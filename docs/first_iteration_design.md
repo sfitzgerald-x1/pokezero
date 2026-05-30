@@ -15,6 +15,10 @@ PokeZero's first iteration targets Gen 3 random battles with player-knowable obs
 
 The simulator owns complete battle state, including hidden teams, unrevealed moves, items, and abilities. The policy receives an information state derived from public events, its own side, legal choices, and a deterministic belief tracker.
 
+The environment boundary is responsible for converting Showdown protocol state into a player-relative view. Raw Showdown seats such as `p1` and `p2` are transport/provenance metadata, not the model's primary frame. For any call to `observe(player)`, `self_*` tokens must always describe the observing player, `opponent_*` tokens must always describe the other side, and the legal-action mask must describe only that player's current request.
+
+This normalization is mandatory for self-play and two-bot evaluation. The same battle position observed by opposite players should produce mirrored player-relative observations, not inputs where the meaning of `p1` and `p2` changes under the model. Raw protocol identifiers may be retained in debug metadata so selected actions can still be submitted back to the correct Showdown side.
+
 The first simulator integration should be a thin PokeZero environment API over Showdown-compatible battle execution:
 
 - `reset(seed, format)` starts a Gen 3 random battle.
@@ -49,6 +53,13 @@ The first observation format, `PokeZeroObservationV0`, is a fixed-shape structur
 Opponent belief features should include possible ability, item, and move masks; revealed move masks; surviving set count; and a compact uncertainty scalar. The actor input is restricted to player-knowable state.
 
 Token feature widths are uniform for batching. Token sections may use different subsets of the categorical and numeric columns; unused columns are padding.
+
+Observation builders must use deterministic player-relative ordering:
+
+- self team tokens follow the observing player's canonical team order from the request side.
+- opponent tokens follow stable revealed-slot order, with padded unknown slots when fewer than six opposing Pokemon are known.
+- action candidate tokens describe the observing player's current legal move and switch candidates.
+- recent event tokens should be normalized to self/opponent actor roles where possible, instead of requiring the model to learn whether `p1` or `p2` is itself on that turn.
 
 ## Action Space
 
@@ -87,10 +98,10 @@ The opponent-action prediction head should predict the opponent's chosen move or
 V0 should use online actor-critic training with PPO-style updates. Training starts with a bootstrap phase against fixed opponents:
 
 - random legal policy
-- simple type-effectiveness heuristic
-- randbat-aware heuristic using revealed moves and basic damage estimates
+- simple legal-action policy with basic switch participation
+- frozen early checkpoints once the first policy can complete games reliably
 
-Once the policy beats the fixed baselines, self-play should use a pool of frozen checkpoints plus fixed heuristic opponents. This keeps training pressure broader than the current policy matchup.
+Once the policy can reliably complete games, self-play should use a pool of frozen checkpoints. This keeps training pressure broader than the current policy matchup without baking damage-calc or handcrafted battle heuristics into the main training loop.
 
 Trajectory records should include observations, legal masks, selected actions, opponent actions, rewards, terminal outcome, capped-game marker, and checkpoint/opponent identifiers.
 
@@ -113,11 +124,17 @@ Progress should be measured against fixed benchmark opponents and historical sel
 V0 evaluation should include:
 
 - random legal policy
-- simple type-effectiveness heuristic
-- randbat-aware heuristic baseline
+- simple legal-action baseline
 - frozen historical PokeZero checkpoints
 
 Each evaluation run should report win rate, average turns per game, capped-game rate, average decision latency, and throughput in completed games per hour.
+
+Harness validation should include replay-style cases that prove side ownership is normalized correctly:
+
+- a bot configured with one default seat but actually seated as the other side still observes itself under `self_*`.
+- two bots observing the same turn receive mirrored `self_*` and `opponent_*` sections.
+- selected policy actions are translated back to the detected Showdown seat before submission.
+- hidden opponent state never appears in the normalized observation.
 
 ## Open Questions
 
@@ -125,4 +142,4 @@ Each evaluation run should report win rate, average turns per game, capped-game 
 - What throughput target should define a useful first rollout loop?
 - What consumer GPU class should constrain the first model size?
 - How much reward shaping is enough before it starts distorting the win objective?
-- Which fixed heuristic baseline should be the first "must beat" milestone?
+- Which non-handcrafted baseline should be the first "must beat" milestone?

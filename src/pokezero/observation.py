@@ -8,6 +8,7 @@ from typing import Any
 from .actions import ACTION_COUNT
 
 OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v0"
+SHOWDOWN_PLAYER_SLOTS = ("p1", "p2")
 FIELD_TOKEN_COUNT = 1
 SELF_POKEMON_TOKEN_COUNT = 6
 OPPONENT_POKEMON_TOKEN_COUNT = 6
@@ -39,12 +40,41 @@ class ObservationSpec:
 
 
 @dataclass(frozen=True)
+class ObservationPerspective:
+    """Debug/provenance metadata for a player-relative observation.
+
+    Model tensors are normalized to self/opponent sections. Raw Showdown seats
+    are retained only so harnesses can audit normalization and submit selected
+    actions back to the correct protocol side.
+    """
+
+    player_id: str
+    showdown_slot: str
+    opponent_showdown_slot: str
+
+    def __post_init__(self) -> None:
+        _require_showdown_slot("showdown_slot", self.showdown_slot)
+        _require_showdown_slot("opponent_showdown_slot", self.opponent_showdown_slot)
+        if self.showdown_slot == self.opponent_showdown_slot:
+            raise ValueError("showdown_slot and opponent_showdown_slot must differ.")
+
+    @classmethod
+    def from_showdown_slot(cls, player_id: str, showdown_slot: str) -> "ObservationPerspective":
+        return cls(
+            player_id=player_id,
+            showdown_slot=showdown_slot,
+            opponent_showdown_slot=opponent_showdown_slot(showdown_slot),
+        )
+
+
+@dataclass(frozen=True)
 class PokeZeroObservationV0:
     categorical_ids: Any
     numeric_features: Any
     token_type_ids: Any
     attention_mask: Any
     legal_action_mask: Any
+    perspective: ObservationPerspective | None = None
     schema_version: str = OBSERVATION_SCHEMA_VERSION
 
     def validate(self, spec: ObservationSpec) -> None:
@@ -57,6 +87,17 @@ class PokeZeroObservationV0:
         _require_outer_length("legal_action_mask", self.legal_action_mask, ACTION_COUNT)
         _require_inner_length("categorical_ids", self.categorical_ids, spec.categorical_feature_count)
         _require_inner_length("numeric_features", self.numeric_features, spec.numeric_feature_count)
+
+
+def opponent_showdown_slot(showdown_slot: str) -> str:
+    _require_showdown_slot("showdown_slot", showdown_slot)
+    return "p2" if showdown_slot == "p1" else "p1"
+
+
+def _require_showdown_slot(name: str, value: str) -> None:
+    if value not in SHOWDOWN_PLAYER_SLOTS:
+        allowed = ", ".join(SHOWDOWN_PLAYER_SLOTS)
+        raise ValueError(f"{name} must be one of {allowed}; got {value!r}.")
 
 
 def _require_outer_length(name: str, values: Any, expected: int) -> None:
