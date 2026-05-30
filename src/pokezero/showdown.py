@@ -6,7 +6,7 @@ Showdown protocol seats (`p1`/`p2`) and PokeZero's player-relative model input.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 from typing import Any, Mapping, Optional, Sequence
@@ -44,6 +44,7 @@ class ShowdownReplayState:
     players: Mapping[str, str]
     requests: Mapping[str, Mapping[str, Any]]
     public_active: Mapping[str, ShowdownPokemon]
+    public_revealed: Mapping[str, tuple[ShowdownPokemon, ...]]
     public_lines: tuple[str, ...]
     winner: Optional[str] = None
 
@@ -81,6 +82,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     players: dict[str, str] = {}
     requests: dict[str, Mapping[str, Any]] = {}
     public_active: dict[str, ShowdownPokemon] = {}
+    public_revealed: dict[str, list[ShowdownPokemon]] = {}
     public_lines: list[str] = []
     winner: Optional[str] = None
 
@@ -109,6 +111,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             pokemon = _pokemon_from_public_line(parts)
             if pokemon is not None:
                 public_active[pokemon.showdown_slot] = pokemon
+                _record_public_reveal(public_revealed, pokemon)
             public_lines.append(line)
             continue
         if event_type == "win" and len(parts) >= 3:
@@ -122,6 +125,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         players=players,
         requests=requests,
         public_active=public_active,
+        public_revealed={slot: tuple(pokemon) for slot, pokemon in public_revealed.items()},
         public_lines=tuple(public_lines),
         winner=winner,
     )
@@ -292,8 +296,7 @@ def _opponent_team_from_public_state(
     replay: ShowdownReplayState,
     opponent_slot: str,
 ) -> tuple[ShowdownPokemon, ...]:
-    active = replay.public_active.get(opponent_slot)
-    return (active,) if active is not None else ()
+    return tuple(replay.public_revealed.get(opponent_slot, ()))
 
 
 def _legal_action_mask(request: Mapping[str, Any] | None) -> tuple[bool, ...]:
@@ -371,7 +374,7 @@ def _can_switch_to(pokemon: Mapping[str, Any]) -> bool:
     if pokemon.get("active"):
         return False
     condition = str(pokemon.get("condition") or "")
-    return not condition.startswith("0 ") and condition != "0 fnt"
+    return not condition.startswith("0 ")
 
 
 def _active_team_index(team: Sequence[ShowdownPokemon]) -> int | None:
@@ -409,12 +412,41 @@ def _normalize_name(value: str | None) -> str:
 
 
 def _normalize_public_event(line: str, *, self_slot: str, opponent_slot: str) -> str:
-    normalized = line
-    normalized = re.sub(rf"\b{self_slot}([a-z]?):", r"self\1:", normalized)
-    normalized = re.sub(rf"\b{opponent_slot}([a-z]?):", r"opponent\1:", normalized)
-    normalized = normalized.replace(f"|{self_slot}|", "|self|")
-    normalized = normalized.replace(f"|{opponent_slot}|", "|opponent|")
-    return normalized
+    parts = line.split("|")
+    if len(parts) < 3:
+        return line
+    normalized = [
+        _normalize_public_field(field, self_slot=self_slot, opponent_slot=opponent_slot)
+        for field in parts
+    ]
+    return "|".join(normalized)
+
+
+def _normalize_public_field(field: str, *, self_slot: str, opponent_slot: str) -> str:
+    field = re.sub(rf"^{self_slot}([a-z]?):", r"self\1:", field)
+    return re.sub(rf"^{opponent_slot}([a-z]?):", r"opponent\1:", field)
+
+
+def _record_public_reveal(
+    public_revealed: dict[str, list[ShowdownPokemon]],
+    pokemon: ShowdownPokemon,
+) -> None:
+    current = public_revealed.setdefault(pokemon.showdown_slot, [])
+    next_revealed: list[ShowdownPokemon] = []
+    matched = False
+    for existing in current:
+        if _same_public_pokemon(existing, pokemon):
+            next_revealed.append(pokemon)
+            matched = True
+        else:
+            next_revealed.append(replace(existing, active=False))
+    if not matched:
+        next_revealed.append(pokemon)
+    public_revealed[pokemon.showdown_slot] = next_revealed
+
+
+def _same_public_pokemon(left: ShowdownPokemon, right: ShowdownPokemon) -> bool:
+    return left.showdown_slot == right.showdown_slot and left.species == right.species
 
 
 def _token_type_ids(spec: ObservationSpec) -> tuple[int, ...]:

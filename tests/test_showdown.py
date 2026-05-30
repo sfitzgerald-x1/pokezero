@@ -74,8 +74,18 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
         opponent_species = {pokemon.species for pokemon in state.opponent_team}
-        self.assertEqual(opponent_species, {"Xatu"})
+        self.assertEqual(opponent_species, {"Arcanine", "Xatu"})
         self.assertNotIn("Alakazam", opponent_species)
+
+    def test_previously_revealed_opponent_pokemon_remain_in_public_memory(self) -> None:
+        replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
+
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+        self.assertEqual([pokemon.species for pokemon in state.opponent_team], ["Arcanine", "Xatu"])
+        self.assertFalse(state.opponent_team[0].active)
+        self.assertTrue(state.opponent_team[1].active)
+        self.assertEqual(state.opponent_active.species, "Xatu")
 
     def test_observation_shell_carries_detected_perspective_and_legal_mask(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
@@ -106,8 +116,12 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
         joined_events = "\n".join(state.recent_public_events)
+        self.assertIn("|player|p1|HumanFriend|", joined_events)
+        self.assertIn("|player|p2|PokeZeroBot|", joined_events)
         self.assertIn("opponenta: Xatu", joined_events)
         self.assertIn("selfa: Charizard", joined_events)
+        self.assertNotIn("|player|opponent|", joined_events)
+        self.assertNotIn("|player|self|", joined_events)
         self.assertNotIn("p1a: Xatu", joined_events)
         self.assertNotIn("p2a: Charizard", joined_events)
 
