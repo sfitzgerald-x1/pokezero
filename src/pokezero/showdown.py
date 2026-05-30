@@ -19,6 +19,7 @@ from .actions import (
     is_move_action,
     is_switch_action,
 )
+from .belief import PlayerBeliefView, PublicBattleBeliefEngine, RevealedPokemonBelief
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
@@ -30,7 +31,7 @@ from .observation import (
     opponent_showdown_slot,
 )
 
-DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(categorical_feature_count=4, numeric_feature_count=4)
+DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(categorical_feature_count=4, numeric_feature_count=7)
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
 CATEGORY_SECONDARY = 1
@@ -40,6 +41,9 @@ NUMERIC_HP_FRACTION = 0
 NUMERIC_ACTIVE = 1
 NUMERIC_LEGAL = 2
 NUMERIC_PRESENT = 3
+NUMERIC_REVEALED_MOVE_COUNT = 4
+NUMERIC_CANDIDATE_SET_COUNT = 5
+NUMERIC_UNCERTAINTY = 6
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -108,6 +112,7 @@ class PlayerRelativeBattleState:
     request_kind: str
     self_team: tuple[ShowdownPokemon, ...]
     opponent_team: tuple[ShowdownPokemon, ...]
+    belief_view: PlayerBeliefView
     legal_action_mask: tuple[bool, ...]
     recent_events: tuple[PlayerRelativePublicEvent, ...]
     recent_public_events: tuple[str, ...]
@@ -230,6 +235,7 @@ def normalize_for_player(
     request = replay.requests.get(showdown_slot)
     self_team = _self_team_from_request(request, showdown_slot)
     opponent_team = _opponent_team_from_public_state(replay, opponent_slot)
+    belief_view = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot().for_player(showdown_slot)
     recent_events = tuple(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
@@ -242,6 +248,7 @@ def normalize_for_player(
         request_kind=_request_kind(request),
         self_team=self_team,
         opponent_team=opponent_team,
+        belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
         recent_public_events=tuple(event.relative_line or event.raw_line for event in recent_events),
@@ -266,6 +273,7 @@ def observation_from_player_state(
         role="self",
         limit=SELF_POKEMON_TOKEN_COUNT,
     )
+    opponent_beliefs = state.belief_view.opponent_by_species()
     _encode_pokemon_tokens(
         categorical_ids,
         numeric_features,
@@ -273,6 +281,7 @@ def observation_from_player_state(
         state.opponent_team,
         role="opponent",
         limit=OPPONENT_POKEMON_TOKEN_COUNT,
+        beliefs_by_species=opponent_beliefs,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state)
     _encode_recent_event_tokens(categorical_ids, numeric_features, state, spec)
@@ -381,7 +390,15 @@ def _public_event_from_line(line: str) -> ShowdownPublicEvent:
         if len(parts) > 4:
             target_ident = parts[4]
             target_slot = _slot_from_ident(target_ident)
-    elif event_type in {"-damage", "-heal", "-status", "-curestatus", "faint"} and len(parts) >= 3:
+    elif event_type in {
+        "-ability",
+        "-curestatus",
+        "-damage",
+        "-heal",
+        "-item",
+        "-status",
+        "faint",
+    } and len(parts) >= 3:
         target_ident = parts[2]
         target_slot = _slot_from_ident(target_ident)
         primary = parts[3] if len(parts) > 3 else None
@@ -504,18 +521,27 @@ def _encode_pokemon_tokens(
     *,
     role: str,
     limit: int,
+    beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
-        condition = _condition_features(candidate.condition)
+        belief = _belief_for_species(beliefs_by_species, candidate.species)
+        condition = _condition_features(belief.condition if belief is not None else candidate.condition)
+        revealed_moves = belief.revealed_moves if belief is not None else ()
+        candidate_set_count = belief.candidate_set_count if belief is not None else None
+        uncertainty = belief.uncertainty if belief is not None else 1.0
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
-        _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{condition.status}")
+        status = belief.status if belief is not None and belief.status is not None else condition.status
+        _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"{role}_slot:{slot_index}")
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 0.0 if condition.fainted else 1.0)
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0)
+        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_MOVE_COUNT, float(len(revealed_moves)))
+        _set_numeric(numeric_features[token_index], NUMERIC_CANDIDATE_SET_COUNT, float(candidate_set_count or 0))
+        _set_numeric(numeric_features[token_index], NUMERIC_UNCERTAINTY, uncertainty)
 
 
 def _encode_action_tokens(
@@ -607,6 +633,15 @@ def _set_category(row: list[int], index: int, value: str) -> None:
 def _set_numeric(row: list[float], index: int, value: float) -> None:
     if index < len(row):
         row[index] = float(value)
+
+
+def _belief_for_species(
+    beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None,
+    species: str,
+) -> RevealedPokemonBelief | None:
+    if not beliefs_by_species:
+        return None
+    return beliefs_by_species.get(_normalize_identifier(species))
 
 
 def _legal_action_mask(request: Mapping[str, Any] | None) -> tuple[bool, ...]:
@@ -750,6 +785,10 @@ def _slot_from_ident(ident: str) -> str | None:
 
 
 def _normalize_name(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _normalize_identifier(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
