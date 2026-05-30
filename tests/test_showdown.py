@@ -93,6 +93,8 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertFalse(state.opponent_team[0].active)
         self.assertTrue(state.opponent_team[1].active)
         self.assertEqual(state.opponent_active.species, "Xatu")
+        self.assertEqual(state.belief_view.opponent_pokemon[1].revealed_moves, ("Psychic",))
+        self.assertEqual(state.belief_view.opponent_pokemon[1].condition, "70/100")
 
     def test_observation_shell_carries_detected_perspective_and_legal_mask(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
@@ -122,7 +124,11 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.categorical_ids[opponent_offset][0], stable_category_id("species:Arcanine"))
         self.assertEqual(observation.numeric_features[opponent_offset][1], 0.0)
         self.assertEqual(observation.categorical_ids[opponent_offset + 1][0], stable_category_id("species:Xatu"))
+        self.assertEqual(observation.numeric_features[opponent_offset + 1][0], 0.7)
         self.assertEqual(observation.numeric_features[opponent_offset + 1][1], 1.0)
+        self.assertEqual(observation.numeric_features[opponent_offset + 1][4], 1.0)
+        self.assertEqual(observation.numeric_features[opponent_offset + 1][5], 0.0)
+        self.assertEqual(observation.numeric_features[opponent_offset + 1][6], 1.0)
         self.assertEqual(observation.categorical_ids[action_offset][0], stable_category_id("move:flamethrower"))
         self.assertEqual(observation.numeric_features[action_offset][2], 1.0)
         self.assertEqual(observation.categorical_ids[action_offset + 2][0], stable_category_id("move:dragonclaw"))

@@ -12,6 +12,14 @@ from .actions import (
     switch_action_index_for_team_index,
     switch_action_candidates,
 )
+from .belief import (
+    BattleBeliefSnapshot,
+    CandidateSetSummary,
+    PlayerBeliefView,
+    PokemonSetSource,
+    PublicBattleBeliefEngine,
+    RevealedPokemonBelief,
+)
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
 from .showdown import (
@@ -34,6 +42,8 @@ __all__ = [
     "ACTION_COUNT",
     "ActionCandidate",
     "AsyncPokeZeroEnv",
+    "BattleBeliefSnapshot",
+    "CandidateSetSummary",
     "MOVE_ACTION_COUNT",
     "ObservationSpec",
     "PokeZeroEnv",
@@ -41,6 +51,10 @@ __all__ = [
     "SWITCH_ACTION_COUNT",
     "PlayerRelativeBattleState",
     "PlayerRelativePublicEvent",
+    "PlayerBeliefView",
+    "PokemonSetSource",
+    "PublicBattleBeliefEngine",
+    "RevealedPokemonBelief",
     "ShowdownPokemon",
     "ShowdownPublicEvent",
     "ShowdownReplayState",
