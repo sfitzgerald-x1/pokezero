@@ -14,6 +14,18 @@ from .actions import (
 )
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
+from .showdown import (
+    PlayerRelativeBattleState,
+    ShowdownPokemon,
+    ShowdownReplayState,
+    ShowdownSubmission,
+    detect_showdown_slot,
+    normalize_for_player,
+    observation_from_player_state,
+    parse_showdown_replay,
+    showdown_choice_for_action,
+    showdown_submission_for_action,
+)
 
 __all__ = [
     "ACTION_COUNT",
@@ -24,12 +36,22 @@ __all__ = [
     "PokeZeroEnv",
     "PokeZeroObservationV0",
     "SWITCH_ACTION_COUNT",
+    "PlayerRelativeBattleState",
+    "ShowdownPokemon",
+    "ShowdownReplayState",
+    "ShowdownSubmission",
     "StepResult",
     "TerminalState",
     "canonical_switch_action_map",
+    "detect_showdown_slot",
     "is_move_action",
     "is_switch_action",
     "move_action_candidates",
+    "normalize_for_player",
+    "observation_from_player_state",
+    "parse_showdown_replay",
+    "showdown_choice_for_action",
+    "showdown_submission_for_action",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
 ]
