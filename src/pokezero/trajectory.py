@@ -13,6 +13,7 @@ from .observation import PokeZeroObservationV0
 @dataclass(frozen=True)
 class TrajectoryStep:
     player_id: str
+    turn_index: int
     observation: PokeZeroObservationV0
     legal_action_mask: tuple[bool, ...]
     action_index: int
@@ -23,8 +24,12 @@ class TrajectoryStep:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.turn_index < 0:
+            raise ValueError("turn_index must be non-negative.")
         if len(self.legal_action_mask) != ACTION_COUNT:
             raise ValueError(f"legal_action_mask must contain {ACTION_COUNT} values.")
+        if tuple(self.observation.legal_action_mask) != self.legal_action_mask:
+            raise ValueError("legal_action_mask must match observation.legal_action_mask.")
         if self.action_index < 0 or self.action_index >= ACTION_COUNT:
             raise ValueError(f"action_index must be between 0 and {ACTION_COUNT - 1}.")
         if not self.legal_action_mask[self.action_index]:
@@ -68,3 +73,9 @@ class BattleTrajectory:
 
     def total_reward(self, player_id: str) -> float:
         return sum(step.reward for step in self.steps if step.player_id == player_id)
+
+    def steps_for_player(self, player_id: str) -> tuple[TrajectoryStep, ...]:
+        return tuple(step for step in self.steps if step.player_id == player_id)
+
+    def steps_for_turn(self, turn_index: int) -> tuple[TrajectoryStep, ...]:
+        return tuple(step for step in self.steps if step.turn_index == turn_index)

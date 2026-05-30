@@ -32,7 +32,7 @@ class Policy(Protocol):
         self,
         observation: PokeZeroObservationV0,
         *,
-        rng: random.Random | None = None,
+        rng: random.Random,
     ) -> PolicyDecision:
         ...
 
@@ -45,11 +45,10 @@ class RandomLegalPolicy:
         self,
         observation: PokeZeroObservationV0,
         *,
-        rng: random.Random | None = None,
+        rng: random.Random,
     ) -> PolicyDecision:
         legal = legal_action_indices(observation.legal_action_mask)
-        generator = rng or random
-        action_index = generator.choice(legal)
+        action_index = rng.choice(legal)
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
@@ -76,30 +75,27 @@ class SimpleLegalPolicy:
         self,
         observation: PokeZeroObservationV0,
         *,
-        rng: random.Random | None = None,
+        rng: random.Random,
     ) -> PolicyDecision:
         legal_moves = legal_move_action_indices(observation.legal_action_mask)
         legal_switches = legal_switch_action_indices(observation.legal_action_mask)
-        legal = legal_action_indices(observation.legal_action_mask)
-        generator = rng or random
+        legal_action_indices(observation.legal_action_mask)
 
-        if legal_switches and (not legal_moves or generator.random() < self.switch_probability):
-            action_index = generator.choice(legal_switches)
+        if legal_switches and (not legal_moves or rng.random() < self.switch_probability):
+            action_index = rng.choice(legal_switches)
             action_pool = legal_switches
             action_family = "switch"
+            family_probability = 1.0 if not legal_moves else self.switch_probability
         elif legal_moves:
-            action_index = generator.choice(legal_moves)
+            action_index = rng.choice(legal_moves)
             action_pool = legal_moves
             action_family = "move"
-        else:
-            action_index = generator.choice(legal)
-            action_pool = legal
-            action_family = "fallback"
+            family_probability = 1.0 if not legal_switches else 1.0 - self.switch_probability
 
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,
-            action_probability=1.0 / len(action_pool),
+            action_probability=family_probability / len(action_pool),
             metadata={"action_family": action_family},
         )
 

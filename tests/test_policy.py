@@ -50,6 +50,14 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertTrue(decisions.issubset({1, 4}))
         self.assertIsInstance(policy, Policy)
 
+    def test_policies_require_explicit_rng_for_reproducibility(self) -> None:
+        obs = observation((True, False, False, False, False, False, False, False, False))
+
+        with self.assertRaises(TypeError):
+            RandomLegalPolicy().select_action(obs)
+        with self.assertRaises(TypeError):
+            SimpleLegalPolicy().select_action(obs)
+
     def test_simple_legal_policy_can_force_switch_participation(self) -> None:
         policy = SimpleLegalPolicy(switch_probability=1.0)
         obs = observation((True, False, False, False, False, True, False, False, False))
@@ -58,6 +66,7 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 5)
         self.assertEqual(decision.metadata["action_family"], "switch")
+        self.assertEqual(decision.action_probability, 1.0)
 
     def test_simple_legal_policy_falls_back_to_moves_when_no_switch_is_legal(self) -> None:
         policy = SimpleLegalPolicy(switch_probability=1.0)
@@ -67,6 +76,22 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 2)
         self.assertEqual(decision.metadata["action_family"], "move")
+        self.assertEqual(decision.action_probability, 1.0)
+
+    def test_simple_legal_policy_records_marginal_action_probability(self) -> None:
+        policy = SimpleLegalPolicy(switch_probability=0.25)
+        obs = observation((True, False, True, False, True, True, False, True, False))
+        probabilities_by_action = {}
+
+        for seed in range(2000):
+            decision = policy.select_action(obs, rng=random.Random(seed))
+            probabilities_by_action[decision.action_index] = decision.action_probability
+
+        self.assertEqual(set(probabilities_by_action), {0, 2, 4, 5, 7})
+        self.assertAlmostEqual(probabilities_by_action[0], 0.375)
+        self.assertAlmostEqual(probabilities_by_action[2], 0.375)
+        self.assertAlmostEqual(probabilities_by_action[4], 0.25 / 3)
+        self.assertAlmostEqual(sum(probabilities_by_action.values()), 1.0)
 
     def test_policy_decision_validates_action_probability(self) -> None:
         with self.assertRaisesRegex(ValueError, "between 0 and 1"):

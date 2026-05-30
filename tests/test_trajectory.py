@@ -24,6 +24,7 @@ class TrajectoryTest(unittest.TestCase):
         trajectory.append(
             TrajectoryStep(
                 player_id="p1",
+                turn_index=0,
                 observation=observation(mask),
                 legal_action_mask=mask,
                 action_index=0,
@@ -35,6 +36,7 @@ class TrajectoryTest(unittest.TestCase):
         trajectory.append(
             TrajectoryStep(
                 player_id="p2",
+                turn_index=0,
                 observation=observation(mask),
                 legal_action_mask=mask,
                 action_index=0,
@@ -44,6 +46,8 @@ class TrajectoryTest(unittest.TestCase):
         trajectory.record_terminal(TerminalState(winner="p1", turn_count=12, capped=False))
 
         self.assertEqual(trajectory.players(), ("p1", "p2"))
+        self.assertEqual([step.player_id for step in trajectory.steps_for_turn(0)], ["p1", "p2"])
+        self.assertEqual(len(trajectory.steps_for_player("p1")), 1)
         self.assertEqual(trajectory.total_reward("p1"), 1.0)
         self.assertEqual(trajectory.total_reward("p2"), -1.0)
         self.assertFalse(trajectory.capped)
@@ -57,6 +61,7 @@ class TrajectoryTest(unittest.TestCase):
             trajectory.append(
                 TrajectoryStep(
                     player_id="p1",
+                    turn_index=0,
                     observation=observation(mask),
                     legal_action_mask=mask,
                     action_index=0,
@@ -69,9 +74,35 @@ class TrajectoryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be legal"):
             TrajectoryStep(
                 player_id="p1",
+                turn_index=0,
                 observation=observation(mask),
                 legal_action_mask=mask,
                 action_index=0,
+            )
+
+    def test_trajectory_step_requires_non_negative_turn_index(self) -> None:
+        mask = (True, False, False, False, False, False, False, False, False)
+
+        with self.assertRaisesRegex(ValueError, "turn_index"):
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=-1,
+                observation=observation(mask),
+                legal_action_mask=mask,
+                action_index=0,
+            )
+
+    def test_trajectory_step_requires_mask_to_match_observation(self) -> None:
+        observation_mask = (True, False, False, False, False, False, False, False, False)
+        recorded_mask = (False, True, False, False, False, False, False, False, False)
+
+        with self.assertRaisesRegex(ValueError, "must match"):
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation(observation_mask),
+                legal_action_mask=recorded_mask,
+                action_index=1,
             )
 
 
