@@ -16,7 +16,9 @@ from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
 from .showdown import (
     PlayerRelativeBattleState,
+    PlayerRelativePublicEvent,
     ShowdownPokemon,
+    ShowdownPublicEvent,
     ShowdownReplayState,
     ShowdownSubmission,
     detect_showdown_slot,
@@ -38,7 +40,9 @@ __all__ = [
     "PokeZeroObservationV0",
     "SWITCH_ACTION_COUNT",
     "PlayerRelativeBattleState",
+    "PlayerRelativePublicEvent",
     "ShowdownPokemon",
+    "ShowdownPublicEvent",
     "ShowdownReplayState",
     "ShowdownSubmission",
     "StepResult",

@@ -65,8 +65,32 @@ class ShowdownReplayState:
     requests: Mapping[str, Mapping[str, Any]]
     public_active: Mapping[str, ShowdownPokemon]
     public_revealed: Mapping[str, tuple[ShowdownPokemon, ...]]
+    public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     winner: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ShowdownPublicEvent:
+    event_type: str
+    raw_line: str
+    actor_slot: Optional[str] = None
+    actor_ident: Optional[str] = None
+    target_slot: Optional[str] = None
+    target_ident: Optional[str] = None
+    primary: Optional[str] = None
+    secondary: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PlayerRelativePublicEvent:
+    event_type: str
+    raw_line: str
+    actor_role: str = "none"
+    target_role: str = "none"
+    primary: Optional[str] = None
+    secondary: Optional[str] = None
+    relative_line: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +109,7 @@ class PlayerRelativeBattleState:
     self_team: tuple[ShowdownPokemon, ...]
     opponent_team: tuple[ShowdownPokemon, ...]
     legal_action_mask: tuple[bool, ...]
+    recent_events: tuple[PlayerRelativePublicEvent, ...]
     recent_public_events: tuple[str, ...]
     winner: Optional[str] = None
 
@@ -103,6 +128,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     requests: dict[str, Mapping[str, Any]] = {}
     public_active: dict[str, ShowdownPokemon] = {}
     public_revealed: dict[str, list[ShowdownPokemon]] = {}
+    public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
     winner: Optional[str] = None
 
@@ -118,6 +144,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:
                 players[showdown_slot] = parts[3]
+            public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
         if event_type == "request" and len(parts) >= 3:
@@ -132,12 +159,15 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             if pokemon is not None:
                 public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(public_revealed, pokemon)
+            public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
         if event_type == "win" and len(parts) >= 3:
             winner = parts[2]
+            public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
+        public_events.append(_public_event_from_line(line))
         public_lines.append(line)
 
     return ShowdownReplayState(
@@ -146,6 +176,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         requests=requests,
         public_active=public_active,
         public_revealed={slot: tuple(pokemon) for slot, pokemon in public_revealed.items()},
+        public_events=tuple(public_events),
         public_lines=tuple(public_lines),
         winner=winner,
     )
@@ -199,6 +230,10 @@ def normalize_for_player(
     request = replay.requests.get(showdown_slot)
     self_team = _self_team_from_request(request, showdown_slot)
     opponent_team = _opponent_team_from_public_state(replay, opponent_slot)
+    recent_events = tuple(
+        _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
+        for event in replay.public_events[-recent_event_limit:]
+    )
     return PlayerRelativeBattleState(
         battle_id=replay.battle_id,
         player_id=player_id,
@@ -208,10 +243,8 @@ def normalize_for_player(
         self_team=self_team,
         opponent_team=opponent_team,
         legal_action_mask=_legal_action_mask(request),
-        recent_public_events=tuple(
-            _normalize_public_event(line, self_slot=showdown_slot, opponent_slot=opponent_slot)
-            for line in replay.public_lines[-recent_event_limit:]
-        ),
+        recent_events=recent_events,
+        recent_public_events=tuple(event.relative_line or event.raw_line for event in recent_events),
         winner=replay.winner,
     )
 
@@ -231,6 +264,7 @@ def observation_from_player_state(
         SELF_POKEMON_TOKEN_OFFSET,
         state.self_team,
         role="self",
+        limit=SELF_POKEMON_TOKEN_COUNT,
     )
     _encode_pokemon_tokens(
         categorical_ids,
@@ -238,6 +272,7 @@ def observation_from_player_state(
         OPPONENT_POKEMON_TOKEN_OFFSET,
         state.opponent_team,
         role="opponent",
+        limit=OPPONENT_POKEMON_TOKEN_COUNT,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state)
     _encode_recent_event_tokens(categorical_ids, numeric_features, state, spec)
@@ -321,6 +356,97 @@ def _pokemon_from_public_line(parts: Sequence[str]) -> ShowdownPokemon | None:
     )
 
 
+def _public_event_from_line(line: str) -> ShowdownPublicEvent:
+    parts = line.split("|")
+    event_type = parts[1] if len(parts) > 1 and parts[1] else "unknown"
+    actor_ident: Optional[str] = None
+    actor_slot: Optional[str] = None
+    target_ident: Optional[str] = None
+    target_slot: Optional[str] = None
+    primary: Optional[str] = None
+    secondary: Optional[str] = None
+
+    if event_type == "player" and len(parts) >= 4:
+        actor_slot = parts[2] if parts[2] in {"p1", "p2"} else None
+        primary = parts[3]
+    elif event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
+        actor_ident = parts[2]
+        actor_slot = _slot_from_ident(actor_ident)
+        primary = _species_from_details(parts[3]) or _species_from_ident(actor_ident)
+        secondary = parts[4] if len(parts) > 4 else None
+    elif event_type == "move" and len(parts) >= 4:
+        actor_ident = parts[2]
+        actor_slot = _slot_from_ident(actor_ident)
+        primary = parts[3]
+        if len(parts) > 4:
+            target_ident = parts[4]
+            target_slot = _slot_from_ident(target_ident)
+    elif event_type in {"-damage", "-heal", "-status", "-curestatus", "faint"} and len(parts) >= 3:
+        target_ident = parts[2]
+        target_slot = _slot_from_ident(target_ident)
+        primary = parts[3] if len(parts) > 3 else None
+        secondary = parts[4] if len(parts) > 4 else None
+    elif event_type == "win" and len(parts) >= 3:
+        primary = parts[2]
+    else:
+        actor_ident = parts[2] if len(parts) > 2 and _slot_from_ident(parts[2]) else None
+        actor_slot = _slot_from_ident(actor_ident or "")
+        primary = parts[3] if len(parts) > 3 else None
+        secondary = parts[4] if len(parts) > 4 else None
+
+    return ShowdownPublicEvent(
+        event_type=event_type,
+        raw_line=line,
+        actor_slot=actor_slot,
+        actor_ident=actor_ident,
+        target_slot=target_slot,
+        target_ident=target_ident,
+        primary=primary,
+        secondary=secondary,
+    )
+
+
+def _relative_public_event(
+    event: ShowdownPublicEvent,
+    *,
+    self_slot: str,
+    opponent_slot: str,
+) -> PlayerRelativePublicEvent:
+    return PlayerRelativePublicEvent(
+        event_type=event.event_type,
+        raw_line=event.raw_line,
+        actor_role=_relative_role(event.actor_slot, self_slot=self_slot, opponent_slot=opponent_slot),
+        target_role=_relative_role(event.target_slot, self_slot=self_slot, opponent_slot=opponent_slot),
+        primary=event.primary,
+        secondary=event.secondary,
+        relative_line=_relative_public_line(event, self_slot=self_slot, opponent_slot=opponent_slot),
+    )
+
+
+def _relative_role(slot: str | None, *, self_slot: str, opponent_slot: str) -> str:
+    if slot == self_slot:
+        return "self"
+    if slot == opponent_slot:
+        return "opponent"
+    return "none"
+
+
+def _relative_public_line(
+    event: ShowdownPublicEvent,
+    *,
+    self_slot: str,
+    opponent_slot: str,
+) -> str:
+    parts = event.raw_line.split("|")
+    if len(parts) < 3:
+        return event.raw_line
+    normalized = [
+        _normalize_public_field(field, self_slot=self_slot, opponent_slot=opponent_slot)
+        for field in parts
+    ]
+    return "|".join(normalized)
+
+
 def _self_team_from_request(request: Mapping[str, Any] | None, showdown_slot: str) -> tuple[ShowdownPokemon, ...]:
     side = request.get("side") if isinstance(request, Mapping) and isinstance(request.get("side"), Mapping) else {}
     pokemon_rows = side.get("pokemon") if isinstance(side, Mapping) else None
@@ -377,8 +503,9 @@ def _encode_pokemon_tokens(
     pokemon: Sequence[ShowdownPokemon],
     *,
     role: str,
+    limit: int,
 ) -> None:
-    for slot_index, candidate in enumerate(pokemon[:SELF_POKEMON_TOKEN_COUNT]):
+    for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
         condition = _condition_features(candidate.condition)
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
@@ -440,14 +567,12 @@ def _encode_recent_event_tokens(
     state: PlayerRelativeBattleState,
     spec: ObservationSpec,
 ) -> None:
-    for event_index, event in enumerate(state.recent_public_events[: spec.recent_event_token_count]):
+    for event_index, event in enumerate(state.recent_events[: spec.recent_event_token_count]):
         token_index = RECENT_EVENT_TOKEN_OFFSET + event_index
-        event_type = _event_type(event)
-        actor_role = _event_actor_role(event)
-        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"event:{event_type}")
-        _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"actor:{actor_role}")
-        _set_category(categorical_ids[token_index], CATEGORY_ROLE, "event")
-        _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"event_slot:{event_index}")
+        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"event:{event.event_type}")
+        _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, _event_detail_category(event))
+        _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"event_actor:{event.actor_role}")
+        _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"event_target:{event.target_role}")
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0)
 
 
@@ -558,19 +683,21 @@ def _request_move_name(move: Mapping[str, Any]) -> str:
     return "unknown"
 
 
-def _event_type(event: str) -> str:
-    parts = event.split("|")
-    return parts[1] if len(parts) > 1 and parts[1] else "unknown"
-
-
-def _event_actor_role(event: str) -> str:
-    parts = event.split("|")
-    for field in parts[2:]:
-        if field.startswith("self"):
-            return "self"
-        if field.startswith("opponent"):
-            return "opponent"
-    return "none"
+def _event_detail_category(event: PlayerRelativePublicEvent) -> str:
+    primary = event.primary or "none"
+    if event.event_type == "move":
+        return f"move:{primary}"
+    if event.event_type in {"switch", "drag", "replace"}:
+        return f"species:{primary}"
+    if event.event_type in {"-damage", "-heal"}:
+        return f"condition:{primary}"
+    if event.event_type in {"-status", "-curestatus"}:
+        return f"status:{primary}"
+    if event.event_type == "player":
+        return f"player:{primary}"
+    if event.event_type == "win":
+        return f"winner:{primary}"
+    return f"detail:{primary}"
 
 
 def _request_side_id(request: Mapping[str, Any]) -> str | None:
@@ -624,17 +751,6 @@ def _slot_from_ident(ident: str) -> str | None:
 
 def _normalize_name(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
-
-
-def _normalize_public_event(line: str, *, self_slot: str, opponent_slot: str) -> str:
-    parts = line.split("|")
-    if len(parts) < 3:
-        return line
-    normalized = [
-        _normalize_public_field(field, self_slot=self_slot, opponent_slot=opponent_slot)
-        for field in parts
-    ]
-    return "|".join(normalized)
 
 
 def _normalize_public_field(field: str, *, self_slot: str, opponent_slot: str) -> str:
