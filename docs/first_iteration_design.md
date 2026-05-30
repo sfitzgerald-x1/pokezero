@@ -1,0 +1,122 @@
+# First Iteration Design
+
+PokeZero's first iteration targets Gen 3 random battles with player-knowable observations, randbat-specific belief tracking, fast policy inference, and self-play refinement.
+
+## Goals
+
+- Build a fresh PokeZero training stack. Metamon is prior art for observation and evaluation ideas; PokeZero owns its implementation.
+- Start with Gen 3 random battles before expanding to other formats.
+- Preserve uncertainty by exposing only information a player could know.
+- Use Gen 3 random battle set data to track possible opponent realities.
+- Keep inference fast enough to support high-throughput rollouts.
+- Use temporal context so previous turns influence future predictions and decisions.
+
+## Environment Boundary
+
+The simulator owns complete battle state, including hidden teams, unrevealed moves, items, and abilities. The policy receives an information state derived from public events, its own side, legal choices, and a deterministic belief tracker.
+
+The first simulator integration should be a thin PokeZero environment API over Showdown-compatible battle execution:
+
+- `reset(seed, format)` starts a Gen 3 random battle.
+- `observe(player)` returns `PokeZeroObservationV0`.
+- `legal_actions(player)` returns the 9-action mask.
+- `step(actions)` submits simultaneous player choices and advances the battle.
+- `terminal()` reports normal win/loss or capped-game termination.
+
+The environment must model Pokemon as a simultaneous-choice game. On standard turns, both players choose before resolution. On forced-switch or asymmetric request turns, the legal-action mask should expose only the choices available to the requested side.
+
+## Belief Tracking
+
+The belief tracker is part of the environment. It updates from public battle events and known Gen 3 random battle set data. It should track candidate opponent realities per revealed slot, including possible moves, abilities, and items.
+
+Example: if an opposing Arcanine can have either Intimidate or Flash Fire, and no Intimidate event occurs when it enters, the tracker collapses the ability belief toward Flash Fire and exposes that reduced belief on later turns.
+
+V0 should treat belief tracking as an explicit engineering workstream. The implementation must extract or mirror the Gen 3 randbat set-generation data needed to produce candidate sets and probability features.
+
+## Observation Shape
+
+The first observation format, `PokeZeroObservationV0`, is a fixed-shape structured token package:
+
+- `field_token`: turn number, weather, hazards, screens, request type, forced-switch flag, and turn-cap progress.
+- `self_pokemon_tokens[6]`: own team state, including species, HP, status, boosts, item, ability, moves, and active/fainted flags.
+- `opponent_pokemon_tokens[6]`: visible opponent state plus belief features for revealed or inferred slots.
+- `action_candidate_tokens[9]`: four move slots and five switch slots, each carrying the semantics of the currently available option.
+- `recent_event_tokens[24]`: compact public events from recent turns, padded when fewer events are available.
+- `legal_action_mask[9]`: valid choices for the current request.
+
+Opponent belief features should include possible ability, item, and move masks; revealed move masks; surviving set count; and a compact uncertainty scalar. The actor input is restricted to player-knowable state.
+
+## Action Space
+
+Gen 3 singles random battles use a fixed 9-action policy head:
+
+- `0..3`: active move slots in Showdown request order.
+- `4..8`: switch slots in canonical team order, excluding the active Pokemon position.
+
+Invalid moves, disabled moves, unavailable switch slots, trapped switch options, and fainted switch targets are masked by `legal_action_mask`.
+
+The policy head is positional over the 9 slots. Action candidate tokens provide the current slot semantics, so the model can evaluate the current move or switch occupying each position.
+
+## Model Shape
+
+The first model should use a small transformer over entity, action, and history tokens.
+
+Inputs:
+
+- categorical ids for species, moves, items, abilities, statuses, weather, and token types
+- numeric features for HP fractions, boosts, turn progress, set counts, and uncertainty
+- attention mask
+- legal action mask
+
+Outputs:
+
+- policy logits over the 9 action slots
+- scalar value estimate
+- opponent-action prediction logits for auxiliary training
+
+The opponent-action prediction head should predict the opponent's chosen move or switch slot from the same information state. This auxiliary task should help train temporal prediction and belief use.
+
+## Training Approach
+
+V0 should use online actor-critic training with PPO-style updates. Training starts with a bootstrap phase against fixed opponents:
+
+- random legal policy
+- simple type-effectiveness heuristic
+- randbat-aware heuristic using revealed moves and basic damage estimates
+
+Once the policy beats the fixed baselines, self-play should use a pool of frozen checkpoints plus fixed heuristic opponents. This keeps training pressure broader than the current policy matchup.
+
+Trajectory records should include observations, legal masks, selected actions, opponent actions, rewards, terminal outcome, capped-game marker, and checkpoint/opponent identifiers.
+
+## Rewards And Termination
+
+Games end normally through the simulator or at a provisional 250-turn cap. Capped games must be recorded distinctly from normal wins and losses.
+
+V0 should use terminal win/loss reward plus lightweight shaping to reduce sparse-credit problems:
+
+- faint differential
+- HP fraction differential
+- small penalty for turns consumed after the cap-progress threshold
+
+The exact capped-game training reward remains an experiment. Candidate treatments are tie, double loss, or explicit stall penalty.
+
+## Evaluation
+
+Progress should be measured against fixed benchmark opponents and historical self-play checkpoints.
+
+V0 evaluation should include:
+
+- random legal policy
+- simple type-effectiveness heuristic
+- randbat-aware heuristic baseline
+- frozen historical PokeZero checkpoints
+
+Each evaluation run should report win rate, average turns per game, capped-game rate, average decision latency, and throughput in completed games per hour.
+
+## Open Questions
+
+- What capped-game reward works best once self-play begins?
+- What throughput target should define a useful first rollout loop?
+- What consumer GPU class should constrain the first model size?
+- How much reward shaping is enough before it starts distorting the win objective?
+- Which fixed heuristic baseline should be the first "must beat" milestone?
