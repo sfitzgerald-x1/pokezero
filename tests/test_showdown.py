@@ -2,6 +2,12 @@ from pathlib import Path
 import unittest
 
 from pokezero.actions import ACTION_COUNT
+from pokezero.observation import (
+    ACTION_CANDIDATE_TOKEN_COUNT,
+    FIELD_TOKEN_COUNT,
+    OPPONENT_POKEMON_TOKEN_COUNT,
+    SELF_POKEMON_TOKEN_COUNT,
+)
 from pokezero.showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     detect_showdown_slot,
@@ -10,6 +16,7 @@ from pokezero.showdown import (
     parse_showdown_replay,
     showdown_choice_for_action,
     showdown_submission_for_action,
+    stable_category_id,
 )
 
 
@@ -97,6 +104,36 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.perspective.showdown_slot, "p2")
         self.assertEqual(observation.perspective.opponent_showdown_slot, "p1")
         self.assertEqual(observation.legal_action_mask, state.legal_action_mask)
+
+    def test_observation_encodes_player_relative_content(self) -> None:
+        replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+        observation = observation_from_player_state(state)
+        self_offset = FIELD_TOKEN_COUNT
+        opponent_offset = self_offset + SELF_POKEMON_TOKEN_COUNT
+        action_offset = opponent_offset + OPPONENT_POKEMON_TOKEN_COUNT
+        event_offset = action_offset + ACTION_CANDIDATE_TOKEN_COUNT
+
+        self.assertEqual(observation.categorical_ids[0][0], stable_category_id("request_kind:move"))
+        self.assertEqual(observation.categorical_ids[self_offset][0], stable_category_id("species:Charizard"))
+        self.assertEqual(observation.numeric_features[self_offset][0], 1.0)
+        self.assertEqual(observation.numeric_features[self_offset][1], 1.0)
+        self.assertEqual(observation.categorical_ids[opponent_offset][0], stable_category_id("species:Arcanine"))
+        self.assertEqual(observation.numeric_features[opponent_offset][1], 0.0)
+        self.assertEqual(observation.categorical_ids[opponent_offset + 1][0], stable_category_id("species:Xatu"))
+        self.assertEqual(observation.numeric_features[opponent_offset + 1][1], 1.0)
+        self.assertEqual(observation.categorical_ids[action_offset][0], stable_category_id("move:flamethrower"))
+        self.assertEqual(observation.numeric_features[action_offset][2], 1.0)
+        self.assertEqual(observation.categorical_ids[action_offset + 2][0], stable_category_id("move:dragonclaw"))
+        self.assertEqual(observation.numeric_features[action_offset + 2][1], 0.0)
+        self.assertEqual(observation.numeric_features[action_offset + 2][2], 0.0)
+        self.assertEqual(observation.categorical_ids[action_offset + 4][0], stable_category_id("species:Snorlax"))
+        self.assertEqual(observation.numeric_features[action_offset + 4][2], 1.0)
+        self.assertEqual(observation.categorical_ids[action_offset + 5][0], stable_category_id("species:Blissey"))
+        self.assertEqual(observation.numeric_features[action_offset + 5][0], 0.0)
+        self.assertEqual(observation.numeric_features[action_offset + 5][2], 0.0)
+        self.assertEqual(observation.categorical_ids[event_offset][0], stable_category_id("event:player"))
 
     def test_policy_action_translates_back_to_showdown_choice_for_detected_side(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
