@@ -19,7 +19,7 @@ from .actions import (
     is_move_action,
     is_switch_action,
 )
-from .belief import PlayerBeliefView, PublicBattleBeliefEngine, RevealedPokemonBelief
+from .belief import PlayerBeliefView, PokemonSetSource, PublicBattleBeliefEngine, RevealedPokemonBelief
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
@@ -218,6 +218,8 @@ def normalize_for_player(
     player_id: str,
     player_name: str | None = None,
     configured_showdown_slot: str | None = None,
+    format_id: str | None = None,
+    set_source: PokemonSetSource | None = None,
     recent_event_limit: int = 24,
 ) -> PlayerRelativeBattleState:
     """Build a player-relative state view from raw Showdown transport state."""
@@ -235,7 +237,13 @@ def normalize_for_player(
     request = replay.requests.get(showdown_slot)
     self_team = _self_team_from_request(request, showdown_slot)
     opponent_team = _opponent_team_from_public_state(replay, opponent_slot)
-    belief_view = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot().for_player(showdown_slot)
+    belief_engine = PublicBattleBeliefEngine.from_events(
+        replay.public_events,
+        format_id=format_id,
+        set_source=set_source,
+    )
+    belief_engine.resolve_pending_switches_at_boundary()
+    belief_view = belief_engine.snapshot().for_player(showdown_slot)
     recent_events = tuple(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
@@ -392,11 +400,15 @@ def _public_event_from_line(line: str) -> ShowdownPublicEvent:
             target_slot = _slot_from_ident(target_ident)
     elif event_type in {
         "-ability",
+        "ability",
+        "-activate",
+        "-boost",
         "-curestatus",
         "-damage",
         "-heal",
         "-item",
         "-status",
+        "-unboost",
         "faint",
     } and len(parts) >= 3:
         target_ident = parts[2]

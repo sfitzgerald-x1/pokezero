@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Self-play training experiments for Pokemon Showdown random battles."
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+  "websockets>=15.0.1,<16",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
