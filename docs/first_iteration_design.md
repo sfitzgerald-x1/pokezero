@@ -25,6 +25,8 @@ The first simulator integration should be a thin PokeZero environment API over S
 
 The environment must model Pokemon as a simultaneous-choice game. On standard turns, both players choose before resolution. On forced-switch or asymmetric request turns, the legal-action mask should expose only the choices available to the requested side.
 
+The environment contract should allow both blocking and async adapters. A local subprocess backend can implement the blocking protocol; an event-loop-backed client can implement the async protocol with the same observation and step semantics.
+
 ## Belief Tracking
 
 The belief tracker is part of the environment. It updates from public battle events and known Gen 3 random battle set data. It should track candidate opponent realities per revealed slot, including possible moves, abilities, and items.
@@ -46,6 +48,8 @@ The first observation format, `PokeZeroObservationV0`, is a fixed-shape structur
 
 Opponent belief features should include possible ability, item, and move masks; revealed move masks; surviving set count; and a compact uncertainty scalar. The actor input is restricted to player-knowable state.
 
+Token feature widths are uniform for batching. Token sections may use different subsets of the categorical and numeric columns; unused columns are padding.
+
 ## Action Space
 
 Gen 3 singles random battles use a fixed 9-action policy head:
@@ -56,6 +60,8 @@ Gen 3 singles random battles use a fixed 9-action policy head:
 Invalid moves, disabled moves, unavailable switch slots, trapped switch options, and fainted switch targets are masked by `legal_action_mask`.
 
 The policy head is positional over the 9 slots. Action candidate tokens provide the current slot semantics, so the model can evaluate the current move or switch occupying each position.
+
+Switch actions are dense candidates over the non-active team members in canonical team order. A switch logit is meaningful through its action-candidate token, which identifies the target Pokemon for that request.
 
 ## Model Shape
 
