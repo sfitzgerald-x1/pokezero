@@ -17,6 +17,114 @@ ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
 
 
 @dataclass(frozen=True)
+class BenchmarkMatchup:
+    label: str
+    p1_policy: Policy
+    p2_policy: Policy
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("benchmark matchup label must be non-empty.")
+
+
+@dataclass(frozen=True)
+class BenchmarkMatchupResult:
+    label: str
+    p1_policy_id: str
+    p2_policy_id: str
+    seed_start: int
+    metrics: "CollectionMetrics"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "p1_policy_id": self.p1_policy_id,
+            "p2_policy_id": self.p2_policy_id,
+            "seed_start": self.seed_start,
+            "metrics": self.metrics.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class BenchmarkHeadToHeadResult:
+    label: str
+    first_policy_id: str
+    second_policy_id: str
+    games: int
+    first_policy_wins: int
+    second_policy_wins: int
+    ties: int
+    capped_games: int
+
+    @property
+    def first_policy_win_rate(self) -> float:
+        return self.first_policy_wins / self.games if self.games else 0.0
+
+    @property
+    def second_policy_win_rate(self) -> float:
+        return self.second_policy_wins / self.games if self.games else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "first_policy_id": self.first_policy_id,
+            "second_policy_id": self.second_policy_id,
+            "games": self.games,
+            "first_policy_wins": self.first_policy_wins,
+            "second_policy_wins": self.second_policy_wins,
+            "ties": self.ties,
+            "capped_games": self.capped_games,
+            "first_policy_win_rate": self.first_policy_win_rate,
+            "second_policy_win_rate": self.second_policy_win_rate,
+        }
+
+
+@dataclass(frozen=True)
+class BenchmarkReport:
+    format_id: str
+    max_decision_rounds: int
+    games_per_matchup: int
+    matchups: tuple[BenchmarkMatchupResult, ...]
+
+    @property
+    def total_games(self) -> int:
+        return sum(result.metrics.games for result in self.matchups)
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return sum(result.metrics.elapsed_seconds for result in self.matchups)
+
+    @property
+    def total_decision_rounds(self) -> int:
+        return sum(result.metrics.total_decision_rounds for result in self.matchups)
+
+    @property
+    def games_per_second(self) -> float:
+        return self.total_games / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
+
+    @property
+    def decisions_per_second(self) -> float:
+        return self.total_decision_rounds / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
+
+    @property
+    def head_to_head_results(self) -> tuple[BenchmarkHeadToHeadResult, ...]:
+        return aggregate_benchmark_head_to_heads(self.matchups)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "format_id": self.format_id,
+            "max_decision_rounds": self.max_decision_rounds,
+            "games_per_matchup": self.games_per_matchup,
+            "total_games": self.total_games,
+            "elapsed_seconds": self.elapsed_seconds,
+            "games_per_second": self.games_per_second,
+            "decisions_per_second": self.decisions_per_second,
+            "matchups": [result.to_dict() for result in self.matchups],
+            "head_to_heads": [result.to_dict() for result in self.head_to_head_results],
+        }
+
+
+@dataclass(frozen=True)
 class RolloutRecord:
     battle_id: str
     seed: int
@@ -109,6 +217,91 @@ def collect_rollouts(
         raise
     elapsed = perf_counter() - collection_start
     return accumulator.to_metrics(elapsed_seconds=elapsed)
+
+
+def benchmark_rollouts(
+    *,
+    games: int,
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    seed_start: int = 1,
+    matchups: Iterable[BenchmarkMatchup] | None = None,
+) -> BenchmarkReport:
+    if games <= 0:
+        raise ValueError("games must be positive.")
+    selected_matchups = tuple(matchups) if matchups is not None else default_benchmark_matchups()
+    if not selected_matchups:
+        raise ValueError("at least one benchmark matchup is required.")
+
+    results: list[BenchmarkMatchupResult] = []
+    for matchup in selected_matchups:
+        policies = {
+            "p1": matchup.p1_policy,
+            "p2": matchup.p2_policy,
+        }
+        accumulator = _MetricsAccumulator()
+        matchup_start = perf_counter()
+        for game_index in range(games):
+            seed = seed_start + game_index
+            record = run_rollout_record(
+                env_factory=env_factory,
+                policies=policies,
+                rollout_config=rollout_config,
+                seed=seed,
+                battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
+            )
+            accumulator.add(record)
+        elapsed = perf_counter() - matchup_start
+        results.append(
+            BenchmarkMatchupResult(
+                label=matchup.label,
+                p1_policy_id=matchup.p1_policy.policy_id,
+                p2_policy_id=matchup.p2_policy.policy_id,
+                seed_start=seed_start,
+                metrics=accumulator.to_metrics(elapsed_seconds=elapsed),
+            )
+        )
+
+    return BenchmarkReport(
+        format_id=rollout_config.format_id,
+        max_decision_rounds=rollout_config.max_decision_rounds,
+        games_per_matchup=games,
+        matchups=tuple(results),
+    )
+
+
+def default_benchmark_matchups() -> tuple[BenchmarkMatchup, ...]:
+    return (
+        BenchmarkMatchup("random-legal vs random-legal", RandomLegalPolicy(), RandomLegalPolicy()),
+        BenchmarkMatchup("simple-legal vs random-legal", SimpleLegalPolicy(), RandomLegalPolicy()),
+        BenchmarkMatchup("random-legal vs simple-legal", RandomLegalPolicy(), SimpleLegalPolicy()),
+        BenchmarkMatchup("simple-legal vs simple-legal", SimpleLegalPolicy(), SimpleLegalPolicy()),
+    )
+
+
+def aggregate_benchmark_head_to_heads(
+    matchup_results: Iterable[BenchmarkMatchupResult],
+) -> tuple[BenchmarkHeadToHeadResult, ...]:
+    accumulators: dict[tuple[str, str], _HeadToHeadAccumulator] = {}
+    ordered_keys: list[tuple[str, str]] = []
+
+    for result in matchup_results:
+        p1_policy_id = result.p1_policy_id
+        p2_policy_id = result.p2_policy_id
+        if p1_policy_id == p2_policy_id:
+            continue
+        unordered_key = tuple(sorted((p1_policy_id, p2_policy_id)))
+        accumulator = accumulators.get(unordered_key)
+        if accumulator is None:
+            accumulator = _HeadToHeadAccumulator(
+                first_policy_id=p1_policy_id,
+                second_policy_id=p2_policy_id,
+            )
+            accumulators[unordered_key] = accumulator
+            ordered_keys.append(unordered_key)
+        accumulator.add(result)
+
+    return tuple(accumulators[key].to_result() for key in ordered_keys)
 
 
 def run_rollout_record(
@@ -239,6 +432,11 @@ def _temporary_output_path(output_path: Path) -> Path:
     return output_path.with_name(f".{output_path.name}.tmp")
 
 
+def _slugify_label(label: str) -> str:
+    slug = "".join(character.lower() if character.isalnum() else "-" for character in label.strip())
+    return "-".join(part for part in slug.split("-") if part)
+
+
 @dataclass
 class _MetricsAccumulator:
     games: int = 0
@@ -270,6 +468,43 @@ class _MetricsAccumulator:
             total_simulator_turns=self.total_simulator_turns,
             p1_wins=self.p1_wins,
             p2_wins=self.p2_wins,
+            ties=self.ties,
+            capped_games=self.capped_games,
+        )
+
+
+@dataclass
+class _HeadToHeadAccumulator:
+    first_policy_id: str
+    second_policy_id: str
+    games: int = 0
+    first_policy_wins: int = 0
+    second_policy_wins: int = 0
+    ties: int = 0
+    capped_games: int = 0
+
+    def add(self, result: BenchmarkMatchupResult) -> None:
+        metrics = result.metrics
+        self.games += metrics.games
+        self.ties += metrics.ties
+        self.capped_games += metrics.capped_games
+        if result.p1_policy_id == self.first_policy_id and result.p2_policy_id == self.second_policy_id:
+            self.first_policy_wins += metrics.p1_wins
+            self.second_policy_wins += metrics.p2_wins
+        elif result.p1_policy_id == self.second_policy_id and result.p2_policy_id == self.first_policy_id:
+            self.first_policy_wins += metrics.p2_wins
+            self.second_policy_wins += metrics.p1_wins
+        else:
+            raise ValueError("matchup result does not match head-to-head policies.")
+
+    def to_result(self) -> BenchmarkHeadToHeadResult:
+        return BenchmarkHeadToHeadResult(
+            label=f"{self.first_policy_id} vs {self.second_policy_id}",
+            first_policy_id=self.first_policy_id,
+            second_policy_id=self.second_policy_id,
+            games=self.games,
+            first_policy_wins=self.first_policy_wins,
+            second_policy_wins=self.second_policy_wins,
             ties=self.ties,
             capped_games=self.capped_games,
         )
