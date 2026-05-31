@@ -41,7 +41,6 @@ class LocalShowdownConfig:
     node_binary: str = "node"
     observation_spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC
     read_timeout_seconds: float = 10.0
-    idle_timeout_seconds: float = 0.02
 
     def resolved_showdown_root(self) -> Path:
         configured = self.showdown_root or os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT
@@ -119,11 +118,13 @@ class LocalShowdownEnv:
         states: dict[PlayerId, PlayerRelativeBattleState] = {
             player: self._state_for_player(player) for player in requested
         }
-        for player in requested:
-            choice = showdown_choice_for_action(states[player], actions[player])
-            self._send_command({"type": "choice", "player": player, "choice": choice})
-
         self._last_step_had_error = False
+        self._latest_requests = {}
+        choices = {
+            player: showdown_choice_for_action(states[player], actions[player])
+            for player in requested
+        }
+        self._send_command({"type": "choices", "choices": choices})
         self._read_until_boundary()
         if self._last_step_had_error:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
@@ -243,19 +244,15 @@ class LocalShowdownEnv:
 
     def _read_until_boundary(self) -> None:
         deadline = time.monotonic() + self.config.read_timeout_seconds
-        saw_event = False
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LocalShowdownError(self._timeout_message())
-            timeout = self.config.idle_timeout_seconds if saw_event else remaining
-            event = self._read_event(timeout=min(timeout, remaining))
+            event = self._read_event(timeout=remaining)
             if event is None:
-                if saw_event and (self._terminal is not None or self.requested_players()):
-                    return
                 continue
-            saw_event = True
-            self._apply_event(event)
+            if self._apply_event(event):
+                return
 
     def _read_event(self, *, timeout: float) -> Mapping[str, Any] | None:
         if self._stdout_queue is None:
@@ -274,12 +271,18 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted non-object event: {event!r}")
         return event
 
-    def _apply_event(self, event: Mapping[str, Any]) -> None:
+    def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")
         if event_type == "error":
             raise LocalShowdownError(str(event.get("message") or "Bridge error."))
+        if event_type == "ready":
+            return True
+        if event_type == "terminal":
+            if self._terminal is None:
+                self._terminal = TerminalState(winner=None, turn_count=self._latest_turn)
+            return True
         if event_type != "stream":
-            return
+            return False
         stream = event.get("stream")
         lines = event.get("lines")
         if not isinstance(stream, str) or not isinstance(lines, list):
@@ -293,7 +296,7 @@ class LocalShowdownEnv:
             for line in clean_lines:
                 self._lines.append(line)
                 self._update_public_state(line)
-            return
+            return False
         if stream in PLAYER_IDS:
             for line in clean_lines:
                 if line.startswith("|request|"):
@@ -303,6 +306,7 @@ class LocalShowdownEnv:
                     if side_id == stream:
                         self._latest_requests[stream] = request
                         self._lines.append(line)
+        return False
 
     def _update_public_state(self, line: str) -> None:
         if line.startswith("|turn|"):

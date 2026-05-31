@@ -40,6 +40,9 @@ try {
 }
 
 let streams = null;
+let boundaryRequests = {};
+let readyScheduled = false;
+let terminalScheduled = false;
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -51,6 +54,7 @@ function emitStreamChunk(stream, chunk) {
     .filter(line => line.length > 0);
   if (lines.length > 0) {
     emit({ type: "stream", stream, lines });
+    recordBoundaryLines(stream, lines);
   }
 }
 
@@ -76,10 +80,65 @@ function deriveSeed(seed, label) {
   return parts.join(",");
 }
 
+function resetBoundaryTracking() {
+  boundaryRequests = {};
+  readyScheduled = false;
+  terminalScheduled = false;
+}
+
+function recordBoundaryLines(stream, lines) {
+  if (stream === "omniscient" && lines.some(isTerminalLine)) {
+    scheduleTerminal();
+    return;
+  }
+  if (!["p1", "p2"].includes(stream)) return;
+  for (const line of lines) {
+    if (!line.startsWith("|request|")) continue;
+    const request = JSON.parse(line.slice("|request|".length));
+    const sideId = request?.side?.id;
+    if (sideId === stream) {
+      boundaryRequests[stream] = request;
+    }
+  }
+  if (boundaryRequests.p1 && boundaryRequests.p2) {
+    scheduleReady();
+  }
+}
+
+function scheduleReady() {
+  if (readyScheduled || terminalScheduled) return;
+  readyScheduled = true;
+  setImmediate(() => {
+    emit({
+      type: "ready",
+      requested: ["p1", "p2"].filter(player => isActionableRequest(boundaryRequests[player])),
+    });
+  });
+}
+
+function scheduleTerminal() {
+  if (terminalScheduled) return;
+  terminalScheduled = true;
+  setImmediate(() => {
+    emit({ type: "terminal" });
+  });
+}
+
+function isTerminalLine(line) {
+  return line.startsWith("|win|") || line === "|tie" || line.startsWith("|tie|");
+}
+
+function isActionableRequest(request) {
+  if (!request || request.wait || request.teamPreview) return false;
+  if (Array.isArray(request.forceSwitch) && request.forceSwitch.some(Boolean)) return true;
+  return Array.isArray(request.active) && request.active.length > 0;
+}
+
 async function startBattle(command) {
   if (streams) {
     throw new Error("A battle is already running in this bridge process.");
   }
+  resetBoundaryTracking();
   const battleStream = new BattleStream();
   streams = getPlayerStreams(battleStream);
   for (const name of ["omniscient", "p1", "p2"]) {
@@ -121,6 +180,26 @@ async function sendChoice(command) {
   emit({ type: "choice_ack", player, choice });
 }
 
+async function sendChoices(command) {
+  if (!streams) {
+    throw new Error("Cannot submit choices before starting a battle.");
+  }
+  const choices = command.choices;
+  if (!choices || typeof choices !== "object") {
+    throw new Error("Choices must be an object keyed by player.");
+  }
+  resetBoundaryTracking();
+  for (const player of ["p1", "p2"]) {
+    if (!Object.prototype.hasOwnProperty.call(choices, player)) continue;
+    const choice = choices[player];
+    if (typeof choice !== "string" || !choice.trim()) {
+      throw new Error(`Choice for ${player} must be a non-empty string.`);
+    }
+    await streams[player].write(choice);
+    emit({ type: "choice_ack", player, choice });
+  }
+}
+
 async function closeBattle() {
   if (streams) {
     await streams.omniscient.writeEnd();
@@ -136,6 +215,9 @@ async function handleCommand(command) {
       break;
     case "choice":
       await sendChoice(command);
+      break;
+    case "choices":
+      await sendChoices(command);
       break;
     case "close":
       await closeBattle();

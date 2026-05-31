@@ -80,7 +80,7 @@ def integration_config() -> LocalShowdownConfig | None:
         return None
     if shutil.which("node") is None:
         return None
-    return LocalShowdownConfig(showdown_root=root, read_timeout_seconds=10.0, idle_timeout_seconds=0.02)
+    return LocalShowdownConfig(showdown_root=root, read_timeout_seconds=10.0)
 
 
 class LocalShowdownRequestTest(unittest.TestCase):
@@ -139,6 +139,31 @@ class LocalShowdownRequestTest(unittest.TestCase):
         self.assertFalse(state.legal_action_mask[1])
         with self.assertRaisesRegex(ValueError, "not legal"):
             showdown_choice_for_action(state, 0)
+
+    def test_boundary_reader_ignores_choice_ack_and_stale_requests_until_ready(self) -> None:
+        env = LocalShowdownEnv(LocalShowdownConfig(read_timeout_seconds=1.0))
+        env._latest_requests = {
+            "p1": request_payload("p1"),
+            "p2": request_payload("p2"),
+        }
+        events = iter(
+            [
+                {"type": "choice_ack", "player": "p1", "choice": "move 1"},
+                None,
+                {"type": "ready", "requested": ["p1", "p2"]},
+            ]
+        )
+        calls = []
+
+        def read_event(*, timeout: float):
+            calls.append(timeout)
+            return next(events)
+
+        env._read_event = read_event  # type: ignore[method-assign]
+
+        env._read_until_boundary()
+
+        self.assertEqual(len(calls), 3)
 
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
