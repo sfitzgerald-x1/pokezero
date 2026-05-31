@@ -80,7 +80,7 @@ python -m pokezero.linear_cli benchmark \
 
 This baseline uses hashed observation-window features, a streaming shuffle buffer, and legal-action-masked linear objectives. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
 
-The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `return-weighted` objective uses terminal returns as signed gradient weights, reinforcing winning actions and suppressing losing actions. It is an early policy-gradient-style experiment, not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
+The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `reward-weighted` objective is an offline reward-weighted regression mode: it reinforces positive-return actions and ignores non-positive-return actions. It is not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
 
 ## Gen 3 Belief Sidecar
 

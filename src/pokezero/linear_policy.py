@@ -18,7 +18,7 @@ from .observation import PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
 LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v1"
-LinearTrainingObjective = Literal["behavior-cloning", "return-weighted"]
+LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 
 
 @dataclass(frozen=True)
@@ -123,8 +123,8 @@ class LinearTrainingConfig:
             raise ValueError("window_size must be positive.")
         if not 0.0 <= self.discount <= 1.0:
             raise ValueError("discount must be between 0 and 1.")
-        if self.objective not in ("behavior-cloning", "return-weighted"):
-            raise ValueError("objective must be behavior-cloning or return-weighted.")
+        if self.objective not in ("behavior-cloning", "reward-weighted"):
+            raise ValueError("objective must be behavior-cloning or reward-weighted.")
         if self.epochs <= 0:
             raise ValueError("epochs must be positive.")
         if self.learning_rate <= 0.0:
@@ -488,8 +488,8 @@ def _gradient_weight(
 ) -> float:
     if objective == "behavior-cloning":
         return 1.0
-    if objective == "return-weighted":
-        return float(example.return_value)
+    if objective == "reward-weighted":
+        return max(0.0, float(example.return_value))
     raise ValueError(f"Unsupported objective: {objective!r}.")
 
 
