@@ -30,6 +30,17 @@ from .collection import (
     rollout_record_to_dict,
     summarize_records,
 )
+from .dataset import (
+    MISSING_ACTION_INDEX,
+    TrajectoryDatasetConfig,
+    TrajectoryExample,
+    TrainingBatch,
+    batch_training_examples,
+    examples_from_record,
+    iter_training_batches,
+    iter_training_examples,
+    training_batch_from_examples,
+)
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .observation import ObservationSpec, PokeZeroObservationV0
@@ -57,6 +68,7 @@ __all__ = [
     "CandidateSetSummary",
     "CollectionMetrics",
     "MOVE_ACTION_COUNT",
+    "MISSING_ACTION_INDEX",
     "ObservationSpec",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
@@ -77,15 +89,22 @@ __all__ = [
     "ShowdownSubmission",
     "StepResult",
     "TerminalState",
+    "TrajectoryDatasetConfig",
+    "TrajectoryExample",
+    "TrainingBatch",
+    "batch_training_examples",
     "canonical_switch_action_map",
     "collect_rollouts",
     "detect_showdown_slot",
+    "examples_from_record",
     "is_move_action",
     "is_switch_action",
     "move_action_candidates",
     "normalize_for_player",
     "observation_from_player_state",
     "parse_showdown_replay",
+    "iter_training_batches",
+    "iter_training_examples",
     "iter_rollout_records",
     "read_rollout_records",
     "rollout_record_from_dict",
@@ -96,4 +115,5 @@ __all__ = [
     "summarize_records",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
+    "training_batch_from_examples",
 ]

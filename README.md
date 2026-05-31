@@ -31,6 +31,22 @@ python -m pokezero.rollout_cli benchmark \
 
 The benchmark command runs `random-legal` and `simple-legal` against each other in both seats, reports win/cap/turn-count metrics, and uses the same seed range for each matchup so results are easier to compare. The default `--games 20` is a throughput smoke. Use hundreds of games before treating the mirror-aggregated head-to-head rows as policy-quality evidence.
 
+## Trajectory Dataset Loading
+
+Rollout JSONL can be streamed into fixed-shape training examples and batches:
+
+```python
+from pokezero.dataset import TrajectoryDatasetConfig, iter_training_batches
+
+config = TrajectoryDatasetConfig(window_size=4, discount=1.0)
+for batch in iter_training_batches("runs/random-vs-random.jsonl", batch_size=64, config=config):
+    ...
+```
+
+Each example contains a left-padded per-player history window, the current legal-action mask, selected action, immediate reward, terminal-derived discounted return, opponent action metadata, and source identifiers. The batch objects are dependency-free tuple containers so they can be converted to NumPy, PyTorch, or another tensor runtime later without adding a training-framework dependency yet.
+
+Padding uses zero-shaped observation values plus `history_mask=False` for missing history slots. Training code must gate temporal attention or pooling with `history_mask`; categorical id `0` is not reserved as a universal padding token. The streaming order is also game-sequential, so gradient training should add a shuffle buffer before consuming batches directly.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:
