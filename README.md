@@ -54,6 +54,7 @@ Train the first dependency-free masked softmax policy from collected rollout JSO
 ```bash
 python -m pokezero.linear_cli train \
   --data runs/random-vs-random.jsonl \
+  --validation-data runs/heldout.jsonl \
   --out checkpoints/linear-softmax.json \
   --epochs 3 \
   --window-size 1
@@ -76,7 +77,9 @@ python -m pokezero.linear_cli benchmark \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This baseline uses hashed observation-window features and legal-action-masked softmax loss. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
+This baseline uses hashed observation-window features, a streaming shuffle buffer, and legal-action-masked behavior-cloning loss. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
+
+Behavior cloning can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. Use held-out validation data for reported accuracy, and treat useful policy improvement as blocked on either a stronger imitation source or a reward/advantage-weighted objective.
 
 ## Gen 3 Belief Sidecar
 

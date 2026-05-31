@@ -103,12 +103,14 @@ class LinearPolicyModel:
 
 @dataclass(frozen=True)
 class LinearTrainingConfig:
-    feature_count: int = 2048
+    feature_count: int = 131_072
     window_size: int = 1
     discount: float = 1.0
     epochs: int = 1
     learning_rate: float = 0.05
     l2: float = 0.0
+    shuffle_buffer_size: int = 1024
+    shuffle_seed: int = 1
     max_examples: int | None = None
     policy_id: str = "linear-softmax"
 
@@ -125,6 +127,8 @@ class LinearTrainingConfig:
             raise ValueError("learning_rate must be positive.")
         if self.l2 < 0.0:
             raise ValueError("l2 must be non-negative.")
+        if self.shuffle_buffer_size < 0:
+            raise ValueError("shuffle_buffer_size must be non-negative.")
         if self.max_examples is not None and self.max_examples <= 0:
             raise ValueError("max_examples must be positive when set.")
 
@@ -152,6 +156,7 @@ class LinearTrainingResult:
     model: LinearPolicyModel
     config: LinearTrainingConfig
     epochs: tuple[LinearEpochMetrics, ...]
+    validation_metrics: LinearEvaluationMetrics | None = None
 
     @property
     def final_metrics(self) -> LinearEpochMetrics:
@@ -225,6 +230,7 @@ def train_linear_policy(
     paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
     *,
     config: LinearTrainingConfig | None = None,
+    validation_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
 ) -> LinearTrainingResult:
     training_config = config or LinearTrainingConfig()
     weights = [list(row) for row in LinearPolicyModel.initialized(
@@ -243,7 +249,12 @@ def train_linear_policy(
         total_loss = 0.0
         correct = 0
         examples = 0
-        for example in iter_training_examples(paths, config=dataset_config):
+        for example in _iter_epoch_examples(
+            paths,
+            dataset_config=dataset_config,
+            shuffle_buffer_size=training_config.shuffle_buffer_size,
+            rng=random.Random(training_config.shuffle_seed + epoch - 1),
+        ):
             features = features_from_example(example, feature_count=training_config.feature_count)
             probabilities = _probabilities_from_weights(weights, features, example.legal_action_mask)
             total_loss += -math.log(max(probabilities[example.action_index], 1e-12))
@@ -273,15 +284,25 @@ def train_linear_policy(
             )
         )
 
+    model = LinearPolicyModel(
+        policy_id=training_config.policy_id,
+        feature_count=training_config.feature_count,
+        window_size=training_config.window_size,
+        weights=tuple(tuple(row) for row in weights),
+    )
+    validation_metrics = None
+    if validation_paths is not None:
+        validation_metrics = evaluate_linear_policy(
+            validation_paths,
+            model,
+            discount=training_config.discount,
+        )
+
     return LinearTrainingResult(
-        model=LinearPolicyModel(
-            policy_id=training_config.policy_id,
-            feature_count=training_config.feature_count,
-            window_size=training_config.window_size,
-            weights=tuple(tuple(row) for row in weights),
-        ),
+        model=model,
         config=training_config,
         epochs=tuple(epoch_metrics),
+        validation_metrics=validation_metrics,
     )
 
 
@@ -408,6 +429,30 @@ def load_linear_model(path: str | PathLike[str] | Path) -> LinearPolicyModel:
     return LinearPolicyModel.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def _iter_epoch_examples(
+    paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
+    *,
+    dataset_config: TrajectoryDatasetConfig,
+    shuffle_buffer_size: int,
+    rng: random.Random,
+) -> Iterable[TrajectoryExample]:
+    examples = iter_training_examples(paths, config=dataset_config)
+    if shuffle_buffer_size == 0:
+        yield from examples
+        return
+
+    buffer: list[TrajectoryExample] = []
+    for example in examples:
+        buffer.append(example)
+        if len(buffer) < shuffle_buffer_size:
+            continue
+        index = rng.randrange(len(buffer))
+        yield buffer.pop(index)
+    while buffer:
+        index = rng.randrange(len(buffer))
+        yield buffer.pop(index)
+
+
 def _sgd_update(
     *,
     weights: list[list[float]],
@@ -423,6 +468,7 @@ def _sgd_update(
         row = weights[action_index]
         for feature_index, feature_value in features.items():
             gradient = error * feature_value
+            # Sparse approximation: shrink only active feature buckets.
             if l2:
                 gradient += l2 * row[feature_index]
             row[feature_index] -= learning_rate * gradient

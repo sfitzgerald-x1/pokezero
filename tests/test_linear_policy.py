@@ -109,6 +109,40 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(restored.to_dict(), model.to_dict())
         self.assertEqual(restored.predict_action(features, LEGAL_TWO_ACTION_MASK), model.predict_action(features, LEGAL_TWO_ACTION_MASK))
 
+    def test_train_linear_policy_reports_held_out_validation_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            train_path = Path(temp_dir) / "train.jsonl"
+            validation_path = Path(temp_dir) / "validation.jsonl"
+            write_record(train_path, separable_record())
+            write_record(validation_path, separable_record())
+
+            result = train_linear_policy(
+                train_path,
+                config=LinearTrainingConfig(feature_count=128, epochs=2, learning_rate=0.01),
+                validation_paths=validation_path,
+            )
+
+        self.assertIsNotNone(result.validation_metrics)
+        assert result.validation_metrics is not None
+        self.assertEqual(result.validation_metrics.examples, 24)
+
+    def test_shuffle_seed_keeps_training_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, separable_record())
+            config = LinearTrainingConfig(
+                feature_count=128,
+                epochs=2,
+                learning_rate=0.01,
+                shuffle_buffer_size=4,
+                shuffle_seed=99,
+            )
+
+            first = train_linear_policy(data_path, config=config).model
+            second = train_linear_policy(data_path, config=config).model
+
+        self.assertEqual(first.to_dict(), second.to_dict())
+
     def test_linear_softmax_policy_respects_legal_mask(self) -> None:
         weights = [[0.0 for _ in range(8)] for _ in range(9)]
         weights[1][0] = 100.0
@@ -145,6 +179,8 @@ class LinearPolicyTest(unittest.TestCase):
                         "train",
                         "--data",
                         str(data_path),
+                        "--validation-data",
+                        str(data_path),
                         "--out",
                         str(checkpoint_path),
                         "--epochs",
@@ -153,6 +189,8 @@ class LinearPolicyTest(unittest.TestCase):
                         "0.01",
                         "--feature-count",
                         "128",
+                        "--shuffle-buffer-size",
+                        "4",
                     ]
                 )
                 evaluate_exit = linear_cli_main(

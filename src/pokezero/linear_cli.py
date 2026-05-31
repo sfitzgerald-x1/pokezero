@@ -28,13 +28,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     train = subparsers.add_parser("train", help="Train a masked linear policy from rollout JSONL.")
     train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
+    train.add_argument("--validation-data", type=Path, nargs="+", default=None, help="Optional held-out rollout JSONL for validation metrics.")
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
     train.add_argument("--epochs", type=int, default=1, help="Number of streaming training passes.")
     train.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
     train.add_argument("--l2", type=float, default=0.0, help="L2 penalty applied on active features.")
-    train.add_argument("--feature-count", type=int, default=2048, help="Hashed feature bucket count.")
+    train.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    train.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
+    train.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")
     train.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
     train.add_argument("--policy-id", default="linear-softmax", help="Policy id stored in the checkpoint.")
     train.set_defaults(func=_train)
@@ -78,14 +81,23 @@ def _train(args: argparse.Namespace) -> int:
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         l2=args.l2,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        shuffle_seed=args.shuffle_seed,
         max_examples=args.max_examples,
         policy_id=args.policy_id,
     )
-    result = train_linear_policy(args.data, config=config)
+    result = train_linear_policy(args.data, config=config, validation_paths=args.validation_data)
     save_linear_model(args.out, result.model)
     for metrics in result.epochs:
         print(
             f"epoch={metrics.epoch} examples={metrics.examples} "
+            f"loss={metrics.loss:.6f} accuracy={metrics.accuracy:.4f} "
+            f"elapsed_seconds={metrics.elapsed_seconds:.3f}"
+        )
+    if result.validation_metrics is not None:
+        metrics = result.validation_metrics
+        print(
+            f"validation examples={metrics.examples} "
             f"loss={metrics.loss:.6f} accuracy={metrics.accuracy:.4f} "
             f"elapsed_seconds={metrics.elapsed_seconds:.3f}"
         )
