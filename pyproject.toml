@@ -12,5 +12,8 @@ dependencies = [
   "websockets>=15.0.1,<16",
 ]
 
+[project.scripts]
+pokezero-rollout = "pokezero.rollout_cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -20,6 +20,15 @@ from .belief import (
     PublicBattleBeliefEngine,
     RevealedPokemonBelief,
 )
+from .collection import (
+    CollectionMetrics,
+    RolloutRecord,
+    collect_rollouts,
+    read_rollout_records,
+    rollout_record_from_dict,
+    rollout_record_to_dict,
+    summarize_records,
+)
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .observation import ObservationSpec, PokeZeroObservationV0
@@ -45,6 +54,7 @@ __all__ = [
     "AsyncPokeZeroEnv",
     "BattleBeliefSnapshot",
     "CandidateSetSummary",
+    "CollectionMetrics",
     "MOVE_ACTION_COUNT",
     "ObservationSpec",
     "PokeZeroEnv",
@@ -59,6 +69,7 @@ __all__ = [
     "PokemonSetSource",
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
+    "RolloutRecord",
     "ShowdownPokemon",
     "ShowdownPublicEvent",
     "ShowdownReplayState",
@@ -66,6 +77,7 @@ __all__ = [
     "StepResult",
     "TerminalState",
     "canonical_switch_action_map",
+    "collect_rollouts",
     "detect_showdown_slot",
     "is_move_action",
     "is_switch_action",
@@ -73,9 +85,13 @@ __all__ = [
     "normalize_for_player",
     "observation_from_player_state",
     "parse_showdown_replay",
+    "read_rollout_records",
+    "rollout_record_from_dict",
+    "rollout_record_to_dict",
     "showdown_choice_for_action",
     "showdown_submission_for_action",
     "stable_category_id",
+    "summarize_records",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
 ]
