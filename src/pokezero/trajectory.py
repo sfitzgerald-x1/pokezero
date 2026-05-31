@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional
 
 from .actions import ACTION_COUNT
 from .env import TerminalState
-from .observation import PokeZeroObservationV0
+from .observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, PokeZeroObservationV0
 
 
 @dataclass(frozen=True)
@@ -79,3 +79,143 @@ class BattleTrajectory:
 
     def steps_for_turn(self, turn_index: int) -> tuple[TrajectoryStep, ...]:
         return tuple(step for step in self.steps if step.turn_index == turn_index)
+
+
+def trajectory_to_dict(trajectory: BattleTrajectory) -> dict[str, Any]:
+    return {
+        "battle_id": trajectory.battle_id,
+        "format_id": trajectory.format_id,
+        "seed": trajectory.seed,
+        "metadata": dict(trajectory.metadata),
+        "terminal": _terminal_to_dict(trajectory.terminal),
+        "steps": [_step_to_dict(step) for step in trajectory.steps],
+    }
+
+
+def trajectory_from_dict(payload: Mapping[str, Any]) -> BattleTrajectory:
+    terminal_payload = payload.get("terminal")
+    trajectory = BattleTrajectory(
+        battle_id=str(payload["battle_id"]),
+        format_id=str(payload["format_id"]),
+        seed=int(payload["seed"]),
+        metadata=_mapping(payload.get("metadata", {})),
+    )
+    for step_payload in _sequence(payload.get("steps")):
+        trajectory.append(_step_from_dict(_mapping(step_payload)))
+    if terminal_payload is not None:
+        trajectory.record_terminal(_terminal_from_dict(_mapping(terminal_payload)))
+    return trajectory
+
+
+def _step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
+    return {
+        "player_id": step.player_id,
+        "turn_index": step.turn_index,
+        "observation": _observation_to_dict(step.observation),
+        "legal_action_mask": list(step.legal_action_mask),
+        "action_index": step.action_index,
+        "reward": step.reward,
+        "opponent_action_index": step.opponent_action_index,
+        "action_probability": step.action_probability,
+        "value_estimate": step.value_estimate,
+        "metadata": dict(step.metadata),
+    }
+
+
+def _step_from_dict(payload: Mapping[str, Any]) -> TrajectoryStep:
+    return TrajectoryStep(
+        player_id=str(payload["player_id"]),
+        turn_index=int(payload["turn_index"]),
+        observation=_observation_from_dict(_mapping(payload["observation"])),
+        legal_action_mask=tuple(bool(value) for value in _sequence(payload["legal_action_mask"])),
+        action_index=int(payload["action_index"]),
+        reward=float(payload.get("reward", 0.0)),
+        opponent_action_index=_optional_int(payload.get("opponent_action_index")),
+        action_probability=_optional_float(payload.get("action_probability")),
+        value_estimate=_optional_float(payload.get("value_estimate")),
+        metadata=_mapping(payload.get("metadata", {})),
+    )
+
+
+def _observation_to_dict(observation: PokeZeroObservationV0) -> dict[str, Any]:
+    return {
+        "schema_version": observation.schema_version,
+        "categorical_ids": observation.categorical_ids,
+        "numeric_features": observation.numeric_features,
+        "token_type_ids": observation.token_type_ids,
+        "attention_mask": observation.attention_mask,
+        "legal_action_mask": observation.legal_action_mask,
+        "perspective": _perspective_to_dict(observation.perspective),
+    }
+
+
+def _observation_from_dict(payload: Mapping[str, Any]) -> PokeZeroObservationV0:
+    return PokeZeroObservationV0(
+        categorical_ids=tuple(tuple(int(value) for value in row) for row in _sequence(payload["categorical_ids"])),
+        numeric_features=tuple(tuple(float(value) for value in row) for row in _sequence(payload["numeric_features"])),
+        token_type_ids=tuple(int(value) for value in _sequence(payload["token_type_ids"])),
+        attention_mask=tuple(bool(value) for value in _sequence(payload["attention_mask"])),
+        legal_action_mask=tuple(bool(value) for value in _sequence(payload["legal_action_mask"])),
+        perspective=_perspective_from_dict(payload.get("perspective")),
+        schema_version=str(payload.get("schema_version") or OBSERVATION_SCHEMA_VERSION),
+    )
+
+
+def _terminal_to_dict(terminal: Optional[TerminalState]) -> dict[str, Any] | None:
+    if terminal is None:
+        return None
+    return {
+        "winner": terminal.winner,
+        "turn_count": terminal.turn_count,
+        "capped": terminal.capped,
+    }
+
+
+def _terminal_from_dict(payload: Mapping[str, Any]) -> TerminalState:
+    winner = payload.get("winner")
+    return TerminalState(
+        winner=str(winner) if winner is not None else None,
+        turn_count=int(payload["turn_count"]),
+        capped=bool(payload.get("capped", False)),
+    )
+
+
+def _perspective_to_dict(perspective: ObservationPerspective | None) -> dict[str, Any] | None:
+    if perspective is None:
+        return None
+    return {
+        "player_id": perspective.player_id,
+        "showdown_slot": perspective.showdown_slot,
+        "opponent_showdown_slot": perspective.opponent_showdown_slot,
+    }
+
+
+def _perspective_from_dict(payload: Any) -> ObservationPerspective | None:
+    if payload is None:
+        return None
+    data = _mapping(payload)
+    return ObservationPerspective(
+        player_id=str(data["player_id"]),
+        showdown_slot=str(data["showdown_slot"]),
+        opponent_showdown_slot=str(data["opponent_showdown_slot"]),
+    )
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected JSON object payload.")
+    return value
+
+
+def _sequence(value: Any) -> tuple[Any, ...]:
+    if not isinstance(value, list | tuple):
+        raise ValueError("expected JSON array payload.")
+    return tuple(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)

@@ -6,6 +6,21 @@ The initial focus is Gen 3 random battles. The goal is to build a training loop 
 
 This repo will hold the self-play, training, evaluation, and model artifacts for that work.
 
+## Rollout Collection
+
+Collect local random-vs-random self-play trajectories as JSONL:
+
+```bash
+python -m pokezero.rollout_cli collect \
+  --games 10 \
+  --out runs/random-vs-random.jsonl \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+The Showdown checkout must be built so `dist/sim/index.js` exists. Each JSONL row contains one battle trajectory plus seed, policy ids, terminal outcome, decision-round count, simulator turn count, and elapsed time.
+
+The printed throughput metrics use wall-clock collection time, including JSONL serialization. Use `pokezero.collection.iter_rollout_records(path)` for streaming reads of large trajectory files.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:
