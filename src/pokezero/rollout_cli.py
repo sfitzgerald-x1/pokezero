@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
 
-from .collection import collect_rollouts, policy_from_name
+from .collection import BenchmarkReport, benchmark_rollouts, collect_rollouts, policy_from_name
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
 
@@ -27,6 +28,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--append", action="store_true", help="Append to the output JSONL instead of replacing it.")
     collect.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     collect.set_defaults(func=_collect)
+
+    benchmark = subparsers.add_parser("benchmark", help="Run baseline rollout benchmarks without writing trajectories.")
+    benchmark.add_argument("--games", type=int, default=20, help="Number of games to run per baseline matchup.")
+    benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed for every matchup.")
+    benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
+    benchmark.set_defaults(func=_benchmark)
     return parser
 
 
@@ -66,6 +77,28 @@ def _collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _benchmark(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    report = benchmark_rollouts(
+        games=args.games,
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=rollout_config,
+        seed_start=args.seed_start,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_benchmark_report(report)
+    return 0
+
+
 def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"games: {metrics['games']}")
     print(f"elapsed_seconds: {float(metrics['elapsed_seconds']):.3f}")
@@ -77,6 +110,37 @@ def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"capped_games: {metrics['capped_games']}")
     print(f"average_decision_rounds: {float(metrics['average_decision_rounds']):.2f}")
     print(f"average_simulator_turns: {float(metrics['average_simulator_turns']):.2f}")
+
+
+def _print_benchmark_report(report: BenchmarkReport) -> None:
+    print(f"format: {report.format_id}")
+    print(f"games_per_matchup: {report.games_per_matchup}")
+    print(f"max_decision_rounds: {report.max_decision_rounds}")
+    print(f"total_games: {report.total_games}")
+    print(f"elapsed_seconds: {report.elapsed_seconds:.3f}")
+    print(f"games_per_second: {report.games_per_second:.3f}")
+    print(f"decisions_per_second: {report.decisions_per_second:.3f}")
+    print("")
+    header = (
+        f"{'matchup':32} {'games':>5} {'p1_wins':>7} {'p2_wins':>7} {'ties':>4} {'capped':>6} "
+        f"{'avg_dec':>8} {'avg_turns':>9} {'games/s':>8} {'dec/s':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for result in report.matchups:
+        metrics = result.metrics
+        print(
+            f"{result.label[:32]:32} "
+            f"{metrics.games:5d} "
+            f"{metrics.p1_wins:7d} "
+            f"{metrics.p2_wins:7d} "
+            f"{metrics.ties:4d} "
+            f"{metrics.capped_games:6d} "
+            f"{metrics.average_decision_rounds:8.2f} "
+            f"{metrics.average_simulator_turns:9.2f} "
+            f"{metrics.games_per_second:8.3f} "
+            f"{metrics.decisions_per_second:8.3f}"
+        )
 
 
 if __name__ == "__main__":

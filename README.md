@@ -21,6 +21,16 @@ The Showdown checkout must be built so `dist/sim/index.js` exists. Each JSONL ro
 
 The printed throughput metrics use wall-clock collection time, including JSONL serialization. Use `pokezero.collection.iter_rollout_records(path)` for streaming reads of large trajectory files.
 
+Run baseline rollout benchmarks without writing trajectory JSONL:
+
+```bash
+python -m pokezero.rollout_cli benchmark \
+  --games 100 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+The benchmark command runs `random-legal` and `simple-legal` against each other in both seats, reports win/cap/turn-count metrics, and uses the same seed range for each matchup so results are easier to compare.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:
