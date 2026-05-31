@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+pokezero-linear = "pokezero.linear_cli:main"
 pokezero-rollout = "pokezero.rollout_cli:main"
 
 [tool.setuptools.packages.find]

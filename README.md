@@ -47,6 +47,40 @@ Each example contains a left-padded per-player history window, the current legal
 
 Padding uses zero-shaped observation values plus `history_mask=False` for missing history slots. Training code must gate temporal attention or pooling with `history_mask`; categorical id `0` is not reserved as a universal padding token. The streaming order is also game-sequential, so gradient training should add a shuffle buffer before consuming batches directly.
 
+## Linear Policy Baseline
+
+Train the first dependency-free masked softmax policy from collected rollout JSONL:
+
+```bash
+python -m pokezero.linear_cli train \
+  --data runs/random-vs-random.jsonl \
+  --validation-data runs/heldout.jsonl \
+  --out checkpoints/linear-softmax.json \
+  --epochs 3 \
+  --window-size 1
+```
+
+Evaluate the checkpoint offline against rollout labels:
+
+```bash
+python -m pokezero.linear_cli evaluate \
+  --data runs/random-vs-random.jsonl \
+  --checkpoint checkpoints/linear-softmax.json
+```
+
+Benchmark it in live local self-play against the fixed baselines:
+
+```bash
+python -m pokezero.linear_cli benchmark \
+  --checkpoint checkpoints/linear-softmax.json \
+  --games 20 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+This baseline uses hashed observation-window features, a streaming shuffle buffer, and legal-action-masked behavior-cloning loss. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
+
+Behavior cloning can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. Use held-out validation data for reported accuracy, and treat useful policy improvement as blocked on either a stronger imitation source or a reward/advantage-weighted objective.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:

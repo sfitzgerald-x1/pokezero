@@ -36,6 +36,7 @@ class RolloutDriver:
     config: RolloutConfig = field(default_factory=RolloutConfig)
 
     def run(self, *, seed: int, battle_id: str = "rollout") -> RolloutResult:
+        self._reset_policies()
         self.env.reset(seed=seed, format_id=self.config.format_id)
         player_rngs: dict[PlayerId, random.Random] = {}
         trajectory = BattleTrajectory(
@@ -127,6 +128,17 @@ class RolloutDriver:
             return self.policies[player_id]
         except KeyError as exc:
             raise ValueError(f"no policy configured for requested player {player_id!r}.") from exc
+
+    def _reset_policies(self) -> None:
+        seen: set[int] = set()
+        for policy in self.policies.values():
+            policy_id = id(policy)
+            if policy_id in seen:
+                continue
+            seen.add(policy_id)
+            reset = getattr(policy, "reset", None)
+            if callable(reset):
+                reset()
 
 
 def _opponent_action_index(
