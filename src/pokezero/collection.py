@@ -14,6 +14,7 @@ from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
 
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
+LINEAR_POLICY_SPEC_PREFIX = "linear:"
 
 
 @dataclass(frozen=True)
@@ -396,13 +397,28 @@ def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: floa
     return accumulator.to_metrics(elapsed_seconds=elapsed_seconds)
 
 
-def policy_from_name(name: str) -> Policy:
-    normalized = name.strip().lower()
-    if normalized == "random-legal":
+def policy_from_spec(spec: str) -> Policy:
+    normalized = spec.strip()
+    lowered = normalized.lower()
+    if lowered == "random-legal":
         return RandomLegalPolicy()
-    if normalized == "simple-legal":
+    if lowered == "simple-legal":
         return SimpleLegalPolicy()
-    raise ValueError(f"Unsupported policy: {name!r}. Expected random-legal or simple-legal.")
+    if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
+        from .linear_policy import LinearSoftmaxPolicy, load_linear_model
+
+        checkpoint = normalized[len(LINEAR_POLICY_SPEC_PREFIX) :].strip()
+        if not checkpoint:
+            raise ValueError("linear policy spec must include a checkpoint path after 'linear:'.")
+        return LinearSoftmaxPolicy(model=load_linear_model(Path(checkpoint)))
+    raise ValueError(
+        f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
+        "or linear:/path/to/checkpoint.json."
+    )
+
+
+def policy_from_name(name: str) -> Policy:
+    return policy_from_spec(name)
 
 
 def _terminal_to_dict(terminal: TerminalState) -> dict[str, Any]:

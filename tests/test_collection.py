@@ -17,12 +17,14 @@ from pokezero.collection import (
     default_benchmark_matchups,
     iter_rollout_records,
     policy_from_name,
+    policy_from_spec,
     read_rollout_records,
     rollout_record_from_dict,
     rollout_record_to_dict,
     summarize_records,
 )
 from pokezero.env import StepResult, TerminalState
+from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_linear_model
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy
@@ -306,6 +308,27 @@ class CollectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported policy"):
             policy_from_name("unknown")
 
+    def test_policy_from_spec_loads_linear_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "linear.json"
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="linear-test",
+                ),
+            )
+
+            policy = policy_from_spec(f"linear:{checkpoint_path}")
+
+        self.assertIsInstance(policy, LinearSoftmaxPolicy)
+        self.assertEqual(policy.policy_id, "linear-test")
+
+    def test_policy_from_spec_rejects_empty_linear_checkpoint_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "checkpoint path"):
+            policy_from_spec("linear:")
+
     def test_rollout_cli_collect_wires_arguments_and_prints_metrics(self) -> None:
         fake_metrics = CollectionMetrics(
             games=1,
@@ -344,6 +367,48 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 7)
         self.assertEqual(kwargs["policies"]["p1"].policy_id, "simple-legal")
         self.assertIn("games_per_second: 0.500", stdout.getvalue())
+
+    def test_rollout_cli_collect_loads_linear_policy_spec(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=1,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "linear.json"
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="linear-cli-test",
+                ),
+            )
+            with patch("pokezero.rollout_cli.collect_rollouts", return_value=fake_metrics) as collect:
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    exit_code = rollout_cli_main(
+                        [
+                            "collect",
+                            "--games",
+                            "1",
+                            "--out",
+                            str(Path(temp_dir) / "rollouts.jsonl"),
+                            "--p1-policy",
+                            f"linear:{checkpoint_path}",
+                            "--p2-policy",
+                            "random-legal",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = collect.call_args.kwargs
+        self.assertEqual(kwargs["policies"]["p1"].policy_id, "linear-cli-test")
+        self.assertEqual(kwargs["policies"]["p2"].policy_id, "random-legal")
 
     def test_rollout_cli_benchmark_wires_arguments_and_prints_report(self) -> None:
         fake_report = BenchmarkReport(
