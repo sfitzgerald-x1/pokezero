@@ -9,6 +9,7 @@ from unittest.mock import patch
 from pokezero.collection import (
     CollectionMetrics,
     collect_rollouts,
+    iter_rollout_records,
     policy_from_name,
     read_rollout_records,
     rollout_record_from_dict,
@@ -98,6 +99,11 @@ class OneTurnEnv:
         self.closed = True
 
 
+class ResetFailingEnv:
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        raise RuntimeError("boom")
+
+
 def integration_config() -> LocalShowdownConfig | None:
     root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
     if not (root / "dist" / "sim" / "index.js").exists():
@@ -144,11 +150,38 @@ class CollectionTest(unittest.TestCase):
             )
 
             records = read_rollout_records(output_path)
+            streamed_records = list(iter_rollout_records(output_path))
         self.assertEqual(metrics.games, 2)
         self.assertEqual(metrics.p1_wins, 2)
         self.assertEqual(metrics.total_decision_rounds, 2)
         self.assertEqual([record.seed for record in records], [10, 11])
+        self.assertEqual([record.seed for record in streamed_records], [10, 11])
         self.assertEqual([record.battle_id for record in records], ["rollout-10", "rollout-11"])
+
+    def test_collect_rollouts_non_append_preserves_existing_file_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rollouts.jsonl"
+            output_path.write_text("existing\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                collect_rollouts(
+                    output_path=output_path,
+                    games=1,
+                    env_factory=ResetFailingEnv,
+                    policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                )
+
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "existing\n")
+
+    def test_summarize_records_requires_explicit_elapsed_seconds(self) -> None:
+        records = [collect_one_record_for_test()]
+
+        metrics = summarize_records(records, elapsed_seconds=2.0)
+
+        self.assertEqual(metrics.games, 1)
+        self.assertEqual(metrics.elapsed_seconds, 2.0)
+        self.assertEqual(metrics.games_per_second, 0.5)
 
     def test_policy_from_name_rejects_unknown_policy(self) -> None:
         self.assertEqual(policy_from_name("random-legal").policy_id, "random-legal")

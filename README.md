@@ -19,6 +19,8 @@ python -m pokezero.rollout_cli collect \
 
 The Showdown checkout must be built so `dist/sim/index.js` exists. Each JSONL row contains one battle trajectory plus seed, policy ids, terminal outcome, decision-round count, simulator turn count, and elapsed time.
 
+The printed throughput metrics use wall-clock collection time, including JSONL serialization. Use `pokezero.collection.iter_rollout_records(path)` for streaming reads of large trajectory files.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:

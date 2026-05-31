@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable, Iterable, Mapping, TextIO
+from typing import Any, Callable, Iterable, Iterator, Mapping, TextIO
 
 from .env import PokeZeroEnv, TerminalState
 from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
@@ -87,19 +87,26 @@ def collect_rollouts(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     accumulator = _MetricsAccumulator()
     collection_start = perf_counter()
-    mode = "a" if append else "w"
-    with output_path.open(mode, encoding="utf-8") as handle:
-        for game_index in range(games):
-            seed = seed_start + game_index
-            record = run_rollout_record(
-                env_factory=env_factory,
-                policies=policies,
-                rollout_config=rollout_config,
-                seed=seed,
-                battle_id=f"rollout-{seed}",
-            )
-            accumulator.add(record)
-            write_rollout_record(handle, record)
+    write_path = output_path if append else _temporary_output_path(output_path)
+    try:
+        with write_path.open("a" if append else "w", encoding="utf-8") as handle:
+            for game_index in range(games):
+                seed = seed_start + game_index
+                record = run_rollout_record(
+                    env_factory=env_factory,
+                    policies=policies,
+                    rollout_config=rollout_config,
+                    seed=seed,
+                    battle_id=f"rollout-{seed}",
+                )
+                accumulator.add(record)
+                write_rollout_record(handle, record)
+        if not append:
+            write_path.replace(output_path)
+    except Exception:
+        if not append:
+            write_path.unlink(missing_ok=True)
+        raise
     elapsed = perf_counter() - collection_start
     return accumulator.to_metrics(elapsed_seconds=elapsed)
 
@@ -149,13 +156,15 @@ def write_rollout_record(handle: TextIO, record: RolloutRecord) -> None:
 
 
 def read_rollout_records(path: Path) -> tuple[RolloutRecord, ...]:
-    records: list[RolloutRecord] = []
+    return tuple(iter_rollout_records(path))
+
+
+def iter_rollout_records(path: Path) -> Iterator[RolloutRecord]:
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
-            records.append(rollout_record_from_dict(json.loads(line)))
-    return tuple(records)
+            yield rollout_record_from_dict(json.loads(line))
 
 
 def rollout_record_to_dict(record: RolloutRecord) -> dict[str, Any]:
@@ -187,20 +196,11 @@ def rollout_record_from_dict(payload: Mapping[str, Any]) -> RolloutRecord:
     )
 
 
-def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: float | None = None) -> CollectionMetrics:
-    records = tuple(records)
-    measured_elapsed = sum(record.elapsed_seconds for record in records)
-    elapsed = measured_elapsed if elapsed_seconds is None else elapsed_seconds
-    return CollectionMetrics(
-        games=len(records),
-        elapsed_seconds=elapsed,
-        total_decision_rounds=sum(record.decision_round_count for record in records),
-        total_simulator_turns=sum(record.terminal.turn_count for record in records),
-        p1_wins=sum(1 for record in records if record.terminal.winner == "p1"),
-        p2_wins=sum(1 for record in records if record.terminal.winner == "p2"),
-        ties=sum(1 for record in records if record.terminal.winner is None and not record.terminal.capped),
-        capped_games=sum(1 for record in records if record.terminal.capped),
-    )
+def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: float) -> CollectionMetrics:
+    accumulator = _MetricsAccumulator()
+    for record in records:
+        accumulator.add(record)
+    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds)
 
 
 def policy_from_name(name: str) -> Policy:
@@ -235,6 +235,10 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value
 
 
+def _temporary_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f".{output_path.name}.tmp")
+
+
 @dataclass
 class _MetricsAccumulator:
     games: int = 0
@@ -253,11 +257,9 @@ class _MetricsAccumulator:
             self.p1_wins += 1
         elif record.terminal.winner == "p2":
             self.p2_wins += 1
-        elif record.terminal.capped:
-            self.capped_games += 1
-        else:
+        elif not record.terminal.capped:
             self.ties += 1
-        if record.terminal.capped and record.terminal.winner is not None:
+        if record.terminal.capped:
             self.capped_games += 1
 
     def to_metrics(self, *, elapsed_seconds: float) -> CollectionMetrics:
