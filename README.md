@@ -21,6 +21,19 @@ The Showdown checkout must be built so `dist/sim/index.js` exists. Each JSONL ro
 
 The printed throughput metrics use wall-clock collection time, including JSONL serialization. Use `pokezero.collection.iter_rollout_records(path)` for streaming reads of large trajectory files.
 
+The `--p1-policy` and `--p2-policy` options accept `random-legal`, `simple-legal`, or a trained linear checkpoint spec:
+
+```bash
+python -m pokezero.rollout_cli collect \
+  --games 10 \
+  --out runs/linear-vs-random.jsonl \
+  --showdown-root /path/to/pokemon-showdown \
+  --p1-policy linear:checkpoints/linear-softmax.json \
+  --p2-policy random-legal
+```
+
+Linear checkpoint specs default to stochastic softmax sampling for collection. Add query options when needed, for example `linear:checkpoints/linear-softmax.json?deterministic=true` for argmax evaluation-style collection, or `linear:checkpoints/linear-softmax.json?epsilon=0.1&temperature=1.5` for exploratory self-play.
+
 Run baseline rollout benchmarks without writing trajectory JSONL:
 
 ```bash

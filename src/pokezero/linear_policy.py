@@ -188,6 +188,7 @@ class LinearSoftmaxPolicy:
     model: LinearPolicyModel
     deterministic: bool = True
     exploration_epsilon: float = 0.0
+    sampling_temperature: float = 1.0
     policy_id: str | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] = field(default_factory=dict, init=False)
 
@@ -196,6 +197,8 @@ class LinearSoftmaxPolicy:
             self.policy_id = self.model.policy_id
         if not 0.0 <= self.exploration_epsilon <= 1.0:
             raise ValueError("exploration_epsilon must be between 0 and 1.")
+        if self.sampling_temperature <= 0.0:
+            raise ValueError("sampling_temperature must be positive.")
 
     def reset(self) -> None:
         self._history_by_player.clear()
@@ -214,19 +217,39 @@ class LinearSoftmaxPolicy:
             window_size=self.model.window_size,
             feature_count=self.model.feature_count,
         )
-        probabilities = self.model.action_probabilities(features, observation.legal_action_mask)
+        probabilities = _probabilities_from_weights(
+            self.model.weights,
+            features,
+            observation.legal_action_mask,
+            temperature=self.sampling_temperature,
+        )
         legal = legal_action_indices(observation.legal_action_mask)
-        if self.exploration_epsilon and rng.random() < self.exploration_epsilon:
+        greedy_action = max(legal, key=lambda index: (probabilities[index], -index))
+        random_exploration = self.exploration_epsilon and rng.random() < self.exploration_epsilon
+        if random_exploration:
             action_index = rng.choice(legal)
         elif self.deterministic:
-            action_index = max(legal, key=lambda index: (probabilities[index], -index))
+            action_index = greedy_action
         else:
             action_index = _sample_action(probabilities, legal, rng)
+        action_probability = _behavior_probability(
+            action_index=action_index,
+            probabilities=probabilities,
+            legal=legal,
+            deterministic=self.deterministic,
+            greedy_action=greedy_action,
+            exploration_epsilon=self.exploration_epsilon,
+        )
         return PolicyDecision(
             action_index=action_index,
             policy_id=str(self.policy_id),
-            action_probability=probabilities[action_index],
-            metadata={"policy_family": "linear-softmax"},
+            action_probability=action_probability,
+            metadata={
+                "policy_family": "linear-softmax",
+                "deterministic": self.deterministic,
+                "exploration_epsilon": self.exploration_epsilon,
+                "sampling_temperature": self.sampling_temperature,
+            },
         )
 
 
@@ -497,9 +520,13 @@ def _probabilities_from_weights(
     weights: Sequence[Sequence[float]],
     features: Mapping[int, float],
     legal_action_mask: Sequence[bool],
+    *,
+    temperature: float = 1.0,
 ) -> tuple[float, ...]:
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive.")
     legal = legal_action_indices(legal_action_mask)
-    logits = tuple(_dot(row, features) for row in weights)
+    logits = tuple(_dot(row, features) / temperature for row in weights)
     max_logit = max(logits[action_index] for action_index in legal)
     exp_by_action = {
         action_index: math.exp(logits[action_index] - max_logit)
@@ -507,6 +534,23 @@ def _probabilities_from_weights(
     }
     denominator = sum(exp_by_action.values())
     return tuple(exp_by_action.get(action_index, 0.0) / denominator for action_index in range(ACTION_COUNT))
+
+
+def _behavior_probability(
+    *,
+    action_index: int,
+    probabilities: Sequence[float],
+    legal: Sequence[int],
+    deterministic: bool,
+    greedy_action: int,
+    exploration_epsilon: float,
+) -> float:
+    random_component = exploration_epsilon / len(legal) if legal else 0.0
+    if deterministic:
+        policy_mass = 1.0 if action_index == greedy_action else 0.0
+    else:
+        policy_mass = probabilities[action_index]
+    return random_component + ((1.0 - exploration_epsilon) * policy_mass)
 
 
 def _dot(row: Sequence[float], features: Mapping[int, float]) -> float:

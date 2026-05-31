@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, TextIO
+from urllib.parse import parse_qsl
 
 from .env import PokeZeroEnv, TerminalState
 from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
@@ -14,6 +15,7 @@ from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
 
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
+LINEAR_POLICY_SPEC_PREFIX = "linear:"
 
 
 @dataclass(frozen=True)
@@ -396,13 +398,98 @@ def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: floa
     return accumulator.to_metrics(elapsed_seconds=elapsed_seconds)
 
 
-def policy_from_name(name: str) -> Policy:
-    normalized = name.strip().lower()
-    if normalized == "random-legal":
+def policy_from_spec(spec: str) -> Policy:
+    normalized = spec.strip()
+    policy_body, options = _split_policy_spec_options(normalized)
+    lowered = policy_body.lower()
+    if lowered == "random-legal":
+        if options:
+            raise ValueError("random-legal does not support policy spec options.")
         return RandomLegalPolicy()
-    if normalized == "simple-legal":
+    if lowered == "simple-legal":
+        if options:
+            raise ValueError("simple-legal does not support policy spec options.")
         return SimpleLegalPolicy()
-    raise ValueError(f"Unsupported policy: {name!r}. Expected random-legal or simple-legal.")
+    if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
+        from .linear_policy import LinearSoftmaxPolicy, load_linear_model
+
+        checkpoint = policy_body[len(LINEAR_POLICY_SPEC_PREFIX) :].strip()
+        if not checkpoint:
+            raise ValueError("linear policy spec must include a checkpoint path after 'linear:'.")
+        linear_options = _linear_policy_options(options)
+        return LinearSoftmaxPolicy(model=load_linear_model(Path(checkpoint)), **linear_options)
+    raise ValueError(
+        f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
+        "or linear:/path/to/checkpoint.json."
+    )
+
+
+def policy_from_name(name: str) -> Policy:
+    return policy_from_spec(name)
+
+
+def _split_policy_spec_options(spec: str) -> tuple[str, dict[str, str]]:
+    body, separator, query = spec.partition("?")
+    if not separator:
+        return body, {}
+    options: dict[str, str] = {}
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        normalized_key = key.strip().lower()
+        if not normalized_key:
+            raise ValueError("policy spec option names must be non-empty.")
+        if normalized_key in options:
+            raise ValueError(f"duplicate policy spec option: {normalized_key}.")
+        options[normalized_key] = value.strip()
+    return body, options
+
+
+def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
+    supported = {"sample", "deterministic", "epsilon", "temperature"}
+    unknown = sorted(set(options) - supported)
+    if unknown:
+        raise ValueError(f"Unsupported linear policy option(s): {', '.join(unknown)}.")
+
+    sample = _optional_bool(options, "sample")
+    deterministic = _optional_bool(options, "deterministic")
+    if sample is not None and deterministic is not None and sample == deterministic:
+        raise ValueError("linear policy options 'sample' and 'deterministic' conflict.")
+    deterministic_policy = deterministic if deterministic is not None else False
+    if sample is not None:
+        deterministic_policy = not sample
+
+    exploration_epsilon = _optional_float(options, "epsilon", default=0.0)
+    sampling_temperature = _optional_float(options, "temperature", default=1.0)
+    if not 0.0 <= exploration_epsilon <= 1.0:
+        raise ValueError("linear policy epsilon must be between 0 and 1.")
+    if sampling_temperature <= 0.0:
+        raise ValueError("linear policy temperature must be positive.")
+    return {
+        "deterministic": deterministic_policy,
+        "exploration_epsilon": exploration_epsilon,
+        "sampling_temperature": sampling_temperature,
+    }
+
+
+def _optional_bool(options: Mapping[str, str], key: str) -> bool | None:
+    if key not in options:
+        return None
+    value = options[key].strip().lower()
+    if value == "":
+        return True
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"policy spec option {key!r} must be a boolean value.")
+
+
+def _optional_float(options: Mapping[str, str], key: str, *, default: float) -> float:
+    if key not in options:
+        return default
+    try:
+        return float(options[key])
+    except ValueError as exc:
+        raise ValueError(f"policy spec option {key!r} must be numeric.") from exc
 
 
 def _terminal_to_dict(terminal: TerminalState) -> dict[str, Any]:
