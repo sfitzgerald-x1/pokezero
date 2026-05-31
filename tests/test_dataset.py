@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -85,7 +86,7 @@ def rollout_record() -> RolloutRecord:
 
 
 class DatasetTest(unittest.TestCase):
-    def test_examples_use_same_player_history_windows_and_discounted_returns(self) -> None:
+    def test_examples_use_same_player_history_windows_and_terminal_returns(self) -> None:
         examples = list(
             examples_from_record(
                 rollout_record(),
@@ -104,9 +105,43 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(p1_second.history_mask, (True, True))
         self.assertEqual(p1_second.categorical_ids[0][0][0], 5)
         self.assertEqual(p1_second.categorical_ids[1][0][0], 6)
-        self.assertAlmostEqual(p1_first.return_value, 2.5)
-        self.assertAlmostEqual(p1_second.return_value, 3.0)
+        self.assertAlmostEqual(p1_first.return_value, 0.5)
+        self.assertAlmostEqual(p1_second.return_value, 1.0)
         self.assertAlmostEqual(p2_first.return_value, -1.0)
+
+    def test_returns_use_terminal_winner_even_when_winner_has_no_final_step_reward(self) -> None:
+        trajectory = BattleTrajectory(battle_id="asymmetric", format_id="gen3randombattle", seed=5)
+        trajectory.append(step(player_id="p1", turn_index=0, value=5, reward=0.0))
+        trajectory.append(step(player_id="p2", turn_index=1, value=50, reward=-1.0))
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+        record = RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "test", "p2": "test"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        p1_examples = [
+            example
+            for example in examples_from_record(record, config=TrajectoryDatasetConfig(window_size=1))
+            if example.player_id == "p1"
+        ]
+
+        self.assertEqual([example.reward for example in p1_examples], [0.0])
+        self.assertEqual([example.return_value for example in p1_examples], [1.0])
+
+    def test_capped_or_tied_terminal_returns_are_zero(self) -> None:
+        record = rollout_record()
+        terminal = TerminalState(winner=None, turn_count=250, capped=True)
+        record.trajectory.record_terminal(terminal)
+        record = replace(record, terminal=terminal)
+
+        examples = list(examples_from_record(record, config=TrajectoryDatasetConfig(window_size=1)))
+
+        self.assertEqual({example.return_value for example in examples}, {0.0})
 
     def test_training_batch_preserves_labels_and_optional_field_masks(self) -> None:
         examples = list(examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=2)))

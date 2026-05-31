@@ -18,7 +18,12 @@ PathInput = str | PathLike[str] | Path
 
 @dataclass(frozen=True)
 class TrajectoryDatasetConfig:
-    """Controls how serialized rollout steps become training examples."""
+    """Controls how serialized rollout steps become training examples.
+
+    Discounting is applied per recorded decision for each player. Terminal
+    returns are derived from the battle result rather than sparse per-step
+    rewards, so asymmetric final rounds still label both players' histories.
+    """
 
     window_size: int = 1
     discount: float = 1.0
@@ -255,13 +260,21 @@ def _discounted_returns_by_step_index(record: RolloutRecord, *, discount: float)
         step_indices_by_player.setdefault(step.player_id, []).append(step_index)
 
     returns_by_step_index: dict[int, float] = {}
-    for step_indices in step_indices_by_player.values():
-        running_return = 0.0
+    for player_id, step_indices in step_indices_by_player.items():
+        running_return = _terminal_value_for_player(record, player_id)
         for step_index in reversed(step_indices):
-            step = record.trajectory.steps[step_index]
-            running_return = float(step.reward) + discount * running_return
             returns_by_step_index[step_index] = running_return
+            running_return *= discount
     return returns_by_step_index
+
+
+def _terminal_value_for_player(record: RolloutRecord, player_id: str) -> float:
+    terminal = record.terminal or record.trajectory.terminal
+    if terminal is None or terminal.capped or terminal.winner is None:
+        return 0.0
+    if terminal.winner == player_id:
+        return 1.0
+    return -1.0
 
 
 def _normalize_paths(paths: PathInput | Iterable[PathInput]) -> tuple[Path, ...]:

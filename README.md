@@ -43,7 +43,9 @@ for batch in iter_training_batches("runs/random-vs-random.jsonl", batch_size=64,
     ...
 ```
 
-Each example contains a left-padded per-player history window, the current legal-action mask, selected action, immediate reward, discounted return, opponent action metadata, and source identifiers. The batch objects are dependency-free tuple containers so they can be converted to NumPy, PyTorch, or another tensor runtime later without adding a training-framework dependency yet.
+Each example contains a left-padded per-player history window, the current legal-action mask, selected action, immediate reward, terminal-derived discounted return, opponent action metadata, and source identifiers. The batch objects are dependency-free tuple containers so they can be converted to NumPy, PyTorch, or another tensor runtime later without adding a training-framework dependency yet.
+
+Padding uses zero-shaped observation values plus `history_mask=False` for missing history slots. Training code must gate temporal attention or pooling with `history_mask`; categorical id `0` is not reserved as a universal padding token. The streaming order is also game-sequential, so gradient training should add a shuffle buffer before consuming batches directly.
 
 ## Gen 3 Belief Sidecar
 
