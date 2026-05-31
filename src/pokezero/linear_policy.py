@@ -10,7 +10,7 @@ from os import PathLike
 from pathlib import Path
 import random
 from time import perf_counter
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_examples
@@ -18,6 +18,7 @@ from .observation import PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
 LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v1"
+LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class LinearTrainingConfig:
     feature_count: int = 131_072
     window_size: int = 1
     discount: float = 1.0
+    objective: LinearTrainingObjective = "behavior-cloning"
     epochs: int = 1
     learning_rate: float = 0.05
     l2: float = 0.0
@@ -121,6 +123,8 @@ class LinearTrainingConfig:
             raise ValueError("window_size must be positive.")
         if not 0.0 <= self.discount <= 1.0:
             raise ValueError("discount must be between 0 and 1.")
+        if self.objective not in ("behavior-cloning", "reward-weighted"):
+            raise ValueError("objective must be behavior-cloning or reward-weighted.")
         if self.epochs <= 0:
             raise ValueError("epochs must be positive.")
         if self.learning_rate <= 0.0:
@@ -266,6 +270,7 @@ def train_linear_policy(
                 probabilities=probabilities,
                 legal_action_mask=example.legal_action_mask,
                 target_action=example.action_index,
+                gradient_weight=_gradient_weight(example, training_config.objective),
                 learning_rate=training_config.learning_rate,
                 l2=training_config.l2,
             )
@@ -460,11 +465,14 @@ def _sgd_update(
     probabilities: Sequence[float],
     legal_action_mask: Sequence[bool],
     target_action: int,
+    gradient_weight: float,
     learning_rate: float,
     l2: float,
 ) -> None:
+    if gradient_weight == 0.0:
+        return
     for action_index in legal_action_indices(legal_action_mask):
-        error = probabilities[action_index] - (1.0 if action_index == target_action else 0.0)
+        error = gradient_weight * (probabilities[action_index] - (1.0 if action_index == target_action else 0.0))
         row = weights[action_index]
         for feature_index, feature_value in features.items():
             gradient = error * feature_value
@@ -472,6 +480,17 @@ def _sgd_update(
             if l2:
                 gradient += l2 * row[feature_index]
             row[feature_index] -= learning_rate * gradient
+
+
+def _gradient_weight(
+    example: TrajectoryExample,
+    objective: LinearTrainingObjective,
+) -> float:
+    if objective == "behavior-cloning":
+        return 1.0
+    if objective == "reward-weighted":
+        return max(0.0, float(example.return_value))
+    raise ValueError(f"Unsupported objective: {objective!r}.")
 
 
 def _probabilities_from_weights(

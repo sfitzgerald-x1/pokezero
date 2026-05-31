@@ -57,6 +57,7 @@ python -m pokezero.linear_cli train \
   --validation-data runs/heldout.jsonl \
   --out checkpoints/linear-softmax.json \
   --epochs 3 \
+  --objective behavior-cloning \
   --window-size 1
 ```
 
@@ -77,9 +78,9 @@ python -m pokezero.linear_cli benchmark \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This baseline uses hashed observation-window features, a streaming shuffle buffer, and legal-action-masked behavior-cloning loss. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
+This baseline uses hashed observation-window features, a streaming shuffle buffer, and legal-action-masked linear objectives. It is intentionally small and CPU-only; its purpose is to validate the train/save/load/evaluate loop before adding a heavier learner.
 
-Behavior cloning can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. Use held-out validation data for reported accuracy, and treat useful policy improvement as blocked on either a stronger imitation source or a reward/advantage-weighted objective.
+The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `reward-weighted` objective is an offline reward-weighted regression mode: it reinforces positive-return actions and ignores non-positive-return actions. It is not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
 
 ## Gen 3 Belief Sidecar
 

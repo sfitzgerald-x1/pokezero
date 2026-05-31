@@ -63,6 +63,54 @@ def separable_record() -> RolloutRecord:
     )
 
 
+def losing_action_record() -> RolloutRecord:
+    trajectory = BattleTrajectory(battle_id="linear-losing", format_id="gen3randombattle", seed=2)
+    trajectory.append(
+        TrajectoryStep(
+            player_id="p1",
+            turn_index=0,
+            observation=observation(10),
+            legal_action_mask=LEGAL_TWO_ACTION_MASK,
+            action_index=0,
+        )
+    )
+    trajectory.record_terminal(TerminalState(winner="p2", turn_count=1))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "loser"},
+        decision_round_count=1,
+        elapsed_seconds=0.1,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
+def winning_action_record() -> RolloutRecord:
+    trajectory = BattleTrajectory(battle_id="linear-winning", format_id="gen3randombattle", seed=3)
+    trajectory.append(
+        TrajectoryStep(
+            player_id="p1",
+            turn_index=0,
+            observation=observation(10),
+            legal_action_mask=LEGAL_TWO_ACTION_MASK,
+            action_index=1,
+        )
+    )
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=1))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "winner"},
+        decision_round_count=1,
+        elapsed_seconds=0.1,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
 def write_record(path: Path, record: RolloutRecord) -> None:
     with path.open("w", encoding="utf-8") as handle:
         write_rollout_record(handle, record)
@@ -125,6 +173,47 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertIsNotNone(result.validation_metrics)
         assert result.validation_metrics is not None
         self.assertEqual(result.validation_metrics.examples, 24)
+
+    def test_reward_weighted_objective_ignores_losing_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, losing_action_record())
+
+            model = train_linear_policy(
+                data_path,
+                config=LinearTrainingConfig(
+                    feature_count=128,
+                    epochs=1,
+                    learning_rate=0.01,
+                    objective="reward-weighted",
+                    shuffle_buffer_size=0,
+                ),
+            ).model
+
+        self.assertEqual(model.to_dict(), LinearPolicyModel.initialized(feature_count=128, window_size=1).to_dict())
+
+    def test_reward_weighted_objective_reinforces_winning_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, winning_action_record())
+
+            model = train_linear_policy(
+                data_path,
+                config=LinearTrainingConfig(
+                    feature_count=128,
+                    epochs=1,
+                    learning_rate=0.01,
+                    objective="reward-weighted",
+                    shuffle_buffer_size=0,
+                ),
+            ).model
+            features = features_from_observation_window(
+                [observation(10)],
+                window_size=model.window_size,
+                feature_count=model.feature_count,
+            )
+
+        self.assertEqual(model.predict_action(features, LEGAL_TWO_ACTION_MASK), 1)
 
     def test_shuffle_seed_keeps_training_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -189,6 +278,8 @@ class LinearPolicyTest(unittest.TestCase):
                         "0.01",
                         "--feature-count",
                         "128",
+                        "--objective",
+                        "reward-weighted",
                         "--shuffle-buffer-size",
                         "4",
                     ]

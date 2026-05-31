@@ -36,6 +36,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    train.add_argument(
+        "--objective",
+        choices=("behavior-cloning", "reward-weighted"),
+        default="behavior-cloning",
+        help="Training objective. reward-weighted reinforces positive-return actions and ignores non-positive returns.",
+    )
     train.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
     train.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")
     train.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
@@ -78,6 +84,7 @@ def _train(args: argparse.Namespace) -> int:
         feature_count=args.feature_count,
         window_size=args.window_size,
         discount=args.discount,
+        objective=args.objective,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         l2=args.l2,
