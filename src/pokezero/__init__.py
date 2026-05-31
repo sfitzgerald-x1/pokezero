@@ -21,6 +21,7 @@ from .belief import (
     RevealedPokemonBelief,
 )
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .observation import ObservationSpec, PokeZeroObservationV0
 from .showdown import (
     PlayerRelativeBattleState,
@@ -48,6 +49,9 @@ __all__ = [
     "ObservationSpec",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
+    "LocalShowdownConfig",
+    "LocalShowdownEnv",
+    "LocalShowdownError",
     "SWITCH_ACTION_COUNT",
     "PlayerRelativeBattleState",
     "PlayerRelativePublicEvent",
