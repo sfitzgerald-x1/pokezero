@@ -29,7 +29,7 @@ python -m pokezero.rollout_cli benchmark \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-The benchmark command runs `random-legal` and `simple-legal` against each other in both seats, reports win/cap/turn-count metrics, and uses the same seed range for each matchup so results are easier to compare.
+The benchmark command runs `random-legal` and `simple-legal` against each other in both seats, reports win/cap/turn-count metrics, and uses the same seed range for each matchup so results are easier to compare. The default `--games 20` is a throughput smoke. Use hundreds of games before treating the mirror-aggregated head-to-head rows as policy-quality evidence.
 
 ## Gen 3 Belief Sidecar
 

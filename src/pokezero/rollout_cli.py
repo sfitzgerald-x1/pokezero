@@ -29,8 +29,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     collect.set_defaults(func=_collect)
 
-    benchmark = subparsers.add_parser("benchmark", help="Run baseline rollout benchmarks without writing trajectories.")
-    benchmark.add_argument("--games", type=int, default=20, help="Number of games to run per baseline matchup.")
+    benchmark = subparsers.add_parser("benchmark", help="Run baseline rollout throughput benchmarks without writing trajectories.")
+    benchmark.add_argument(
+        "--games",
+        type=int,
+        default=20,
+        help="Number of games to run per baseline matchup. Default is a smoke size; use hundreds for quality comparisons.",
+    )
     benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed for every matchup.")
@@ -120,6 +125,7 @@ def _print_benchmark_report(report: BenchmarkReport) -> None:
     print(f"elapsed_seconds: {report.elapsed_seconds:.3f}")
     print(f"games_per_second: {report.games_per_second:.3f}")
     print(f"decisions_per_second: {report.decisions_per_second:.3f}")
+    print("note: default --games is a throughput smoke; use larger N for policy-quality claims.")
     print("")
     header = (
         f"{'matchup':32} {'games':>5} {'p1_wins':>7} {'p2_wins':>7} {'ties':>4} {'capped':>6} "
@@ -140,6 +146,26 @@ def _print_benchmark_report(report: BenchmarkReport) -> None:
             f"{metrics.average_simulator_turns:9.2f} "
             f"{metrics.games_per_second:8.3f} "
             f"{metrics.decisions_per_second:8.3f}"
+        )
+    if not report.head_to_head_results:
+        return
+    print("")
+    head_to_head_header = (
+        f"{'mirror head-to-head':32} {'games':>5} {'first_w':>7} {'second_w':>8} {'ties':>4} {'capped':>6} "
+        f"{'first_wr':>8} {'second_wr':>9}"
+    )
+    print(head_to_head_header)
+    print("-" * len(head_to_head_header))
+    for result in report.head_to_head_results:
+        print(
+            f"{result.label[:32]:32} "
+            f"{result.games:5d} "
+            f"{result.first_policy_wins:7d} "
+            f"{result.second_policy_wins:8d} "
+            f"{result.ties:4d} "
+            f"{result.capped_games:6d} "
+            f"{result.first_policy_win_rate:8.3f} "
+            f"{result.second_policy_win_rate:9.3f}"
         )
 
 

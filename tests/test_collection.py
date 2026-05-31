@@ -11,6 +11,7 @@ from pokezero.collection import (
     BenchmarkMatchupResult,
     BenchmarkReport,
     CollectionMetrics,
+    aggregate_benchmark_head_to_heads,
     benchmark_rollouts,
     collect_rollouts,
     default_benchmark_matchups,
@@ -209,6 +210,70 @@ class CollectionTest(unittest.TestCase):
         )
 
         self.assertEqual(reset_seeds, [7, 8, 7, 8])
+
+    def test_benchmark_head_to_head_aggregates_mirror_pair(self) -> None:
+        rows = (
+            BenchmarkMatchupResult(
+                label="simple-legal vs random-legal",
+                p1_policy_id="simple-legal",
+                p2_policy_id="random-legal",
+                seed_start=1,
+                metrics=CollectionMetrics(
+                    games=10,
+                    elapsed_seconds=1.0,
+                    total_decision_rounds=20,
+                    total_simulator_turns=18,
+                    p1_wins=6,
+                    p2_wins=3,
+                    ties=1,
+                    capped_games=0,
+                ),
+            ),
+            BenchmarkMatchupResult(
+                label="random-legal vs simple-legal",
+                p1_policy_id="random-legal",
+                p2_policy_id="simple-legal",
+                seed_start=1,
+                metrics=CollectionMetrics(
+                    games=10,
+                    elapsed_seconds=1.0,
+                    total_decision_rounds=20,
+                    total_simulator_turns=18,
+                    p1_wins=4,
+                    p2_wins=5,
+                    ties=0,
+                    capped_games=1,
+                ),
+            ),
+            BenchmarkMatchupResult(
+                label="random-legal vs random-legal",
+                p1_policy_id="random-legal",
+                p2_policy_id="random-legal",
+                seed_start=1,
+                metrics=CollectionMetrics(
+                    games=10,
+                    elapsed_seconds=1.0,
+                    total_decision_rounds=20,
+                    total_simulator_turns=18,
+                    p1_wins=5,
+                    p2_wins=5,
+                    ties=0,
+                    capped_games=0,
+                ),
+            ),
+        )
+
+        head_to_heads = aggregate_benchmark_head_to_heads(rows)
+
+        self.assertEqual(len(head_to_heads), 1)
+        result = head_to_heads[0]
+        self.assertEqual(result.label, "simple-legal vs random-legal")
+        self.assertEqual(result.games, 20)
+        self.assertEqual(result.first_policy_wins, 11)
+        self.assertEqual(result.second_policy_wins, 7)
+        self.assertEqual(result.ties, 1)
+        self.assertEqual(result.capped_games, 1)
+        self.assertAlmostEqual(result.first_policy_win_rate, 0.55)
 
     def test_collect_rollouts_non_append_preserves_existing_file_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

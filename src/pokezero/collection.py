@@ -46,6 +46,40 @@ class BenchmarkMatchupResult:
 
 
 @dataclass(frozen=True)
+class BenchmarkHeadToHeadResult:
+    label: str
+    first_policy_id: str
+    second_policy_id: str
+    games: int
+    first_policy_wins: int
+    second_policy_wins: int
+    ties: int
+    capped_games: int
+
+    @property
+    def first_policy_win_rate(self) -> float:
+        return self.first_policy_wins / self.games if self.games else 0.0
+
+    @property
+    def second_policy_win_rate(self) -> float:
+        return self.second_policy_wins / self.games if self.games else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "first_policy_id": self.first_policy_id,
+            "second_policy_id": self.second_policy_id,
+            "games": self.games,
+            "first_policy_wins": self.first_policy_wins,
+            "second_policy_wins": self.second_policy_wins,
+            "ties": self.ties,
+            "capped_games": self.capped_games,
+            "first_policy_win_rate": self.first_policy_win_rate,
+            "second_policy_win_rate": self.second_policy_win_rate,
+        }
+
+
+@dataclass(frozen=True)
 class BenchmarkReport:
     format_id: str
     max_decision_rounds: int
@@ -72,6 +106,10 @@ class BenchmarkReport:
     def decisions_per_second(self) -> float:
         return self.total_decision_rounds / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
 
+    @property
+    def head_to_head_results(self) -> tuple[BenchmarkHeadToHeadResult, ...]:
+        return aggregate_benchmark_head_to_heads(self.matchups)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "format_id": self.format_id,
@@ -82,6 +120,7 @@ class BenchmarkReport:
             "games_per_second": self.games_per_second,
             "decisions_per_second": self.decisions_per_second,
             "matchups": [result.to_dict() for result in self.matchups],
+            "head_to_heads": [result.to_dict() for result in self.head_to_head_results],
         }
 
 
@@ -238,6 +277,31 @@ def default_benchmark_matchups() -> tuple[BenchmarkMatchup, ...]:
         BenchmarkMatchup("random-legal vs simple-legal", RandomLegalPolicy(), SimpleLegalPolicy()),
         BenchmarkMatchup("simple-legal vs simple-legal", SimpleLegalPolicy(), SimpleLegalPolicy()),
     )
+
+
+def aggregate_benchmark_head_to_heads(
+    matchup_results: Iterable[BenchmarkMatchupResult],
+) -> tuple[BenchmarkHeadToHeadResult, ...]:
+    accumulators: dict[tuple[str, str], _HeadToHeadAccumulator] = {}
+    ordered_keys: list[tuple[str, str]] = []
+
+    for result in matchup_results:
+        p1_policy_id = result.p1_policy_id
+        p2_policy_id = result.p2_policy_id
+        if p1_policy_id == p2_policy_id:
+            continue
+        unordered_key = tuple(sorted((p1_policy_id, p2_policy_id)))
+        accumulator = accumulators.get(unordered_key)
+        if accumulator is None:
+            accumulator = _HeadToHeadAccumulator(
+                first_policy_id=p1_policy_id,
+                second_policy_id=p2_policy_id,
+            )
+            accumulators[unordered_key] = accumulator
+            ordered_keys.append(unordered_key)
+        accumulator.add(result)
+
+    return tuple(accumulators[key].to_result() for key in ordered_keys)
 
 
 def run_rollout_record(
@@ -404,6 +468,43 @@ class _MetricsAccumulator:
             total_simulator_turns=self.total_simulator_turns,
             p1_wins=self.p1_wins,
             p2_wins=self.p2_wins,
+            ties=self.ties,
+            capped_games=self.capped_games,
+        )
+
+
+@dataclass
+class _HeadToHeadAccumulator:
+    first_policy_id: str
+    second_policy_id: str
+    games: int = 0
+    first_policy_wins: int = 0
+    second_policy_wins: int = 0
+    ties: int = 0
+    capped_games: int = 0
+
+    def add(self, result: BenchmarkMatchupResult) -> None:
+        metrics = result.metrics
+        self.games += metrics.games
+        self.ties += metrics.ties
+        self.capped_games += metrics.capped_games
+        if result.p1_policy_id == self.first_policy_id and result.p2_policy_id == self.second_policy_id:
+            self.first_policy_wins += metrics.p1_wins
+            self.second_policy_wins += metrics.p2_wins
+        elif result.p1_policy_id == self.second_policy_id and result.p2_policy_id == self.first_policy_id:
+            self.first_policy_wins += metrics.p2_wins
+            self.second_policy_wins += metrics.p1_wins
+        else:
+            raise ValueError("matchup result does not match head-to-head policies.")
+
+    def to_result(self) -> BenchmarkHeadToHeadResult:
+        return BenchmarkHeadToHeadResult(
+            label=f"{self.first_policy_id} vs {self.second_policy_id}",
+            first_policy_id=self.first_policy_id,
+            second_policy_id=self.second_policy_id,
+            games=self.games,
+            first_policy_wins=self.first_policy_wins,
+            second_policy_wins=self.second_policy_wins,
             ties=self.ties,
             capped_games=self.capped_games,
         )
