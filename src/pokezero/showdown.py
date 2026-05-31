@@ -701,7 +701,7 @@ def _request_kind(request: Mapping[str, Any] | None) -> str:
 def _switching_allowed(request: Mapping[str, Any]) -> bool:
     active_rows = request.get("active")
     active = active_rows[0] if isinstance(active_rows, list) and active_rows and isinstance(active_rows[0], Mapping) else None
-    if isinstance(active, Mapping) and active.get("trapped") is True:
+    if isinstance(active, Mapping) and (active.get("trapped") is True or active.get("maybeTrapped") is True):
         return False
     return _request_kind(request) == "move"
 
