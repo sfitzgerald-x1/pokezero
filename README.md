@@ -32,6 +32,8 @@ python -m pokezero.rollout_cli collect \
   --p2-policy random-legal
 ```
 
+Linear checkpoint specs default to stochastic softmax sampling for collection. Add query options when needed, for example `linear:checkpoints/linear-softmax.json?deterministic=true` for argmax evaluation-style collection, or `linear:checkpoints/linear-softmax.json?epsilon=0.1&temperature=1.5` for exploratory self-play.
+
 Run baseline rollout benchmarks without writing trajectory JSONL:
 
 ```bash

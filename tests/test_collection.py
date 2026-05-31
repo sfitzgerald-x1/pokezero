@@ -324,10 +324,47 @@ class CollectionTest(unittest.TestCase):
 
         self.assertIsInstance(policy, LinearSoftmaxPolicy)
         self.assertEqual(policy.policy_id, "linear-test")
+        self.assertFalse(policy.deterministic)
+        self.assertEqual(policy.exploration_epsilon, 0.0)
+        self.assertEqual(policy.sampling_temperature, 1.0)
+
+    def test_policy_from_spec_loads_linear_checkpoint_with_sampling_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "linear.json"
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="linear-test",
+                ),
+            )
+
+            policy = policy_from_spec(f"linear:{checkpoint_path}?deterministic=true&epsilon=0.25&temperature=2.5")
+
+        self.assertIsInstance(policy, LinearSoftmaxPolicy)
+        self.assertTrue(policy.deterministic)
+        self.assertEqual(policy.exploration_epsilon, 0.25)
+        self.assertEqual(policy.sampling_temperature, 2.5)
 
     def test_policy_from_spec_rejects_empty_linear_checkpoint_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "checkpoint path"):
             policy_from_spec("linear:")
+
+    def test_policy_from_spec_rejects_conflicting_linear_sampling_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "linear.json"
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="linear-test",
+                ),
+            )
+
+            with self.assertRaisesRegex(ValueError, "conflict"):
+                policy_from_spec(f"linear:{checkpoint_path}?sample=true&deterministic=true")
 
     def test_rollout_cli_collect_wires_arguments_and_prints_metrics(self) -> None:
         fake_metrics = CollectionMetrics(

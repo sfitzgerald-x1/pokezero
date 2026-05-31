@@ -255,6 +255,71 @@ class LinearPolicyTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(decision.policy_id, "linear-test")
+        self.assertEqual(decision.action_probability, 1.0)
+
+    def test_linear_softmax_policy_samples_and_records_sampling_probability(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=8,
+            window_size=1,
+            policy_id="linear-test",
+        )
+        policy = LinearSoftmaxPolicy(model=model, deterministic=False)
+        obs = PokeZeroObservationV0(
+            categorical_ids=observation(10).categorical_ids,
+            numeric_features=observation(10).numeric_features,
+            token_type_ids=observation(10).token_type_ids,
+            attention_mask=observation(10).attention_mask,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            perspective=ObservationPerspective.from_showdown_slot("p1", "p1"),
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertIn(decision.action_index, {0, 1})
+        self.assertAlmostEqual(decision.action_probability, 0.5)
+        self.assertFalse(decision.metadata["deterministic"])
+
+    def test_linear_softmax_policy_records_epsilon_mixture_probability(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=8,
+            window_size=1,
+            policy_id="linear-test",
+        )
+        policy = LinearSoftmaxPolicy(model=model, deterministic=True, exploration_epsilon=0.2)
+        obs = PokeZeroObservationV0(
+            categorical_ids=observation(10).categorical_ids,
+            numeric_features=observation(10).numeric_features,
+            token_type_ids=observation(10).token_type_ids,
+            attention_mask=observation(10).attention_mask,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            perspective=ObservationPerspective.from_showdown_slot("p1", "p1"),
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(2))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertAlmostEqual(decision.action_probability, 0.9)
+
+    def test_linear_softmax_policy_records_non_greedy_epsilon_probability(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=8,
+            window_size=1,
+            policy_id="linear-test",
+        )
+        policy = LinearSoftmaxPolicy(model=model, deterministic=True, exploration_epsilon=0.2)
+        obs = PokeZeroObservationV0(
+            categorical_ids=observation(10).categorical_ids,
+            numeric_features=observation(10).numeric_features,
+            token_type_ids=observation(10).token_type_ids,
+            attention_mask=observation(10).attention_mask,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            perspective=ObservationPerspective.from_showdown_slot("p1", "p1"),
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(18))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertAlmostEqual(decision.action_probability, 0.1)
 
     def test_linear_cli_train_and_evaluate_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
