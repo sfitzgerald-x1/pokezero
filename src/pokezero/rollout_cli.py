@@ -100,7 +100,7 @@ def _benchmark(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
-        _print_benchmark_report(report)
+        print_benchmark_report(report)
     return 0
 
 
@@ -117,7 +117,7 @@ def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"average_simulator_turns: {float(metrics['average_simulator_turns']):.2f}")
 
 
-def _print_benchmark_report(report: BenchmarkReport) -> None:
+def print_benchmark_report(report: BenchmarkReport) -> None:
     print(f"format: {report.format_id}")
     print(f"games_per_matchup: {report.games_per_matchup}")
     print(f"max_decision_rounds: {report.max_decision_rounds}")

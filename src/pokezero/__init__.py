@@ -43,6 +43,20 @@ from .dataset import (
 )
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
+from .linear_policy import (
+    LINEAR_POLICY_SCHEMA_VERSION,
+    LinearEpochMetrics,
+    LinearEvaluationMetrics,
+    LinearPolicyModel,
+    LinearSoftmaxPolicy,
+    LinearTrainingConfig,
+    LinearTrainingResult,
+    evaluate_linear_policy,
+    features_from_example,
+    load_linear_model,
+    save_linear_model,
+    train_linear_policy,
+)
 from .observation import ObservationSpec, PokeZeroObservationV0
 from .showdown import (
     PlayerRelativeBattleState,
@@ -75,6 +89,13 @@ __all__ = [
     "LocalShowdownConfig",
     "LocalShowdownEnv",
     "LocalShowdownError",
+    "LINEAR_POLICY_SCHEMA_VERSION",
+    "LinearEpochMetrics",
+    "LinearEvaluationMetrics",
+    "LinearPolicyModel",
+    "LinearSoftmaxPolicy",
+    "LinearTrainingConfig",
+    "LinearTrainingResult",
     "SWITCH_ACTION_COUNT",
     "PlayerRelativeBattleState",
     "PlayerRelativePublicEvent",
@@ -97,8 +118,11 @@ __all__ = [
     "collect_rollouts",
     "detect_showdown_slot",
     "examples_from_record",
+    "evaluate_linear_policy",
+    "features_from_example",
     "is_move_action",
     "is_switch_action",
+    "load_linear_model",
     "move_action_candidates",
     "normalize_for_player",
     "observation_from_player_state",
@@ -109,11 +133,13 @@ __all__ = [
     "read_rollout_records",
     "rollout_record_from_dict",
     "rollout_record_to_dict",
+    "save_linear_model",
     "showdown_choice_for_action",
     "showdown_submission_for_action",
     "stable_category_id",
     "summarize_records",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
+    "train_linear_policy",
     "training_batch_from_examples",
 ]

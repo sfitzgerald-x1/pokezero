@@ -174,6 +174,17 @@ class RolloutDriverTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requested no players"):
             driver.run(seed=1)
 
+    def test_rollout_resets_stateful_policies_before_each_game(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+        policy = ResetCountingPolicy()
+        driver = RolloutDriver(env=env, policies={"p1": policy})
+
+        driver.run(seed=1)
+        driver.run(seed=2)
+
+        self.assertEqual(policy.reset_calls, 2)
+
+
 class DrawBurningPolicy:
     policy_id = "draw-burning"
 
@@ -183,6 +194,19 @@ class DrawBurningPolicy:
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         for _ in range(self.draw_count):
             rng.random()
+        return RandomLegalPolicy(policy_id=self.policy_id).select_action(observation, rng=rng)
+
+
+class ResetCountingPolicy:
+    policy_id = "reset-counting"
+
+    def __init__(self) -> None:
+        self.reset_calls = 0
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         return RandomLegalPolicy(policy_id=self.policy_id).select_action(observation, rng=rng)
 
 
