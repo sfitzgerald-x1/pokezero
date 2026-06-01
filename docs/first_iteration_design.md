@@ -17,7 +17,7 @@ Implemented:
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
-- Self-play iteration harness with current-policy-only training data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
+- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 
 Partially implemented:
@@ -31,6 +31,7 @@ Known limitations:
 
 - Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
+- Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
 
 Not implemented yet:
 
@@ -43,6 +44,8 @@ Not implemented yet:
 ## Deviations From Original Plan
 
 The design below still describes the target direction, but the implementation deliberately inserted a dependency-free linear-policy phase before the transformer/PPO phase. This was not intended as the final learning algorithm. It validates the environment boundary, observation serialization, trajectory format, checkpoint compatibility, self-play loop, resume behavior, parallel collection, and reporting before adding a heavier training framework.
+
+The current docs now separate the cold self-play baseline from the imitation-bootstrap path in `docs/bootstrap_strategy.md`. The implementation supports both at the harness level: cold runs can start from `random-legal`, while bootstrap runs can start from any trained linear checkpoint via `--initial-policy linear:<checkpoint>` and carry held-out validation JSONL with `--validation-data`.
 
 The Gen 3 belief work also started as a read-only sidecar and deterministic public-information engine rather than being immediately embedded into a learned policy. That has been useful for validating randbat set inference and player-relative state without coupling early training to belief-model complexity.
 

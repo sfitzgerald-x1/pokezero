@@ -107,6 +107,7 @@ python -m pokezero.selfplay_cli iterate \
   --iterations 3 \
   --games-per-iteration 100 \
   --workers 4 \
+  --validation-data runs/heldout.jsonl \
   --evaluation-games 20 \
   --showdown-root /path/to/pokemon-showdown
 ```
@@ -114,6 +115,10 @@ python -m pokezero.selfplay_cli iterate \
 Each iteration writes full-audit `rollouts.jsonl`, current-policy-only `training-rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. Training accumulates current-policy examples across iterations and warm-starts from the prior checkpoint. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
 
 Use `--workers N` to collect games in parallel within each iteration. Result files are still written in deterministic seed order, and the default remains `--workers 1` for simpler debugging.
+
+Use `--validation-data` to attach one or more held-out rollout JSONL files to every training step. Validation metrics are stored in each iteration manifest and surfaced by the report command.
+
+Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
 
 Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
 
@@ -124,6 +129,22 @@ python -m pokezero.selfplay_cli report --run-dir runs/selfplay-smoke
 ```
 
 Add `--json` to print the raw formatted run manifest for downstream scripts.
+
+Start self-play from a bootstrap checkpoint by first training offline data with `linear_cli train`, then passing the resulting checkpoint as the initial policy:
+
+```bash
+python -m pokezero.selfplay_cli iterate \
+  --run-dir runs/bootstrap-selfplay \
+  --initial-policy linear:checkpoints/bootstrap-linear.json \
+  --validation-data runs/bootstrap-validation.jsonl \
+  --iterations 5 \
+  --games-per-iteration 200 \
+  --workers 4 \
+  --evaluation-games 50 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+See `docs/bootstrap_strategy.md` for the cold self-play versus imitation-bootstrap plan.
 
 ## Gen 3 Belief Sidecar
 
