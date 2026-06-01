@@ -399,17 +399,21 @@ def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: floa
 
 
 def policy_from_spec(spec: str) -> Policy:
+    return policy_factory_from_spec(spec)()
+
+
+def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
     normalized = spec.strip()
     policy_body, options = _split_policy_spec_options(normalized)
     lowered = policy_body.lower()
     if lowered == "random-legal":
         if options:
             raise ValueError("random-legal does not support policy spec options.")
-        return RandomLegalPolicy()
+        return RandomLegalPolicy
     if lowered == "simple-legal":
         if options:
             raise ValueError("simple-legal does not support policy spec options.")
-        return SimpleLegalPolicy()
+        return SimpleLegalPolicy
     if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
         from .linear_policy import LinearSoftmaxPolicy, load_linear_model
 
@@ -417,7 +421,8 @@ def policy_from_spec(spec: str) -> Policy:
         if not checkpoint:
             raise ValueError("linear policy spec must include a checkpoint path after 'linear:'.")
         linear_options = _linear_policy_options(options)
-        return LinearSoftmaxPolicy(model=load_linear_model(Path(checkpoint)), **linear_options)
+        model = load_linear_model(Path(checkpoint))
+        return lambda: LinearSoftmaxPolicy(model=model, **linear_options)
     raise ValueError(
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
         "or linear:/path/to/checkpoint.json."

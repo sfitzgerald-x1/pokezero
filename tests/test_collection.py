@@ -16,6 +16,7 @@ from pokezero.collection import (
     collect_rollouts,
     default_benchmark_matchups,
     iter_rollout_records,
+    policy_factory_from_spec,
     policy_from_name,
     policy_from_spec,
     read_rollout_records,
@@ -346,6 +347,25 @@ class CollectionTest(unittest.TestCase):
         self.assertTrue(policy.deterministic)
         self.assertEqual(policy.exploration_epsilon, 0.25)
         self.assertEqual(policy.sampling_temperature, 2.5)
+
+    def test_policy_factory_from_spec_reuses_immutable_linear_model(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=8,
+            window_size=1,
+            policy_id="linear-test",
+        )
+        with patch("pokezero.linear_policy.load_linear_model", return_value=model) as load:
+            factory = policy_factory_from_spec("linear:/tmp/linear.json?deterministic=true")
+            first = factory()
+            second = factory()
+
+        self.assertEqual(load.call_count, 1)
+        self.assertIsInstance(first, LinearSoftmaxPolicy)
+        self.assertIsInstance(second, LinearSoftmaxPolicy)
+        self.assertIs(first.model, model)
+        self.assertIs(second.model, model)
+        self.assertIsNot(first, second)
+        self.assertTrue(first.deterministic)
 
     def test_policy_from_spec_rejects_empty_linear_checkpoint_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "checkpoint path"):

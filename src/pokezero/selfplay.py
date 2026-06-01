@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from .collection import (
     RolloutRecord,
     benchmark_rollouts,
     iter_rollout_records,
+    policy_factory_from_spec,
     policy_from_spec,
     run_rollout_record,
     summarize_records,
@@ -48,6 +50,7 @@ class SelfPlayIterationResult:
     opponent_policy_specs: tuple[str, ...]
     training_rollout_paths: tuple[Path, ...]
     seed_start: int
+    worker_count: int
     metrics: CollectionMetrics
     training: LinearTrainingResult
     benchmark: BenchmarkReport | None = None
@@ -68,6 +71,7 @@ class SelfPlayIterationResult:
             "opponent_policy_specs": list(self.opponent_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "seed_start": self.seed_start,
+            "worker_count": self.worker_count,
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
@@ -115,6 +119,7 @@ def run_selfplay_iterations(
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     resume: bool = False,
+    worker_count: int = 1,
 ) -> SelfPlayRunResult:
     if iterations <= 0:
         raise ValueError("iterations must be positive.")
@@ -124,6 +129,8 @@ def run_selfplay_iterations(
         raise ValueError("max_historical_opponents must be non-negative.")
     if evaluation_games < 0:
         raise ValueError("evaluation_games must be non-negative.")
+    if worker_count <= 0:
+        raise ValueError("worker_count must be positive.")
 
     run_dir.mkdir(parents=True, exist_ok=True)
     fixed_opponents = tuple(fixed_opponent_policy_specs)
@@ -179,6 +186,7 @@ def run_selfplay_iterations(
             seed_start=iteration_seed_start,
             current_policy_spec=current_policy_spec,
             opponent_policy_specs=opponent_policy_specs,
+            worker_count=worker_count,
         )
         iteration_training_config = replace(
             training_config,
@@ -211,6 +219,7 @@ def run_selfplay_iterations(
             opponent_policy_specs=opponent_policy_specs,
             training_rollout_paths=tuple(training_rollout_history),
             seed_start=iteration_seed_start,
+            worker_count=worker_count,
             metrics=metrics,
             training=training,
             benchmark=benchmark,
@@ -248,12 +257,16 @@ def collect_selfplay_rollouts(
     seed_start: int,
     current_policy_spec: str,
     opponent_policy_specs: Iterable[str],
+    worker_count: int = 1,
 ) -> CollectionMetrics:
     if games <= 0:
         raise ValueError("games must be positive.")
+    if worker_count <= 0:
+        raise ValueError("worker_count must be positive.")
     opponent_specs = tuple(opponent_policy_specs)
     if not opponent_specs:
         raise ValueError("at least one opponent policy spec is required.")
+    policy_factories = _policy_factories_for_specs((current_policy_spec, *opponent_specs))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path.with_name(f".{output_path.name}.tmp")
     training_write_path = None
@@ -274,6 +287,8 @@ def collect_selfplay_rollouts(
                     seed_start=seed_start,
                     current_policy_spec=current_policy_spec,
                     opponent_specs=opponent_specs,
+                    policy_factories=policy_factories,
+                    worker_count=worker_count,
                 )
             finally:
                 if training_handle is not None:
@@ -302,29 +317,87 @@ def _collect_selfplay_records(
     seed_start: int,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
+    policy_factories: Mapping[str, Callable[[], Any]],
+    worker_count: int,
 ) -> None:
-    for game_index in range(games):
-        seed = seed_start + game_index
-        opponent_spec = opponent_specs[game_index % len(opponent_specs)]
-        p1_spec, p2_spec = _seat_policy_specs(
-            current_policy_spec=current_policy_spec,
-            opponent_policy_spec=opponent_spec,
-            game_index=game_index,
+    if worker_count == 1:
+        results = (
+            _run_selfplay_game_record(
+                game_index=game_index,
+                seed_start=seed_start,
+                env_factory=env_factory,
+                rollout_config=rollout_config,
+                current_policy_spec=current_policy_spec,
+                opponent_specs=opponent_specs,
+                policy_factories=policy_factories,
+            )
+            for game_index in range(games)
         )
-        current_player = "p1" if game_index % 2 == 0 else "p2"
-        record = run_rollout_record(
-            env_factory=env_factory,
-            policies={
-                "p1": policy_from_spec(p1_spec),
-                "p2": policy_from_spec(p2_spec),
-            },
-            rollout_config=rollout_config,
-            seed=seed,
-            battle_id=f"selfplay-{seed}",
+        _write_selfplay_game_results(handle=handle, training_handle=training_handle, results=results)
+        return
+
+    max_workers = min(worker_count, games)
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
+        results = executor.map(
+            lambda game_index: _run_selfplay_game_record(
+                game_index=game_index,
+                seed_start=seed_start,
+                env_factory=env_factory,
+                rollout_config=rollout_config,
+                current_policy_spec=current_policy_spec,
+                opponent_specs=opponent_specs,
+                policy_factories=policy_factories,
+            ),
+            range(games),
         )
+        _write_selfplay_game_results(handle=handle, training_handle=training_handle, results=results)
+
+
+def _write_selfplay_game_results(
+    *,
+    handle,
+    training_handle,
+    results: Iterable[tuple[RolloutRecord, RolloutRecord]],
+) -> None:
+    for record, training_record in results:
         write_rollout_record(handle, record)
         if training_handle is not None:
-            write_rollout_record(training_handle, _record_for_player(record, current_player))
+            write_rollout_record(training_handle, training_record)
+
+
+def _run_selfplay_game_record(
+    *,
+    game_index: int,
+    seed_start: int,
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    current_policy_spec: str,
+    opponent_specs: tuple[str, ...],
+    policy_factories: Mapping[str, Callable[[], Any]],
+) -> tuple[RolloutRecord, RolloutRecord]:
+    seed = seed_start + game_index
+    opponent_spec = opponent_specs[game_index % len(opponent_specs)]
+    p1_spec, p2_spec = _seat_policy_specs(
+        current_policy_spec=current_policy_spec,
+        opponent_policy_spec=opponent_spec,
+        game_index=game_index,
+    )
+    current_player = "p1" if game_index % 2 == 0 else "p2"
+    record = run_rollout_record(
+        env_factory=env_factory,
+        policies={
+            "p1": policy_factories[p1_spec](),
+            "p2": policy_factories[p2_spec](),
+        },
+        rollout_config=rollout_config,
+        seed=seed,
+        battle_id=f"selfplay-{seed}",
+    )
+    return record, _record_for_player(record, current_player)
+
+
+def _policy_factories_for_specs(specs: Iterable[str]) -> Mapping[str, Callable[[], Any]]:
+    return {spec: policy_factory_from_spec(spec) for spec in dict.fromkeys(specs)}
 
 
 def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:

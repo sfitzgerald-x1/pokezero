@@ -106,11 +106,14 @@ python -m pokezero.selfplay_cli iterate \
   --run-dir runs/selfplay-smoke \
   --iterations 3 \
   --games-per-iteration 100 \
+  --workers 4 \
   --evaluation-games 20 \
   --showdown-root /path/to/pokemon-showdown
 ```
 
 Each iteration writes full-audit `rollouts.jsonl`, current-policy-only `training-rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. Training accumulates current-policy examples across iterations and warm-starts from the prior checkpoint. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
+
+Use `--workers N` to collect games in parallel within each iteration. Result files are still written in deterministic seed order, and the default remains `--workers 1` for simpler debugging.
 
 Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
 
