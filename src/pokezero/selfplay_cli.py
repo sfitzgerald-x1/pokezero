@@ -19,6 +19,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate = subparsers.add_parser("iterate", help="Run linear-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
     iterate.add_argument("--iterations", type=int, required=True, help="Number of collect/train/evaluate iterations.")
+    iterate.add_argument("--resume", action="store_true", help="Continue an existing run directory from its latest manifest.")
     iterate.add_argument("--games-per-iteration", type=int, required=True, help="Rollout games collected before each train step.")
     iterate.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     iterate.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
@@ -100,6 +101,7 @@ def _iterate(args: argparse.Namespace) -> int:
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
+        resume=args.resume,
     )
     _print_run_summary(result)
     return 0
