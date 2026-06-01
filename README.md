@@ -112,6 +112,8 @@ python -m pokezero.selfplay_cli iterate \
 
 Each iteration writes full-audit `rollouts.jsonl`, current-policy-only `training-rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. Training accumulates current-policy examples across iterations and warm-starts from the prior checkpoint. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
 
+Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:

@@ -26,6 +26,7 @@ from .linear_policy import (
     LinearSoftmaxPolicy,
     LinearTrainingConfig,
     LinearTrainingResult,
+    load_linear_model,
     save_linear_model,
     train_linear_policy,
 )
@@ -77,18 +78,24 @@ class SelfPlayIterationResult:
 class SelfPlayRunResult:
     run_dir: Path
     iterations: tuple[SelfPlayIterationResult, ...]
+    prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
         if not self.iterations:
+            if self.prior_iteration_manifests:
+                checkpoint_path = self.prior_iteration_manifests[-1].get("checkpoint_path")
+                return Path(str(checkpoint_path)) if checkpoint_path is not None else None
             return None
         return self.iterations[-1].checkpoint_path
 
     def to_dict(self) -> dict[str, Any]:
+        iteration_manifests = [dict(iteration) for iteration in self.prior_iteration_manifests]
+        iteration_manifests.extend(iteration.to_manifest_dict() for iteration in self.iterations)
         return {
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
-            "iterations": [iteration.to_manifest_dict() for iteration in self.iterations],
+            "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
         }
 
@@ -107,6 +114,7 @@ def run_selfplay_iterations(
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
+    resume: bool = False,
 ) -> SelfPlayRunResult:
     if iterations <= 0:
         raise ValueError("iterations must be positive.")
@@ -122,20 +130,35 @@ def run_selfplay_iterations(
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
 
+    prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
     current_policy_spec = initial_policy_spec
     current_model = _initial_model_from_policy_spec(initial_policy_spec)
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
+    first_iteration = 1
+    next_seed_start = seed_start
+    if prior_iteration_manifests:
+        last_iteration = prior_iteration_manifests[-1]
+        current_policy_spec = str(last_iteration["checkpoint_policy_spec"])
+        current_model = load_linear_model(Path(str(last_iteration["checkpoint_path"])))
+        checkpoint_history = [str(iteration["checkpoint_policy_spec"]) for iteration in prior_iteration_manifests]
+        training_rollout_history = [
+            Path(str(path))
+            for path in _sequence(last_iteration.get("training_rollout_paths", ()))
+        ]
+        first_iteration = int(last_iteration["iteration"]) + 1
+        next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
     results: list[SelfPlayIterationResult] = []
 
-    for iteration in range(1, iterations + 1):
+    for offset in range(iterations):
+        iteration = first_iteration + offset
         iteration_dir = run_dir / f"iteration-{iteration:04d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         rollout_path = iteration_dir / "rollouts.jsonl"
         training_rollout_path = iteration_dir / "training-rollouts.jsonl"
         checkpoint_path = iteration_dir / "linear-policy.json"
         manifest_path = iteration_dir / "manifest.json"
-        iteration_seed_start = seed_start + ((iteration - 1) * games_per_iteration)
+        iteration_seed_start = next_seed_start + (offset * games_per_iteration)
         opponent_policy_specs = _opponent_pool(
             fixed_policy_specs=fixed_opponents,
             checkpoint_history=checkpoint_history,
@@ -194,7 +217,11 @@ def run_selfplay_iterations(
         current_policy_spec = result.checkpoint_policy_spec
         current_model = training.model
 
-    run_result = SelfPlayRunResult(run_dir=run_dir, iterations=tuple(results))
+    run_result = SelfPlayRunResult(
+        run_dir=run_dir,
+        iterations=tuple(results),
+        prior_iteration_manifests=tuple(prior_iteration_manifests),
+    )
     _write_json(run_dir / "manifest.json", run_result.to_dict())
     return run_result
 
@@ -334,6 +361,27 @@ def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | Non
     return None
 
 
+def _load_prior_iteration_manifests(
+    run_dir: Path,
+    *,
+    resume: bool,
+) -> tuple[Mapping[str, Any], ...]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        if resume:
+            raise ValueError("cannot resume: run manifest does not exist.")
+        return ()
+    if not resume:
+        raise ValueError("run_dir already contains a manifest; pass resume=True to continue it.")
+    manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+    if manifest.get("schema_version") != SELFPLAY_RUN_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported self-play run schema: {manifest.get('schema_version')!r}.")
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        raise ValueError("cannot resume: run manifest contains no iterations.")
+    return iterations
+
+
 def _seat_policy_specs(
     *,
     current_policy_spec: str,
@@ -401,3 +449,15 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary_path = path.with_name(f".{path.name}.tmp")
     temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     temporary_path.replace(path)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected JSON object payload.")
+    return value
+
+
+def _sequence(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        raise ValueError("expected JSON array payload.")
+    return tuple(value)
