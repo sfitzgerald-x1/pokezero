@@ -29,11 +29,13 @@ from .collection import (
     policy_factory_from_spec,
     policy_from_name,
     policy_from_spec,
+    policy_spec_with_showdown_root,
     read_rollout_records,
     rollout_record_from_dict,
     rollout_record_to_dict,
     summarize_records,
 )
+from .dex import MoveInfo, ShowdownDex, SpeciesInfo, load_showdown_dex
 from .dataset import (
     MISSING_ACTION_INDEX,
     TrajectoryDatasetConfig,
@@ -64,6 +66,7 @@ from .linear_policy import (
     train_linear_policy,
 )
 from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
+from .policy import ScriptedTeacherPolicy
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
@@ -98,6 +101,7 @@ __all__ = [
     "CollectionMetrics",
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
+    "MoveInfo",
     "ObservationSpec",
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
@@ -129,6 +133,9 @@ __all__ = [
     "ShowdownPublicEvent",
     "ShowdownReplayState",
     "ShowdownSubmission",
+    "ShowdownDex",
+    "ScriptedTeacherPolicy",
+    "SpeciesInfo",
     "StepResult",
     "TerminalState",
     "TrajectoryDatasetConfig",
@@ -146,6 +153,7 @@ __all__ = [
     "is_switch_action",
     "load_linear_model",
     "load_selfplay_run_manifest",
+    "load_showdown_dex",
     "move_action_candidates",
     "normalize_for_player",
     "observation_from_player_state",
@@ -153,6 +161,7 @@ __all__ = [
     "policy_factory_from_spec",
     "policy_from_name",
     "policy_from_spec",
+    "policy_spec_with_showdown_root",
     "iter_training_batches",
     "iter_training_examples",
     "iter_rollout_records",

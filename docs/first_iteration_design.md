@@ -13,7 +13,7 @@ Implemented:
 - Local Showdown environment backed by the built Pokemon Showdown simulator.
 - Rollout collection to JSONL with terminal outcome, capped-game marker, opponent action metadata, and policy identifiers.
 - Dataset streaming with left-padded temporal windows, terminal-winner-derived returns, and batch containers for training examples.
-- Random legal and simple legal baseline policies.
+- Random legal, simple legal, and initial scripted-teacher baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
@@ -25,13 +25,14 @@ Partially implemented:
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
 - Belief tracking exists as a sidecar/debug system and candidate future observation feature source, but it is not wired into the trained policy path yet.
 - Evaluation exists against fixed baselines and historical checkpoints, but benchmark gates and long-run experiment criteria are still informal.
-- Capped games are recorded and surfaced in reports, but capped-game reward/scoring policy is still unresolved.
+- Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
 Known limitations:
 
 - Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
+- The initial scripted teacher uses local Showdown dex metadata and shallow move/switch scoring. It is a bootstrap data source, not the intended long-term policy.
 
 Not implemented yet:
 
@@ -148,6 +149,7 @@ V0 should use online actor-critic training with PPO-style updates. Training star
 
 - random legal policy
 - simple legal-action policy with basic switch participation
+- scripted-teacher bootstrap policy
 - frozen early checkpoints once the first policy can complete games reliably
 
 Once the policy can reliably complete games, self-play should use a pool of frozen checkpoints. This keeps training pressure broader than the current policy matchup without baking damage-calc or handcrafted battle heuristics into the main training loop.
@@ -164,7 +166,7 @@ V0 should use terminal win/loss reward plus lightweight shaping to reduce sparse
 - HP fraction differential
 - small penalty for turns consumed after the cap-progress threshold
 
-The exact capped-game training reward remains an experiment. Candidate treatments are tie, double loss, or explicit stall penalty.
+The self-play CLI currently uses a provisional capped-game return of `-0.25` for both players. Stronger double-loss or explicit stall penalties remain experiments.
 
 ## Evaluation
 

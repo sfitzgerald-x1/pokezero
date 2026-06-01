@@ -13,7 +13,7 @@ PokeZero aims to train a model to play Pokemon Showdown Gen 3 random battles thr
 
 ## Open Questions
 
-- How should capped games be scored: tie, double loss, or another penalty?
+- Is the provisional capped-game penalty strong enough, or should capped games become a stronger double loss or explicit stall penalty?
 - How much temporal context should be encoded in the model versus supplied by the environment?
 - What throughput target is acceptable beyond the initial single-machine parallel collector?
 - Which consumer GPU class should be treated as the target constraint?

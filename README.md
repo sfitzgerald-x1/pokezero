@@ -21,7 +21,7 @@ The Showdown checkout must be built so `dist/sim/index.js` exists. Each JSONL ro
 
 The printed throughput metrics use wall-clock collection time, including JSONL serialization. Use `pokezero.collection.iter_rollout_records(path)` for streaming reads of large trajectory files.
 
-The `--p1-policy` and `--p2-policy` options accept `random-legal`, `simple-legal`, or a trained linear checkpoint spec:
+The `--p1-policy` and `--p2-policy` options accept `random-legal`, `simple-legal`, `scripted-teacher`, or a trained linear checkpoint spec:
 
 ```bash
 python -m pokezero.rollout_cli collect \
@@ -33,6 +33,8 @@ python -m pokezero.rollout_cli collect \
 ```
 
 Linear checkpoint specs default to stochastic softmax sampling for collection. Add query options when needed, for example `linear:checkpoints/linear-softmax.json?deterministic=true` for argmax evaluation-style collection, or `linear:checkpoints/linear-softmax.json?epsilon=0.1&temperature=1.5` for exploratory self-play.
+
+`scripted-teacher` is a deterministic Gen 3 bootstrap policy backed by local Showdown dex metadata. It scores legal moves with Gen 3 type/category rules and uses switches mainly for force-switches or when legal attacks are poor. It is intended for bootstrap data generation, not as the target policy.
 
 Run baseline rollout benchmarks without writing trajectory JSONL:
 
@@ -119,6 +121,8 @@ Use `--workers N` to collect games in parallel within each iteration. Result fil
 Use `--validation-data` to attach one or more held-out rollout JSONL files to every training step. Validation metrics are stored in each iteration manifest and surfaced by the report command.
 
 Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
+
+Self-play training defaults capped games to a mild double-loss return with `--capped-terminal-value -0.25`. This keeps capped games from being free neutral outcomes while preserving a CLI override for experiments.
 
 Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
 

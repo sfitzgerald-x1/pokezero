@@ -302,6 +302,7 @@ def observation_from_player_state(
         attention_mask=attention_mask,
         legal_action_mask=state.legal_action_mask,
         perspective=state.perspective,
+        metadata=_observation_metadata(state),
     )
 
 
@@ -612,6 +613,82 @@ def _encode_recent_event_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"event_actor:{event.actor_role}")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"event_target:{event.target_role}")
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0)
+
+
+def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
+    return {
+        "battle_id": state.battle_id,
+        "player_id": state.player_id,
+        "request_kind": state.request_kind,
+        "showdown_slot": state.perspective.showdown_slot,
+        "opponent_showdown_slot": state.perspective.opponent_showdown_slot,
+        "self_active": _pokemon_metadata(state.self_active),
+        "opponent_active": _pokemon_metadata(state.opponent_active),
+        "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],
+        "opponent_team": [_pokemon_metadata(pokemon) for pokemon in state.opponent_team],
+        "action_candidates": _action_candidate_metadata(state),
+        "recent_public_events": list(state.recent_public_events),
+    }
+
+
+def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    active_request = _active_request(state.request)
+    moves = active_request.get("moves") if isinstance(active_request, Mapping) else None
+    for move_index in range(MOVE_ACTION_COUNT):
+        move = moves[move_index] if isinstance(moves, list) and move_index < len(moves) else None
+        move_name = _request_move_name(move) if isinstance(move, Mapping) else f"slot:{move_index + 1}"
+        candidates.append(
+            {
+                "action_index": move_index,
+                "kind": "move",
+                "legal": bool(state.legal_action_mask[move_index]),
+                "move_slot": move_index + 1,
+                "move_id": _normalize_identifier(move_name),
+                "move_name": move_name,
+                "disabled": bool(move.get("disabled")) if isinstance(move, Mapping) else True,
+                "target_species": state.opponent_active.species if state.opponent_active is not None else None,
+            }
+        )
+
+    active_team_index = _active_team_index(state.self_team)
+    switch_targets = (
+        canonical_switch_action_map(active_team_index, team_size=len(state.self_team))
+        if active_team_index is not None and len(state.self_team) >= 2
+        else ()
+    )
+    for switch_slot in range(ACTION_CANDIDATE_TOKEN_COUNT - MOVE_ACTION_COUNT):
+        action_index = MOVE_ACTION_COUNT + switch_slot
+        team_index = switch_targets[switch_slot] if switch_slot < len(switch_targets) else None
+        pokemon = state.self_team[team_index] if team_index is not None and team_index < len(state.self_team) else None
+        candidates.append(
+            {
+                "action_index": action_index,
+                "kind": "switch",
+                "legal": bool(state.legal_action_mask[action_index]),
+                "switch_slot": switch_slot + 1,
+                "team_index": team_index,
+                "pokemon": _pokemon_metadata(pokemon),
+            }
+        )
+    return candidates
+
+
+def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
+    if pokemon is None:
+        return None
+    condition = _condition_features(pokemon.condition)
+    return {
+        "ident": pokemon.ident,
+        "showdown_slot": pokemon.showdown_slot,
+        "species": pokemon.species,
+        "condition": pokemon.condition,
+        "hp_fraction": condition.hp_fraction,
+        "status": condition.status,
+        "fainted": condition.fainted,
+        "active": pokemon.active,
+        "details": pokemon.details,
+    }
 
 
 @dataclass(frozen=True)

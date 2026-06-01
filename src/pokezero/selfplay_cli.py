@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
+from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
@@ -53,6 +54,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     iterate.add_argument(
+        "--capped-terminal-value",
+        type=float,
+        default=-0.25,
+        help="Return assigned to each player in capped self-play games. Default is a mild double-loss penalty.",
+    )
+    iterate.add_argument(
         "--objective",
         choices=("behavior-cloning", "reward-weighted"),
         default="reward-weighted",
@@ -94,6 +101,7 @@ def _iterate(args: argparse.Namespace) -> int:
         feature_count=args.feature_count,
         window_size=args.window_size,
         discount=args.discount,
+        capped_terminal_value=args.capped_terminal_value,
         objective=args.objective,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
@@ -103,6 +111,12 @@ def _iterate(args: argparse.Namespace) -> int:
         max_examples=args.max_examples,
         policy_id=args.policy_id,
     )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    initial_policy = policy_spec_with_showdown_root(args.initial_policy, policy_showdown_root)
+    fixed_opponents = tuple(
+        policy_spec_with_showdown_root(spec, policy_showdown_root)
+        for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
+    )
     result = run_selfplay_iterations(
         run_dir=args.run_dir,
         iterations=args.iterations,
@@ -111,8 +125,8 @@ def _iterate(args: argparse.Namespace) -> int:
         rollout_config=rollout_config,
         training_config=training_config,
         seed_start=args.seed_start,
-        initial_policy_spec=args.initial_policy,
-        fixed_opponent_policy_specs=tuple(args.opponent_policy or ("random-legal", "simple-legal")),
+        initial_policy_spec=initial_policy,
+        fixed_opponent_policy_specs=fixed_opponents,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,

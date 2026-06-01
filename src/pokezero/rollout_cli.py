@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from .collection import BenchmarkReport, benchmark_rollouts, collect_rollouts, policy_from_spec
+from .collection import BenchmarkReport, benchmark_rollouts, collect_rollouts, policy_from_spec, policy_spec_with_showdown_root
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
 
@@ -23,7 +23,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     collect.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
     collect.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
-    policy_help = "Policy spec. Supports random-legal, simple-legal, or linear:/path/to/checkpoint.json."
+    policy_help = "Policy spec. Supports random-legal, simple-legal, scripted-teacher, or linear:/path/to/checkpoint.json."
     collect.add_argument("--p1-policy", default="random-legal", help=f"Policy for p1. {policy_help}")
     collect.add_argument("--p2-policy", default="random-legal", help=f"Policy for p2. {policy_help}")
     collect.add_argument("--append", action="store_true", help="Append to the output JSONL instead of replacing it.")
@@ -58,14 +58,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _collect(args: argparse.Namespace) -> int:
-    policies = {
-        "p1": policy_from_spec(args.p1_policy),
-        "p2": policy_from_spec(args.p2_policy),
-    }
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
     )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    policies = {
+        "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
+        "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
+    }
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,

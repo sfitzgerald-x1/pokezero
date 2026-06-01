@@ -146,6 +146,7 @@ def _observation_to_dict(observation: PokeZeroObservationV0) -> dict[str, Any]:
         "attention_mask": observation.attention_mask,
         "legal_action_mask": observation.legal_action_mask,
         "perspective": _perspective_to_dict(observation.perspective),
+        "metadata": dict(observation.metadata),
     }
 
 
@@ -157,6 +158,7 @@ def _observation_from_dict(payload: Mapping[str, Any]) -> PokeZeroObservationV0:
         attention_mask=tuple(bool(value) for value in _sequence(payload["attention_mask"])),
         legal_action_mask=tuple(bool(value) for value in _sequence(payload["legal_action_mask"])),
         perspective=_perspective_from_dict(payload.get("perspective")),
+        metadata=_mapping(payload.get("metadata", {})),
         schema_version=str(payload.get("schema_version") or OBSERVATION_SCHEMA_VERSION),
     )
 
