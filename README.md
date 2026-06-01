@@ -117,6 +117,14 @@ Use `--workers N` to collect games in parallel within each iteration. Result fil
 
 Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
 
+Summarize an existing run without opening the manifest JSON:
+
+```bash
+python -m pokezero.selfplay_cli report --run-dir runs/selfplay-smoke
+```
+
+Add `--json` to print the raw formatted run manifest for downstream scripts.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:

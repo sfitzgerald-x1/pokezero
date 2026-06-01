@@ -11,7 +11,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.rollout import RolloutConfig
-from pokezero.selfplay import collect_selfplay_rollouts, run_selfplay_iterations
+from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION, collect_selfplay_rollouts, run_selfplay_iterations
 from pokezero.selfplay_cli import main as selfplay_cli_main
 
 
@@ -476,6 +476,51 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertIn("latest_checkpoint", stdout.getvalue())
 
+    def test_selfplay_cli_report_prints_manifest_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("iterations: 1", output)
+        self.assertIn("latest_checkpoint:", output)
+        self.assertIn("linear-policy.json", output)
+        self.assertIn("0.600", output)
+        self.assertIn("0.125000", output)
+        self.assertIn("0.8750", output)
+        self.assertIn(" val ", output)
+        self.assertNotIn("0.250000", output)
+
+    def test_selfplay_cli_report_can_print_json_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir), "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(payload["iterations"][0]["iteration"], 1)
+
+    def test_selfplay_cli_report_reconstructs_from_iteration_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir, top_level=False)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("iterations: 1", output)
+        self.assertIn("linear-policy.json", output)
+
 
 def normalized_record_payloads(path: Path) -> tuple[dict, ...]:
     payloads = []
@@ -484,6 +529,97 @@ def normalized_record_payloads(path: Path) -> tuple[dict, ...]:
         payload["elapsed_seconds"] = 0.0
         payloads.append(payload)
     return tuple(payloads)
+
+
+def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
+    checkpoint_path = run_dir / "iteration-0001" / "linear-policy.json"
+    iteration_dir = run_dir / "iteration-0001"
+    iteration_dir.mkdir(parents=True, exist_ok=True)
+    iteration_manifest = {
+        "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+        "iteration": 1,
+        "rollout_path": str(iteration_dir / "rollouts.jsonl"),
+        "training_rollout_path": str(iteration_dir / "training-rollouts.jsonl"),
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_policy_spec": f"linear:{checkpoint_path}",
+        "current_policy_spec": "random-legal",
+        "opponent_policy_specs": ["random-legal"],
+        "training_rollout_paths": [str(iteration_dir / "training-rollouts.jsonl")],
+        "seed_start": 20,
+        "worker_count": 2,
+        "collection_metrics": {
+            "games": 3,
+            "elapsed_seconds": 2.0,
+            "total_decision_rounds": 6,
+            "total_simulator_turns": 5,
+            "p1_wins": 2,
+            "p2_wins": 0,
+            "ties": 0,
+            "capped_games": 1,
+            "games_per_second": 1.5,
+            "decisions_per_second": 3.0,
+            "average_decision_rounds": 2.0,
+            "average_simulator_turns": 1.67,
+        },
+        "training": {
+            "config": {},
+            "epochs": [
+                {
+                    "epoch": 1,
+                    "examples": 6,
+                    "loss": 0.25,
+                    "accuracy": 0.75,
+                    "elapsed_seconds": 0.5,
+                }
+            ],
+            "validation_metrics": {
+                "examples": 4,
+                "loss": 0.125,
+                "accuracy": 0.875,
+                "elapsed_seconds": 0.25,
+            },
+            "model": {"policy_id": "linear-selfplay-test-iter-0001"},
+        },
+        "benchmark": {
+            "format_id": "gen3randombattle",
+            "max_decision_rounds": 250,
+            "games_per_matchup": 10,
+            "total_games": 20,
+            "elapsed_seconds": 4.0,
+            "games_per_second": 5.0,
+            "decisions_per_second": 10.0,
+            "matchups": [],
+            "head_to_heads": [
+                {
+                    "label": "linear-selfplay-test-iter-0001 vs random-legal",
+                    "first_policy_id": "linear-selfplay-test-iter-0001",
+                    "second_policy_id": "random-legal",
+                    "games": 20,
+                    "first_policy_wins": 12,
+                    "second_policy_wins": 8,
+                    "ties": 0,
+                    "capped_games": 1,
+                    "first_policy_win_rate": 0.6,
+                    "second_policy_win_rate": 0.4,
+                }
+            ],
+        },
+    }
+    (iteration_dir / "manifest.json").write_text(json.dumps(iteration_manifest, indent=2), encoding="utf-8")
+    if not top_level:
+        return
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+                "run_dir": str(run_dir),
+                "latest_checkpoint_path": str(checkpoint_path),
+                "iterations": [iteration_manifest],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

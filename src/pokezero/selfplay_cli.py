@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
+from typing import Any, Mapping
 
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
-from .selfplay import run_selfplay_iterations
+from .selfplay import _mapping, _sequence, load_selfplay_run_manifest, run_selfplay_iterations
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -54,6 +56,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
     iterate.add_argument("--policy-id", default="linear-selfplay", help="Policy id prefix stored in checkpoints.")
     iterate.set_defaults(func=_iterate)
+
+    report = subparsers.add_parser("report", help="Print a summary of a self-play run manifest.")
+    report.add_argument("--run-dir", type=Path, required=True, help="Self-play run directory containing manifest.json.")
+    report.add_argument("--json", action="store_true", help="Print the raw run manifest as formatted JSON.")
+    report.set_defaults(func=_report)
     return parser
 
 
@@ -123,6 +130,102 @@ def _print_run_summary(result) -> None:
         )
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
+
+
+def _report(args: argparse.Namespace) -> int:
+    manifest = load_selfplay_run_manifest(args.run_dir)
+    if args.json:
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        return 0
+    _print_manifest_report(manifest)
+    return 0
+
+
+def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    print(f"run_dir: {manifest.get('run_dir')}")
+    print(f"latest_checkpoint: {manifest.get('latest_checkpoint_path')}")
+    print(f"iterations: {len(iterations)}")
+    if not iterations:
+        return
+    print("")
+    header = (
+        f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
+        f"{'bench_wr':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} checkpoint"
+    )
+    print(header)
+    print("-" * len(header))
+    for iteration in iterations:
+        metrics = _mapping(iteration.get("collection_metrics", {}))
+        training = _mapping(iteration.get("training", {}))
+        fit_source, fit_metrics = _fit_metrics(training)
+        print(
+            f"{int(iteration.get('iteration', 0)):4d} "
+            f"{int(metrics.get('games', 0)):5d} "
+            f"{int(metrics.get('capped_games', 0)):4d} "
+            f"{int(metrics.get('p1_wins', 0)):4d} "
+            f"{int(metrics.get('p2_wins', 0)):4d} "
+            f"{int(metrics.get('ties', 0)):4d} "
+            f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
+            f"{float(metrics.get('decisions_per_second', 0.0)):8.3f} "
+            f"{fit_source:>5} "
+            f"{_format_optional_float(fit_metrics.get('loss') if fit_metrics else None, digits=6):>10} "
+            f"{_format_optional_float(fit_metrics.get('accuracy') if fit_metrics else None, digits=4):>8} "
+            f"{iteration.get('checkpoint_path')}"
+        )
+
+
+def _fit_metrics(training: Mapping[str, Any]) -> tuple[str, Mapping[str, Any] | None]:
+    validation = training.get("validation_metrics")
+    if validation is not None:
+        return "val", _mapping(validation)
+    epochs = tuple(_mapping(epoch) for epoch in _sequence(training.get("epochs", ())))
+    if epochs:
+        return "train", epochs[-1]
+    return "-", None
+
+
+def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:
+    benchmark = iteration.get("benchmark")
+    if benchmark is None:
+        return None
+    benchmark_payload = _mapping(benchmark)
+    training = _mapping(iteration.get("training", {}))
+    model = _mapping(training.get("model", {}))
+    policy_id = model.get("policy_id")
+    if not isinstance(policy_id, str) or not policy_id:
+        return None
+    head_to_heads = tuple(_mapping(result) for result in _sequence(benchmark_payload.get("head_to_heads", ())))
+    wins = 0
+    games = 0
+    for result in head_to_heads:
+        result_games = int(result.get("games", 0))
+        if result.get("first_policy_id") == policy_id:
+            wins += int(result.get("first_policy_wins", 0))
+            games += result_games
+        elif result.get("second_policy_id") == policy_id:
+            wins += int(result.get("second_policy_wins", 0))
+            games += result_games
+    if games:
+        return wins / games
+    for result in tuple(_mapping(result) for result in _sequence(benchmark_payload.get("matchups", ()))):
+        metrics = _mapping(result.get("metrics", {}))
+        result_games = int(metrics.get("games", 0))
+        if result.get("p1_policy_id") == policy_id:
+            wins += int(metrics.get("p1_wins", 0))
+            games += result_games
+        elif result.get("p2_policy_id") == policy_id:
+            wins += int(metrics.get("p2_wins", 0))
+            games += result_games
+    if not games:
+        return None
+    return wins / games
+
+
+def _format_optional_float(value: object, *, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.{digits}f}"
 
 
 if __name__ == "__main__":
