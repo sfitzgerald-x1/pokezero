@@ -242,6 +242,90 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn(result.iterations[0].checkpoint_policy_spec, result.iterations[2].opponent_policy_specs)
         self.assertEqual(len(result.iterations[2].training_rollout_paths), 3)
 
+    def test_run_selfplay_iterations_records_validation_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            validation_path = temp_path / "validation.jsonl"
+            collect_selfplay_rollouts(
+                output_path=validation_path,
+                games=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=900,
+                current_policy_spec="random-legal",
+                opponent_policy_specs=("random-legal",),
+            )
+
+            run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                fixed_opponent_policy_specs=("random-legal",),
+                validation_rollout_paths=(validation_path,),
+            )
+
+            iteration_manifest = json.loads((temp_path / "run" / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(iteration_manifest["validation_rollout_paths"], [str(validation_path)])
+        self.assertIsNotNone(iteration_manifest["training"]["validation_metrics"])
+        self.assertGreater(iteration_manifest["training"]["validation_metrics"]["examples"], 0)
+
+    def test_run_selfplay_iterations_resume_preserves_validation_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            validation_path = temp_path / "validation.jsonl"
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+            collect_selfplay_rollouts(
+                output_path=validation_path,
+                games=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=900,
+                current_policy_spec="random-legal",
+                opponent_policy_specs=("random-legal",),
+            )
+            run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                validation_rollout_paths=(validation_path,),
+            )
+
+            run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                resume=True,
+            )
+
+            iteration_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(iteration_manifest["validation_rollout_paths"], [str(validation_path)])
+        self.assertIsNotNone(iteration_manifest["training"]["validation_metrics"])
+
     def test_run_selfplay_iterations_requires_resume_for_existing_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -460,6 +544,10 @@ class SelfPlayTest(unittest.TestCase):
                         "random-legal",
                         "--workers",
                         "2",
+                        "--validation-data",
+                        "heldout-a.jsonl",
+                        "--validation-data",
+                        "heldout-b.jsonl",
                         "--evaluation-games",
                         "3",
                     ]
@@ -473,6 +561,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
         self.assertEqual(kwargs["evaluation_games"], 3)
         self.assertEqual(kwargs["worker_count"], 2)
+        self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertIn("latest_checkpoint", stdout.getvalue())
 
@@ -545,6 +634,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
         "current_policy_spec": "random-legal",
         "opponent_policy_specs": ["random-legal"],
         "training_rollout_paths": [str(iteration_dir / "training-rollouts.jsonl")],
+        "validation_rollout_paths": [],
         "seed_start": 20,
         "worker_count": 2,
         "collection_metrics": {

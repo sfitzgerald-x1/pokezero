@@ -31,6 +31,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     iterate.add_argument("--initial-policy", default="random-legal", help="Policy spec used before the first checkpoint exists.")
     iterate.add_argument(
+        "--validation-data",
+        type=Path,
+        action="append",
+        default=None,
+        help="Held-out rollout JSONL used for validation metrics after each train step. May be repeated.",
+    )
+    iterate.add_argument(
         "--opponent-policy",
         action="append",
         default=None,
@@ -109,6 +116,7 @@ def _iterate(args: argparse.Namespace) -> int:
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
+        validation_rollout_paths=tuple(args.validation_data or ()),
         resume=args.resume,
         worker_count=args.workers,
     )

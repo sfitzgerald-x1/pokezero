@@ -49,6 +49,7 @@ class SelfPlayIterationResult:
     current_policy_spec: str
     opponent_policy_specs: tuple[str, ...]
     training_rollout_paths: tuple[Path, ...]
+    validation_rollout_paths: tuple[Path, ...]
     seed_start: int
     worker_count: int
     metrics: CollectionMetrics
@@ -70,6 +71,7 @@ class SelfPlayIterationResult:
             "current_policy_spec": self.current_policy_spec,
             "opponent_policy_specs": list(self.opponent_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
+            "validation_rollout_paths": [str(path) for path in self.validation_rollout_paths],
             "seed_start": self.seed_start,
             "worker_count": self.worker_count,
             "collection_metrics": self.metrics.to_dict(),
@@ -137,6 +139,7 @@ def run_selfplay_iterations(
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
+    validation_rollout_paths: Iterable[Path] | None = None,
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -155,6 +158,7 @@ def run_selfplay_iterations(
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
+    validation_paths = tuple(validation_rollout_paths or ())
 
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
@@ -171,6 +175,11 @@ def run_selfplay_iterations(
             Path(str(path))
             for path in _sequence(last_iteration.get("training_rollout_paths", ()))
         ]
+        if not validation_paths:
+            validation_paths = tuple(
+                Path(str(path))
+                for path in _sequence(last_iteration.get("validation_rollout_paths", ()))
+            )
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
     else:
@@ -216,6 +225,7 @@ def run_selfplay_iterations(
             tuple(training_rollout_history),
             config=iteration_training_config,
             initial_model=current_model,
+            validation_paths=validation_paths or None,
         )
         save_linear_model(checkpoint_path, training.model)
         benchmark = None
@@ -237,6 +247,7 @@ def run_selfplay_iterations(
             current_policy_spec=current_policy_spec,
             opponent_policy_specs=opponent_policy_specs,
             training_rollout_paths=tuple(training_rollout_history),
+            validation_rollout_paths=validation_paths,
             seed_start=iteration_seed_start,
             worker_count=worker_count,
             metrics=metrics,
