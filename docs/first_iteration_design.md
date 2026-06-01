@@ -15,7 +15,7 @@ Implemented:
 - Dataset streaming with left-padded temporal windows for training examples and batches.
 - Random legal and simple legal baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
-- Linear checkpoint save/load with schema compatibility checks.
+- Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Self-play iteration harness with current-policy-only training data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
@@ -23,9 +23,15 @@ Implemented:
 Partially implemented:
 
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
-- Belief tracking exists as a sidecar/debug system and observation feature source, but it is not yet a fully trained model input in a neural policy loop.
+- Belief tracking exists as a sidecar/debug system and candidate future observation feature source, but it is not wired into the trained policy path yet.
 - Evaluation exists against fixed baselines and historical checkpoints, but benchmark gates and long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports, but capped-game reward/scoring policy is still unresolved.
+
+Known limitations:
+
+- Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
+- Reward-weighted training currently depends on the recorded terminal winner and per-player returns; winner-side reward handling needs a focused audit before treating RWR results as quality evidence.
+- Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 
 Not implemented yet:
 
