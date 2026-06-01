@@ -279,6 +279,55 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIsNotNone(iteration_manifest["training"]["validation_metrics"])
         self.assertGreater(iteration_manifest["training"]["validation_metrics"]["examples"], 0)
 
+    def test_run_selfplay_iterations_rejects_missing_validation_data_before_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            missing_path = Path(temp_dir) / "missing-validation.jsonl"
+
+            with self.assertRaisesRegex(FileNotFoundError, "Validation rollout path"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=ResetFailingEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    validation_rollout_paths=(missing_path,),
+                )
+
+            self.assertFalse((run_dir / "iteration-0001").exists())
+
+    def test_run_selfplay_iterations_rejects_empty_validation_data_before_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            validation_path = Path(temp_dir) / "empty-validation.jsonl"
+            validation_path.write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "empty"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=ResetFailingEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    validation_rollout_paths=(validation_path,),
+                )
+
+            self.assertFalse((run_dir / "iteration-0001").exists())
+
     def test_run_selfplay_iterations_resume_preserves_validation_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -582,6 +631,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("0.125000", output)
         self.assertIn("0.8750", output)
         self.assertIn(" val ", output)
+        self.assertIn("fit metrics measure imitation", output)
         self.assertNotIn("0.250000", output)
 
     def test_selfplay_cli_report_can_print_json_manifest(self) -> None:
@@ -609,6 +659,26 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
         self.assertIn("linear-policy.json", output)
+
+    def test_selfplay_cli_report_warns_when_validation_paths_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            first_iteration = manifest["iterations"][0]
+            first_iteration["validation_rollout_paths"] = ["validation-a.jsonl"]
+            second_iteration = dict(first_iteration)
+            second_iteration["iteration"] = 2
+            second_iteration["validation_rollout_paths"] = ["validation-b.jsonl"]
+            manifest["iterations"] = [first_iteration, second_iteration]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("validation rollout paths changed", stdout.getvalue())
 
 
 def normalized_record_payloads(path: Path) -> tuple[dict, ...]:

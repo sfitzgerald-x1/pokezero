@@ -118,6 +118,8 @@ Use `--workers N` to collect games in parallel within each iteration. Result fil
 
 Use `--validation-data` to attach one or more held-out rollout JSONL files to every training step. Validation metrics are stored in each iteration manifest and surfaced by the report command.
 
+Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
+
 Pass `--resume` with the same `--run-dir` to continue from the latest manifest checkpoint. Existing run directories are not overwritten unless resume is explicit.
 
 Summarize an existing run without opening the manifest JSON:

@@ -156,6 +156,9 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print(f"iterations: {len(iterations)}")
     if not iterations:
         return
+    print("note: benchmark win rate is the strength signal; fit metrics measure imitation of rollout labels.")
+    if _validation_paths_changed(iterations):
+        print("warning: validation rollout paths changed across iterations; fit metrics are not directly comparable.")
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
@@ -191,6 +194,14 @@ def _fit_metrics(training: Mapping[str, Any]) -> tuple[str, Mapping[str, Any] | 
     if epochs:
         return "train", epochs[-1]
     return "-", None
+
+
+def _validation_paths_changed(iterations: tuple[Mapping[str, Any], ...]) -> bool:
+    seen = {
+        tuple(str(path) for path in _sequence(iteration.get("validation_rollout_paths", ())))
+        for iteration in iterations
+    }
+    return len(seen) > 1
 
 
 def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:

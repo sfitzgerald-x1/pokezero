@@ -158,7 +158,7 @@ def run_selfplay_iterations(
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
-    validation_paths = tuple(validation_rollout_paths or ())
+    validation_paths = tuple(Path(path) for path in (validation_rollout_paths or ()))
 
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
@@ -187,6 +187,7 @@ def run_selfplay_iterations(
         current_model = _initial_model_from_policy_spec(initial_policy_spec)
         if current_model is not None:
             _validate_training_config_matches_model(training_config, current_model)
+    _validate_validation_rollout_paths(validation_paths)
     results: list[SelfPlayIterationResult] = []
 
     for offset in range(iterations):
@@ -524,6 +525,16 @@ def _validate_training_config_matches_model(
         raise ValueError("training_config feature_count must match the resumed checkpoint.")
     if training_config.window_size != model.window_size:
         raise ValueError("training_config window_size must match the resumed checkpoint.")
+
+
+def _validate_validation_rollout_paths(paths: Iterable[Path]) -> None:
+    for path in paths:
+        if not path.exists():
+            raise FileNotFoundError(f"Validation rollout path does not exist: {path}")
+        if not path.is_file():
+            raise ValueError(f"Validation rollout path must be a file: {path}")
+        if path.stat().st_size == 0:
+            raise ValueError(f"Validation rollout path is empty: {path}")
 
 
 def _seat_policy_specs(

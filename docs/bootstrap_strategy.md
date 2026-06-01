@@ -32,9 +32,9 @@ Start from stronger trajectories before self-play fine-tuning.
 
 The bootstrap data could come from:
 
-- curated human or ladder replays converted into player-relative trajectories
 - a stronger non-learning policy used only to seed examples
 - a future search/planning teacher used to generate target actions
+- curated Gen 3 random battle replays converted into player-relative trajectories
 - filtered self-play games from later checkpoints once a stronger pool exists
 
 The current harness already supports this in two stages:
@@ -44,18 +44,30 @@ The current harness already supports this in two stages:
 
 Held-out validation JSONL can now be passed into self-play iterations with `--validation-data`, so reports can distinguish in-sample fit from validation fit.
 
+Validation fit is still an imitation metric. It answers whether the checkpoint matches the held-out rollout labels, not whether the policy is stronger. Benchmark win rate, capped-game rate, and head-to-head results remain the promotion signal.
+
+## Gen 3 Randbat Corpus Constraint
+
+The easiest replay corpora to find are usually ladder or tournament games in constructed formats. Those are not drop-in training data for Gen 3 random battles because the team-generation distribution, hidden-information assumptions, and common tactical situations differ.
+
+Curated Gen 3 randbat replays may still be useful, but the corpus source is unresolved. Until we know that a large enough randbat-specific replay set exists, replay import should not be the critical path for bootstrapping.
+
 ## Current Recommendation
 
-Keep Path A running as a baseline, but build Path B next. The transformer/PPO phase will need stronger early signal than random/simple rollouts are likely to provide. The immediate goal should be to make replay/imported trajectory conversion reliable, then use those trajectories as a bootstrap corpus.
+Keep Path A running as a baseline, but build Path B around a scripted Gen 3 randbat teacher first. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
+
+Replay import remains valuable after a randbat replay source is identified. It should share the same rollout JSONL schema and player-relative observation path, but it should not block the first bootstrap iteration.
 
 ## Near-Term Implementation Plan
 
-- Add a replay-to-trajectory importer that produces the same rollout JSONL schema as live collection.
-- Keep all imported observations player-relative and player-knowable.
-- Add provenance metadata for imported examples, including source, replay id, winner, rating/quality fields when available, and conversion version.
-- Train bootstrap checkpoints from imported data with held-out validation.
+- Resolve capped-game scoring policy enough to stop treating long capped games as free neutral outcomes forever.
+- Build a deterministic scripted teacher for Gen 3 randbats that is stronger than `simple-legal`, covering basic type pressure, status, hazards, low-value moves, and obvious switch participation.
+- Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
+- Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
-- Track capped-game rate, benchmark win rate, validation fit, and games per hour for both paths.
+- Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
+- Track benchmark win rate, capped-game rate, validation fit, and games per hour for both paths. Treat validation fit as imitation-health only.
+- Add a replay-to-trajectory importer after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape
 
