@@ -95,6 +95,21 @@ This baseline uses hashed observation-window features, a streaming shuffle buffe
 
 The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `reward-weighted` objective is an offline reward-weighted regression mode: it reinforces positive-return actions and ignores non-positive-return actions. It is not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
 
+## Self-Play Iteration Harness
+
+Run the first linear-policy collect/train/evaluate loop:
+
+```bash
+python -m pokezero.selfplay_cli iterate \
+  --run-dir runs/selfplay-smoke \
+  --iterations 3 \
+  --games-per-iteration 100 \
+  --evaluation-games 20 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+Each iteration writes `rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
+
 ## Gen 3 Belief Sidecar
 
 The read-only sidecar can attach to a local Showdown battle room and display the public Gen 3 random-battle belief state:

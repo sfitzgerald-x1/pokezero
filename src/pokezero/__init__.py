@@ -61,6 +61,13 @@ from .linear_policy import (
     train_linear_policy,
 )
 from .observation import ObservationSpec, PokeZeroObservationV0
+from .selfplay import (
+    SELFPLAY_RUN_SCHEMA_VERSION,
+    SelfPlayIterationResult,
+    SelfPlayRunResult,
+    collect_selfplay_rollouts,
+    run_selfplay_iterations,
+)
 from .showdown import (
     PlayerRelativeBattleState,
     PlayerRelativePublicEvent,
@@ -108,6 +115,9 @@ __all__ = [
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
     "RolloutRecord",
+    "SELFPLAY_RUN_SCHEMA_VERSION",
+    "SelfPlayIterationResult",
+    "SelfPlayRunResult",
     "ShowdownPokemon",
     "ShowdownPublicEvent",
     "ShowdownReplayState",
@@ -120,6 +130,7 @@ __all__ = [
     "batch_training_examples",
     "canonical_switch_action_map",
     "collect_rollouts",
+    "collect_selfplay_rollouts",
     "detect_showdown_slot",
     "examples_from_record",
     "evaluate_linear_policy",
@@ -139,6 +150,7 @@ __all__ = [
     "read_rollout_records",
     "rollout_record_from_dict",
     "rollout_record_to_dict",
+    "run_selfplay_iterations",
     "save_linear_model",
     "showdown_choice_for_action",
     "showdown_submission_for_action",
