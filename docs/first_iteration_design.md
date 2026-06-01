@@ -2,6 +2,53 @@
 
 PokeZero's first iteration targets Gen 3 random battles with player-knowable observations, randbat-specific belief tracking, fast policy inference, and self-play refinement.
 
+## Current Status
+
+As of June 2026, the repo has moved from design exploration into a working CPU-first harness. The implemented stack can run local Gen 3 random-battle games through a Showdown BattleStream bridge, normalize each side into player-relative observations, collect trajectories, train a small dependency-free linear policy baseline, evaluate checkpoints, iterate self-play runs, resume interrupted runs, and inspect run manifests.
+
+Implemented:
+
+- Fixed 9-action Gen 3 singles action space with move and switch slots.
+- Player-relative Showdown normalization where `self_*` and `opponent_*` are stable regardless of raw `p1` or `p2` seat.
+- Local Showdown environment backed by the built Pokemon Showdown simulator.
+- Rollout collection to JSONL with terminal outcome, capped-game marker, opponent action metadata, and policy identifiers.
+- Dataset streaming with left-padded temporal windows for training examples and batches.
+- Random legal and simple legal baseline policies.
+- CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
+- Linear checkpoint save/load with version-tag compatibility checks.
+- Baseline rollout benchmarking and checkpoint benchmarking.
+- Self-play iteration harness with current-policy-only training data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
+- Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
+
+Partially implemented:
+
+- Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
+- Belief tracking exists as a sidecar/debug system and candidate future observation feature source, but it is not wired into the trained policy path yet.
+- Evaluation exists against fixed baselines and historical checkpoints, but benchmark gates and long-run experiment criteria are still informal.
+- Capped games are recorded and surfaced in reports, but capped-game reward/scoring policy is still unresolved.
+
+Known limitations:
+
+- Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
+- Reward-weighted training currently depends on the recorded terminal winner and per-player returns; winner-side reward handling needs a focused audit before treating RWR results as quality evidence.
+- Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
+
+Not implemented yet:
+
+- Transformer/entity-token policy model.
+- Value head, opponent-action auxiliary head, or PPO-style online actor-critic training.
+- GPU training path.
+- Large-scale experiment orchestration across multiple machines.
+- Formal benchmark thresholds for promotion, regression detection, or checkpoint pool curation.
+
+## Deviations From Original Plan
+
+The design below still describes the target direction, but the implementation deliberately inserted a dependency-free linear-policy phase before the transformer/PPO phase. This was not intended as the final learning algorithm. It validates the environment boundary, observation serialization, trajectory format, checkpoint compatibility, self-play loop, resume behavior, parallel collection, and reporting before adding a heavier training framework.
+
+The Gen 3 belief work also started as a read-only sidecar and deterministic public-information engine rather than being immediately embedded into a learned policy. That has been useful for validating randbat set inference and player-relative state without coupling early training to belief-model complexity.
+
+Parallelization has started at the single-machine collection layer with `--workers`. It is not yet a distributed rollout system.
+
 ## Goals
 
 - Build a fresh PokeZero training stack. Metamon is prior art for observation and evaluation ideas; PokeZero owns its implementation.
