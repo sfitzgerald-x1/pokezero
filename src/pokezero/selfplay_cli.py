@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
+from typing import Any, Mapping
 
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
-from .selfplay import run_selfplay_iterations
+from .selfplay import load_selfplay_run_manifest, run_selfplay_iterations
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -54,6 +56,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
     iterate.add_argument("--policy-id", default="linear-selfplay", help="Policy id prefix stored in checkpoints.")
     iterate.set_defaults(func=_iterate)
+
+    report = subparsers.add_parser("report", help="Print a summary of a self-play run manifest.")
+    report.add_argument("--run-dir", type=Path, required=True, help="Self-play run directory containing manifest.json.")
+    report.add_argument("--json", action="store_true", help="Print the raw run manifest as formatted JSON.")
+    report.set_defaults(func=_report)
     return parser
 
 
@@ -123,6 +130,58 @@ def _print_run_summary(result) -> None:
         )
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
+
+
+def _report(args: argparse.Namespace) -> int:
+    manifest = load_selfplay_run_manifest(args.run_dir)
+    if args.json:
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        return 0
+    _print_manifest_report(manifest)
+    return 0
+
+
+def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    print(f"run_dir: {manifest.get('run_dir')}")
+    print(f"latest_checkpoint: {manifest.get('latest_checkpoint_path')}")
+    print(f"iterations: {len(iterations)}")
+    if not iterations:
+        return
+    print("")
+    header = (
+        f"{'iter':>4} {'games':>5} {'workers':>7} {'dec/s':>8} {'avg_dec':>8} "
+        f"{'loss':>10} {'accuracy':>8} checkpoint"
+    )
+    print(header)
+    print("-" * len(header))
+    for iteration in iterations:
+        metrics = _mapping(iteration.get("collection_metrics", {}))
+        training = _mapping(iteration.get("training", {}))
+        epochs = tuple(_mapping(epoch) for epoch in _sequence(training.get("epochs", ())))
+        final_epoch = epochs[-1] if epochs else {}
+        print(
+            f"{int(iteration['iteration']):4d} "
+            f"{int(metrics.get('games', 0)):5d} "
+            f"{int(iteration.get('worker_count', 1)):7d} "
+            f"{float(metrics.get('decisions_per_second', 0.0)):8.3f} "
+            f"{float(metrics.get('average_decision_rounds', 0.0)):8.2f} "
+            f"{float(final_epoch.get('loss', 0.0)):10.6f} "
+            f"{float(final_epoch.get('accuracy', 0.0)):8.4f} "
+            f"{iteration.get('checkpoint_path')}"
+        )
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected JSON object payload.")
+    return value
+
+
+def _sequence(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, (str, bytes)) or isinstance(value, Mapping) or not hasattr(value, "__iter__"):
+        raise ValueError("expected JSON array payload.")
+    return tuple(value)
 
 
 if __name__ == "__main__":

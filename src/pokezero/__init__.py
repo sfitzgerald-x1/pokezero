@@ -69,6 +69,7 @@ from .selfplay import (
     SelfPlayIterationResult,
     SelfPlayRunResult,
     collect_selfplay_rollouts,
+    load_selfplay_run_manifest,
     run_selfplay_iterations,
 )
 from .showdown import (
@@ -144,6 +145,7 @@ __all__ = [
     "is_move_action",
     "is_switch_action",
     "load_linear_model",
+    "load_selfplay_run_manifest",
     "move_action_candidates",
     "normalize_for_player",
     "observation_from_player_state",

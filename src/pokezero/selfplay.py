@@ -104,6 +104,17 @@ class SelfPlayRunResult:
         }
 
 
+def load_selfplay_run_manifest(run_dir: Path) -> Mapping[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Self-play run manifest does not exist: {manifest_path}")
+    manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+    if manifest.get("schema_version") != SELFPLAY_RUN_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported self-play run schema: {manifest.get('schema_version')!r}.")
+    _sequence(manifest.get("iterations", ()))
+    return manifest
+
+
 def run_selfplay_iterations(
     *,
     run_dir: Path,
