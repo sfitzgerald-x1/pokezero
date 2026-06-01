@@ -241,10 +241,12 @@ class LinearPolicyTest(unittest.TestCase):
 
         self.assertEqual(model.to_dict(), LinearPolicyModel.initialized(feature_count=128, window_size=1).to_dict())
 
-    def test_reward_weighted_objective_reinforces_winning_actions(self) -> None:
+    def test_reward_weighted_objective_uses_terminal_return_when_step_reward_is_zero(self) -> None:
+        record = winning_action_record()
+        self.assertEqual(record.trajectory.steps[0].reward, 0.0)
         with tempfile.TemporaryDirectory() as temp_dir:
             data_path = Path(temp_dir) / "rollouts.jsonl"
-            write_record(data_path, winning_action_record())
+            write_record(data_path, record)
 
             model = train_linear_policy(
                 data_path,

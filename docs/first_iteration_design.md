@@ -12,7 +12,7 @@ Implemented:
 - Player-relative Showdown normalization where `self_*` and `opponent_*` are stable regardless of raw `p1` or `p2` seat.
 - Local Showdown environment backed by the built Pokemon Showdown simulator.
 - Rollout collection to JSONL with terminal outcome, capped-game marker, opponent action metadata, and policy identifiers.
-- Dataset streaming with left-padded temporal windows for training examples and batches.
+- Dataset streaming with left-padded temporal windows, terminal-winner-derived returns, and batch containers for training examples.
 - Random legal and simple legal baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear checkpoint save/load with version-tag compatibility checks.
@@ -30,7 +30,6 @@ Partially implemented:
 Known limitations:
 
 - Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
-- Reward-weighted training currently depends on the recorded terminal winner and per-player returns; winner-side reward handling needs a focused audit before treating RWR results as quality evidence.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 
 Not implemented yet:
