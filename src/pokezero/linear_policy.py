@@ -17,7 +17,7 @@ from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_e
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
-LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v1"
+LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v2"
 LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v1"
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 
@@ -109,19 +109,9 @@ class LinearPolicyModel:
             raise ValueError(f"Unsupported linear policy schema: {payload.get('schema_version')!r}.")
         return cls(
             policy_id=str(payload["policy_id"]),
-            action_schema_version=_supported_version(payload, "action_schema_version", ACTION_SCHEMA_VERSION, "action schema"),
-            observation_schema_version=_supported_version(
-                payload,
-                "observation_schema_version",
-                OBSERVATION_SCHEMA_VERSION,
-                "observation schema",
-            ),
-            feature_schema_version=_supported_version(
-                payload,
-                "feature_schema_version",
-                LINEAR_FEATURE_SCHEMA_VERSION,
-                "linear feature schema",
-            ),
+            action_schema_version=_required_str(payload, "action_schema_version"),
+            observation_schema_version=_required_str(payload, "observation_schema_version"),
+            feature_schema_version=_required_str(payload, "feature_schema_version"),
             feature_count=int(payload["feature_count"]),
             window_size=int(payload["window_size"]),
             weights=tuple(tuple(float(value) for value in row) for row in _sequence(payload["weights"])),
@@ -491,16 +481,11 @@ def load_linear_model(path: str | PathLike[str] | Path) -> LinearPolicyModel:
     return LinearPolicyModel.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
-def _supported_version(
-    payload: Mapping[str, Any],
-    key: str,
-    expected: str,
-    label: str,
-) -> str:
-    actual = payload.get(key)
-    if actual != expected:
-        raise ValueError(f"Unsupported {label}: {actual!r}. Expected {expected!r}.")
-    return str(actual)
+def _required_str(payload: Mapping[str, Any], key: str) -> str:
+    try:
+        return str(payload[key])
+    except KeyError as exc:
+        raise ValueError(f"linear policy checkpoint missing required field: {key}.") from exc
 
 
 def _iter_epoch_examples(

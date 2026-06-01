@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 import random
 import tempfile
@@ -16,6 +18,7 @@ from pokezero.linear_policy import (
     LinearTrainingConfig,
     evaluate_linear_policy,
     features_from_observation_window,
+    features_from_window,
     load_linear_model,
     save_linear_model,
     train_linear_policy,
@@ -170,21 +173,38 @@ class LinearPolicyTest(unittest.TestCase):
             mutated = dict(payload)
             mutated[key] = "stale"
             stale_payloads.append(mutated)
-        missing = dict(payload)
-        del missing["observation_schema_version"]
-        stale_payloads.append(missing)
-
         for stale_payload in stale_payloads:
             with self.subTest(stale_payload=stale_payload):
                 with self.assertRaisesRegex(ValueError, "Unsupported"):
                     LinearPolicyModel.from_dict(stale_payload)
 
+        missing = dict(payload)
+        del missing["observation_schema_version"]
+        with self.assertRaisesRegex(ValueError, "missing required field"):
+            LinearPolicyModel.from_dict(missing)
+
     def test_linear_checkpoint_rejects_stale_policy_schema_version(self) -> None:
         payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
-        payload["schema_version"] = f"{LINEAR_POLICY_SCHEMA_VERSION}.stale"
+        payload["schema_version"] = "pokezero.linear_policy.v1"
 
         with self.assertRaisesRegex(ValueError, "Unsupported linear policy schema"):
             LinearPolicyModel.from_dict(payload)
+
+    def test_linear_feature_extractor_golden_hash(self) -> None:
+        features = features_from_window(
+            categorical_ids=(((1, 2), (3, 4)), ((5, 6), (7, 8))),
+            numeric_features=(((0.0, 1.5), (2.0, 0.0)), ((3.25, 0.0), (0.0, -1.0))),
+            token_type_ids=((9, 10), (11, 12)),
+            attention_mask=((True, False), (True, True)),
+            history_mask=(False, True),
+            feature_count=64,
+        )
+        encoded = json.dumps(sorted(features.items()), separators=(",", ":")).encode()
+
+        self.assertEqual(
+            hashlib.sha256(encoded).hexdigest(),
+            "e4b9231184308ca4bc20eea19d319507cde989c6f3da1a78e52b4689b2a7d31f",
+        )
 
     def test_train_linear_policy_reports_held_out_validation_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
