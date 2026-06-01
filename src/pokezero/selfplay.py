@@ -130,17 +130,16 @@ def run_selfplay_iterations(
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
 
-    prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
-    current_policy_spec = initial_policy_spec
-    current_model = _initial_model_from_policy_spec(initial_policy_spec)
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
     first_iteration = 1
     next_seed_start = seed_start
+    prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
         current_policy_spec = str(last_iteration["checkpoint_policy_spec"])
         current_model = load_linear_model(Path(str(last_iteration["checkpoint_path"])))
+        _validate_training_config_matches_model(training_config, current_model)
         checkpoint_history = [str(iteration["checkpoint_policy_spec"]) for iteration in prior_iteration_manifests]
         training_rollout_history = [
             Path(str(path))
@@ -148,6 +147,11 @@ def run_selfplay_iterations(
         ]
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
+    else:
+        current_policy_spec = initial_policy_spec
+        current_model = _initial_model_from_policy_spec(initial_policy_spec)
+        if current_model is not None:
+            _validate_training_config_matches_model(training_config, current_model)
     results: list[SelfPlayIterationResult] = []
 
     for offset in range(iterations):
@@ -216,6 +220,14 @@ def run_selfplay_iterations(
         checkpoint_history.append(result.checkpoint_policy_spec)
         current_policy_spec = result.checkpoint_policy_spec
         current_model = training.model
+        _write_json(
+            run_dir / "manifest.json",
+            SelfPlayRunResult(
+                run_dir=run_dir,
+                iterations=tuple(results),
+                prior_iteration_manifests=tuple(prior_iteration_manifests),
+            ).to_dict(),
+        )
 
     run_result = SelfPlayRunResult(
         run_dir=run_dir,
@@ -368,6 +380,15 @@ def _load_prior_iteration_manifests(
 ) -> tuple[Mapping[str, Any], ...]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
+        iteration_manifests = _load_iteration_manifests(run_dir)
+        if iteration_manifests:
+            if not resume:
+                raise ValueError("run_dir already contains iteration manifests; pass resume=True to continue it.")
+            return iteration_manifests
+        if list(run_dir.glob("iteration-*")):
+            if not resume:
+                raise ValueError("run_dir already contains iteration directories; pass resume=True to inspect or continue it.")
+            raise ValueError("cannot resume: run directory contains no completed iteration manifests.")
         if resume:
             raise ValueError("cannot resume: run manifest does not exist.")
         return ()
@@ -380,6 +401,26 @@ def _load_prior_iteration_manifests(
     if not iterations:
         raise ValueError("cannot resume: run manifest contains no iterations.")
     return iterations
+
+
+def _load_iteration_manifests(run_dir: Path) -> tuple[Mapping[str, Any], ...]:
+    manifests: list[Mapping[str, Any]] = []
+    for manifest_path in sorted(run_dir.glob("iteration-*/manifest.json")):
+        manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+        if manifest.get("schema_version") != SELFPLAY_RUN_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported self-play iteration schema: {manifest.get('schema_version')!r}.")
+        manifests.append(manifest)
+    return tuple(manifests)
+
+
+def _validate_training_config_matches_model(
+    training_config: LinearTrainingConfig,
+    model: LinearPolicyModel,
+) -> None:
+    if training_config.feature_count != model.feature_count:
+        raise ValueError("training_config feature_count must match the resumed checkpoint.")
+    if training_config.window_size != model.window_size:
+        raise ValueError("training_config window_size must match the resumed checkpoint.")
 
 
 def _seat_policy_specs(

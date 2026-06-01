@@ -64,6 +64,11 @@ class OneTurnEnv:
         self.closed = True
 
 
+class ResetFailingEnv:
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        raise RuntimeError("boom")
+
+
 class SelfPlayTest(unittest.TestCase):
     def test_collect_selfplay_rollouts_alternates_current_policy_seat(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -225,6 +230,106 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(len(second.iterations[0].training_rollout_paths), 2)
         self.assertEqual(len(manifest["iterations"]), 3)
         self.assertEqual(manifest["latest_checkpoint_path"], str(second.latest_checkpoint_path))
+
+    def test_run_selfplay_iterations_writes_manifest_after_each_completed_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+            envs = iter((OneTurnEnv, ResetFailingEnv))
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: next(envs)(),
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=config,
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
+
+            manifest_after_crash = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            resumed = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                resume=True,
+            )
+
+            final_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(manifest_after_crash["iterations"]), 1)
+        self.assertEqual(resumed.iterations[0].iteration, 2)
+        self.assertEqual(resumed.iterations[0].seed_start, 21)
+        self.assertEqual(len(final_manifest["iterations"]), 2)
+
+    def test_run_selfplay_iterations_rejects_resume_config_mismatch_before_collecting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                fixed_opponent_policy_specs=("random-legal",),
+            )
+
+            with self.assertRaisesRegex(ValueError, "feature_count"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=64,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    resume=True,
+                )
+
+            self.assertFalse((run_dir / "iteration-0002").exists())
+
+    def test_run_selfplay_iterations_refuses_orphaned_iteration_directory_without_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            (run_dir / "iteration-0001").mkdir(parents=True)
+
+            with self.assertRaisesRegex(ValueError, "iteration directories"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
 
     def test_selfplay_cli_iterate_wires_arguments(self) -> None:
         fake_metrics = CollectionMetrics(
