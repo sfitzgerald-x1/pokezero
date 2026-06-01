@@ -4,10 +4,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.actions import ACTION_SCHEMA_VERSION
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.linear_cli import main as linear_cli_main
 from pokezero.linear_policy import (
+    LINEAR_FEATURE_SCHEMA_VERSION,
+    LINEAR_POLICY_SCHEMA_VERSION,
     LinearPolicyModel,
     LinearSoftmaxPolicy,
     LinearTrainingConfig,
@@ -17,7 +20,7 @@ from pokezero.linear_policy import (
     save_linear_model,
     train_linear_policy,
 )
-from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -155,7 +158,33 @@ class LinearPolicyTest(unittest.TestCase):
             )
 
         self.assertEqual(restored.to_dict(), model.to_dict())
+        self.assertEqual(restored.action_schema_version, ACTION_SCHEMA_VERSION)
+        self.assertEqual(restored.observation_schema_version, OBSERVATION_SCHEMA_VERSION)
+        self.assertEqual(restored.feature_schema_version, LINEAR_FEATURE_SCHEMA_VERSION)
         self.assertEqual(restored.predict_action(features, LEGAL_TWO_ACTION_MASK), model.predict_action(features, LEGAL_TWO_ACTION_MASK))
+
+    def test_linear_checkpoint_rejects_stale_runtime_schema_versions(self) -> None:
+        payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+        stale_payloads = []
+        for key in ("action_schema_version", "observation_schema_version", "feature_schema_version"):
+            mutated = dict(payload)
+            mutated[key] = "stale"
+            stale_payloads.append(mutated)
+        missing = dict(payload)
+        del missing["observation_schema_version"]
+        stale_payloads.append(missing)
+
+        for stale_payload in stale_payloads:
+            with self.subTest(stale_payload=stale_payload):
+                with self.assertRaisesRegex(ValueError, "Unsupported"):
+                    LinearPolicyModel.from_dict(stale_payload)
+
+    def test_linear_checkpoint_rejects_stale_policy_schema_version(self) -> None:
+        payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+        payload["schema_version"] = f"{LINEAR_POLICY_SCHEMA_VERSION}.stale"
+
+        with self.assertRaisesRegex(ValueError, "Unsupported linear policy schema"):
+            LinearPolicyModel.from_dict(payload)
 
     def test_train_linear_policy_reports_held_out_validation_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
