@@ -1,6 +1,8 @@
+import io
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
 import unittest
 
@@ -8,6 +10,8 @@ from pokezero.local_showdown import (
     DEFAULT_SHOWDOWN_ROOT,
     LocalShowdownConfig,
     LocalShowdownEnv,
+    _drain_stderr,
+    _drain_stdout,
     requested_players_from_requests,
     showdown_seed_from_int,
 )
@@ -164,6 +168,20 @@ class LocalShowdownRequestTest(unittest.TestCase):
         env._read_until_boundary()
 
         self.assertEqual(len(calls), 3)
+
+    def test_drain_threads_tolerate_closed_streams(self) -> None:
+        stdout_stream = io.StringIO("first\n")
+        stderr_stream = io.StringIO("warning\n")
+        output_queue: queue.Queue[str | None] = queue.Queue()
+        stdout_stream.close()
+        stderr_stream.close()
+
+        _drain_stdout(stdout_stream, output_queue)
+        stderr_lines: list[str] = []
+        _drain_stderr(stderr_stream, stderr_lines)
+
+        self.assertIsNone(output_queue.get_nowait())
+        self.assertEqual(stderr_lines, [])
 
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")

@@ -396,9 +396,13 @@ def _decode_request_line(line: str) -> Mapping[str, Any]:
 
 
 def _drain_stdout(stream: TextIO, target: queue.Queue[str | None]) -> None:
-    for line in stream:
-        target.put(line)
-    target.put(None)
+    try:
+        for line in stream:
+            target.put(line)
+    except (OSError, ValueError):
+        pass
+    finally:
+        target.put(None)
 
 
 def _close_process_pipes(process: subprocess.Popen[str]) -> None:
@@ -413,7 +417,10 @@ def _close_process_pipes(process: subprocess.Popen[str]) -> None:
 def _drain_stderr(stream: TextIO | None, target: list[str]) -> None:
     if stream is None:
         return
-    for line in stream:
-        target.append(line.rstrip())
-        if len(target) > 100:
-            del target[: len(target) - 100]
+    try:
+        for line in stream:
+            target.append(line.rstrip())
+            if len(target) > 100:
+                del target[: len(target) - 100]
+    except (OSError, ValueError):
+        pass
