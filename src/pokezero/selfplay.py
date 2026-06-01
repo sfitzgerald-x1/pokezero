@@ -387,6 +387,9 @@ def _training_result_to_dict(result: LinearTrainingResult) -> dict[str, Any]:
         "validation_metrics": result.validation_metrics.to_dict() if result.validation_metrics is not None else None,
         "model": {
             "policy_id": result.model.policy_id,
+            "action_schema_version": result.model.action_schema_version,
+            "observation_schema_version": result.model.observation_schema_version,
+            "feature_schema_version": result.model.feature_schema_version,
             "feature_count": result.model.feature_count,
             "window_size": result.model.window_size,
         },

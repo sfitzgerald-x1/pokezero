@@ -2,6 +2,7 @@
 
 from .actions import (
     ACTION_COUNT,
+    ACTION_SCHEMA_VERSION,
     ActionCandidate,
     MOVE_ACTION_COUNT,
     SWITCH_ACTION_COUNT,
@@ -46,6 +47,7 @@ from .dataset import (
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .linear_policy import (
+    LINEAR_FEATURE_SCHEMA_VERSION,
     LINEAR_POLICY_SCHEMA_VERSION,
     LinearEpochMetrics,
     LinearEvaluationMetrics,
@@ -60,7 +62,7 @@ from .linear_policy import (
     save_linear_model,
     train_linear_policy,
 )
-from .observation import ObservationSpec, PokeZeroObservationV0
+from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
@@ -86,6 +88,7 @@ from .showdown import (
 
 __all__ = [
     "ACTION_COUNT",
+    "ACTION_SCHEMA_VERSION",
     "ActionCandidate",
     "AsyncPokeZeroEnv",
     "BattleBeliefSnapshot",
@@ -94,11 +97,13 @@ __all__ = [
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
     "ObservationSpec",
+    "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
     "LocalShowdownConfig",
     "LocalShowdownEnv",
     "LocalShowdownError",
+    "LINEAR_FEATURE_SCHEMA_VERSION",
     "LINEAR_POLICY_SCHEMA_VERSION",
     "LinearEpochMetrics",
     "LinearEvaluationMetrics",

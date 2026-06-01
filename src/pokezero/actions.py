@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 ACTION_COUNT = 9
+ACTION_SCHEMA_VERSION = "pokezero.action_space.v0"
 MOVE_ACTION_COUNT = 4
 SWITCH_ACTION_COUNT = 5
 TEAM_SIZE = 6

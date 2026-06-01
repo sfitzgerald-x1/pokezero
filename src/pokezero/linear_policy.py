@@ -12,12 +12,13 @@ import random
 from time import perf_counter
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
-from .actions import ACTION_COUNT
+from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
 from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_examples
-from .observation import PokeZeroObservationV0
+from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
-LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v1"
+LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v2"
+LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v1"
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 
 
@@ -27,8 +28,17 @@ class LinearPolicyModel:
     feature_count: int
     window_size: int
     weights: tuple[tuple[float, ...], ...]
+    action_schema_version: str = ACTION_SCHEMA_VERSION
+    observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
+    feature_schema_version: str = LINEAR_FEATURE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if self.action_schema_version != ACTION_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
+        if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
+        if self.feature_schema_version != LINEAR_FEATURE_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported linear feature schema version: {self.feature_schema_version!r}.")
         if self.feature_count <= 1:
             raise ValueError("feature_count must be greater than 1.")
         if self.window_size <= 0:
@@ -85,6 +95,9 @@ class LinearPolicyModel:
         return {
             "schema_version": LINEAR_POLICY_SCHEMA_VERSION,
             "policy_id": self.policy_id,
+            "action_schema_version": self.action_schema_version,
+            "observation_schema_version": self.observation_schema_version,
+            "feature_schema_version": self.feature_schema_version,
             "feature_count": self.feature_count,
             "window_size": self.window_size,
             "weights": [list(row) for row in self.weights],
@@ -96,6 +109,9 @@ class LinearPolicyModel:
             raise ValueError(f"Unsupported linear policy schema: {payload.get('schema_version')!r}.")
         return cls(
             policy_id=str(payload["policy_id"]),
+            action_schema_version=_required_str(payload, "action_schema_version"),
+            observation_schema_version=_required_str(payload, "observation_schema_version"),
+            feature_schema_version=_required_str(payload, "feature_schema_version"),
             feature_count=int(payload["feature_count"]),
             window_size=int(payload["window_size"]),
             weights=tuple(tuple(float(value) for value in row) for row in _sequence(payload["weights"])),
@@ -463,6 +479,13 @@ def save_linear_model(path: str | PathLike[str] | Path, model: LinearPolicyModel
 
 def load_linear_model(path: str | PathLike[str] | Path) -> LinearPolicyModel:
     return LinearPolicyModel.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def _required_str(payload: Mapping[str, Any], key: str) -> str:
+    try:
+        return str(payload[key])
+    except KeyError as exc:
+        raise ValueError(f"linear policy checkpoint missing required field: {key}.") from exc
 
 
 def _iter_epoch_examples(
