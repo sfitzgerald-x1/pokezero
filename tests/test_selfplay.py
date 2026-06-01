@@ -68,9 +68,11 @@ class SelfPlayTest(unittest.TestCase):
     def test_collect_selfplay_rollouts_alternates_current_policy_seat(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
+            training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
 
             metrics = collect_selfplay_rollouts(
                 output_path=output_path,
+                training_output_path=training_output_path,
                 games=2,
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
@@ -80,9 +82,34 @@ class SelfPlayTest(unittest.TestCase):
             )
 
             records = read_rollout_records(output_path)
+            training_records = read_rollout_records(training_output_path)
         self.assertEqual(metrics.games, 2)
         self.assertEqual(records[0].policy_ids, {"p1": "simple-legal", "p2": "random-legal"})
         self.assertEqual(records[1].policy_ids, {"p1": "random-legal", "p2": "simple-legal"})
+        self.assertEqual(training_records[0].policy_ids, {"p1": "simple-legal"})
+        self.assertEqual(training_records[1].policy_ids, {"p2": "simple-legal"})
+        self.assertEqual({step.player_id for record in training_records for step in record.trajectory.steps}, {"p1", "p2"})
+
+    def test_collect_selfplay_rollouts_filters_current_seat_even_when_policy_ids_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rollouts.jsonl"
+            training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=output_path,
+                training_output_path=training_output_path,
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=10,
+                current_policy_spec="random-legal",
+                opponent_policy_specs=("random-legal",),
+            )
+
+            training_records = read_rollout_records(training_output_path)
+
+        self.assertEqual(training_records[0].policy_ids, {"p1": "random-legal"})
+        self.assertEqual(training_records[1].policy_ids, {"p2": "random-legal"})
 
     def test_run_selfplay_iterations_writes_checkpoint_and_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -114,7 +141,10 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["iteration"], 1)
         self.assertEqual(iteration_manifest["collection_metrics"]["games"], 2)
         self.assertEqual(iteration_manifest["training"]["model"]["policy_id"], "linear-selfplay-test-iter-0001")
+        self.assertEqual(len(iteration_manifest["training_rollout_paths"]), 1)
+        self.assertTrue(iteration_manifest["training_rollout_path"].endswith("training-rollouts.jsonl"))
         self.assertIn(result.iterations[0].checkpoint_policy_spec, result.iterations[2].opponent_policy_specs)
+        self.assertEqual(len(result.iterations[2].training_rollout_paths), 3)
 
     def test_selfplay_cli_iterate_wires_arguments(self) -> None:
         fake_metrics = CollectionMetrics(
@@ -156,8 +186,6 @@ class SelfPlayTest(unittest.TestCase):
                         "random-legal",
                         "--evaluation-games",
                         "3",
-                        "--objective",
-                        "reward-weighted",
                     ]
                 )
 

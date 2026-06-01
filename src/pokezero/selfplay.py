@@ -12,6 +12,7 @@ from .collection import (
     BenchmarkMatchup,
     BenchmarkReport,
     CollectionMetrics,
+    RolloutRecord,
     benchmark_rollouts,
     iter_rollout_records,
     policy_from_spec,
@@ -21,6 +22,7 @@ from .collection import (
 )
 from .env import PokeZeroEnv
 from .linear_policy import (
+    LinearPolicyModel,
     LinearSoftmaxPolicy,
     LinearTrainingConfig,
     LinearTrainingResult,
@@ -29,6 +31,7 @@ from .linear_policy import (
 )
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
+from .trajectory import BattleTrajectory
 
 SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
 
@@ -37,10 +40,12 @@ SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
 class SelfPlayIterationResult:
     iteration: int
     rollout_path: Path
+    training_rollout_path: Path
     checkpoint_path: Path
     manifest_path: Path
     current_policy_spec: str
     opponent_policy_specs: tuple[str, ...]
+    training_rollout_paths: tuple[Path, ...]
     seed_start: int
     metrics: CollectionMetrics
     training: LinearTrainingResult
@@ -55,10 +60,12 @@ class SelfPlayIterationResult:
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "iteration": self.iteration,
             "rollout_path": str(self.rollout_path),
+            "training_rollout_path": str(self.training_rollout_path),
             "checkpoint_path": str(self.checkpoint_path),
             "checkpoint_policy_spec": self.checkpoint_policy_spec,
             "current_policy_spec": self.current_policy_spec,
             "opponent_policy_specs": list(self.opponent_policy_specs),
+            "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "seed_start": self.seed_start,
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
@@ -116,13 +123,16 @@ def run_selfplay_iterations(
         raise ValueError("at least one fixed opponent policy spec is required.")
 
     current_policy_spec = initial_policy_spec
+    current_model = _initial_model_from_policy_spec(initial_policy_spec)
     checkpoint_history: list[str] = []
+    training_rollout_history: list[Path] = []
     results: list[SelfPlayIterationResult] = []
 
     for iteration in range(1, iterations + 1):
         iteration_dir = run_dir / f"iteration-{iteration:04d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         rollout_path = iteration_dir / "rollouts.jsonl"
+        training_rollout_path = iteration_dir / "training-rollouts.jsonl"
         checkpoint_path = iteration_dir / "linear-policy.json"
         manifest_path = iteration_dir / "manifest.json"
         iteration_seed_start = seed_start + ((iteration - 1) * games_per_iteration)
@@ -135,6 +145,7 @@ def run_selfplay_iterations(
 
         metrics = collect_selfplay_rollouts(
             output_path=rollout_path,
+            training_output_path=training_rollout_path,
             games=games_per_iteration,
             env_factory=env_factory,
             rollout_config=rollout_config,
@@ -146,7 +157,12 @@ def run_selfplay_iterations(
             training_config,
             policy_id=f"{training_config.policy_id}-iter-{iteration:04d}",
         )
-        training = train_linear_policy(rollout_path, config=iteration_training_config)
+        training_rollout_history.append(training_rollout_path)
+        training = train_linear_policy(
+            tuple(training_rollout_history),
+            config=iteration_training_config,
+            initial_model=current_model,
+        )
         save_linear_model(checkpoint_path, training.model)
         benchmark = None
         if evaluation_games:
@@ -161,10 +177,12 @@ def run_selfplay_iterations(
         result = SelfPlayIterationResult(
             iteration=iteration,
             rollout_path=rollout_path,
+            training_rollout_path=training_rollout_path,
             checkpoint_path=checkpoint_path,
             manifest_path=manifest_path,
             current_policy_spec=current_policy_spec,
             opponent_policy_specs=opponent_policy_specs,
+            training_rollout_paths=tuple(training_rollout_history),
             seed_start=iteration_seed_start,
             metrics=metrics,
             training=training,
@@ -174,6 +192,7 @@ def run_selfplay_iterations(
         results.append(result)
         checkpoint_history.append(result.checkpoint_policy_spec)
         current_policy_spec = result.checkpoint_policy_spec
+        current_model = training.model
 
     run_result = SelfPlayRunResult(run_dir=run_dir, iterations=tuple(results))
     _write_json(run_dir / "manifest.json", run_result.to_dict())
@@ -183,6 +202,7 @@ def run_selfplay_iterations(
 def collect_selfplay_rollouts(
     *,
     output_path: Path,
+    training_output_path: Path | None = None,
     games: int,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -197,35 +217,98 @@ def collect_selfplay_rollouts(
         raise ValueError("at least one opponent policy spec is required.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path.with_name(f".{output_path.name}.tmp")
+    training_write_path = None
+    if training_output_path is not None:
+        training_output_path.parent.mkdir(parents=True, exist_ok=True)
+        training_write_path = training_output_path.with_name(f".{training_output_path.name}.tmp")
     collection_start = perf_counter()
     try:
         with write_path.open("w", encoding="utf-8") as handle:
-            for game_index in range(games):
-                seed = seed_start + game_index
-                opponent_spec = opponent_specs[game_index % len(opponent_specs)]
-                p1_spec, p2_spec = _seat_policy_specs(
-                    current_policy_spec=current_policy_spec,
-                    opponent_policy_spec=opponent_spec,
-                    game_index=game_index,
-                )
-                record = run_rollout_record(
+            training_handle = training_write_path.open("w", encoding="utf-8") if training_write_path is not None else None
+            try:
+                _collect_selfplay_records(
+                    handle=handle,
+                    training_handle=training_handle,
+                    games=games,
                     env_factory=env_factory,
-                    policies={
-                        "p1": policy_from_spec(p1_spec),
-                        "p2": policy_from_spec(p2_spec),
-                    },
                     rollout_config=rollout_config,
-                    seed=seed,
-                    battle_id=f"selfplay-{seed}",
+                    seed_start=seed_start,
+                    current_policy_spec=current_policy_spec,
+                    opponent_specs=opponent_specs,
                 )
-                write_rollout_record(handle, record)
+            finally:
+                if training_handle is not None:
+                    training_handle.close()
         write_path.replace(output_path)
+        if training_write_path is not None and training_output_path is not None:
+            training_write_path.replace(training_output_path)
     except Exception:
         write_path.unlink(missing_ok=True)
+        if training_write_path is not None:
+            training_write_path.unlink(missing_ok=True)
         raise
     return summarize_records(
         iter_rollout_records(output_path),
         elapsed_seconds=perf_counter() - collection_start,
+    )
+
+
+def _collect_selfplay_records(
+    *,
+    handle,
+    training_handle,
+    games: int,
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    seed_start: int,
+    current_policy_spec: str,
+    opponent_specs: tuple[str, ...],
+) -> None:
+    for game_index in range(games):
+        seed = seed_start + game_index
+        opponent_spec = opponent_specs[game_index % len(opponent_specs)]
+        p1_spec, p2_spec = _seat_policy_specs(
+            current_policy_spec=current_policy_spec,
+            opponent_policy_spec=opponent_spec,
+            game_index=game_index,
+        )
+        current_player = "p1" if game_index % 2 == 0 else "p2"
+        record = run_rollout_record(
+            env_factory=env_factory,
+            policies={
+                "p1": policy_from_spec(p1_spec),
+                "p2": policy_from_spec(p2_spec),
+            },
+            rollout_config=rollout_config,
+            seed=seed,
+            battle_id=f"selfplay-{seed}",
+        )
+        write_rollout_record(handle, record)
+        if training_handle is not None:
+            write_rollout_record(training_handle, _record_for_player(record, current_player))
+
+
+def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
+    trajectory = BattleTrajectory(
+        battle_id=record.trajectory.battle_id,
+        format_id=record.trajectory.format_id,
+        seed=record.trajectory.seed,
+        metadata=dict(record.trajectory.metadata),
+    )
+    for step in record.trajectory.steps:
+        if step.player_id == player_id:
+            trajectory.append(step)
+    if record.trajectory.terminal is not None:
+        trajectory.record_terminal(record.trajectory.terminal)
+    return RolloutRecord(
+        battle_id=record.battle_id,
+        seed=record.seed,
+        format_id=record.format_id,
+        policy_ids={player_id: str(record.policy_ids[player_id])},
+        decision_round_count=len(trajectory.steps),
+        elapsed_seconds=record.elapsed_seconds,
+        terminal=record.terminal,
+        trajectory=trajectory,
     )
 
 
@@ -242,6 +325,13 @@ def _opponent_pool(
     else:
         historical = []
     return fixed_policy_specs + tuple(historical)
+
+
+def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | None:
+    policy = policy_from_spec(policy_spec)
+    if isinstance(policy, LinearSoftmaxPolicy):
+        return policy.model
+    return None
 
 
 def _seat_policy_specs(

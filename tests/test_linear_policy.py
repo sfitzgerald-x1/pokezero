@@ -232,6 +232,47 @@ class LinearPolicyTest(unittest.TestCase):
 
         self.assertEqual(first.to_dict(), second.to_dict())
 
+    def test_train_linear_policy_can_warm_start_from_initial_model(self) -> None:
+        weights = [[0.0 for _ in range(128)] for _ in range(9)]
+        weights[1][0] = 2.0
+        initial_model = LinearPolicyModel(
+            policy_id="warm-start",
+            feature_count=128,
+            window_size=1,
+            weights=tuple(tuple(row) for row in weights),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, winning_action_record())
+
+            model = train_linear_policy(
+                data_path,
+                config=LinearTrainingConfig(
+                    feature_count=128,
+                    epochs=1,
+                    learning_rate=0.01,
+                    objective="reward-weighted",
+                    shuffle_buffer_size=0,
+                    policy_id="warm-started",
+                ),
+                initial_model=initial_model,
+            ).model
+
+        self.assertEqual(model.policy_id, "warm-started")
+        self.assertGreater(model.weights[1][0], 2.0)
+
+    def test_train_linear_policy_rejects_incompatible_initial_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, winning_action_record())
+
+            with self.assertRaisesRegex(ValueError, "feature_count"):
+                train_linear_policy(
+                    data_path,
+                    config=LinearTrainingConfig(feature_count=128),
+                    initial_model=LinearPolicyModel.initialized(feature_count=64, window_size=1),
+                )
+
     def test_linear_softmax_policy_respects_legal_mask(self) -> None:
         weights = [[0.0 for _ in range(8)] for _ in range(9)]
         weights[1][0] = 100.0

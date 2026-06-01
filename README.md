@@ -108,7 +108,7 @@ python -m pokezero.selfplay_cli iterate \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-Each iteration writes `rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
+Each iteration writes full-audit `rollouts.jsonl`, current-policy-only `training-rollouts.jsonl`, `linear-policy.json`, and `manifest.json` under `iteration-NNNN/`, plus a top-level run manifest. The current checkpoint plays both seats across the collected games against a fixed opponent pool and a bounded history of older checkpoints. Training accumulates current-policy examples across iterations and warm-starts from the prior checkpoint. This is still a small linear-policy harness; it exists to make the improvement loop auditable before moving to a larger neural model.
 
 ## Gen 3 Belief Sidecar
 

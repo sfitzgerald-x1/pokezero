@@ -258,13 +258,21 @@ def train_linear_policy(
     *,
     config: LinearTrainingConfig | None = None,
     validation_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
+    initial_model: LinearPolicyModel | None = None,
 ) -> LinearTrainingResult:
     training_config = config or LinearTrainingConfig()
-    weights = [list(row) for row in LinearPolicyModel.initialized(
-        feature_count=training_config.feature_count,
-        window_size=training_config.window_size,
-        policy_id=training_config.policy_id,
-    ).weights]
+    if initial_model is not None:
+        if initial_model.feature_count != training_config.feature_count:
+            raise ValueError("initial_model feature_count must match the training config.")
+        if initial_model.window_size != training_config.window_size:
+            raise ValueError("initial_model window_size must match the training config.")
+        weights = [list(row) for row in initial_model.weights]
+    else:
+        weights = [list(row) for row in LinearPolicyModel.initialized(
+            feature_count=training_config.feature_count,
+            window_size=training_config.window_size,
+            policy_id=training_config.policy_id,
+        ).weights]
     epoch_metrics = []
     dataset_config = TrajectoryDatasetConfig(
         window_size=training_config.window_size,
