@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pokezero.collection import CollectionMetrics, read_rollout_records
+from pokezero.collection import CollectionMetrics, read_rollout_records, rollout_record_to_dict
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
@@ -67,6 +67,12 @@ class OneTurnEnv:
 class ResetFailingEnv:
     def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
         raise RuntimeError("boom")
+
+
+class MultiActionEnv(OneTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self._observation = observation((True, True, True, True, True, True, False, False, False))
 
 
 class SelfPlayTest(unittest.TestCase):
@@ -157,6 +163,45 @@ class SelfPlayTest(unittest.TestCase):
                 {"p2": "simple-legal"},
             ],
         )
+
+    def test_collect_selfplay_rollouts_parallel_matches_serial_for_rng_policies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            serial_rollouts = temp_path / "serial-rollouts.jsonl"
+            serial_training = temp_path / "serial-training.jsonl"
+            parallel_rollouts = temp_path / "parallel-rollouts.jsonl"
+            parallel_training = temp_path / "parallel-training.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=serial_rollouts,
+                training_output_path=serial_training,
+                games=8,
+                env_factory=MultiActionEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=100,
+                current_policy_spec="simple-legal",
+                opponent_policy_specs=("random-legal",),
+                worker_count=1,
+            )
+            collect_selfplay_rollouts(
+                output_path=parallel_rollouts,
+                training_output_path=parallel_training,
+                games=8,
+                env_factory=MultiActionEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=100,
+                current_policy_spec="simple-legal",
+                opponent_policy_specs=("random-legal",),
+                worker_count=4,
+            )
+
+            serial_payloads = normalized_record_payloads(serial_rollouts)
+            parallel_payloads = normalized_record_payloads(parallel_rollouts)
+            serial_training_payloads = normalized_record_payloads(serial_training)
+            parallel_training_payloads = normalized_record_payloads(parallel_training)
+
+        self.assertEqual(serial_payloads, parallel_payloads)
+        self.assertEqual(serial_training_payloads, parallel_training_payloads)
 
     def test_run_selfplay_iterations_writes_checkpoint_and_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -430,6 +475,15 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertIn("latest_checkpoint", stdout.getvalue())
+
+
+def normalized_record_payloads(path: Path) -> tuple[dict, ...]:
+    payloads = []
+    for record in read_rollout_records(path):
+        payload = rollout_record_to_dict(record)
+        payload["elapsed_seconds"] = 0.0
+        payloads.append(payload)
+    return tuple(payloads)
 
 
 if __name__ == "__main__":

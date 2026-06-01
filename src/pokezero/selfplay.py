@@ -16,6 +16,7 @@ from .collection import (
     RolloutRecord,
     benchmark_rollouts,
     iter_rollout_records,
+    policy_factory_from_spec,
     policy_from_spec,
     run_rollout_record,
     summarize_records,
@@ -265,6 +266,7 @@ def collect_selfplay_rollouts(
     opponent_specs = tuple(opponent_policy_specs)
     if not opponent_specs:
         raise ValueError("at least one opponent policy spec is required.")
+    policy_factories = _policy_factories_for_specs((current_policy_spec, *opponent_specs))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path.with_name(f".{output_path.name}.tmp")
     training_write_path = None
@@ -285,6 +287,7 @@ def collect_selfplay_rollouts(
                     seed_start=seed_start,
                     current_policy_spec=current_policy_spec,
                     opponent_specs=opponent_specs,
+                    policy_factories=policy_factories,
                     worker_count=worker_count,
                 )
             finally:
@@ -314,6 +317,7 @@ def _collect_selfplay_records(
     seed_start: int,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
+    policy_factories: Mapping[str, Callable[[], Any]],
     worker_count: int,
 ) -> None:
     if worker_count == 1:
@@ -325,6 +329,7 @@ def _collect_selfplay_records(
                 rollout_config=rollout_config,
                 current_policy_spec=current_policy_spec,
                 opponent_specs=opponent_specs,
+                policy_factories=policy_factories,
             )
             for game_index in range(games)
         )
@@ -341,6 +346,7 @@ def _collect_selfplay_records(
                 rollout_config=rollout_config,
                 current_policy_spec=current_policy_spec,
                 opponent_specs=opponent_specs,
+                policy_factories=policy_factories,
             ),
             range(games),
         )
@@ -367,6 +373,7 @@ def _run_selfplay_game_record(
     rollout_config: RolloutConfig,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
+    policy_factories: Mapping[str, Callable[[], Any]],
 ) -> tuple[RolloutRecord, RolloutRecord]:
     seed = seed_start + game_index
     opponent_spec = opponent_specs[game_index % len(opponent_specs)]
@@ -379,14 +386,18 @@ def _run_selfplay_game_record(
     record = run_rollout_record(
         env_factory=env_factory,
         policies={
-            "p1": policy_from_spec(p1_spec),
-            "p2": policy_from_spec(p2_spec),
+            "p1": policy_factories[p1_spec](),
+            "p2": policy_factories[p2_spec](),
         },
         rollout_config=rollout_config,
         seed=seed,
         battle_id=f"selfplay-{seed}",
     )
     return record, _record_for_player(record, current_player)
+
+
+def _policy_factories_for_specs(specs: Iterable[str]) -> Mapping[str, Callable[[], Any]]:
+    return {spec: policy_factory_from_spec(spec) for spec in dict.fromkeys(specs)}
 
 
 def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
