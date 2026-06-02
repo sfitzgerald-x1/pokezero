@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass
+from dataclasses import field
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,6 +14,7 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
 DEFAULT_MIN_BENCHMARK_WIN_RATE = 0.55
+DEFAULT_MIN_BENCHMARK_GAMES = 50
 DEFAULT_MAX_COLLECTION_CAPPED_RATE = 0.10
 DEFAULT_MAX_BENCHMARK_CAPPED_RATE = 0.10
 DEFAULT_MAX_TEACHER_DEGRADATION_RATE = 0.0
@@ -21,12 +23,17 @@ DEFAULT_MAX_TEACHER_DEGRADATION_RATE = 0.0
 @dataclass(frozen=True)
 class PromotionGateConfig:
     min_benchmark_win_rate: float = DEFAULT_MIN_BENCHMARK_WIN_RATE
+    min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
     max_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
     max_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
     max_teacher_degradation_rate: float = DEFAULT_MAX_TEACHER_DEGRADATION_RATE
     require_benchmark: bool = True
+    required_benchmark_opponents: tuple[str, ...] = ()
+    opponent_min_win_rates: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.min_benchmark_games < 0:
+            raise ValueError("min_benchmark_games must be non-negative.")
         for field_name in (
             "min_benchmark_win_rate",
             "max_collection_capped_rate",
@@ -36,6 +43,11 @@ class PromotionGateConfig:
             value = float(getattr(self, field_name))
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{field_name} must be between 0 and 1.")
+        for opponent_id, threshold in self.opponent_min_win_rates.items():
+            if not str(opponent_id):
+                raise ValueError("opponent_min_win_rates keys must be non-empty.")
+            if not 0.0 <= float(threshold) <= 1.0:
+                raise ValueError("opponent-specific win-rate thresholds must be between 0 and 1.")
 
 
 @dataclass(frozen=True)
@@ -58,6 +70,7 @@ class PromotionGateCheck:
 
 @dataclass(frozen=True)
 class PromotionGateResult:
+    gate_mode: str
     source_type: str
     manifest_path: Path
     candidate_policy_id: str | None
@@ -67,6 +80,7 @@ class PromotionGateResult:
     benchmark_win_rate: float | None
     benchmark_capped_rate: float | None
     benchmark_games: int
+    benchmark_opponents: tuple["PromotionBenchmarkOpponentResult", ...]
     teacher_degradation_rate: float | None
     checks: tuple[PromotionGateCheck, ...]
 
@@ -76,6 +90,7 @@ class PromotionGateResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "gate_mode": self.gate_mode,
             "source_type": self.source_type,
             "manifest_path": str(self.manifest_path),
             "candidate_policy_id": self.candidate_policy_id,
@@ -85,9 +100,36 @@ class PromotionGateResult:
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_capped_rate": self.benchmark_capped_rate,
             "benchmark_games": self.benchmark_games,
+            "benchmark_opponents": [opponent.to_dict() for opponent in self.benchmark_opponents],
             "teacher_degradation_rate": self.teacher_degradation_rate,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+@dataclass(frozen=True)
+class PromotionBenchmarkOpponentResult:
+    opponent_policy_id: str
+    wins: int
+    games: int
+    capped_games: int
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.games if self.games else 0.0
+
+    @property
+    def capped_rate(self) -> float:
+        return self.capped_games / self.games if self.games else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "opponent_policy_id": self.opponent_policy_id,
+            "wins": self.wins,
+            "games": self.games,
+            "capped_games": self.capped_games,
+            "win_rate": self.win_rate,
+            "capped_rate": self.capped_rate,
         }
 
 
@@ -124,15 +166,50 @@ def evaluate_promotion_gate(
         )
     ]
     if benchmark.games:
+        gated_opponents = _gated_benchmark_opponents(
+            benchmark.opponents,
+            required_opponents=config.required_benchmark_opponents,
+        )
+        for missing_opponent in _missing_benchmark_opponents(
+            benchmark.opponents,
+            required_opponents=config.required_benchmark_opponents,
+        ):
+            checks.append(
+                PromotionGateCheck(
+                    name=f"benchmark_opponent:{missing_opponent}",
+                    passed=False,
+                    observed=None,
+                    threshold="required",
+                    message=f"required benchmark opponent is missing: {missing_opponent}",
+                )
+            )
+        for opponent in gated_opponents:
+            checks.append(
+                PromotionGateCheck(
+                    name=f"benchmark_games:{opponent.opponent_policy_id}",
+                    passed=opponent.games >= config.min_benchmark_games,
+                    observed=opponent.games,
+                    threshold=config.min_benchmark_games,
+                    message="benchmark opponent has enough games",
+                )
+            )
+            threshold = float(
+                config.opponent_min_win_rates.get(
+                    opponent.opponent_policy_id,
+                    config.min_benchmark_win_rate,
+                )
+            )
+            checks.append(
+                _threshold_check(
+                    name=f"benchmark_win_rate:{opponent.opponent_policy_id}",
+                    observed=opponent.win_rate,
+                    threshold=threshold,
+                    passed=opponent.win_rate >= threshold,
+                    message="benchmark win rate meets opponent-specific promotion floor",
+                )
+            )
         checks.extend(
             (
-                _threshold_check(
-                    name="benchmark_win_rate",
-                    observed=benchmark.win_rate,
-                    threshold=config.min_benchmark_win_rate,
-                    passed=benchmark.win_rate >= config.min_benchmark_win_rate,
-                    message="benchmark win rate meets promotion floor",
-                ),
                 _threshold_check(
                     name="benchmark_capped_rate",
                     observed=benchmark.capped_rate,
@@ -165,6 +242,7 @@ def evaluate_promotion_gate(
         )
 
     return PromotionGateResult(
+        gate_mode="absolute_floor",
         source_type=source_type,
         manifest_path=manifest_path,
         candidate_policy_id=candidate.policy_id,
@@ -174,6 +252,15 @@ def evaluate_promotion_gate(
         benchmark_win_rate=benchmark.win_rate if benchmark.games else None,
         benchmark_capped_rate=benchmark.capped_rate if benchmark.games else None,
         benchmark_games=benchmark.games,
+        benchmark_opponents=tuple(
+            PromotionBenchmarkOpponentResult(
+                opponent_policy_id=opponent.opponent_policy_id,
+                wins=opponent.wins,
+                games=opponent.games,
+                capped_games=opponent.capped_games,
+            )
+            for opponent in benchmark.opponents
+        ),
         teacher_degradation_rate=candidate.teacher_degradation_rate,
         checks=tuple(checks),
     )
@@ -194,6 +281,7 @@ class _BenchmarkSummary:
     wins: int
     games: int
     capped_games: int
+    opponents: tuple["_BenchmarkOpponentSummary", ...] = ()
 
     @property
     def win_rate(self) -> float:
@@ -202,6 +290,18 @@ class _BenchmarkSummary:
     @property
     def capped_rate(self) -> float:
         return self.capped_games / self.games if self.games else 0.0
+
+
+@dataclass(frozen=True)
+class _BenchmarkOpponentSummary:
+    opponent_policy_id: str
+    wins: int = 0
+    games: int = 0
+    capped_games: int = 0
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.games if self.games else 0.0
 
 
 def _candidate_from_selfplay_manifest(manifest: Mapping[str, Any]) -> _CandidateManifest:
@@ -236,35 +336,127 @@ def _candidate_from_bootstrap_manifest(manifest: Mapping[str, Any]) -> _Candidat
 
 def _benchmark_summary(benchmark: Mapping[str, Any] | None, policy_id: str | None) -> _BenchmarkSummary:
     if benchmark is None or not policy_id:
-        return _BenchmarkSummary(wins=0, games=0, capped_games=0)
-    wins = 0
-    games = 0
-    capped_games = 0
+        return _BenchmarkSummary(wins=0, games=0, capped_games=0, opponents=())
+    accumulators: dict[str, _BenchmarkOpponentAccumulator] = {}
+    ordered_opponents: list[str] = []
     for result in tuple(_mapping(result) for result in _sequence(benchmark.get("head_to_heads", ()))):
         result_games = int(result.get("games", 0))
         if result.get("first_policy_id") == policy_id:
-            wins += int(result.get("first_policy_wins", 0))
-            games += result_games
-            capped_games += int(result.get("capped_games", 0))
+            _add_opponent_result(
+                accumulators=accumulators,
+                ordered_opponents=ordered_opponents,
+                opponent_policy_id=str(result.get("second_policy_id")),
+                wins=int(result.get("first_policy_wins", 0)),
+                games=result_games,
+                capped_games=int(result.get("capped_games", 0)),
+            )
         elif result.get("second_policy_id") == policy_id:
-            wins += int(result.get("second_policy_wins", 0))
-            games += result_games
-            capped_games += int(result.get("capped_games", 0))
-    if games:
-        return _BenchmarkSummary(wins=wins, games=games, capped_games=capped_games)
+            _add_opponent_result(
+                accumulators=accumulators,
+                ordered_opponents=ordered_opponents,
+                opponent_policy_id=str(result.get("first_policy_id")),
+                wins=int(result.get("second_policy_wins", 0)),
+                games=result_games,
+                capped_games=int(result.get("capped_games", 0)),
+            )
+    if accumulators:
+        return _summary_from_opponents(accumulators, ordered_opponents)
 
     for result in tuple(_mapping(result) for result in _sequence(benchmark.get("matchups", ()))):
         metrics = _mapping(result.get("metrics", {}))
         result_games = int(metrics.get("games", 0))
         if result.get("p1_policy_id") == policy_id:
-            wins += int(metrics.get("p1_wins", 0))
-            games += result_games
-            capped_games += int(metrics.get("capped_games", 0))
+            _add_opponent_result(
+                accumulators=accumulators,
+                ordered_opponents=ordered_opponents,
+                opponent_policy_id=str(result.get("p2_policy_id")),
+                wins=int(metrics.get("p1_wins", 0)),
+                games=result_games,
+                capped_games=int(metrics.get("capped_games", 0)),
+            )
         elif result.get("p2_policy_id") == policy_id:
-            wins += int(metrics.get("p2_wins", 0))
-            games += result_games
-            capped_games += int(metrics.get("capped_games", 0))
-    return _BenchmarkSummary(wins=wins, games=games, capped_games=capped_games)
+            _add_opponent_result(
+                accumulators=accumulators,
+                ordered_opponents=ordered_opponents,
+                opponent_policy_id=str(result.get("p1_policy_id")),
+                wins=int(metrics.get("p2_wins", 0)),
+                games=result_games,
+                capped_games=int(metrics.get("capped_games", 0)),
+            )
+    return _summary_from_opponents(accumulators, ordered_opponents)
+
+
+@dataclass
+class _BenchmarkOpponentAccumulator:
+    opponent_policy_id: str
+    wins: int = 0
+    games: int = 0
+    capped_games: int = 0
+
+    def add(self, *, wins: int, games: int, capped_games: int) -> None:
+        self.wins += wins
+        self.games += games
+        self.capped_games += capped_games
+
+    def to_summary(self) -> _BenchmarkOpponentSummary:
+        return _BenchmarkOpponentSummary(
+            opponent_policy_id=self.opponent_policy_id,
+            wins=self.wins,
+            games=self.games,
+            capped_games=self.capped_games,
+        )
+
+
+def _add_opponent_result(
+    *,
+    accumulators: dict[str, _BenchmarkOpponentAccumulator],
+    ordered_opponents: list[str],
+    opponent_policy_id: str,
+    wins: int,
+    games: int,
+    capped_games: int,
+) -> None:
+    accumulator = accumulators.get(opponent_policy_id)
+    if accumulator is None:
+        accumulator = _BenchmarkOpponentAccumulator(opponent_policy_id=opponent_policy_id)
+        accumulators[opponent_policy_id] = accumulator
+        ordered_opponents.append(opponent_policy_id)
+    accumulator.add(wins=wins, games=games, capped_games=capped_games)
+
+
+def _summary_from_opponents(
+    accumulators: Mapping[str, _BenchmarkOpponentAccumulator],
+    ordered_opponents: list[str],
+) -> _BenchmarkSummary:
+    opponents = tuple(accumulators[opponent].to_summary() for opponent in ordered_opponents)
+    return _BenchmarkSummary(
+        wins=sum(opponent.wins for opponent in opponents),
+        games=sum(opponent.games for opponent in opponents),
+        capped_games=sum(opponent.capped_games for opponent in opponents),
+        opponents=opponents,
+    )
+
+
+def _gated_benchmark_opponents(
+    opponents: tuple[_BenchmarkOpponentSummary, ...],
+    *,
+    required_opponents: tuple[str, ...],
+) -> tuple[_BenchmarkOpponentSummary, ...]:
+    if not required_opponents:
+        return opponents
+    required = set(required_opponents)
+    return tuple(opponent for opponent in opponents if opponent.opponent_policy_id in required)
+
+
+def _missing_benchmark_opponents(
+    opponents: tuple[_BenchmarkOpponentSummary, ...],
+    *,
+    required_opponents: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not required_opponents:
+        return ()
+    seen = {opponent.opponent_policy_id for opponent in opponents}
+    return tuple(opponent for opponent in required_opponents if opponent not in seen)
 
 
 def _threshold_check(
