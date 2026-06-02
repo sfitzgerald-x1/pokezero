@@ -27,12 +27,15 @@ class TrajectoryDatasetConfig:
 
     window_size: int = 1
     discount: float = 1.0
+    capped_terminal_value: float = 0.0
 
     def __post_init__(self) -> None:
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
         if not 0.0 <= self.discount <= 1.0:
             raise ValueError("discount must be between 0 and 1.")
+        if not -1.0 <= self.capped_terminal_value <= 0.0:
+            raise ValueError("capped_terminal_value must be between -1 and 0.")
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class TrajectoryExample:
     opponent_action_index: int | None = None
     action_probability: float | None = None
     step_metadata: Mapping[str, Any] | None = None
+    terminal_capped: bool = False
 
     @property
     def window_size(self) -> int:
@@ -135,7 +139,11 @@ def examples_from_record(
     config: TrajectoryDatasetConfig | None = None,
 ) -> Iterator[TrajectoryExample]:
     dataset_config = config or TrajectoryDatasetConfig()
-    returns_by_step_index = _discounted_returns_by_step_index(record, discount=dataset_config.discount)
+    returns_by_step_index = _discounted_returns_by_step_index(
+        record,
+        discount=dataset_config.discount,
+        capped_terminal_value=dataset_config.capped_terminal_value,
+    )
     history_by_player: dict[str, list[TrajectoryStep]] = {}
 
     for step_index, step in enumerate(record.trajectory.steps):
@@ -251,26 +259,36 @@ def _example_from_window(
         opponent_action_index=step.opponent_action_index,
         action_probability=step.action_probability,
         step_metadata=dict(step.metadata),
+        terminal_capped=bool((record.terminal or record.trajectory.terminal) and (record.terminal or record.trajectory.terminal).capped),
     )
 
 
-def _discounted_returns_by_step_index(record: RolloutRecord, *, discount: float) -> dict[int, float]:
+def _discounted_returns_by_step_index(
+    record: RolloutRecord,
+    *,
+    discount: float,
+    capped_terminal_value: float,
+) -> dict[int, float]:
     step_indices_by_player: dict[str, list[int]] = {}
     for step_index, step in enumerate(record.trajectory.steps):
         step_indices_by_player.setdefault(step.player_id, []).append(step_index)
 
     returns_by_step_index: dict[int, float] = {}
     for player_id, step_indices in step_indices_by_player.items():
-        running_return = _terminal_value_for_player(record, player_id)
+        running_return = _terminal_value_for_player(record, player_id, capped_terminal_value=capped_terminal_value)
         for step_index in reversed(step_indices):
             returns_by_step_index[step_index] = running_return
             running_return *= discount
     return returns_by_step_index
 
 
-def _terminal_value_for_player(record: RolloutRecord, player_id: str) -> float:
+def _terminal_value_for_player(record: RolloutRecord, player_id: str, *, capped_terminal_value: float) -> float:
     terminal = record.terminal or record.trajectory.terminal
-    if terminal is None or terminal.capped or terminal.winner is None:
+    if terminal is None:
+        return 0.0
+    if terminal.capped:
+        return capped_terminal_value
+    if terminal.winner is None:
         return 0.0
     if terminal.winner == player_id:
         return 1.0

@@ -7,10 +7,10 @@ import json
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, TextIO
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
-from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
+from .policy import Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
 
@@ -414,6 +414,9 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         if options:
             raise ValueError("simple-legal does not support policy spec options.")
         return SimpleLegalPolicy
+    if lowered == "scripted-teacher":
+        teacher_options = _scripted_teacher_options(options)
+        return lambda: ScriptedTeacherPolicy(**teacher_options)
     if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
         from .linear_policy import LinearSoftmaxPolicy, load_linear_model
 
@@ -425,12 +428,22 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         return lambda: LinearSoftmaxPolicy(model=model, **linear_options)
     raise ValueError(
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
-        "or linear:/path/to/checkpoint.json."
+        "scripted-teacher, or linear:/path/to/checkpoint.json."
     )
 
 
 def policy_from_name(name: str) -> Policy:
     return policy_from_spec(name)
+
+
+def policy_spec_with_showdown_root(spec: str, showdown_root: Path | str | None) -> str:
+    if showdown_root is None:
+        return spec
+    policy_body, options = _split_policy_spec_options(spec.strip())
+    if policy_body.lower() != "scripted-teacher" or "showdown_root" in options:
+        return spec
+    options = {**options, "showdown_root": str(showdown_root)}
+    return f"{policy_body}?{urlencode(options)}"
 
 
 def _split_policy_spec_options(spec: str) -> tuple[str, dict[str, str]]:
@@ -473,6 +486,27 @@ def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
         "exploration_epsilon": exploration_epsilon,
         "sampling_temperature": sampling_temperature,
     }
+
+
+def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
+    supported = {"showdown_root", "switch_margin", "poor_move_threshold", "allow_fallback", "allow_unknown_moves"}
+    unknown = sorted(set(options) - supported)
+    if unknown:
+        raise ValueError(f"Unsupported scripted-teacher option(s): {', '.join(unknown)}.")
+    teacher_options: dict[str, object] = {}
+    if options.get("showdown_root"):
+        teacher_options["showdown_root"] = Path(options["showdown_root"])
+    if "switch_margin" in options:
+        teacher_options["switch_margin"] = _optional_float(options, "switch_margin", default=8.0)
+    if "poor_move_threshold" in options:
+        teacher_options["poor_move_threshold"] = _optional_float(options, "poor_move_threshold", default=35.0)
+    allow_fallback = _optional_bool(options, "allow_fallback")
+    if allow_fallback is not None:
+        teacher_options["allow_fallback"] = allow_fallback
+    allow_unknown_moves = _optional_bool(options, "allow_unknown_moves")
+    if allow_unknown_moves is not None:
+        teacher_options["allow_unknown_moves"] = allow_unknown_moves
+    return teacher_options
 
 
 def _optional_bool(options: Mapping[str, str], key: str) -> bool | None:

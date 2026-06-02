@@ -133,7 +133,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual([example.reward for example in p1_examples], [0.0])
         self.assertEqual([example.return_value for example in p1_examples], [1.0])
 
-    def test_capped_or_tied_terminal_returns_are_zero(self) -> None:
+    def test_capped_or_tied_terminal_returns_default_to_zero(self) -> None:
         record = rollout_record()
         terminal = TerminalState(winner=None, turn_count=250, capped=True)
         record.trajectory.record_terminal(terminal)
@@ -142,6 +142,22 @@ class DatasetTest(unittest.TestCase):
         examples = list(examples_from_record(record, config=TrajectoryDatasetConfig(window_size=1)))
 
         self.assertEqual({example.return_value for example in examples}, {0.0})
+
+    def test_capped_terminal_value_can_penalize_both_players(self) -> None:
+        record = rollout_record()
+        terminal = TerminalState(winner=None, turn_count=250, capped=True)
+        record.trajectory.record_terminal(terminal)
+        record = replace(record, terminal=terminal)
+
+        examples = list(
+            examples_from_record(
+                record,
+                config=TrajectoryDatasetConfig(window_size=1, capped_terminal_value=-0.25),
+            )
+        )
+
+        self.assertEqual({example.return_value for example in examples}, {-0.25})
+        self.assertTrue(all(example.terminal_capped for example in examples))
 
     def test_training_batch_preserves_labels_and_optional_field_masks(self) -> None:
         examples = list(examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=2)))
@@ -183,6 +199,8 @@ class DatasetTest(unittest.TestCase):
             TrajectoryDatasetConfig(window_size=0)
         with self.assertRaisesRegex(ValueError, "discount"):
             TrajectoryDatasetConfig(discount=1.5)
+        with self.assertRaisesRegex(ValueError, "capped_terminal_value"):
+            TrajectoryDatasetConfig(capped_terminal_value=0.5)
 
     def test_training_batch_rejects_empty_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one"):

@@ -106,6 +106,10 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.perspective.showdown_slot, "p2")
         self.assertEqual(observation.perspective.opponent_showdown_slot, "p1")
         self.assertEqual(observation.legal_action_mask, state.legal_action_mask)
+        self.assertEqual(observation.metadata["self_active"]["species"], "Charizard")
+        self.assertEqual(observation.metadata["opponent_active"]["species"], "Xatu")
+        self.assertEqual(observation.metadata["action_candidates"][0]["move_name"], "flamethrower")
+        self.assertEqual(observation.metadata["action_candidates"][4]["pokemon"]["species"], "Snorlax")
 
     def test_observation_encodes_player_relative_content(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")

@@ -577,6 +577,7 @@ def _training_result_to_dict(result: LinearTrainingResult) -> dict[str, Any]:
             "feature_count": result.config.feature_count,
             "window_size": result.config.window_size,
             "discount": result.config.discount,
+            "capped_terminal_value": result.config.capped_terminal_value,
             "objective": result.config.objective,
             "epochs": result.config.epochs,
             "learning_rate": result.config.learning_rate,

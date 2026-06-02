@@ -612,6 +612,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
+        self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
         self.assertIn("latest_checkpoint", stdout.getvalue())
 
     def test_selfplay_cli_report_prints_manifest_summary(self) -> None:

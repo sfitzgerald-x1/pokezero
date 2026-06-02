@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from .actions import ACTION_COUNT
 
@@ -75,6 +75,7 @@ class PokeZeroObservationV0:
     attention_mask: Any
     legal_action_mask: Any
     perspective: ObservationPerspective | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
     schema_version: str = OBSERVATION_SCHEMA_VERSION
 
     def validate(self, spec: ObservationSpec) -> None:

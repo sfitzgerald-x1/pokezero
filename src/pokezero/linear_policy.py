@@ -123,6 +123,7 @@ class LinearTrainingConfig:
     feature_count: int = 131_072
     window_size: int = 1
     discount: float = 1.0
+    capped_terminal_value: float = 0.0
     objective: LinearTrainingObjective = "behavior-cloning"
     epochs: int = 1
     learning_rate: float = 0.05
@@ -139,6 +140,8 @@ class LinearTrainingConfig:
             raise ValueError("window_size must be positive.")
         if not 0.0 <= self.discount <= 1.0:
             raise ValueError("discount must be between 0 and 1.")
+        if not -1.0 <= self.capped_terminal_value <= 0.0:
+            raise ValueError("capped_terminal_value must be between -1 and 0.")
         if self.objective not in ("behavior-cloning", "reward-weighted"):
             raise ValueError("objective must be behavior-cloning or reward-weighted.")
         if self.epochs <= 0:
@@ -293,6 +296,7 @@ def train_linear_policy(
     dataset_config = TrajectoryDatasetConfig(
         window_size=training_config.window_size,
         discount=training_config.discount,
+        capped_terminal_value=training_config.capped_terminal_value,
     )
 
     for epoch in range(1, training_config.epochs + 1):
@@ -348,6 +352,7 @@ def train_linear_policy(
             validation_paths,
             model,
             discount=training_config.discount,
+            capped_terminal_value=training_config.capped_terminal_value,
         )
 
     return LinearTrainingResult(
@@ -363,11 +368,16 @@ def evaluate_linear_policy(
     model: LinearPolicyModel,
     *,
     discount: float = 1.0,
+    capped_terminal_value: float = 0.0,
     max_examples: int | None = None,
 ) -> LinearEvaluationMetrics:
     if max_examples is not None and max_examples <= 0:
         raise ValueError("max_examples must be positive when set.")
-    dataset_config = TrajectoryDatasetConfig(window_size=model.window_size, discount=discount)
+    dataset_config = TrajectoryDatasetConfig(
+        window_size=model.window_size,
+        discount=discount,
+        capped_terminal_value=capped_terminal_value,
+    )
     start = perf_counter()
     total_loss = 0.0
     correct = 0
@@ -543,6 +553,8 @@ def _gradient_weight(
     if objective == "behavior-cloning":
         return 1.0
     if objective == "reward-weighted":
+        if example.terminal_capped:
+            return float(example.return_value)
         return max(0.0, float(example.return_value))
     raise ValueError(f"Unsupported objective: {objective!r}.")
 

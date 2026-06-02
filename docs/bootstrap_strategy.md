@@ -20,9 +20,9 @@ This path is simplest operationally:
 Risks:
 
 - early trajectories are low quality
-- reward-weighted regression ignores losing and capped examples, so it can fail to learn from many games
+- reward-weighted regression ignores ordinary losing examples, so it can fail to learn from many games
 - self-play can amplify degenerate habits before the model learns useful tactics
-- capped games currently provide no explicit anti-stall gradient
+- capped games are now mildly penalized by default in self-play, including under reward-weighted training
 
 Use this path as a control condition and harness smoke, not as the only route to a strong policy.
 
@@ -54,14 +54,14 @@ Curated Gen 3 randbat replays may still be useful, but the corpus source is unre
 
 ## Current Recommendation
 
-Keep Path A running as a baseline, but build Path B around a scripted Gen 3 randbat teacher first. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
+Keep Path A running as a baseline, but build Path B around the scripted Gen 3 randbat teacher. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
 
 Replay import remains valuable after a randbat replay source is identified. It should share the same rollout JSONL schema and player-relative observation path, but it should not block the first bootstrap iteration.
 
 ## Near-Term Implementation Plan
 
-- Resolve capped-game scoring policy enough to stop treating long capped games as free neutral outcomes forever.
-- Build a deterministic scripted teacher for Gen 3 randbats that is stronger than `simple-legal`, covering basic type pressure, status, hazards, low-value moves, and obvious switch participation.
+- Use the initial capped-game scoring policy: self-play defaults to `--capped-terminal-value -0.25`, a mild double-loss penalty that can be tuned later.
+- Expand the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version, covering more battle context such as hazards, status value, and safer switch participation.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
@@ -102,10 +102,21 @@ Inspect the run:
 python -m pokezero.selfplay_cli report --run-dir runs/bootstrap-selfplay
 ```
 
+Collect initial teacher data directly from the local Showdown harness:
+
+```bash
+python -m pokezero.rollout_cli collect \
+  --games 200 \
+  --out runs/scripted-teacher-vs-baseline.jsonl \
+  --showdown-root /path/to/pokemon-showdown \
+  --p1-policy scripted-teacher \
+  --p2-policy simple-legal
+```
+
 ## Open Questions
 
 - What source should be the first bootstrap corpus?
-- Should capped games be treated as tie, double loss, or explicit stall penalty?
+- Is `--capped-terminal-value -0.25` enough pressure, or should capped games become a stronger double-loss or explicit stall penalty?
 - What benchmark win-rate delta should promote a checkpoint?
 - How much imported data is needed before self-play fine-tuning is useful?
 - Should bootstrap data continue to mix into later self-play training, or only initialize the first checkpoint?

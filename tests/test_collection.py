@@ -19,6 +19,7 @@ from pokezero.collection import (
     policy_factory_from_spec,
     policy_from_name,
     policy_from_spec,
+    policy_spec_with_showdown_root,
     read_rollout_records,
     rollout_record_from_dict,
     rollout_record_to_dict,
@@ -28,7 +29,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_linear_model
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
-from pokezero.policy import RandomLegalPolicy
+from pokezero.policy import RandomLegalPolicy, ScriptedTeacherPolicy
 from pokezero.rollout import RolloutConfig
 from pokezero.rollout_cli import main as rollout_cli_main
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep, trajectory_from_dict, trajectory_to_dict
@@ -308,6 +309,29 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(policy_from_name("simple-legal").policy_id, "simple-legal")
         with self.assertRaisesRegex(ValueError, "Unsupported policy"):
             policy_from_name("unknown")
+
+    def test_policy_from_spec_loads_scripted_teacher_options(self) -> None:
+        policy = policy_from_spec(
+            "scripted-teacher?showdown_root=/tmp/showdown&switch_margin=3&poor_move_threshold=20"
+            "&allow_fallback=true&allow_unknown_moves=true"
+        )
+
+        self.assertIsInstance(policy, ScriptedTeacherPolicy)
+        self.assertEqual(policy.showdown_root, Path("/tmp/showdown"))
+        self.assertEqual(policy.switch_margin, 3.0)
+        self.assertEqual(policy.poor_move_threshold, 20.0)
+        self.assertTrue(policy.allow_fallback)
+        self.assertTrue(policy.allow_unknown_moves)
+
+    def test_policy_spec_with_showdown_root_injects_scripted_teacher_root(self) -> None:
+        self.assertEqual(
+            policy_spec_with_showdown_root("scripted-teacher", Path("/tmp/showdown")),
+            "scripted-teacher?showdown_root=%2Ftmp%2Fshowdown",
+        )
+        self.assertEqual(
+            policy_spec_with_showdown_root("random-legal", Path("/tmp/showdown")),
+            "random-legal",
+        )
 
     def test_policy_from_spec_loads_linear_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

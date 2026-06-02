@@ -36,11 +36,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    train.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     train.add_argument(
         "--objective",
         choices=("behavior-cloning", "reward-weighted"),
         default="behavior-cloning",
-        help="Training objective. reward-weighted reinforces positive-return actions and ignores non-positive returns.",
+        help="Training objective. reward-weighted reinforces positive returns, ignores ordinary losses, and applies capped-game returns.",
     )
     train.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
     train.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")
@@ -52,6 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
     evaluate.add_argument("--checkpoint", type=Path, required=True, help="Linear checkpoint path.")
     evaluate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    evaluate.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     evaluate.add_argument("--max-examples", type=int, default=None, help="Optional max examples to evaluate.")
     evaluate.add_argument("--json", action="store_true", help="Print metrics as JSON.")
     evaluate.set_defaults(func=_evaluate)
@@ -84,6 +86,7 @@ def _train(args: argparse.Namespace) -> int:
         feature_count=args.feature_count,
         window_size=args.window_size,
         discount=args.discount,
+        capped_terminal_value=args.capped_terminal_value,
         objective=args.objective,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
@@ -118,6 +121,7 @@ def _evaluate(args: argparse.Namespace) -> int:
         args.data,
         model,
         discount=args.discount,
+        capped_terminal_value=args.capped_terminal_value,
         max_examples=args.max_examples,
     )
     if args.json:
