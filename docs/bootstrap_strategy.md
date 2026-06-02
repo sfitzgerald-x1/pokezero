@@ -80,11 +80,22 @@ python -m pokezero.bootstrap_cli teacher \
   --validation-games 200 \
   --workers 4 \
   --showdown-root /path/to/pokemon-showdown \
-  --window-size 4 \
-  --benchmark-games 50
+  --window-size 4
 ```
 
-This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, optional baseline benchmark results, and `manifest.json`.
+This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, baseline benchmark results, and `manifest.json`.
+
+Default teacher bootstrap collection includes three opponent families:
+
+- teacher mirror games, which reduce immediate covariate shift between bootstrap data and clone-vs-clone deployment
+- `simple-legal`
+- `random-legal`
+
+This does not eliminate DAgger-style compounding error. The first self-play iterations still exist partly to correct states that the behavior-cloned checkpoint did not see in the teacher corpus.
+
+The CLI keeps the scripted teacher strict by default. A short preflight run executes before the full collection so missing dex metadata, unresolved moves, or missing observation metadata fail early. If a policy spec deliberately enables `allow_unknown_moves=true` or `allow_fallback=true`, the manifest records teacher decision counters for unknown-move and fallback decisions so degraded data is visible.
+
+The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
 
 Use the generated checkpoint as the first self-play policy:
 
@@ -99,6 +110,8 @@ python -m pokezero.selfplay_cli iterate \
   --evaluation-games 50 \
   --showdown-root /path/to/pokemon-showdown
 ```
+
+Bootstrap validation data measures teacher imitation retention during self-play. It is useful for detecting catastrophic teacher forgetting, but it is not a promotion signal. If self-play improves past the teacher, validation fit against teacher labels can legitimately decrease.
 
 The manual two-step path remains useful when a custom corpus has already been collected.
 

@@ -17,7 +17,7 @@ Implemented:
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
-- Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, trains a linear behavior-cloning checkpoint, and records a manifest.
+- Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
 - Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 

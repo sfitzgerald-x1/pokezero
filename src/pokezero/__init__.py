@@ -22,6 +22,10 @@ from .belief import (
     RevealedPokemonBelief,
 )
 from .bootstrap import (
+    DEFAULT_BASELINE_OPPONENT_POLICY_SPECS,
+    DEFAULT_BENCHMARK_GAMES,
+    DEFAULT_PREFLIGHT_GAMES,
+    DEFAULT_PREFLIGHT_SEED_START,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
     TeacherBootstrapResult,
     run_teacher_bootstrap,
@@ -104,6 +108,10 @@ __all__ = [
     "BattleBeliefSnapshot",
     "CandidateSetSummary",
     "CollectionMetrics",
+    "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
+    "DEFAULT_BENCHMARK_GAMES",
+    "DEFAULT_PREFLIGHT_GAMES",
+    "DEFAULT_PREFLIGHT_SEED_START",
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
     "MoveInfo",

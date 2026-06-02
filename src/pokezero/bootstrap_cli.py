@@ -7,7 +7,12 @@ import json
 from pathlib import Path
 import sys
 
-from .bootstrap import run_teacher_bootstrap
+from .bootstrap import (
+    DEFAULT_BENCHMARK_GAMES,
+    DEFAULT_PREFLIGHT_GAMES,
+    DEFAULT_PREFLIGHT_SEED_START,
+    run_teacher_bootstrap,
+)
 from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -27,8 +32,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     teacher.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     teacher.add_argument("--seed-start", type=int, default=1, help="First deterministic training-data seed.")
     teacher.add_argument("--validation-seed-start", type=int, default=1_000_000, help="First deterministic validation-data seed.")
-    teacher.add_argument("--benchmark-games", type=int, default=0, help="Optional benchmark games per matchup after training.")
+    teacher.add_argument("--benchmark-games", type=int, default=DEFAULT_BENCHMARK_GAMES, help="Benchmark games per matchup after training. Set 0 to disable.")
     teacher.add_argument("--benchmark-seed-start", type=int, default=2_000_000, help="First deterministic benchmark seed.")
+    teacher.add_argument("--preflight-games", type=int, default=DEFAULT_PREFLIGHT_GAMES, help="Strict teacher warmup games before the full run. Set 0 to disable.")
+    teacher.add_argument("--preflight-seed-start", type=int, default=DEFAULT_PREFLIGHT_SEED_START, help="First deterministic preflight seed.")
     teacher.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
     teacher.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     teacher.add_argument("--teacher-policy", default="scripted-teacher", help="Teacher policy spec.")
@@ -36,15 +43,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--opponent-policy",
         action="append",
         default=None,
-        help="Opponent policy spec for teacher collection. May be repeated. Defaults to simple-legal and random-legal.",
+        help="Opponent policy spec for teacher collection. May be repeated. Defaults to teacher mirror, simple-legal, and random-legal.",
     )
     teacher.add_argument("--epochs", type=int, default=1, help="Training epochs for the bootstrap checkpoint.")
     teacher.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
     teacher.add_argument("--l2", type=float, default=0.0, help="L2 penalty applied on active features.")
     teacher.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     teacher.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
-    teacher.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
-    teacher.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     teacher.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
     teacher.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")
     teacher.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
@@ -71,9 +76,10 @@ def _teacher(args: argparse.Namespace) -> int:
     )
     policy_showdown_root = env_config.resolved_showdown_root()
     teacher_policy = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
-    opponent_policies = tuple(
-        policy_spec_with_showdown_root(spec, policy_showdown_root)
-        for spec in (args.opponent_policy or ("simple-legal", "random-legal"))
+    opponent_policies = (
+        tuple(policy_spec_with_showdown_root(spec, policy_showdown_root) for spec in args.opponent_policy)
+        if args.opponent_policy is not None
+        else None
     )
     result = run_teacher_bootstrap(
         run_dir=args.run_dir,
@@ -85,8 +91,6 @@ def _teacher(args: argparse.Namespace) -> int:
         training_config=LinearTrainingConfig(
             feature_count=args.feature_count,
             window_size=args.window_size,
-            discount=args.discount,
-            capped_terminal_value=args.capped_terminal_value,
             objective="behavior-cloning",
             epochs=args.epochs,
             learning_rate=args.learning_rate,
@@ -104,6 +108,8 @@ def _teacher(args: argparse.Namespace) -> int:
         validation_seed_start=args.validation_seed_start,
         benchmark_games=args.benchmark_games,
         benchmark_seed_start=args.benchmark_seed_start,
+        preflight_games=args.preflight_games,
+        preflight_seed_start=args.preflight_seed_start,
         worker_count=args.workers,
     )
     if args.json:
@@ -121,6 +127,8 @@ def _print_teacher_summary(result) -> None:
     print(f"checkpoint: {result.checkpoint_path}")
     print(f"train_games: {result.train_metrics.games}")
     print(f"validation_games: {result.validation_metrics.games}")
+    if result.preflight_metrics is not None:
+        print(f"preflight_games: {result.preflight_metrics.games}")
     print(
         f"training examples={final_epoch.examples} "
         f"loss={final_epoch.loss:.6f} "
@@ -142,6 +150,13 @@ def _print_teacher_summary(result) -> None:
                 f"{row.second_policy_id}_wr={row.second_policy_win_rate:.3f} "
                 f"capped={row.capped_games}"
             )
+    summary = result.teacher_decision_summary
+    if summary.get("unknown_move_decisions") or summary.get("fallback_decisions"):
+        print(
+            "teacher_degradation: "
+            f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
+            f"fallbacks={summary.get('fallback_decisions', 0)}"
+        )
     print(f"manifest: {result.manifest_path}")
 
 
