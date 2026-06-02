@@ -10,10 +10,14 @@ import sys
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
     DEFAULT_MAX_COLLECTION_CAPPED_RATE,
+    DEFAULT_MAX_INCUMBENT_CAPPED_RATE,
     DEFAULT_MAX_TEACHER_DEGRADATION_RATE,
+    DEFAULT_MIN_INCUMBENT_GAMES,
+    DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
     DEFAULT_MIN_BENCHMARK_GAMES,
     DEFAULT_MIN_BENCHMARK_WIN_RATE,
     DEFAULT_MIN_INCUMBENT_WIN_RATE,
+    DEFAULT_INCUMBENT_CONFIDENCE_Z,
     PromotionGateConfig,
     evaluate_promotion_gate,
 )
@@ -28,9 +32,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     gate.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
     gate.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
     gate.add_argument("--min-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
+    gate.add_argument("--min-incumbent-games", type=int, default=DEFAULT_MIN_INCUMBENT_GAMES)
     gate.add_argument("--max-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
     gate.add_argument("--max-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
+    gate.add_argument("--max-incumbent-capped-rate", type=float, default=DEFAULT_MAX_INCUMBENT_CAPPED_RATE)
     gate.add_argument("--max-teacher-degradation-rate", type=float, default=DEFAULT_MAX_TEACHER_DEGRADATION_RATE)
+    gate.add_argument(
+        "--min-incumbent-win-rate-lower-bound",
+        type=float,
+        default=DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
+        help="Minimum Wilson lower confidence bound for candidate win rate against the incumbent.",
+    )
+    gate.add_argument(
+        "--incumbent-confidence-z",
+        type=float,
+        default=DEFAULT_INCUMBENT_CONFIDENCE_Z,
+        help="Z-score used for the incumbent Wilson lower-bound check. Default is one-sided 95%%.",
+    )
     gate.add_argument(
         "--benchmark-opponent",
         action="append",
@@ -72,9 +90,13 @@ def _gate(args: argparse.Namespace) -> int:
             min_benchmark_win_rate=args.min_benchmark_win_rate,
             min_incumbent_win_rate=args.min_incumbent_win_rate,
             min_benchmark_games=args.min_benchmark_games,
+            min_incumbent_games=args.min_incumbent_games,
             max_collection_capped_rate=args.max_collection_capped_rate,
             max_benchmark_capped_rate=args.max_benchmark_capped_rate,
+            max_incumbent_capped_rate=args.max_incumbent_capped_rate,
             max_teacher_degradation_rate=args.max_teacher_degradation_rate,
+            min_incumbent_win_rate_lower_bound=args.min_incumbent_win_rate_lower_bound,
+            incumbent_confidence_z=args.incumbent_confidence_z,
             require_benchmark=not args.allow_missing_benchmark,
             required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
             opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
@@ -104,6 +126,7 @@ def _print_gate_result(result) -> None:
     if result.incumbent_policy_id is not None:
         print(f"incumbent_policy: {result.incumbent_policy_id}")
         print(f"incumbent_win_rate: {_format_optional_float(result.incumbent_win_rate)}")
+        print(f"incumbent_win_rate_lower_bound: {_format_optional_float(result.incumbent_win_rate_lower_bound)}")
         print(f"incumbent_games: {result.incumbent_games}")
         print(f"incumbent_capped_rate: {_format_optional_float(result.incumbent_capped_rate)}")
     if result.teacher_degradation_rate is not None:

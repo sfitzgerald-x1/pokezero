@@ -171,12 +171,12 @@ Use an incumbent gate when deciding whether a self-play checkpoint should replac
 
 ```bash
 python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
-  --incumbent-policy linear-selfplay-iter-0004 \
   --min-incumbent-win-rate 0.55 \
+  --min-incumbent-games 200 \
   --min-benchmark-games 100
 ```
 
-When self-play runs with `--evaluation-games`, each iteration automatically benchmarks the candidate against the policy it just replaced if that incumbent is a linear checkpoint. The incumbent row is gated by `--min-incumbent-win-rate`; fixed random/simple baseline rows continue to use the normal per-opponent benchmark floors.
+When self-play runs with `--evaluation-games`, each iteration automatically benchmarks the candidate against the policy it just replaced if that incumbent is a linear checkpoint. The gate auto-derives that incumbent from self-play manifests when possible, with `--incumbent-policy` available as an override. The incumbent row is gated separately from fixed baselines by point-estimate win rate, minimum games, capped-game rate, and a Wilson lower-bound no-regression check. Fixed random/simple baseline rows continue to use the normal per-opponent benchmark floors, and aggregate benchmark health excludes the incumbent row.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 
@@ -195,6 +195,6 @@ python -m pokezero.rollout_cli collect \
 
 - What source should be the first bootstrap corpus?
 - Is `--capped-terminal-value -0.25` enough pressure, or should capped games become a stronger double-loss or explicit stall penalty?
-- What incumbent win-rate margin should be required before replacing a checkpoint in longer runs?
+- Is the default incumbent gate strict enough for long runs, or should it require a larger lower-bound margin above 0.50?
 - How much imported data is needed before self-play fine-tuning is useful?
 - Should bootstrap data continue to mix into later self-play training, or only initialize the first checkpoint?
