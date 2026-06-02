@@ -150,6 +150,20 @@ python -m pokezero.selfplay_cli report --run-dir runs/selfplay-smoke
 
 Add `--json` to print the raw formatted run manifest for downstream scripts.
 
+Evaluate whether a bootstrap or self-play manifest clears basic promotion gates:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
+  --min-benchmark-win-rate 0.55 \
+  --min-benchmark-games 50 \
+  --max-collection-capped-rate 0.10 \
+  --max-benchmark-capped-rate 0.10
+```
+
+The gate command treats per-opponent benchmark win rates as the strength signal and capped-game rates as health checks. It returns exit code `0` for pass and `2` for fail, so shell scripts can use it before promoting a checkpoint. Bootstrap manifests also check teacher degradation counters by default.
+
+By default the gate checks every benchmark opponent row independently and requires a minimum game count per opponent. Use `--benchmark-opponent scripted-teacher --opponent-win-rate scripted-teacher=0.50` when a specific head-to-head comparison is the promotion target. The current gate is an absolute floor, not a delta-vs-incumbent comparison.
+
 Start self-play from a bootstrap checkpoint by first training offline data with `linear_cli train`, then passing the resulting checkpoint as the initial policy:
 
 ```bash

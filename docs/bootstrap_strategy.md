@@ -146,6 +146,31 @@ Inspect the run:
 python -m pokezero.selfplay_cli report --run-dir runs/bootstrap-selfplay
 ```
 
+Gate a candidate before promotion:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
+  --min-benchmark-win-rate 0.55 \
+  --min-benchmark-games 50 \
+  --max-collection-capped-rate 0.10 \
+  --max-benchmark-capped-rate 0.10
+```
+
+The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs.
+
+Use opponent filters when a specific comparison matters more than broad baseline health:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
+  --benchmark-opponent scripted-teacher \
+  --opponent-win-rate scripted-teacher=0.50 \
+  --min-benchmark-games 100
+```
+
+The current gate is an absolute benchmark floor, not an incumbent-delta promotion rule. A checkpoint can pass the absolute floor while still not improving over the previous promoted checkpoint; candidate-vs-incumbent promotion remains an open experiment-policy layer.
+
+Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
+
 Collect initial teacher data directly from the local Showdown harness:
 
 ```bash
@@ -161,6 +186,6 @@ python -m pokezero.rollout_cli collect \
 
 - What source should be the first bootstrap corpus?
 - Is `--capped-terminal-value -0.25` enough pressure, or should capped games become a stronger double-loss or explicit stall penalty?
-- What benchmark win-rate delta should promote a checkpoint?
+- What incumbent-delta rule should promote a checkpoint in longer runs?
 - How much imported data is needed before self-play fine-tuning is useful?
 - Should bootstrap data continue to mix into later self-play training, or only initialize the first checkpoint?
