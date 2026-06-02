@@ -93,6 +93,14 @@ from .linear_policy import (
 )
 from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
 from .policy import ScriptedTeacherPolicy
+from .promotion import (
+    PROMOTION_REGISTRY_SCHEMA_VERSION,
+    PromotionRecordResult,
+    PromotionRegistry,
+    PromotionRegistryEntry,
+    load_promotion_registry,
+    record_promotion,
+)
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
@@ -146,6 +154,7 @@ __all__ = [
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
+    "PROMOTION_REGISTRY_SCHEMA_VERSION",
     "LocalShowdownConfig",
     "LocalShowdownEnv",
     "LocalShowdownError",
@@ -167,6 +176,9 @@ __all__ = [
     "PromotionGateCheck",
     "PromotionGateConfig",
     "PromotionGateResult",
+    "PromotionRecordResult",
+    "PromotionRegistry",
+    "PromotionRegistryEntry",
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
     "RolloutRecord",
@@ -199,6 +211,7 @@ __all__ = [
     "is_move_action",
     "is_switch_action",
     "load_linear_model",
+    "load_promotion_registry",
     "load_selfplay_run_manifest",
     "load_showdown_dex",
     "load_showdown_dex_cached",
@@ -214,6 +227,7 @@ __all__ = [
     "iter_training_examples",
     "iter_rollout_records",
     "read_rollout_records",
+    "record_promotion",
     "rollout_record_from_dict",
     "rollout_record_to_dict",
     "run_selfplay_iterations",

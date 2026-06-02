@@ -178,6 +178,19 @@ python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
 
 When self-play runs with `--evaluation-games`, each iteration automatically benchmarks the candidate against the policy it just replaced if that incumbent is a linear checkpoint. The gate auto-derives that incumbent from self-play manifests when possible, with `--incumbent-policy` available as an override. The incumbent row is gated separately from fixed baselines by point-estimate win rate, minimum games, capped-game rate, and a Wilson lower-bound no-regression check. Fixed random/simple baseline rows continue to use the normal per-opponent benchmark floors, and aggregate benchmark health excludes the incumbent row.
 
+Record accepted checkpoints in a promotion registry:
+
+```bash
+python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
+  --registry runs/promotions.json \
+  --min-incumbent-win-rate 0.55 \
+  --min-incumbent-games 200 \
+  --min-benchmark-games 100 \
+  --label bootstrap-selfplay-0005
+```
+
+The registry is append-only by default and embeds the full gate result for each accepted checkpoint. It is the first checkpoint-pool index; it intentionally stores references to existing checkpoint files rather than copying artifacts into a managed directory.
+
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 
 Collect initial teacher data directly from the local Showdown harness:

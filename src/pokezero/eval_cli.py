@@ -21,6 +21,7 @@ from .evaluation import (
     PromotionGateConfig,
     evaluate_promotion_gate,
 )
+from .promotion import load_promotion_registry, record_promotion
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -29,47 +30,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     gate = subparsers.add_parser("gate", help="Evaluate whether a manifest clears promotion thresholds.")
     gate.add_argument("path", type=Path, help="Experiment run directory or manifest.json path.")
-    gate.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
-    gate.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
-    gate.add_argument("--min-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
-    gate.add_argument("--min-incumbent-games", type=int, default=DEFAULT_MIN_INCUMBENT_GAMES)
-    gate.add_argument("--max-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
-    gate.add_argument("--max-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
-    gate.add_argument("--max-incumbent-capped-rate", type=float, default=DEFAULT_MAX_INCUMBENT_CAPPED_RATE)
-    gate.add_argument("--max-teacher-degradation-rate", type=float, default=DEFAULT_MAX_TEACHER_DEGRADATION_RATE)
-    gate.add_argument(
-        "--min-incumbent-win-rate-lower-bound",
-        type=float,
-        default=DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
-        help="Minimum Wilson lower confidence bound for candidate win rate against the incumbent.",
-    )
-    gate.add_argument(
-        "--incumbent-confidence-z",
-        type=float,
-        default=DEFAULT_INCUMBENT_CONFIDENCE_Z,
-        help="Z-score used for the incumbent Wilson lower-bound check. Default is one-sided 95%%.",
-    )
-    gate.add_argument(
-        "--benchmark-opponent",
-        action="append",
-        default=None,
-        help="Require and gate a specific benchmark opponent policy id. May be repeated. Defaults to every candidate benchmark opponent.",
-    )
-    gate.add_argument(
-        "--opponent-win-rate",
-        action="append",
-        default=None,
-        metavar="POLICY_ID=RATE",
-        help="Override the win-rate floor for a specific benchmark opponent. May be repeated.",
-    )
-    gate.add_argument(
-        "--incumbent-policy",
-        default=None,
-        help="Require direct benchmark evidence against this incumbent policy id and gate the candidate win rate against it.",
-    )
-    gate.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because benchmark evidence is missing.")
+    _add_gate_arguments(gate)
     gate.add_argument("--json", action="store_true", help="Print the gate result as JSON.")
     gate.set_defaults(func=_gate)
+
+    promote = subparsers.add_parser("promote", help="Evaluate a candidate and append it to a promotion registry if it passes.")
+    promote.add_argument("path", type=Path, help="Experiment run directory or manifest.json path.")
+    promote.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
+    promote.add_argument("--label", default=None, help="Optional short label for the promotion entry.")
+    promote.add_argument("--notes", default=None, help="Optional notes stored with the promotion entry.")
+    promote.add_argument("--allow-duplicate", action="store_true", help="Allow recording a policy/checkpoint already present in the registry.")
+    _add_gate_arguments(promote)
+    promote.add_argument("--json", action="store_true", help="Print the promotion result as JSON.")
+    promote.set_defaults(func=_promote)
+
+    promotions = subparsers.add_parser("promotions", help="Print a promotion registry summary.")
+    promotions.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
+    promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
+    promotions.set_defaults(func=_promotions)
     return parser
 
 
@@ -86,28 +64,117 @@ def main(argv: list[str] | None = None) -> int:
 def _gate(args: argparse.Namespace) -> int:
     result = evaluate_promotion_gate(
         args.path,
-        config=PromotionGateConfig(
-            min_benchmark_win_rate=args.min_benchmark_win_rate,
-            min_incumbent_win_rate=args.min_incumbent_win_rate,
-            min_benchmark_games=args.min_benchmark_games,
-            min_incumbent_games=args.min_incumbent_games,
-            max_collection_capped_rate=args.max_collection_capped_rate,
-            max_benchmark_capped_rate=args.max_benchmark_capped_rate,
-            max_incumbent_capped_rate=args.max_incumbent_capped_rate,
-            max_teacher_degradation_rate=args.max_teacher_degradation_rate,
-            min_incumbent_win_rate_lower_bound=args.min_incumbent_win_rate_lower_bound,
-            incumbent_confidence_z=args.incumbent_confidence_z,
-            require_benchmark=not args.allow_missing_benchmark,
-            required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
-            opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
-            incumbent_policy_id=args.incumbent_policy,
-        ),
+        config=_gate_config_from_args(args),
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
         _print_gate_result(result)
     return 0 if result.passed else 2
+
+
+def _promote(args: argparse.Namespace) -> int:
+    result = record_promotion(
+        args.path,
+        registry_path=args.registry,
+        config=_gate_config_from_args(args),
+        label=args.label,
+        notes=args.notes,
+        allow_duplicate=args.allow_duplicate,
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_gate_result(result.gate_result)
+        print(f"promotion_recorded: {'yes' if result.recorded else 'no'}")
+        print(f"registry: {result.registry_path}")
+        if result.entry is not None:
+            print(f"promotion_sequence: {result.entry.sequence}")
+            print(f"promoted_policy: {result.entry.policy_id or '-'}")
+            print(f"promoted_checkpoint: {result.entry.checkpoint_path or '-'}")
+    return 0 if result.recorded else 2
+
+
+def _promotions(args: argparse.Namespace) -> int:
+    registry = load_promotion_registry(args.registry)
+    if args.json:
+        print(json.dumps(registry.to_dict(), indent=2, sort_keys=True))
+        return 0
+    print(f"registry: {registry.path}")
+    print(f"promotions: {len(registry.entries)}")
+    if registry.latest is not None:
+        print(f"latest_policy: {registry.latest.policy_id or '-'}")
+        print(f"latest_checkpoint: {registry.latest.checkpoint_path or '-'}")
+    if registry.entries:
+        print("entries:")
+        for entry in registry.entries:
+            label = f" label={entry.label}" if entry.label else ""
+            print(
+                f"- {entry.sequence}: policy={entry.policy_id or '-'} "
+                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}"
+            )
+    return 0
+
+
+def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
+    parser.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
+    parser.add_argument("--min-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
+    parser.add_argument("--min-incumbent-games", type=int, default=DEFAULT_MIN_INCUMBENT_GAMES)
+    parser.add_argument("--max-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
+    parser.add_argument("--max-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
+    parser.add_argument("--max-incumbent-capped-rate", type=float, default=DEFAULT_MAX_INCUMBENT_CAPPED_RATE)
+    parser.add_argument("--max-teacher-degradation-rate", type=float, default=DEFAULT_MAX_TEACHER_DEGRADATION_RATE)
+    parser.add_argument(
+        "--min-incumbent-win-rate-lower-bound",
+        type=float,
+        default=DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
+        help="Minimum Wilson lower confidence bound for candidate win rate against the incumbent.",
+    )
+    parser.add_argument(
+        "--incumbent-confidence-z",
+        type=float,
+        default=DEFAULT_INCUMBENT_CONFIDENCE_Z,
+        help="Z-score used for the incumbent Wilson lower-bound check. Default is one-sided 95%%.",
+    )
+    parser.add_argument(
+        "--benchmark-opponent",
+        action="append",
+        default=None,
+        help="Require and gate a specific benchmark opponent policy id. May be repeated. Defaults to every candidate benchmark opponent.",
+    )
+    parser.add_argument(
+        "--opponent-win-rate",
+        action="append",
+        default=None,
+        metavar="POLICY_ID=RATE",
+        help="Override the win-rate floor for a specific benchmark opponent. May be repeated.",
+    )
+    parser.add_argument(
+        "--incumbent-policy",
+        default=None,
+        help="Require direct benchmark evidence against this incumbent policy id and gate the candidate win rate against it.",
+    )
+    parser.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because benchmark evidence is missing.")
+
+
+def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
+    return PromotionGateConfig(
+        min_benchmark_win_rate=args.min_benchmark_win_rate,
+        min_incumbent_win_rate=args.min_incumbent_win_rate,
+        min_benchmark_games=args.min_benchmark_games,
+        min_incumbent_games=args.min_incumbent_games,
+        max_collection_capped_rate=args.max_collection_capped_rate,
+        max_benchmark_capped_rate=args.max_benchmark_capped_rate,
+        max_incumbent_capped_rate=args.max_incumbent_capped_rate,
+        max_teacher_degradation_rate=args.max_teacher_degradation_rate,
+        min_incumbent_win_rate_lower_bound=args.min_incumbent_win_rate_lower_bound,
+        incumbent_confidence_z=args.incumbent_confidence_z,
+        require_benchmark=not args.allow_missing_benchmark,
+        required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
+        opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
+        incumbent_policy_id=args.incumbent_policy,
+    )
 
 
 def _print_gate_result(result) -> None:
