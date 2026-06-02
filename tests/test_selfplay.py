@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pokezero.collection import CollectionMetrics, read_rollout_records, rollout_record_to_dict
 from pokezero.env import StepResult, TerminalState
-from pokezero.linear_policy import LinearTrainingConfig
+from pokezero.linear_policy import LinearPolicyModel, LinearTrainingConfig, save_linear_model
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION, collect_selfplay_rollouts, run_selfplay_iterations
@@ -278,6 +278,54 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["validation_rollout_paths"], [str(validation_path)])
         self.assertIsNotNone(iteration_manifest["training"]["validation_metrics"])
         self.assertGreater(iteration_manifest["training"]["validation_metrics"]["examples"], 0)
+
+    def test_run_selfplay_iterations_benchmarks_candidate_against_linear_incumbent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+
+            benchmark = result.iterations[0].benchmark
+            iteration_manifest = json.loads((temp_path / "run" / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertIsNotNone(benchmark)
+        head_to_heads = benchmark.head_to_head_results if benchmark is not None else ()
+        self.assertIn(
+            ("linear-selfplay-test-iter-0001", "bootstrap-linear"),
+            {(row.first_policy_id, row.second_policy_id) for row in head_to_heads},
+        )
+        self.assertIn(
+            ("linear-selfplay-test-iter-0001", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in iteration_manifest["benchmark"]["head_to_heads"]
+            },
+        )
 
     def test_run_selfplay_iterations_rejects_missing_validation_data_before_collection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

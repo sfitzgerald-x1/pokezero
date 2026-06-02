@@ -233,6 +233,7 @@ def run_selfplay_iterations(
         if evaluation_games:
             benchmark = _benchmark_checkpoint(
                 model_policy=LinearSoftmaxPolicy(model=training.model),
+                incumbent_policy_spec=current_policy_spec,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
@@ -551,22 +552,52 @@ def _seat_policy_specs(
 def _benchmark_checkpoint(
     *,
     model_policy: LinearSoftmaxPolicy,
+    incumbent_policy_spec: str | None = None,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
     games: int,
     seed_start: int,
 ) -> BenchmarkReport:
     policy_id = str(model_policy.policy_id)
+    matchups = (
+        BenchmarkMatchup(f"{policy_id} vs random-legal", model_policy, RandomLegalPolicy()),
+        BenchmarkMatchup(f"random-legal vs {policy_id}", RandomLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
+        BenchmarkMatchup(f"{policy_id} vs simple-legal", LinearSoftmaxPolicy(model=model_policy.model), SimpleLegalPolicy()),
+        BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
+        *_incumbent_benchmark_matchups(model_policy=model_policy, incumbent_policy_spec=incumbent_policy_spec),
+    )
     return benchmark_rollouts(
         games=games,
         env_factory=env_factory,
         rollout_config=rollout_config,
         seed_start=seed_start,
-        matchups=(
-            BenchmarkMatchup(f"{policy_id} vs random-legal", model_policy, RandomLegalPolicy()),
-            BenchmarkMatchup(f"random-legal vs {policy_id}", RandomLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
-            BenchmarkMatchup(f"{policy_id} vs simple-legal", LinearSoftmaxPolicy(model=model_policy.model), SimpleLegalPolicy()),
-            BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
+        matchups=matchups,
+    )
+
+
+def _incumbent_benchmark_matchups(
+    *,
+    model_policy: LinearSoftmaxPolicy,
+    incumbent_policy_spec: str | None,
+) -> tuple[BenchmarkMatchup, ...]:
+    if incumbent_policy_spec is None:
+        return ()
+    policy_id = str(model_policy.policy_id)
+    incumbent_factory = policy_factory_from_spec(incumbent_policy_spec)
+    incumbent_policy = incumbent_factory()
+    incumbent_policy_id = str(incumbent_policy.policy_id)
+    if incumbent_policy_id in {policy_id, "random-legal", "simple-legal"}:
+        return ()
+    return (
+        BenchmarkMatchup(
+            f"{policy_id} vs {incumbent_policy_id}",
+            LinearSoftmaxPolicy(model=model_policy.model),
+            incumbent_policy,
+        ),
+        BenchmarkMatchup(
+            f"{incumbent_policy_id} vs {policy_id}",
+            incumbent_factory(),
+            LinearSoftmaxPolicy(model=model_policy.model),
         ),
     )
 
