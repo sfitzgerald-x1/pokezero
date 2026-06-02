@@ -140,6 +140,7 @@ def run_selfplay_iterations(
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     validation_rollout_paths: Iterable[Path] | None = None,
+    promotion_registry_path: Path | None = None,
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -159,6 +160,7 @@ def run_selfplay_iterations(
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
     validation_paths = tuple(Path(path) for path in (validation_rollout_paths or ()))
+    promoted_checkpoint_specs = _promoted_checkpoint_specs(promotion_registry_path)
 
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
@@ -201,7 +203,7 @@ def run_selfplay_iterations(
         iteration_seed_start = next_seed_start + (offset * games_per_iteration)
         opponent_policy_specs = _opponent_pool(
             fixed_policy_specs=fixed_opponents,
-            checkpoint_history=checkpoint_history,
+            checkpoint_history=promoted_checkpoint_specs if promotion_registry_path is not None else checkpoint_history,
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
         )
@@ -459,7 +461,7 @@ def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
 def _opponent_pool(
     *,
     fixed_policy_specs: tuple[str, ...],
-    checkpoint_history: list[str],
+    checkpoint_history: Iterable[str],
     current_policy_spec: str,
     max_historical_opponents: int,
 ) -> tuple[str, ...]:
@@ -469,6 +471,14 @@ def _opponent_pool(
     else:
         historical = []
     return fixed_policy_specs + tuple(historical)
+
+
+def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[str, ...]:
+    if promotion_registry_path is None:
+        return ()
+    from .promotion import load_promotion_registry
+
+    return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
 
 
 def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | None:

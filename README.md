@@ -162,9 +162,27 @@ python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
 
 The gate command treats per-opponent benchmark win rates as the strength signal and capped-game rates as health checks. It returns exit code `0` for pass and `2` for fail, so shell scripts can use it before promoting a checkpoint. Bootstrap manifests also check teacher degradation counters by default.
 
-By default the gate checks every fixed-opponent benchmark row independently and requires a minimum game count per opponent. Use `--benchmark-opponent scripted-teacher --opponent-win-rate scripted-teacher=0.50` when a specific fixed-opponent comparison is the promotion target. For self-play manifests, the gate auto-derives the incumbent from the previous iteration when possible; use `--incumbent-policy <policy-id>` to override it. Incumbent checks use a separate point-estimate floor, minimum game count, capped-game limit, and Wilson lower-bound check via `--min-incumbent-win-rate`, `--min-incumbent-games`, `--max-incumbent-capped-rate`, and `--min-incumbent-win-rate-lower-bound`.
+By default the gate checks every fixed-opponent benchmark row independently and requires a minimum game count per opponent. Use `--benchmark-opponent scripted-teacher --opponent-win-rate scripted-teacher=0.50` when a specific fixed-opponent comparison is the promotion target. For self-play manifests, the gate auto-derives the incumbent from the previous iteration when possible; use `--registry runs/promotions.json` to default the incumbent to the latest promoted policy, or `--incumbent-policy <policy-id>` to override it. Incumbent checks use a separate point-estimate floor, minimum game count, capped-game limit, and Wilson lower-bound check via `--min-incumbent-win-rate`, `--min-incumbent-games`, `--max-incumbent-capped-rate`, and `--min-incumbent-win-rate-lower-bound`.
 
 When `--evaluation-games` is enabled during self-play, the benchmark includes the fixed random/simple baselines plus a direct candidate-vs-incumbent comparison whenever the incumbent policy is a previous linear checkpoint or bootstrap checkpoint. Fixed baselines are not duplicated as incumbents because they are already benchmarked. Aggregate benchmark win rate and capped rate exclude the incumbent row; the incumbent is reported and gated separately.
+
+Record a gate-passing checkpoint in an append-only promotion registry:
+
+```bash
+python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
+  --registry runs/promotions.json \
+  --min-benchmark-win-rate 0.55 \
+  --min-benchmark-games 50 \
+  --label bootstrap-selfplay-0005
+```
+
+Inspect promoted checkpoints:
+
+```bash
+python -m pokezero.eval_cli promotions --registry runs/promotions.json
+```
+
+`promote` embeds the full gate result in the registry entry and refuses duplicate checkpoint entries by default. It does not copy checkpoint files; the registry is an audit trail and checkpoint-pool index over existing run artifacts. Passing `--promotion-registry runs/promotions.json` to `selfplay_cli iterate` makes the historical opponent pool draw from promoted checkpoints instead of every raw prior iteration checkpoint.
 
 Start self-play from a bootstrap checkpoint by first training offline data with `linear_cli train`, then passing the resulting checkpoint as the initial policy:
 

@@ -10,6 +10,7 @@ from pokezero.collection import CollectionMetrics, read_rollout_records, rollout
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearPolicyModel, LinearTrainingConfig, save_linear_model
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
+from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION, collect_selfplay_rollouts, run_selfplay_iterations
 from pokezero.selfplay_cli import main as selfplay_cli_main
@@ -327,6 +328,44 @@ class SelfPlayTest(unittest.TestCase):
             },
         )
 
+    def test_run_selfplay_iterations_uses_promotion_registry_for_historical_opponents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            promoted_checkpoint_path = temp_path / "promoted-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                promoted_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted",
+                ),
+            )
+            write_promotion_registry(registry_path, checkpoint_paths=(promoted_checkpoint_path,))
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                fixed_opponent_policy_specs=("random-legal",),
+                max_historical_opponents=1,
+                promotion_registry_path=registry_path,
+            )
+
+        promoted_spec = f"linear:{promoted_checkpoint_path}"
+        self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
+        self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))
+        self.assertNotIn(result.iterations[0].checkpoint_policy_spec, result.iterations[1].opponent_policy_specs)
+
     def test_run_selfplay_iterations_rejects_missing_validation_data_before_collection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -641,6 +680,8 @@ class SelfPlayTest(unittest.TestCase):
                         "random-legal",
                         "--workers",
                         "2",
+                        "--promotion-registry",
+                        "promotions.json",
                         "--validation-data",
                         "heldout-a.jsonl",
                         "--validation-data",
@@ -658,6 +699,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
         self.assertEqual(kwargs["evaluation_games"], 3)
         self.assertEqual(kwargs["worker_count"], 2)
+        self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
@@ -737,6 +779,37 @@ def normalized_record_payloads(path: Path) -> tuple[dict, ...]:
         payload["elapsed_seconds"] = 0.0
         payloads.append(payload)
     return tuple(payloads)
+
+
+def write_promotion_registry(path: Path, *, checkpoint_paths: tuple[Path, ...]) -> None:
+    entries = [
+        {
+            "sequence": index,
+            "policy_id": f"linear-promoted-{index}",
+            "checkpoint_path": str(checkpoint_path),
+            "manifest_path": f"runs/promoted-{index}/manifest.json",
+            "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
+            "source_iteration": index,
+            "promoted_at": "2026-06-02T00:00:00Z",
+            "label": None,
+            "notes": None,
+            "gate_result": {"passed": True},
+        }
+        for index, checkpoint_path in enumerate(checkpoint_paths, start=1)
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": PROMOTION_REGISTRY_SCHEMA_VERSION,
+                "registry_path": str(path),
+                "latest_policy_id": entries[-1]["policy_id"] if entries else None,
+                "latest_checkpoint_path": entries[-1]["checkpoint_path"] if entries else None,
+                "entries": entries,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:

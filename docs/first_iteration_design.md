@@ -20,13 +20,14 @@ Implemented:
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
 - Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
+- Append-only promotion registry for recording gate-passing checkpoints, defaulting incumbent gates to the latest promoted policy, and filtering self-play historical opponents to promoted checkpoints.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 
 Partially implemented:
 
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
 - Belief tracking exists as a sidecar/debug system and candidate future observation feature source, but it is not wired into the trained policy path yet.
-- Evaluation exists against fixed baselines and historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates; long-run experiment criteria are still informal.
+- Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
 Known limitations:
@@ -42,7 +43,7 @@ Not implemented yet:
 - Value head, opponent-action auxiliary head, or PPO-style online actor-critic training.
 - GPU training path.
 - Large-scale experiment orchestration across multiple machines.
-- Long-run benchmark thresholds, regression detection, or checkpoint pool curation.
+- Long-run benchmark thresholds, automated regression detection, or managed checkpoint artifact curation.
 
 ## Deviations From Original Plan
 
