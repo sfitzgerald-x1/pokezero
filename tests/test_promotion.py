@@ -48,6 +48,40 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(loaded.latest.label if loaded.latest is not None else None, "smoke-promote")
         self.assertEqual(loaded.latest.gate_result["passed"] if loaded.latest is not None else None, True)
 
+    def test_record_promotion_can_copy_checkpoint_to_artifact_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "run" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            artifact_dir = temp_path / "promoted-checkpoints"
+            manifest = selfplay_manifest()
+            write_manifest(manifest_path, manifest)
+            source_checkpoint = write_checkpoint_for_manifest(temp_path, manifest)
+
+            result = record_promotion(
+                manifest_path,
+                registry_path=registry_path,
+                artifact_dir=artifact_dir,
+                config=passing_gate_config(),
+                promoted_at="2026-06-02T00:00:00Z",
+            )
+            loaded = load_promotion_registry(registry_path)
+            managed_checkpoint_path = Path(result.entry.checkpoint_path if result.entry else "")
+            managed_checkpoint_exists = managed_checkpoint_path.exists()
+            managed_checkpoint_payload = json.loads(managed_checkpoint_path.read_text(encoding="utf-8"))
+            source_checkpoint_text = source_checkpoint.read_text(encoding="utf-8")
+            managed_checkpoint_text = managed_checkpoint_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result.recorded)
+        self.assertTrue(managed_checkpoint_exists)
+        self.assertEqual(managed_checkpoint_payload["policy_id"], "linear-selfplay-test-iter-0001")
+        self.assertEqual(managed_checkpoint_path.parent, artifact_dir)
+        self.assertEqual(result.entry.source_checkpoint_path if result.entry else None, "run/iteration-0001/linear-policy.json")
+        self.assertEqual(result.entry.checkpoint_path if result.entry else None, str(managed_checkpoint_path))
+        self.assertEqual(loaded.latest.checkpoint_path if loaded.latest else None, str(managed_checkpoint_path))
+        self.assertEqual(loaded.checkpoint_policy_specs(), (f"linear:{managed_checkpoint_path}",))
+        self.assertEqual(source_checkpoint_text, managed_checkpoint_text)
+
     def test_record_promotion_does_not_write_failed_gate(self) -> None:
         manifest = selfplay_manifest()
         manifest["iterations"][0]["collection_metrics"]["capped_games"] = 5
@@ -221,6 +255,43 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(list_exit, 0)
         self.assertEqual(list_payload["entries"][0]["policy_id"], "linear-selfplay-test-iter-0001")
 
+    def test_eval_cli_promote_can_copy_checkpoint_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "run" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            artifact_dir = temp_path / "artifact-store"
+            manifest = selfplay_manifest()
+            write_manifest(manifest_path, manifest)
+            write_checkpoint_for_manifest(temp_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promote",
+                        str(manifest_path),
+                        "--registry",
+                        str(registry_path),
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--min-benchmark-win-rate",
+                        "0.60",
+                        "--min-benchmark-games",
+                        "20",
+                        "--max-collection-capped-rate",
+                        "0.20",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            managed_checkpoint = Path(payload["entry"]["checkpoint_path"])
+            managed_checkpoint_exists = managed_checkpoint.exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["entry"]["source_checkpoint_path"], "run/iteration-0001/linear-policy.json")
+        self.assertEqual(managed_checkpoint.parent, artifact_dir)
+        self.assertTrue(managed_checkpoint_exists)
+
 
 def selfplay_manifest() -> dict:
     return {
@@ -287,6 +358,14 @@ def add_benchmark_head_to_head(
             "second_policy_win_rate": second_policy_wins / games,
         }
     )
+
+
+def write_checkpoint_for_manifest(temp_path: Path, manifest: dict) -> Path:
+    checkpoint_path = temp_path / str(manifest["latest_checkpoint_path"])
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    policy_id = manifest["iterations"][0]["training"]["model"]["policy_id"]
+    checkpoint_path.write_text(json.dumps({"policy_id": policy_id}, indent=2), encoding="utf-8")
+    return checkpoint_path
 
 
 def benchmark_payload(*, policy_id: str, wins: int, losses: int, capped_games: int) -> dict:
