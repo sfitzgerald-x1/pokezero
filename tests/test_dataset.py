@@ -157,6 +157,7 @@ class DatasetTest(unittest.TestCase):
         )
 
         self.assertEqual({example.return_value for example in examples}, {-0.25})
+        self.assertTrue(all(example.terminal_capped for example in examples))
 
     def test_training_batch_preserves_labels_and_optional_field_masks(self) -> None:
         examples = list(examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=2)))

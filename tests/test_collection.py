@@ -311,12 +311,17 @@ class CollectionTest(unittest.TestCase):
             policy_from_name("unknown")
 
     def test_policy_from_spec_loads_scripted_teacher_options(self) -> None:
-        policy = policy_from_spec("scripted-teacher?showdown_root=/tmp/showdown&switch_margin=3&poor_move_threshold=20")
+        policy = policy_from_spec(
+            "scripted-teacher?showdown_root=/tmp/showdown&switch_margin=3&poor_move_threshold=20"
+            "&allow_fallback=true&allow_unknown_moves=true"
+        )
 
         self.assertIsInstance(policy, ScriptedTeacherPolicy)
         self.assertEqual(policy.showdown_root, Path("/tmp/showdown"))
         self.assertEqual(policy.switch_margin, 3.0)
         self.assertEqual(policy.poor_move_threshold, 20.0)
+        self.assertTrue(policy.allow_fallback)
+        self.assertTrue(policy.allow_unknown_moves)
 
     def test_policy_spec_with_showdown_root_injects_scripted_teacher_root(self) -> None:
         self.assertEqual(

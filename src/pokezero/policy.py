@@ -9,7 +9,7 @@ import random
 from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
-from .dex import ShowdownDex, load_showdown_dex, normalize_id
+from .dex import ShowdownDex, load_showdown_dex_cached, normalize_id
 from .observation import PokeZeroObservationV0
 
 
@@ -110,6 +110,10 @@ class ScriptedTeacherPolicy:
     policy_id: str = "scripted-teacher"
     showdown_root: Path | str | None = None
     dex: ShowdownDex | None = None
+    allow_fallback: bool = False
+    allow_unknown_moves: bool = False
+    # Move scores are roughly base_power * effectiveness * STAB (0-250+);
+    # switch scores are roughly hp*40 plus a [-22, 35] matchup bonus.
     switch_margin: float = 8.0
     poor_move_threshold: float = 35.0
 
@@ -120,18 +124,29 @@ class ScriptedTeacherPolicy:
         rng: random.Random,
     ) -> PolicyDecision:
         dex = self._dex()
-        if dex is None or not observation.metadata:
-            return self._fallback(observation, rng=rng)
+        if dex is None:
+            return self._fallback(observation, rng=rng, reason="dex unavailable")
+        if not observation.metadata:
+            return self._fallback(observation, rng=rng, reason="missing observation metadata")
 
         candidates = _legal_candidate_metadata(observation)
         if not candidates:
-            return self._fallback(observation, rng=rng)
-        move_scores = tuple(_move_score(candidate, observation.metadata, dex) for candidate in candidates if candidate.get("kind") == "move")
+            return self._fallback(observation, rng=rng, reason="missing legal candidate metadata")
+        unknown_moves = _unknown_legal_move_names(candidates, dex)
+        if unknown_moves and not self.allow_unknown_moves:
+            raise ValueError(f"scripted-teacher could not resolve legal move(s): {', '.join(unknown_moves)}")
+        move_scores = tuple(
+            _move_score(candidate, observation.metadata, dex, allow_unknown_moves=self.allow_unknown_moves)
+            for candidate in candidates
+            if candidate.get("kind") == "move"
+        )
         switch_scores = tuple(
             _switch_score(candidate, observation.metadata, dex)
             for candidate in candidates
             if candidate.get("kind") == "switch"
         )
+        if not move_scores and not switch_scores:
+            return self._fallback(observation, rng=rng)
         best_move = max(move_scores, key=lambda score: score.score, default=None)
         best_switch = max(switch_scores, key=lambda score: score.score, default=None)
         selected_pool = move_scores
@@ -159,7 +174,9 @@ class ScriptedTeacherPolicy:
             },
         )
 
-    def _fallback(self, observation: PokeZeroObservationV0, *, rng: random.Random) -> PolicyDecision:
+    def _fallback(self, observation: PokeZeroObservationV0, *, rng: random.Random, reason: str = "fallback") -> PolicyDecision:
+        if not self.allow_fallback:
+            raise ValueError(f"scripted-teacher cannot select a teacher action: {reason}")
         decision = SimpleLegalPolicy(policy_id=self.policy_id, switch_probability=0.05).select_action(
             observation,
             rng=rng,
@@ -168,7 +185,7 @@ class ScriptedTeacherPolicy:
             action_index=decision.action_index,
             policy_id=self.policy_id,
             action_probability=decision.action_probability,
-            metadata={**dict(decision.metadata), "policy_family": "scripted-teacher", "teacher_reason": "fallback"},
+            metadata={**dict(decision.metadata), "policy_family": "scripted-teacher", "teacher_reason": reason},
         )
 
     def _dex(self) -> ShowdownDex | None:
@@ -177,7 +194,7 @@ class ScriptedTeacherPolicy:
         root = self.showdown_root or os.environ.get("POKEZERO_SHOWDOWN_ROOT")
         if root is None:
             return None
-        self.dex = load_showdown_dex(root)
+        self.dex = load_showdown_dex_cached(root)
         return self.dex
 
 
@@ -229,10 +246,29 @@ def _legal_candidate_metadata(observation: PokeZeroObservationV0) -> tuple[Mappi
     return tuple(candidates)
 
 
-def _move_score(candidate: Mapping[str, Any], metadata: Mapping[str, Any], dex: ShowdownDex) -> _ActionScore:
+def _unknown_legal_move_names(candidates: Sequence[Mapping[str, Any]], dex: ShowdownDex) -> tuple[str, ...]:
+    missing: list[str] = []
+    for candidate in candidates:
+        if candidate.get("kind") != "move":
+            continue
+        move_name = str(candidate.get("move_id") or candidate.get("move_name") or "")
+        if not dex.move_info(move_name):
+            missing.append(str(candidate.get("move_name") or candidate.get("move_id") or "unknown"))
+    return tuple(missing)
+
+
+def _move_score(
+    candidate: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    dex: ShowdownDex,
+    *,
+    allow_unknown_moves: bool,
+) -> _ActionScore:
     action_index = int(candidate["action_index"])
     move = dex.move_info(str(candidate.get("move_id") or candidate.get("move_name") or ""))
     if move is None:
+        if not allow_unknown_moves:
+            raise ValueError(f"scripted-teacher could not resolve move: {candidate.get('move_name') or candidate.get('move_id')}")
         return _ActionScore(action_index, "move", 12.0, "unknown move")
 
     self_types = _metadata_species_types(metadata.get("self_active"), dex)

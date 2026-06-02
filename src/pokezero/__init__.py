@@ -35,7 +35,7 @@ from .collection import (
     rollout_record_to_dict,
     summarize_records,
 )
-from .dex import MoveInfo, ShowdownDex, SpeciesInfo, load_showdown_dex
+from .dex import MoveInfo, ShowdownDex, SpeciesInfo, load_showdown_dex, load_showdown_dex_cached
 from .dataset import (
     MISSING_ACTION_INDEX,
     TrajectoryDatasetConfig,
@@ -154,6 +154,7 @@ __all__ = [
     "load_linear_model",
     "load_selfplay_run_manifest",
     "load_showdown_dex",
+    "load_showdown_dex_cached",
     "move_action_candidates",
     "normalize_for_player",
     "observation_from_player_state",

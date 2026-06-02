@@ -489,7 +489,7 @@ def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
 
 
 def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
-    supported = {"showdown_root", "switch_margin", "poor_move_threshold"}
+    supported = {"showdown_root", "switch_margin", "poor_move_threshold", "allow_fallback", "allow_unknown_moves"}
     unknown = sorted(set(options) - supported)
     if unknown:
         raise ValueError(f"Unsupported scripted-teacher option(s): {', '.join(unknown)}.")
@@ -500,6 +500,12 @@ def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
         teacher_options["switch_margin"] = _optional_float(options, "switch_margin", default=8.0)
     if "poor_move_threshold" in options:
         teacher_options["poor_move_threshold"] = _optional_float(options, "poor_move_threshold", default=35.0)
+    allow_fallback = _optional_bool(options, "allow_fallback")
+    if allow_fallback is not None:
+        teacher_options["allow_fallback"] = allow_fallback
+    allow_unknown_moves = _optional_bool(options, "allow_unknown_moves")
+    if allow_unknown_moves is not None:
+        teacher_options["allow_unknown_moves"] = allow_unknown_moves
     return teacher_options
 
 

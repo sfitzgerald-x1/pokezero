@@ -553,6 +553,8 @@ def _gradient_weight(
     if objective == "behavior-cloning":
         return 1.0
     if objective == "reward-weighted":
+        if example.terminal_capped:
+            return float(example.return_value)
         return max(0.0, float(example.return_value))
     raise ValueError(f"Unsupported objective: {objective!r}.")
 

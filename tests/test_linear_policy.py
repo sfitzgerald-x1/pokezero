@@ -117,6 +117,30 @@ def winning_action_record() -> RolloutRecord:
     )
 
 
+def capped_action_record() -> RolloutRecord:
+    trajectory = BattleTrajectory(battle_id="linear-capped", format_id="gen3randombattle", seed=4)
+    trajectory.append(
+        TrajectoryStep(
+            player_id="p1",
+            turn_index=0,
+            observation=observation(10),
+            legal_action_mask=LEGAL_TWO_ACTION_MASK,
+            action_index=0,
+        )
+    )
+    trajectory.record_terminal(TerminalState(winner=None, turn_count=250, capped=True))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "capped"},
+        decision_round_count=1,
+        elapsed_seconds=0.1,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
 def write_record(path: Path, record: RolloutRecord) -> None:
     with path.open("w", encoding="utf-8") as handle:
         write_rollout_record(handle, record)
@@ -240,6 +264,31 @@ class LinearPolicyTest(unittest.TestCase):
             ).model
 
         self.assertEqual(model.to_dict(), LinearPolicyModel.initialized(feature_count=128, window_size=1).to_dict())
+
+    def test_reward_weighted_objective_penalizes_capped_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, capped_action_record())
+
+            model = train_linear_policy(
+                data_path,
+                config=LinearTrainingConfig(
+                    feature_count=128,
+                    epochs=1,
+                    learning_rate=0.1,
+                    capped_terminal_value=-0.25,
+                    objective="reward-weighted",
+                    shuffle_buffer_size=0,
+                ),
+            ).model
+            features = features_from_observation_window(
+                [observation(10)],
+                window_size=model.window_size,
+                feature_count=model.feature_count,
+            )
+
+        probabilities = model.action_probabilities(features, LEGAL_TWO_ACTION_MASK)
+        self.assertLess(probabilities[0], probabilities[1])
 
     def test_reward_weighted_objective_uses_terminal_return_when_step_reward_is_zero(self) -> None:
         record = winning_action_record()

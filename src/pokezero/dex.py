@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
 from typing import Any, Mapping, Optional
 
 
@@ -72,6 +73,21 @@ class ShowdownDex:
             elif modifier == 3:
                 return 0.0
         return multiplier
+
+
+_DEX_CACHE: dict[Path, ShowdownDex] = {}
+_DEX_CACHE_LOCK = threading.Lock()
+
+
+def load_showdown_dex_cached(showdown_root: Path | str) -> ShowdownDex:
+    root = Path(showdown_root).expanduser().resolve()
+    with _DEX_CACHE_LOCK:
+        cached = _DEX_CACHE.get(root)
+        if cached is not None:
+            return cached
+    loaded = load_showdown_dex(root)
+    with _DEX_CACHE_LOCK:
+        return _DEX_CACHE.setdefault(root, loaded)
 
 
 def load_showdown_dex(showdown_root: Path | str) -> ShowdownDex:
@@ -182,7 +198,7 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
         category=category,
         gen3_category=gen3_move_category(move_type, category),
         base_power=int(payload.get("basePower") or 0),
-        accuracy=float(payload.get("accuracy") or 0),
+        accuracy=_accuracy_value(payload.get("accuracy")),
         priority=int(payload.get("priority") or 0),
         recoil=bool(payload.get("recoil")),
         drain=bool(payload.get("drain")),
@@ -229,3 +245,11 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _accuracy_value(value: Any) -> float:
+    if value is True:
+        return 100.0
+    if value is False or value is None or value == "":
+        return 0.0
+    return float(value)

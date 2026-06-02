@@ -57,6 +57,7 @@ class TrajectoryExample:
     opponent_action_index: int | None = None
     action_probability: float | None = None
     step_metadata: Mapping[str, Any] | None = None
+    terminal_capped: bool = False
 
     @property
     def window_size(self) -> int:
@@ -258,6 +259,7 @@ def _example_from_window(
         opponent_action_index=step.opponent_action_index,
         action_probability=step.action_probability,
         step_metadata=dict(step.metadata),
+        terminal_capped=bool((record.terminal or record.trajectory.terminal) and (record.terminal or record.trajectory.terminal).capped),
     )
 
 

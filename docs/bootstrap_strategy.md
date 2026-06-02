@@ -20,9 +20,9 @@ This path is simplest operationally:
 Risks:
 
 - early trajectories are low quality
-- reward-weighted regression ignores losing and capped examples, so it can fail to learn from many games
+- reward-weighted regression ignores ordinary losing examples, so it can fail to learn from many games
 - self-play can amplify degenerate habits before the model learns useful tactics
-- capped games are now mildly penalized by default in self-play, but reward-weighted regression still ignores non-positive examples
+- capped games are now mildly penalized by default in self-play, including under reward-weighted training
 
 Use this path as a control condition and harness smoke, not as the only route to a strong policy.
 

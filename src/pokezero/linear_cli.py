@@ -41,7 +41,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--objective",
         choices=("behavior-cloning", "reward-weighted"),
         default="behavior-cloning",
-        help="Training objective. reward-weighted reinforces positive-return actions and ignores non-positive returns.",
+        help="Training objective. reward-weighted reinforces positive returns, ignores ordinary losses, and applies capped-game returns.",
     )
     train.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
     train.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")

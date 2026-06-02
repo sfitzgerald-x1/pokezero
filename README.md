@@ -97,7 +97,7 @@ This baseline uses hashed observation-window features, a streaming shuffle buffe
 
 Linear checkpoints include the current action-space, observation, and linear-feature schema versions. Loading a stale checkpoint with mismatched runtime schemas fails fast instead of silently producing incompatible features.
 
-The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `reward-weighted` objective is an offline reward-weighted regression mode: it reinforces positive-return actions and ignores non-positive-return actions. It is not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
+The default `behavior-cloning` objective can only imitate the data source. Training on `random-legal` or `simple-legal` rollouts is useful as a plumbing smoke test, but it should not be expected to produce a stronger agent than those policies. The optional `reward-weighted` objective is an offline reward-weighted regression mode: it reinforces positive-return actions, ignores ordinary losing actions, and applies the configured capped-game return as an explicit anti-stall update. It is not a replacement for a stronger imitation source or a full self-play optimizer. Use held-out validation data for reported accuracy.
 
 ## Self-Play Iteration Harness
 
