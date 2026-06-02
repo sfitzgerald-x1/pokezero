@@ -45,6 +45,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
+    iterate.add_argument(
+        "--promotion-registry",
+        type=Path,
+        default=None,
+        help="Optional promotion registry. When set, historical opponents come from promoted checkpoints instead of raw iteration history.",
+    )
     iterate.add_argument("--evaluation-games", type=int, default=0, help="Optional benchmark games per baseline matchup after each iteration.")
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic evaluation seed.")
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
@@ -131,6 +137,7 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
         validation_rollout_paths=tuple(args.validation_data or ()),
+        promotion_registry_path=args.promotion_registry,
         resume=args.resume,
         worker_count=args.workers,
     )

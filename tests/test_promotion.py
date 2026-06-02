@@ -67,7 +67,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertFalse(result.recorded)
         self.assertFalse(registry_exists)
 
-    def test_record_promotion_rejects_duplicate_policy_by_default(self) -> None:
+    def test_record_promotion_rejects_duplicate_checkpoint_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             manifest_path = temp_path / "run" / "manifest.json"
@@ -89,6 +89,100 @@ class PromotionRegistryTest(unittest.TestCase):
             loaded = load_promotion_registry(registry_path)
 
         self.assertEqual(len(loaded.entries), 1)
+
+    def test_record_promotion_allows_same_policy_id_with_distinct_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_manifest_path = temp_path / "run-a" / "manifest.json"
+            second_manifest_path = temp_path / "run-b" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            first_manifest = selfplay_manifest()
+            second_manifest = selfplay_manifest()
+            set_manifest_checkpoint(second_manifest, "run-b/iteration-0001/linear-policy.json")
+            write_manifest(first_manifest_path, first_manifest)
+            write_manifest(second_manifest_path, second_manifest)
+
+            record_promotion(
+                first_manifest_path,
+                registry_path=registry_path,
+                config=passing_gate_config(),
+            )
+            record_promotion(
+                second_manifest_path,
+                registry_path=registry_path,
+                config=passing_gate_config(),
+            )
+            loaded = load_promotion_registry(registry_path)
+
+        self.assertEqual(len(loaded.entries), 2)
+        self.assertEqual(
+            [entry.policy_id for entry in loaded.entries],
+            ["linear-selfplay-test-iter-0001", "linear-selfplay-test-iter-0001"],
+        )
+        self.assertEqual(
+            [entry.checkpoint_path for entry in loaded.entries],
+            ["run/iteration-0001/linear-policy.json", "run-b/iteration-0001/linear-policy.json"],
+        )
+
+    def test_eval_cli_gate_defaults_incumbent_from_registry_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            incumbent_manifest = selfplay_manifest()
+            set_manifest_identity(
+                incumbent_manifest,
+                policy_id="linear-incumbent",
+                checkpoint_path="run-incumbent/iteration-0001/linear-policy.json",
+            )
+            incumbent_manifest_path = temp_path / "run-incumbent" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            write_manifest(incumbent_manifest_path, incumbent_manifest)
+            record_promotion(
+                incumbent_manifest_path,
+                registry_path=registry_path,
+                config=passing_gate_config(),
+            )
+
+            candidate_manifest = selfplay_manifest()
+            set_manifest_identity(
+                candidate_manifest,
+                policy_id="linear-candidate",
+                checkpoint_path="run-candidate/iteration-0001/linear-policy.json",
+            )
+            add_benchmark_head_to_head(
+                candidate_manifest,
+                first_policy_id="linear-candidate",
+                second_policy_id="linear-incumbent",
+                first_policy_wins=18,
+                second_policy_wins=2,
+                capped_games=0,
+            )
+            candidate_manifest_path = temp_path / "run-candidate" / "manifest.json"
+            write_manifest(candidate_manifest_path, candidate_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "gate",
+                        str(candidate_manifest_path),
+                        "--registry",
+                        str(registry_path),
+                        "--min-benchmark-win-rate",
+                        "0.60",
+                        "--min-benchmark-games",
+                        "20",
+                        "--min-incumbent-games",
+                        "20",
+                        "--max-collection-capped-rate",
+                        "0.20",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["gate_mode"], "absolute_floor+incumbent_delta")
+        self.assertEqual(payload["incumbent_policy_id"], "linear-incumbent")
+        self.assertEqual(payload["incumbent_games"], 20)
 
     def test_eval_cli_promote_and_promotions_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -149,6 +243,50 @@ def selfplay_manifest() -> dict:
             }
         ],
     }
+
+
+def set_manifest_identity(manifest: dict, *, policy_id: str, checkpoint_path: str) -> None:
+    manifest["latest_checkpoint_path"] = checkpoint_path
+    iteration = manifest["iterations"][0]
+    iteration["checkpoint_path"] = checkpoint_path
+    iteration["training"]["model"]["policy_id"] = policy_id
+    iteration["benchmark"] = benchmark_payload(
+        policy_id=policy_id,
+        wins=13,
+        losses=7,
+        capped_games=1,
+    )
+
+
+def set_manifest_checkpoint(manifest: dict, checkpoint_path: str) -> None:
+    manifest["latest_checkpoint_path"] = checkpoint_path
+    manifest["iterations"][0]["checkpoint_path"] = checkpoint_path
+
+
+def add_benchmark_head_to_head(
+    manifest: dict,
+    *,
+    first_policy_id: str,
+    second_policy_id: str,
+    first_policy_wins: int,
+    second_policy_wins: int,
+    capped_games: int,
+) -> None:
+    games = first_policy_wins + second_policy_wins
+    manifest["iterations"][0]["benchmark"]["head_to_heads"].append(
+        {
+            "label": f"{first_policy_id} vs {second_policy_id}",
+            "first_policy_id": first_policy_id,
+            "second_policy_id": second_policy_id,
+            "games": games,
+            "first_policy_wins": first_policy_wins,
+            "second_policy_wins": second_policy_wins,
+            "ties": 0,
+            "capped_games": capped_games,
+            "first_policy_win_rate": first_policy_wins / games,
+            "second_policy_win_rate": second_policy_wins / games,
+        }
+    )
 
 
 def benchmark_payload(*, policy_id: str, wins: int, losses: int, capped_games: int) -> dict:

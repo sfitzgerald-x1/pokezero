@@ -59,6 +59,13 @@ class PromotionRegistry:
             "entries": [entry.to_dict() for entry in self.entries],
         }
 
+    def checkpoint_policy_specs(self) -> tuple[str, ...]:
+        return tuple(
+            f"linear:{entry.checkpoint_path}"
+            for entry in self.entries
+            if entry.checkpoint_path
+        )
+
 
 @dataclass(frozen=True)
 class PromotionRecordResult:
@@ -155,8 +162,6 @@ def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
 
 def _reject_duplicate(registry: PromotionRegistry, gate_result: PromotionGateResult) -> None:
     for entry in registry.entries:
-        if gate_result.candidate_policy_id is not None and entry.policy_id == gate_result.candidate_policy_id:
-            raise ValueError(f"policy is already promoted: {gate_result.candidate_policy_id}")
         if gate_result.checkpoint_path is not None and entry.checkpoint_path == gate_result.checkpoint_path:
             raise ValueError(f"checkpoint is already promoted: {gate_result.checkpoint_path}")
 

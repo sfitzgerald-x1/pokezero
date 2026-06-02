@@ -30,16 +30,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     gate = subparsers.add_parser("gate", help="Evaluate whether a manifest clears promotion thresholds.")
     gate.add_argument("path", type=Path, help="Experiment run directory or manifest.json path.")
+    gate.add_argument("--registry", type=Path, default=None, help="Optional promotion registry used as the default incumbent source.")
     _add_gate_arguments(gate)
     gate.add_argument("--json", action="store_true", help="Print the gate result as JSON.")
     gate.set_defaults(func=_gate)
 
     promote = subparsers.add_parser("promote", help="Evaluate a candidate and append it to a promotion registry if it passes.")
     promote.add_argument("path", type=Path, help="Experiment run directory or manifest.json path.")
-    promote.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
+    promote.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path. Also defaults the incumbent to the latest registry entry.")
     promote.add_argument("--label", default=None, help="Optional short label for the promotion entry.")
     promote.add_argument("--notes", default=None, help="Optional notes stored with the promotion entry.")
-    promote.add_argument("--allow-duplicate", action="store_true", help="Allow recording a policy/checkpoint already present in the registry.")
+    promote.add_argument("--allow-duplicate", action="store_true", help="Allow recording a checkpoint already present in the registry.")
     _add_gate_arguments(promote)
     promote.add_argument("--json", action="store_true", help="Print the promotion result as JSON.")
     promote.set_defaults(func=_promote)
@@ -159,6 +160,11 @@ def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
+    incumbent_policy_id = args.incumbent_policy
+    registry_path = getattr(args, "registry", None)
+    if incumbent_policy_id is None and registry_path is not None:
+        latest = load_promotion_registry(registry_path).latest
+        incumbent_policy_id = latest.policy_id if latest is not None else None
     return PromotionGateConfig(
         min_benchmark_win_rate=args.min_benchmark_win_rate,
         min_incumbent_win_rate=args.min_incumbent_win_rate,
@@ -173,7 +179,7 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
         require_benchmark=not args.allow_missing_benchmark,
         required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
         opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
-        incumbent_policy_id=args.incumbent_policy,
+        incumbent_policy_id=incumbent_policy_id,
     )
 
 
