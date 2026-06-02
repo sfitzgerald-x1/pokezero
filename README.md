@@ -101,6 +101,20 @@ The default `behavior-cloning` objective can only imitate the data source. Train
 
 ## Self-Play Iteration Harness
 
+Generate a scripted-teacher bootstrap checkpoint in one command:
+
+```bash
+python -m pokezero.bootstrap_cli teacher \
+  --run-dir runs/scripted-teacher-bootstrap \
+  --train-games 1000 \
+  --validation-games 200 \
+  --workers 4 \
+  --showdown-root /path/to/pokemon-showdown \
+  --window-size 4
+```
+
+The bootstrap workflow writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, and `manifest.json`. By default it collects against a teacher mirror plus `simple-legal` and `random-legal`, runs a short strict-teacher preflight before the full collection, and benchmarks the resulting checkpoint. It is the preferred way to seed the first checkpoint from the scripted teacher before moving into self-play.
+
 Run the first linear-policy collect/train/evaluate loop:
 
 ```bash
@@ -121,6 +135,8 @@ Use `--workers N` to collect games in parallel within each iteration. Result fil
 Use `--validation-data` to attach one or more held-out rollout JSONL files to every training step. Validation metrics are stored in each iteration manifest and surfaced by the report command.
 
 Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
+
+When reusing teacher bootstrap validation data during self-play, treat it as a teacher-retention regression check. A policy that improves past the teacher may become less teacher-faithful, so promotion still depends on benchmark strength and capped-game health.
 
 Self-play training defaults capped games to a mild double-loss return with `--capped-terminal-value -0.25`. This keeps capped games from being free neutral outcomes while preserving a CLI override for experiments.
 
