@@ -150,6 +150,59 @@ class PromotionGateTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertIn("benchmark_opponent:scripted-teacher", failed_check_names(result))
 
+    def test_gate_can_require_incumbent_delta_without_applying_generic_floor_to_incumbent(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["benchmark"] = benchmark_payload(
+            policy_id="linear-selfplay-test-iter-0001",
+            rows=(
+                ("random-legal", 13, 7, 0),
+                ("linear-selfplay-test-iter-0000", 11, 9, 0),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = evaluate_promotion_gate(
+                manifest_path,
+                config=PromotionGateConfig(
+                    min_benchmark_win_rate=0.60,
+                    min_incumbent_win_rate=0.55,
+                    min_benchmark_games=20,
+                    max_collection_capped_rate=0.20,
+                    incumbent_policy_id="linear-selfplay-test-iter-0000",
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.gate_mode, "absolute_floor+incumbent_delta")
+        self.assertEqual(result.incumbent_policy_id, "linear-selfplay-test-iter-0000")
+        self.assertEqual(result.incumbent_win_rate, 0.55)
+        self.assertEqual(result.incumbent_games, 20)
+        checked_names = {check.name for check in result.checks}
+        self.assertIn("incumbent_win_rate:linear-selfplay-test-iter-0000", checked_names)
+        self.assertNotIn("benchmark_win_rate:linear-selfplay-test-iter-0000", checked_names)
+
+    def test_gate_fails_when_incumbent_benchmark_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, selfplay_manifest())
+
+            result = evaluate_promotion_gate(
+                manifest_path,
+                config=PromotionGateConfig(
+                    min_benchmark_games=20,
+                    max_collection_capped_rate=0.20,
+                    incumbent_policy_id="linear-selfplay-test-iter-0000",
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn(
+            "incumbent_benchmark_opponent:linear-selfplay-test-iter-0000",
+            failed_check_names(result),
+        )
+
     def test_bootstrap_manifest_checks_teacher_degradation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "manifest.json"
@@ -237,6 +290,41 @@ class PromotionGateTest(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
+
+    def test_eval_cli_gate_wires_incumbent_policy(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["benchmark"] = benchmark_payload(
+            policy_id="linear-selfplay-test-iter-0001",
+            rows=(
+                ("random-legal", 13, 7, 0),
+                ("linear-selfplay-test-iter-0000", 11, 9, 0),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "gate",
+                        str(manifest_path),
+                        "--min-benchmark-win-rate",
+                        "0.60",
+                        "--min-incumbent-win-rate",
+                        "0.55",
+                        "--min-benchmark-games",
+                        "20",
+                        "--max-collection-capped-rate",
+                        "0.20",
+                        "--incumbent-policy",
+                        "linear-selfplay-test-iter-0000",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("mode: absolute_floor+incumbent_delta", stdout.getvalue())
+        self.assertIn("incumbent_win_rate: 0.550", stdout.getvalue())
 
 
 def selfplay_manifest() -> dict:

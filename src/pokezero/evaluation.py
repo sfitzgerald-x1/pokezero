@@ -14,6 +14,7 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
 DEFAULT_MIN_BENCHMARK_WIN_RATE = 0.55
+DEFAULT_MIN_INCUMBENT_WIN_RATE = 0.55
 DEFAULT_MIN_BENCHMARK_GAMES = 50
 DEFAULT_MAX_COLLECTION_CAPPED_RATE = 0.10
 DEFAULT_MAX_BENCHMARK_CAPPED_RATE = 0.10
@@ -23,6 +24,7 @@ DEFAULT_MAX_TEACHER_DEGRADATION_RATE = 0.0
 @dataclass(frozen=True)
 class PromotionGateConfig:
     min_benchmark_win_rate: float = DEFAULT_MIN_BENCHMARK_WIN_RATE
+    min_incumbent_win_rate: float = DEFAULT_MIN_INCUMBENT_WIN_RATE
     min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
     max_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
     max_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
@@ -30,12 +32,14 @@ class PromotionGateConfig:
     require_benchmark: bool = True
     required_benchmark_opponents: tuple[str, ...] = ()
     opponent_min_win_rates: Mapping[str, float] = field(default_factory=dict)
+    incumbent_policy_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.min_benchmark_games < 0:
             raise ValueError("min_benchmark_games must be non-negative.")
         for field_name in (
             "min_benchmark_win_rate",
+            "min_incumbent_win_rate",
             "max_collection_capped_rate",
             "max_benchmark_capped_rate",
             "max_teacher_degradation_rate",
@@ -48,6 +52,8 @@ class PromotionGateConfig:
                 raise ValueError("opponent_min_win_rates keys must be non-empty.")
             if not 0.0 <= float(threshold) <= 1.0:
                 raise ValueError("opponent-specific win-rate thresholds must be between 0 and 1.")
+        if self.incumbent_policy_id is not None and not self.incumbent_policy_id.strip():
+            raise ValueError("incumbent_policy_id must be non-empty when set.")
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,10 @@ class PromotionGateResult:
     benchmark_capped_rate: float | None
     benchmark_games: int
     benchmark_opponents: tuple["PromotionBenchmarkOpponentResult", ...]
+    incumbent_policy_id: str | None
+    incumbent_win_rate: float | None
+    incumbent_games: int
+    incumbent_capped_rate: float | None
     teacher_degradation_rate: float | None
     checks: tuple[PromotionGateCheck, ...]
 
@@ -101,6 +111,10 @@ class PromotionGateResult:
             "benchmark_capped_rate": self.benchmark_capped_rate,
             "benchmark_games": self.benchmark_games,
             "benchmark_opponents": [opponent.to_dict() for opponent in self.benchmark_opponents],
+            "incumbent_policy_id": self.incumbent_policy_id,
+            "incumbent_win_rate": self.incumbent_win_rate,
+            "incumbent_games": self.incumbent_games,
+            "incumbent_capped_rate": self.incumbent_capped_rate,
             "teacher_degradation_rate": self.teacher_degradation_rate,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
@@ -149,6 +163,8 @@ def evaluate_promotion_gate(
         raise ValueError(f"Unsupported experiment manifest schema: {source_type!r}.")
 
     benchmark = _benchmark_summary(candidate.benchmark, candidate.policy_id)
+    incumbent_policy_id = config.incumbent_policy_id.strip() if config.incumbent_policy_id is not None else None
+    incumbent_opponent = _benchmark_opponent_for_policy_id(benchmark.opponents, incumbent_policy_id)
     checks: list[PromotionGateCheck] = [
         _threshold_check(
             name="collection_capped_rate",
@@ -169,6 +185,7 @@ def evaluate_promotion_gate(
         gated_opponents = _gated_benchmark_opponents(
             benchmark.opponents,
             required_opponents=config.required_benchmark_opponents,
+            excluded_opponents=(incumbent_policy_id,) if incumbent_policy_id is not None else (),
         )
         for missing_opponent in _missing_benchmark_opponents(
             benchmark.opponents,
@@ -230,6 +247,37 @@ def evaluate_promotion_gate(
             )
         )
 
+    if incumbent_policy_id is not None:
+        if incumbent_opponent is None:
+            checks.append(
+                PromotionGateCheck(
+                    name=f"incumbent_benchmark_opponent:{incumbent_policy_id}",
+                    passed=False,
+                    observed=None,
+                    threshold="required",
+                    message=f"incumbent benchmark opponent is missing: {incumbent_policy_id}",
+                )
+            )
+        else:
+            checks.append(
+                PromotionGateCheck(
+                    name=f"incumbent_benchmark_games:{incumbent_policy_id}",
+                    passed=incumbent_opponent.games >= config.min_benchmark_games,
+                    observed=incumbent_opponent.games,
+                    threshold=config.min_benchmark_games,
+                    message="incumbent benchmark has enough games",
+                )
+            )
+            checks.append(
+                _threshold_check(
+                    name=f"incumbent_win_rate:{incumbent_policy_id}",
+                    observed=incumbent_opponent.win_rate,
+                    threshold=config.min_incumbent_win_rate,
+                    passed=incumbent_opponent.win_rate >= config.min_incumbent_win_rate,
+                    message="candidate win rate clears incumbent promotion floor",
+                )
+            )
+
     if candidate.teacher_degradation_rate is not None:
         checks.append(
             _threshold_check(
@@ -242,7 +290,7 @@ def evaluate_promotion_gate(
         )
 
     return PromotionGateResult(
-        gate_mode="absolute_floor",
+        gate_mode="absolute_floor+incumbent_delta" if incumbent_policy_id is not None else "absolute_floor",
         source_type=source_type,
         manifest_path=manifest_path,
         candidate_policy_id=candidate.policy_id,
@@ -261,6 +309,10 @@ def evaluate_promotion_gate(
             )
             for opponent in benchmark.opponents
         ),
+        incumbent_policy_id=incumbent_policy_id,
+        incumbent_win_rate=incumbent_opponent.win_rate if incumbent_opponent is not None else None,
+        incumbent_games=incumbent_opponent.games if incumbent_opponent is not None else 0,
+        incumbent_capped_rate=incumbent_opponent.capped_rate if incumbent_opponent is not None else None,
         teacher_degradation_rate=candidate.teacher_degradation_rate,
         checks=tuple(checks),
     )
@@ -302,6 +354,10 @@ class _BenchmarkOpponentSummary:
     @property
     def win_rate(self) -> float:
         return self.wins / self.games if self.games else 0.0
+
+    @property
+    def capped_rate(self) -> float:
+        return self.capped_games / self.games if self.games else 0.0
 
 
 def _candidate_from_selfplay_manifest(manifest: Mapping[str, Any]) -> _CandidateManifest:
@@ -441,11 +497,17 @@ def _gated_benchmark_opponents(
     opponents: tuple[_BenchmarkOpponentSummary, ...],
     *,
     required_opponents: tuple[str, ...],
+    excluded_opponents: tuple[str, ...] = (),
 ) -> tuple[_BenchmarkOpponentSummary, ...]:
+    excluded = set(excluded_opponents)
     if not required_opponents:
-        return opponents
+        return tuple(opponent for opponent in opponents if opponent.opponent_policy_id not in excluded)
     required = set(required_opponents)
-    return tuple(opponent for opponent in opponents if opponent.opponent_policy_id in required)
+    return tuple(
+        opponent
+        for opponent in opponents
+        if opponent.opponent_policy_id in required and opponent.opponent_policy_id not in excluded
+    )
 
 
 def _missing_benchmark_opponents(
@@ -457,6 +519,18 @@ def _missing_benchmark_opponents(
         return ()
     seen = {opponent.opponent_policy_id for opponent in opponents}
     return tuple(opponent for opponent in required_opponents if opponent not in seen)
+
+
+def _benchmark_opponent_for_policy_id(
+    opponents: tuple[_BenchmarkOpponentSummary, ...],
+    policy_id: str | None,
+) -> _BenchmarkOpponentSummary | None:
+    if policy_id is None:
+        return None
+    for opponent in opponents:
+        if opponent.opponent_policy_id == policy_id:
+            return opponent
+    return None
 
 
 def _threshold_check(
