@@ -17,6 +17,7 @@ pokezero-linear = "pokezero.linear_cli:main"
 pokezero-rollout = "pokezero.rollout_cli:main"
 pokezero-selfplay = "pokezero.selfplay_cli:main"
 pokezero-bootstrap = "pokezero.bootstrap_cli:main"
+pokezero-eval = "pokezero.eval_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

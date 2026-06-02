@@ -57,6 +57,16 @@ from .dataset import (
     training_batch_from_examples,
 )
 from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
+from .evaluation import (
+    DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
+    DEFAULT_MAX_COLLECTION_CAPPED_RATE,
+    DEFAULT_MAX_TEACHER_DEGRADATION_RATE,
+    DEFAULT_MIN_BENCHMARK_WIN_RATE,
+    PromotionGateCheck,
+    PromotionGateConfig,
+    PromotionGateResult,
+    evaluate_promotion_gate,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .linear_policy import (
     LINEAR_FEATURE_SCHEMA_VERSION,
@@ -110,6 +120,10 @@ __all__ = [
     "CollectionMetrics",
     "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
     "DEFAULT_BENCHMARK_GAMES",
+    "DEFAULT_MAX_BENCHMARK_CAPPED_RATE",
+    "DEFAULT_MAX_COLLECTION_CAPPED_RATE",
+    "DEFAULT_MAX_TEACHER_DEGRADATION_RATE",
+    "DEFAULT_MIN_BENCHMARK_WIN_RATE",
     "DEFAULT_PREFLIGHT_GAMES",
     "DEFAULT_PREFLIGHT_SEED_START",
     "MOVE_ACTION_COUNT",
@@ -136,6 +150,9 @@ __all__ = [
     "PlayerRelativePublicEvent",
     "PlayerBeliefView",
     "PokemonSetSource",
+    "PromotionGateCheck",
+    "PromotionGateConfig",
+    "PromotionGateResult",
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
     "RolloutRecord",
@@ -163,6 +180,7 @@ __all__ = [
     "detect_showdown_slot",
     "examples_from_record",
     "evaluate_linear_policy",
+    "evaluate_promotion_gate",
     "features_from_example",
     "is_move_action",
     "is_switch_action",

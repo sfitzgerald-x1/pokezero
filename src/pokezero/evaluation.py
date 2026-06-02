@@ -1,0 +1,343 @@
+"""Promotion gate helpers for experiment manifests."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable as IterableABC
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
+from .bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
+from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
+
+
+DEFAULT_MIN_BENCHMARK_WIN_RATE = 0.55
+DEFAULT_MAX_COLLECTION_CAPPED_RATE = 0.10
+DEFAULT_MAX_BENCHMARK_CAPPED_RATE = 0.10
+DEFAULT_MAX_TEACHER_DEGRADATION_RATE = 0.0
+
+
+@dataclass(frozen=True)
+class PromotionGateConfig:
+    min_benchmark_win_rate: float = DEFAULT_MIN_BENCHMARK_WIN_RATE
+    max_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
+    max_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
+    max_teacher_degradation_rate: float = DEFAULT_MAX_TEACHER_DEGRADATION_RATE
+    require_benchmark: bool = True
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "min_benchmark_win_rate",
+            "max_collection_capped_rate",
+            "max_benchmark_capped_rate",
+            "max_teacher_degradation_rate",
+        ):
+            value = float(getattr(self, field_name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{field_name} must be between 0 and 1.")
+
+
+@dataclass(frozen=True)
+class PromotionGateCheck:
+    name: str
+    passed: bool
+    observed: float | int | str | None
+    threshold: float | int | str | None
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "observed": self.observed,
+            "threshold": self.threshold,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
+class PromotionGateResult:
+    source_type: str
+    manifest_path: Path
+    candidate_policy_id: str | None
+    checkpoint_path: str | None
+    source_iteration: int | None
+    collection_capped_rate: float | None
+    benchmark_win_rate: float | None
+    benchmark_capped_rate: float | None
+    benchmark_games: int
+    teacher_degradation_rate: float | None
+    checks: tuple[PromotionGateCheck, ...]
+
+    @property
+    def passed(self) -> bool:
+        return all(check.passed for check in self.checks)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_type": self.source_type,
+            "manifest_path": str(self.manifest_path),
+            "candidate_policy_id": self.candidate_policy_id,
+            "checkpoint_path": self.checkpoint_path,
+            "source_iteration": self.source_iteration,
+            "collection_capped_rate": self.collection_capped_rate,
+            "benchmark_win_rate": self.benchmark_win_rate,
+            "benchmark_capped_rate": self.benchmark_capped_rate,
+            "benchmark_games": self.benchmark_games,
+            "teacher_degradation_rate": self.teacher_degradation_rate,
+            "passed": self.passed,
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+def evaluate_promotion_gate(
+    path: Path,
+    *,
+    config: PromotionGateConfig = PromotionGateConfig(),
+) -> PromotionGateResult:
+    manifest_path = _manifest_path(path)
+    manifest = _load_manifest(manifest_path)
+    source_type = str(manifest.get("schema_version") or "")
+    if source_type == SELFPLAY_RUN_SCHEMA_VERSION:
+        candidate = _candidate_from_selfplay_manifest(manifest)
+    elif source_type == TEACHER_BOOTSTRAP_SCHEMA_VERSION:
+        candidate = _candidate_from_bootstrap_manifest(manifest)
+    else:
+        raise ValueError(f"Unsupported experiment manifest schema: {source_type!r}.")
+
+    benchmark = _benchmark_summary(candidate.benchmark, candidate.policy_id)
+    checks: list[PromotionGateCheck] = [
+        _threshold_check(
+            name="collection_capped_rate",
+            observed=candidate.collection_capped_rate,
+            threshold=config.max_collection_capped_rate,
+            passed=(
+                candidate.collection_capped_rate is not None
+                and candidate.collection_capped_rate <= config.max_collection_capped_rate
+            ),
+            message=(
+                "collection capped-game rate is within limit"
+                if candidate.collection_capped_rate is not None
+                else "collection capped-game rate is unavailable"
+            ),
+        )
+    ]
+    if benchmark.games:
+        checks.extend(
+            (
+                _threshold_check(
+                    name="benchmark_win_rate",
+                    observed=benchmark.win_rate,
+                    threshold=config.min_benchmark_win_rate,
+                    passed=benchmark.win_rate >= config.min_benchmark_win_rate,
+                    message="benchmark win rate meets promotion floor",
+                ),
+                _threshold_check(
+                    name="benchmark_capped_rate",
+                    observed=benchmark.capped_rate,
+                    threshold=config.max_benchmark_capped_rate,
+                    passed=benchmark.capped_rate <= config.max_benchmark_capped_rate,
+                    message="benchmark capped-game rate is within limit",
+                ),
+            )
+        )
+    elif config.require_benchmark:
+        checks.append(
+            PromotionGateCheck(
+                name="benchmark_available",
+                passed=False,
+                observed=None,
+                threshold="required",
+                message="benchmark evidence is required for promotion",
+            )
+        )
+
+    if candidate.teacher_degradation_rate is not None:
+        checks.append(
+            _threshold_check(
+                name="teacher_degradation_rate",
+                observed=candidate.teacher_degradation_rate,
+                threshold=config.max_teacher_degradation_rate,
+                passed=candidate.teacher_degradation_rate <= config.max_teacher_degradation_rate,
+                message="teacher degradation rate is within limit",
+            )
+        )
+
+    return PromotionGateResult(
+        source_type=source_type,
+        manifest_path=manifest_path,
+        candidate_policy_id=candidate.policy_id,
+        checkpoint_path=candidate.checkpoint_path,
+        source_iteration=candidate.iteration,
+        collection_capped_rate=candidate.collection_capped_rate,
+        benchmark_win_rate=benchmark.win_rate if benchmark.games else None,
+        benchmark_capped_rate=benchmark.capped_rate if benchmark.games else None,
+        benchmark_games=benchmark.games,
+        teacher_degradation_rate=candidate.teacher_degradation_rate,
+        checks=tuple(checks),
+    )
+
+
+@dataclass(frozen=True)
+class _CandidateManifest:
+    policy_id: str | None
+    checkpoint_path: str | None
+    iteration: int | None
+    collection_capped_rate: float | None
+    benchmark: Mapping[str, Any] | None
+    teacher_degradation_rate: float | None
+
+
+@dataclass(frozen=True)
+class _BenchmarkSummary:
+    wins: int
+    games: int
+    capped_games: int
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.games if self.games else 0.0
+
+    @property
+    def capped_rate(self) -> float:
+        return self.capped_games / self.games if self.games else 0.0
+
+
+def _candidate_from_selfplay_manifest(manifest: Mapping[str, Any]) -> _CandidateManifest:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        raise ValueError("self-play run manifest contains no iterations.")
+    latest = iterations[-1]
+    training = _mapping(latest.get("training", {}))
+    model = _mapping(training.get("model", {}))
+    return _CandidateManifest(
+        policy_id=_optional_str(model.get("policy_id")),
+        checkpoint_path=_optional_str(latest.get("checkpoint_path")),
+        iteration=int(latest.get("iteration", 0)),
+        collection_capped_rate=_capped_rate(_mapping(latest.get("collection_metrics", {}))),
+        benchmark=_optional_mapping(latest.get("benchmark")),
+        teacher_degradation_rate=None,
+    )
+
+
+def _candidate_from_bootstrap_manifest(manifest: Mapping[str, Any]) -> _CandidateManifest:
+    training = _mapping(manifest.get("training", {}))
+    model = _mapping(training.get("model", {}))
+    return _CandidateManifest(
+        policy_id=_optional_str(model.get("policy_id")),
+        checkpoint_path=_optional_str(manifest.get("checkpoint_path")),
+        iteration=None,
+        collection_capped_rate=_capped_rate(_mapping(manifest.get("train_collection_metrics", {}))),
+        benchmark=_optional_mapping(manifest.get("benchmark")),
+        teacher_degradation_rate=_teacher_degradation_rate(manifest.get("teacher_decision_summary")),
+    )
+
+
+def _benchmark_summary(benchmark: Mapping[str, Any] | None, policy_id: str | None) -> _BenchmarkSummary:
+    if benchmark is None or not policy_id:
+        return _BenchmarkSummary(wins=0, games=0, capped_games=0)
+    wins = 0
+    games = 0
+    capped_games = 0
+    for result in tuple(_mapping(result) for result in _sequence(benchmark.get("head_to_heads", ()))):
+        result_games = int(result.get("games", 0))
+        if result.get("first_policy_id") == policy_id:
+            wins += int(result.get("first_policy_wins", 0))
+            games += result_games
+            capped_games += int(result.get("capped_games", 0))
+        elif result.get("second_policy_id") == policy_id:
+            wins += int(result.get("second_policy_wins", 0))
+            games += result_games
+            capped_games += int(result.get("capped_games", 0))
+    if games:
+        return _BenchmarkSummary(wins=wins, games=games, capped_games=capped_games)
+
+    for result in tuple(_mapping(result) for result in _sequence(benchmark.get("matchups", ()))):
+        metrics = _mapping(result.get("metrics", {}))
+        result_games = int(metrics.get("games", 0))
+        if result.get("p1_policy_id") == policy_id:
+            wins += int(metrics.get("p1_wins", 0))
+            games += result_games
+            capped_games += int(metrics.get("capped_games", 0))
+        elif result.get("p2_policy_id") == policy_id:
+            wins += int(metrics.get("p2_wins", 0))
+            games += result_games
+            capped_games += int(metrics.get("capped_games", 0))
+    return _BenchmarkSummary(wins=wins, games=games, capped_games=capped_games)
+
+
+def _threshold_check(
+    *,
+    name: str,
+    observed: float | None,
+    threshold: float,
+    passed: bool,
+    message: str,
+) -> PromotionGateCheck:
+    return PromotionGateCheck(
+        name=name,
+        passed=passed,
+        observed=observed,
+        threshold=threshold,
+        message=message,
+    )
+
+
+def _manifest_path(path: Path) -> Path:
+    resolved = path.expanduser()
+    if resolved.is_dir():
+        resolved = resolved / "manifest.json"
+    if not resolved.exists():
+        raise FileNotFoundError(f"Experiment manifest does not exist: {resolved}")
+    if not resolved.is_file():
+        raise ValueError(f"Experiment manifest path must be a file: {resolved}")
+    return resolved
+
+
+def _load_manifest(path: Path) -> Mapping[str, Any]:
+    return _mapping(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _capped_rate(metrics: Mapping[str, Any]) -> float | None:
+    games = int(metrics.get("games", 0))
+    if games <= 0:
+        return None
+    return int(metrics.get("capped_games", 0)) / games
+
+
+def _teacher_degradation_rate(value: Any) -> float | None:
+    if value is None:
+        return None
+    summary = _mapping(value)
+    decisions = int(summary.get("scripted_teacher_decisions", 0))
+    if decisions <= 0:
+        decisions = int(summary.get("total_decisions", 0))
+    if decisions <= 0:
+        return None
+    degraded = int(summary.get("unknown_move_decisions", 0)) + int(summary.get("fallback_decisions", 0))
+    return degraded / decisions
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected JSON object payload.")
+    return value
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    return _mapping(value)
+
+
+def _sequence(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, IterableABC):
+        raise ValueError("expected JSON array payload.")
+    return tuple(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)

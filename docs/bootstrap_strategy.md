@@ -146,6 +146,17 @@ Inspect the run:
 python -m pokezero.selfplay_cli report --run-dir runs/bootstrap-selfplay
 ```
 
+Gate a candidate before promotion:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
+  --min-benchmark-win-rate 0.55 \
+  --max-collection-capped-rate 0.10 \
+  --max-benchmark-capped-rate 0.10
+```
+
+The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, aggregates the candidate policy's benchmark win rate, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs.
+
 Collect initial teacher data directly from the local Showdown harness:
 
 ```bash
@@ -161,6 +172,6 @@ python -m pokezero.rollout_cli collect \
 
 - What source should be the first bootstrap corpus?
 - Is `--capped-terminal-value -0.25` enough pressure, or should capped games become a stronger double-loss or explicit stall penalty?
-- What benchmark win-rate delta should promote a checkpoint?
+- What benchmark win-rate delta should promote a checkpoint in longer runs?
 - How much imported data is needed before self-play fine-tuning is useful?
 - Should bootstrap data continue to mix into later self-play training, or only initialize the first checkpoint?
