@@ -101,6 +101,21 @@ The default `behavior-cloning` objective can only imitate the data source. Train
 
 ## Self-Play Iteration Harness
 
+Generate a scripted-teacher bootstrap checkpoint in one command:
+
+```bash
+python -m pokezero.bootstrap_cli teacher \
+  --run-dir runs/scripted-teacher-bootstrap \
+  --train-games 1000 \
+  --validation-games 200 \
+  --workers 4 \
+  --showdown-root /path/to/pokemon-showdown \
+  --window-size 4 \
+  --benchmark-games 50
+```
+
+The bootstrap workflow writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, and `manifest.json`. It is the preferred way to seed the first checkpoint from the scripted teacher before moving into self-play.
+
 Run the first linear-policy collect/train/evaluate loop:
 
 ```bash

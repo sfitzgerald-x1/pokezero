@@ -21,6 +21,11 @@ from .belief import (
     PublicBattleBeliefEngine,
     RevealedPokemonBelief,
 )
+from .bootstrap import (
+    TEACHER_BOOTSTRAP_SCHEMA_VERSION,
+    TeacherBootstrapResult,
+    run_teacher_bootstrap,
+)
 from .collection import (
     CollectionMetrics,
     RolloutRecord,
@@ -136,8 +141,10 @@ __all__ = [
     "ShowdownDex",
     "ScriptedTeacherPolicy",
     "SpeciesInfo",
+    "TEACHER_BOOTSTRAP_SCHEMA_VERSION",
     "StepResult",
     "TerminalState",
+    "TeacherBootstrapResult",
     "TrajectoryDatasetConfig",
     "TrajectoryExample",
     "TrainingBatch",
@@ -170,6 +177,7 @@ __all__ = [
     "rollout_record_from_dict",
     "rollout_record_to_dict",
     "run_selfplay_iterations",
+    "run_teacher_bootstrap",
     "save_linear_model",
     "showdown_choice_for_action",
     "showdown_submission_for_action",

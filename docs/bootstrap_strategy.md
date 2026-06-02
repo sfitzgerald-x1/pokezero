@@ -71,6 +71,37 @@ Replay import remains valuable after a randbat replay source is identified. It s
 
 ## Supported Command Shape
 
+Generate the initial scripted-teacher bootstrap checkpoint in one command:
+
+```bash
+python -m pokezero.bootstrap_cli teacher \
+  --run-dir runs/scripted-teacher-bootstrap \
+  --train-games 1000 \
+  --validation-games 200 \
+  --workers 4 \
+  --showdown-root /path/to/pokemon-showdown \
+  --window-size 4 \
+  --benchmark-games 50
+```
+
+This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, optional baseline benchmark results, and `manifest.json`.
+
+Use the generated checkpoint as the first self-play policy:
+
+```bash
+python -m pokezero.selfplay_cli iterate \
+  --run-dir runs/bootstrap-selfplay \
+  --initial-policy linear:runs/scripted-teacher-bootstrap/linear-bootstrap.json \
+  --validation-data runs/scripted-teacher-bootstrap/validation-rollouts.jsonl \
+  --iterations 5 \
+  --games-per-iteration 200 \
+  --workers 4 \
+  --evaluation-games 50 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+The manual two-step path remains useful when a custom corpus has already been collected.
+
 Train a bootstrap checkpoint from offline data:
 
 ```bash
