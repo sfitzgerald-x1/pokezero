@@ -146,7 +146,7 @@ python -m pokezero.selfplay_cli iterate \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-With `--auto-promote`, each iteration evaluates the same promotion gate used by `eval_cli promote` after the benchmark is written. Passing checkpoints are recorded in `--promotion-registry`, copied into `--promotion-artifact-dir` when supplied, and become eligible historical opponents for later iterations in the same run.
+With `--auto-promote`, each iteration evaluates the same promotion gate used by `eval_cli promote` after the benchmark is written. Passing checkpoints are recorded in `--promotion-registry`, copied into `--promotion-artifact-dir` when supplied, and become eligible historical opponents for later iterations in the same run. `--allow-missing-benchmark` bypasses the win-rate signal in this path too, so reserve it for smoke runs.
 
 Inspect the run:
 

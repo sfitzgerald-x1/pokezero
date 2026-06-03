@@ -421,6 +421,70 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_two_manifest["promotion"]["recorded"], True)
         self.assertEqual(iteration_two_manifest["promotion"]["gate_result"]["incumbent_policy_id"], "linear-selfplay-test-iter-0001")
 
+    def test_run_selfplay_iterations_auto_promotion_benchmarks_frozen_registry_champion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            champion_checkpoint_path = temp_path / "champion-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                champion_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-champion",
+                ),
+            )
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(champion_checkpoint_path,),
+                policy_ids=("linear-champion",),
+            )
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                fixed_opponent_policy_specs=("random-legal",),
+                max_historical_opponents=2,
+                evaluation_games=1,
+                promotion_registry_path=registry_path,
+                auto_promotion_config=SelfPlayPromotionConfig(
+                    registry_path=registry_path,
+                    gate_config=PromotionGateConfig(
+                        min_benchmark_win_rate=0.0,
+                        min_incumbent_win_rate=0.0,
+                        min_benchmark_games=0,
+                        min_incumbent_games=0,
+                        max_collection_capped_rate=1.0,
+                        max_benchmark_capped_rate=1.0,
+                        max_incumbent_capped_rate=1.0,
+                        min_incumbent_win_rate_lower_bound=0.0,
+                        required_benchmark_opponents=("missing-opponent",),
+                    ),
+                ),
+            )
+
+        second_promotion = result.iterations[1].promotion
+        failed_checks = {
+            check["name"]
+            for check in second_promotion.gate_result.to_dict()["checks"]
+            if not check["passed"]
+        } if second_promotion else set()
+        self.assertFalse(second_promotion.recorded if second_promotion else True)
+        self.assertEqual(second_promotion.gate_result.incumbent_policy_id if second_promotion else None, "linear-champion")
+        self.assertGreater(second_promotion.gate_result.incumbent_games if second_promotion else 0, 0)
+        self.assertNotIn("incumbent_benchmark_opponent:linear-champion", failed_checks)
+        self.assertIn("benchmark_opponent:missing-opponent", failed_checks)
+
     def test_run_selfplay_iterations_rejects_missing_validation_data_before_collection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -852,11 +916,17 @@ def normalized_record_payloads(path: Path) -> tuple[dict, ...]:
     return tuple(payloads)
 
 
-def write_promotion_registry(path: Path, *, checkpoint_paths: tuple[Path, ...]) -> None:
+def write_promotion_registry(
+    path: Path,
+    *,
+    checkpoint_paths: tuple[Path, ...],
+    policy_ids: tuple[str, ...] | None = None,
+) -> None:
+    entry_policy_ids = policy_ids or tuple(f"linear-promoted-{index}" for index in range(1, len(checkpoint_paths) + 1))
     entries = [
         {
             "sequence": index,
-            "policy_id": f"linear-promoted-{index}",
+            "policy_id": entry_policy_ids[index - 1],
             "checkpoint_path": str(checkpoint_path),
             "manifest_path": f"runs/promoted-{index}/manifest.json",
             "source_type": SELFPLAY_RUN_SCHEMA_VERSION,

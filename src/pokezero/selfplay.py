@@ -253,9 +253,13 @@ def run_selfplay_iterations(
         save_linear_model(checkpoint_path, training.model)
         benchmark = None
         if evaluation_games:
+            benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
+                fallback_policy_spec=current_policy_spec,
+                promotion_config=auto_promotion_config,
+            )
             benchmark = _benchmark_checkpoint(
                 model_policy=LinearSoftmaxPolicy(model=training.model),
-                incumbent_policy_spec=current_policy_spec,
+                incumbent_policy_spec=benchmark_incumbent_policy_spec,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
@@ -281,6 +285,8 @@ def run_selfplay_iterations(
         _write_json(manifest_path, result.to_manifest_dict())
         results.append(result)
         run_manifest_path = run_dir / "manifest.json"
+        # The promotion gate consumes the top-level run-manifest shape, not the
+        # per-iteration manifest, so write it before evaluating auto-promotion.
         _write_json(
             run_manifest_path,
             SelfPlayRunResult(
@@ -521,17 +527,30 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
     return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
 
 
+def _benchmark_incumbent_policy_spec(
+    *,
+    fallback_policy_spec: str,
+    promotion_config: SelfPlayPromotionConfig | None,
+) -> str:
+    if promotion_config is None:
+        return fallback_policy_spec
+    entry = _promotion_incumbent_entry(promotion_config)
+    if entry is None or not entry.checkpoint_path:
+        return fallback_policy_spec
+    return f"linear:{entry.checkpoint_path}"
+
+
 def _record_auto_promotion(
     *,
     manifest_path: Path,
     promotion_config: SelfPlayPromotionConfig,
     iteration: int,
 ) -> "PromotionRecordResult":
-    from .promotion import load_promotion_registry, record_promotion
+    from .promotion import record_promotion
 
     gate_config = promotion_config.gate_config
     if gate_config.incumbent_policy_id is None:
-        latest = load_promotion_registry(promotion_config.registry_path).latest
+        latest = _promotion_incumbent_entry(promotion_config)
         if latest is not None and latest.policy_id:
             gate_config = replace(gate_config, incumbent_policy_id=latest.policy_id)
     label = (
@@ -548,6 +567,19 @@ def _record_auto_promotion(
         artifact_dir=promotion_config.artifact_dir,
         allow_duplicate=promotion_config.allow_duplicate,
     )
+
+
+def _promotion_incumbent_entry(promotion_config: SelfPlayPromotionConfig):
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
+    incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
+    if incumbent_policy_id is None:
+        return registry.latest
+    for entry in reversed(registry.entries):
+        if entry.policy_id == incumbent_policy_id:
+            return entry
+    return None
 
 
 def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | None:

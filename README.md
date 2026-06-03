@@ -139,7 +139,7 @@ Use `--validation-data` to attach one or more held-out rollout JSONL files to ev
 
 Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
 
-With `--auto-promote`, each completed iteration writes its manifest, evaluates the promotion gate, records passing checkpoints in `--promotion-registry`, and optionally copies them into `--promotion-artifact-dir`. Later iterations in the same run use newly promoted checkpoints as historical opponents when `--promotion-registry` is set. Auto-promotion uses the latest registry entry as the incumbent gate target unless `--incumbent-policy` is supplied.
+With `--auto-promote`, each completed iteration writes its manifest, evaluates the promotion gate, records passing checkpoints in `--promotion-registry`, and optionally copies them into `--promotion-artifact-dir`. Later iterations in the same run use newly promoted checkpoints as historical opponents when `--promotion-registry` is set. Auto-promotion uses the latest registry entry as the incumbent gate target unless `--incumbent-policy` is supplied. `--allow-missing-benchmark` also applies here, but it bypasses win-rate evidence and should only be used for smoke runs.
 
 When reusing teacher bootstrap validation data during self-play, treat it as a teacher-retention regression check. A policy that improves past the teacher may become less teacher-faithful, so promotion still depends on benchmark strength and capped-game health.
 
