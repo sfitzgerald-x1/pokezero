@@ -191,7 +191,7 @@ python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
   --label bootstrap-selfplay-0005
 ```
 
-The registry is append-only by default and embeds the full gate result for each accepted checkpoint. With `--artifact-dir`, promotion copies the accepted checkpoint into a stable artifact directory, records that managed copy as the checkpoint used by later self-play, and preserves the original source checkpoint path for audit. Without `--artifact-dir`, the registry stores references to existing checkpoint files.
+The registry is append-only by default and embeds the full gate result for each accepted checkpoint. With `--artifact-dir`, promotion copies the accepted single-file checkpoint into a stable artifact directory, records that managed copy as the checkpoint used by later self-play, records a SHA-256 checksum, and preserves the original source checkpoint path for audit. The embedded gate result still reflects the source manifest and source checkpoint that were evaluated. Without `--artifact-dir`, the registry stores references to existing checkpoint files.
 
 The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint.
 

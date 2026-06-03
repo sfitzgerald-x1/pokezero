@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -74,6 +75,7 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertTrue(result.recorded)
         self.assertTrue(managed_checkpoint_exists)
+        self.assertEqual(len(result.entry.checkpoint_sha256 if result.entry else ""), 64)
         self.assertEqual(managed_checkpoint_payload["policy_id"], "linear-selfplay-test-iter-0001")
         self.assertEqual(managed_checkpoint_path.parent, artifact_dir)
         self.assertEqual(result.entry.source_checkpoint_path if result.entry else None, "run/iteration-0001/linear-policy.json")
@@ -81,6 +83,34 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(loaded.latest.checkpoint_path if loaded.latest else None, str(managed_checkpoint_path))
         self.assertEqual(loaded.checkpoint_policy_specs(), (f"linear:{managed_checkpoint_path}",))
         self.assertEqual(source_checkpoint_text, managed_checkpoint_text)
+
+    def test_record_promotion_prefers_manifest_relative_checkpoint_over_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with tempfile.TemporaryDirectory() as cwd_dir:
+                temp_path = Path(temp_dir)
+                manifest_path = temp_path / "run" / "manifest.json"
+                registry_path = temp_path / "promotions.json"
+                artifact_dir = temp_path / "promoted-checkpoints"
+                manifest = selfplay_manifest()
+                write_manifest(manifest_path, manifest)
+                write_checkpoint_for_manifest(temp_path, manifest, policy_id="correct-checkpoint")
+                write_checkpoint_for_manifest(Path(cwd_dir), manifest, policy_id="wrong-cwd-checkpoint")
+
+                previous_cwd = Path.cwd()
+                try:
+                    os.chdir(cwd_dir)
+                    result = record_promotion(
+                        manifest_path,
+                        registry_path=registry_path,
+                        artifact_dir=artifact_dir,
+                        config=passing_gate_config(),
+                    )
+                    managed_checkpoint_path = Path(result.entry.checkpoint_path if result.entry else "")
+                    managed_checkpoint_payload = json.loads(managed_checkpoint_path.read_text(encoding="utf-8"))
+                finally:
+                    os.chdir(previous_cwd)
+
+        self.assertEqual(managed_checkpoint_payload["policy_id"], "correct-checkpoint")
 
     def test_record_promotion_does_not_write_failed_gate(self) -> None:
         manifest = selfplay_manifest()
@@ -289,6 +319,7 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["entry"]["source_checkpoint_path"], "run/iteration-0001/linear-policy.json")
+        self.assertEqual(len(payload["entry"]["checkpoint_sha256"]), 64)
         self.assertEqual(managed_checkpoint.parent, artifact_dir)
         self.assertTrue(managed_checkpoint_exists)
 
@@ -360,11 +391,11 @@ def add_benchmark_head_to_head(
     )
 
 
-def write_checkpoint_for_manifest(temp_path: Path, manifest: dict) -> Path:
+def write_checkpoint_for_manifest(temp_path: Path, manifest: dict, *, policy_id: str | None = None) -> Path:
     checkpoint_path = temp_path / str(manifest["latest_checkpoint_path"])
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    policy_id = manifest["iterations"][0]["training"]["model"]["policy_id"]
-    checkpoint_path.write_text(json.dumps({"policy_id": policy_id}, indent=2), encoding="utf-8")
+    checkpoint_policy_id = policy_id or manifest["iterations"][0]["training"]["model"]["policy_id"]
+    checkpoint_path.write_text(json.dumps({"policy_id": checkpoint_policy_id}, indent=2), encoding="utf-8")
     return checkpoint_path
 
 

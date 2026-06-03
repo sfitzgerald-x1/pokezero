@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -27,6 +28,7 @@ class PromotionRegistryEntry:
     notes: str | None
     gate_result: Mapping[str, Any]
     source_checkpoint_path: str | None = None
+    checkpoint_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -43,6 +45,8 @@ class PromotionRegistryEntry:
         }
         if self.source_checkpoint_path is not None:
             payload["source_checkpoint_path"] = self.source_checkpoint_path
+        if self.checkpoint_sha256 is not None:
+            payload["checkpoint_sha256"] = self.checkpoint_sha256
         return payload
 
 
@@ -131,8 +135,11 @@ def record_promotion(
     sequence = len(registry.entries) + 1
     checkpoint_path = gate_result.checkpoint_path
     source_checkpoint_path = None
+    checkpoint_sha256 = None
     if artifact_dir is not None:
-        checkpoint_path = _copy_checkpoint_artifact(
+        # Copy before writing the registry so retries can safely overwrite the same
+        # sequence-named orphan if the later registry write fails.
+        checkpoint_path, checkpoint_sha256 = _copy_checkpoint_artifact(
             gate_result,
             artifact_dir=artifact_dir,
             sequence=sequence,
@@ -150,6 +157,7 @@ def record_promotion(
         notes=notes,
         gate_result=gate_result.to_dict(),
         source_checkpoint_path=source_checkpoint_path,
+        checkpoint_sha256=checkpoint_sha256,
     )
     updated = PromotionRegistry(path=registry.path, entries=(*registry.entries, entry))
     _write_registry(updated)
@@ -175,6 +183,7 @@ def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
         notes=_optional_str(entry.get("notes")),
         gate_result=_mapping(entry.get("gate_result", {})),
         source_checkpoint_path=_optional_str(entry.get("source_checkpoint_path")),
+        checkpoint_sha256=_optional_str(entry.get("checkpoint_sha256")),
     )
 
 
@@ -191,7 +200,7 @@ def _copy_checkpoint_artifact(
     *,
     artifact_dir: Path,
     sequence: int,
-) -> str:
+) -> tuple[str, str]:
     if gate_result.checkpoint_path is None:
         raise ValueError("cannot copy promoted artifact: gate result has no checkpoint path.")
     source_path = _resolve_checkpoint_path(
@@ -200,6 +209,7 @@ def _copy_checkpoint_artifact(
     )
     if source_path is None:
         raise FileNotFoundError(f"Promoted checkpoint does not exist: {gate_result.checkpoint_path}")
+    source_sha256 = _sha256_file(source_path)
     target_dir = artifact_dir.expanduser()
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / _artifact_file_name(
@@ -210,7 +220,9 @@ def _copy_checkpoint_artifact(
     temporary_path = target_path.with_name(f".{target_path.name}.tmp")
     shutil.copy2(source_path, temporary_path)
     temporary_path.replace(target_path)
-    return str(target_path)
+    if _sha256_file(target_path) != source_sha256:
+        raise OSError(f"Promoted checkpoint copy checksum mismatch: {target_path}")
+    return str(target_path), source_sha256
 
 
 def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Path | None:
@@ -218,15 +230,22 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Pa
     candidates = (raw_path,)
     if not raw_path.is_absolute():
         candidates = (
-            raw_path,
-            Path.cwd() / raw_path,
             manifest_path.parent / raw_path,
             manifest_path.parent.parent / raw_path,
+            raw_path,
         )
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _artifact_file_name(*, sequence: int, policy_id: str | None, source_path: Path) -> str:
