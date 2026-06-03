@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from .actions import ACTION_COUNT
 
-OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v0"
+OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v1"
 SHOWDOWN_PLAYER_SLOTS = ("p1", "p2")
 FIELD_TOKEN_COUNT = 1
 SELF_POKEMON_TOKEN_COUNT = 6

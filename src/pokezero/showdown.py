@@ -31,12 +31,15 @@ from .observation import (
     opponent_showdown_slot,
 )
 
-DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(categorical_feature_count=4, numeric_feature_count=7)
+DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(categorical_feature_count=7, numeric_feature_count=12)
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
 CATEGORY_SECONDARY = 1
 CATEGORY_ROLE = 2
 CATEGORY_SLOT = 3
+CATEGORY_BELIEF_ABILITY = 4
+CATEGORY_BELIEF_ITEM = 5
+CATEGORY_BELIEF_MOVE = 6
 NUMERIC_HP_FRACTION = 0
 NUMERIC_ACTIVE = 1
 NUMERIC_LEGAL = 2
@@ -44,6 +47,11 @@ NUMERIC_PRESENT = 3
 NUMERIC_REVEALED_MOVE_COUNT = 4
 NUMERIC_CANDIDATE_SET_COUNT = 5
 NUMERIC_UNCERTAINTY = 6
+NUMERIC_POSSIBLE_ABILITY_COUNT = 7
+NUMERIC_POSSIBLE_ITEM_COUNT = 8
+NUMERIC_POSSIBLE_MOVE_COUNT = 9
+NUMERIC_REVEALED_ABILITY = 10
+NUMERIC_REVEALED_ITEM = 11
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -541,6 +549,13 @@ def _encode_pokemon_tokens(
         belief = _belief_for_species(beliefs_by_species, candidate.species)
         condition = _condition_features(belief.condition if belief is not None else candidate.condition)
         revealed_moves = belief.revealed_moves if belief is not None else ()
+        revealed_ability = belief.revealed_ability if belief is not None else None
+        revealed_item = belief.revealed_item if belief is not None else None
+        possible_abilities = belief.possible_abilities if belief is not None else ()
+        possible_items = belief.possible_items if belief is not None else ()
+        possible_moves = belief.possible_moves if belief is not None else ()
+        ability_feature_values = _known_or_possible_values(revealed_ability, possible_abilities)
+        item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
         uncertainty = belief.uncertainty if belief is not None else 1.0
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
@@ -548,6 +563,21 @@ def _encode_pokemon_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"{role}_slot:{slot_index}")
+        _set_optional_category(
+            categorical_ids[token_index],
+            CATEGORY_BELIEF_ABILITY,
+            _belief_values_category("ability", ability_feature_values),
+        )
+        _set_optional_category(
+            categorical_ids[token_index],
+            CATEGORY_BELIEF_ITEM,
+            _belief_values_category("item", item_feature_values),
+        )
+        _set_optional_category(
+            categorical_ids[token_index],
+            CATEGORY_BELIEF_MOVE,
+            _belief_values_category("possible_moves", possible_moves),
+        )
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 0.0 if condition.fainted else 1.0)
@@ -555,6 +585,11 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_MOVE_COUNT, float(len(revealed_moves)))
         _set_numeric(numeric_features[token_index], NUMERIC_CANDIDATE_SET_COUNT, float(candidate_set_count or 0))
         _set_numeric(numeric_features[token_index], NUMERIC_UNCERTAINTY, uncertainty)
+        _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_ABILITY_COUNT, float(len(ability_feature_values)))
+        _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_ITEM_COUNT, float(len(item_feature_values)))
+        _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_MOVE_COUNT, float(len(possible_moves)))
+        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ABILITY, 1.0 if revealed_ability else 0.0)
+        _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
 
 
 def _encode_action_tokens(
@@ -616,6 +651,7 @@ def _encode_recent_event_tokens(
 
 
 def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
+    opponent_beliefs = state.belief_view.opponent_by_species()
     return {
         "battle_id": state.battle_id,
         "player_id": state.player_id,
@@ -623,9 +659,18 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "showdown_slot": state.perspective.showdown_slot,
         "opponent_showdown_slot": state.perspective.opponent_showdown_slot,
         "self_active": _pokemon_metadata(state.self_active),
-        "opponent_active": _pokemon_metadata(state.opponent_active),
+        "opponent_active": _pokemon_metadata(
+            state.opponent_active,
+            belief=_belief_for_species(opponent_beliefs, state.opponent_active.species)
+            if state.opponent_active is not None
+            else None,
+        ),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],
-        "opponent_team": [_pokemon_metadata(pokemon) for pokemon in state.opponent_team],
+        "opponent_team": [
+            _pokemon_metadata(pokemon, belief=_belief_for_species(opponent_beliefs, pokemon.species))
+            for pokemon in state.opponent_team
+        ],
+        "belief": _belief_view_metadata(state.belief_view),
         "action_candidates": _action_candidate_metadata(state),
         "recent_public_events": list(state.recent_public_events),
     }
@@ -674,11 +719,15 @@ def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[st
     return candidates
 
 
-def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
+def _pokemon_metadata(
+    pokemon: ShowdownPokemon | None,
+    *,
+    belief: RevealedPokemonBelief | None = None,
+) -> dict[str, Any] | None:
     if pokemon is None:
         return None
     condition = _condition_features(pokemon.condition)
-    return {
+    payload: dict[str, Any] = {
         "ident": pokemon.ident,
         "showdown_slot": pokemon.showdown_slot,
         "species": pokemon.species,
@@ -688,6 +737,37 @@ def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
         "fainted": condition.fainted,
         "active": pokemon.active,
         "details": pokemon.details,
+    }
+    if belief is not None:
+        payload["belief"] = _belief_metadata(belief)
+    return payload
+
+
+def _belief_view_metadata(view: PlayerBeliefView) -> dict[str, Any]:
+    return {
+        "self_slot": view.self_slot,
+        "opponent_slot": view.opponent_slot,
+        "opponent_pokemon": [_belief_metadata(pokemon) for pokemon in view.opponent_pokemon],
+    }
+
+
+def _belief_metadata(belief: RevealedPokemonBelief) -> dict[str, Any]:
+    return {
+        "species": belief.species,
+        "showdown_slot": belief.showdown_slot,
+        "condition": belief.condition,
+        "status": belief.status,
+        "active": belief.active,
+        "revealed_moves": list(belief.revealed_moves),
+        "revealed_ability": belief.revealed_ability,
+        "revealed_item": belief.revealed_item,
+        "ruled_out_abilities": list(belief.ruled_out_abilities),
+        "candidate_set_count": belief.candidate_set_count,
+        "uncertainty": belief.uncertainty,
+        "possible_abilities": list(belief.possible_abilities),
+        "possible_items": list(belief.possible_items),
+        "possible_moves": list(belief.possible_moves),
+        "evidence": [item.to_payload() for item in belief.evidence],
     }
 
 
@@ -719,9 +799,44 @@ def _set_category(row: list[int], index: int, value: str) -> None:
         row[index] = stable_category_id(value)
 
 
+def _set_optional_category(row: list[int], index: int, value: str | None) -> None:
+    if value is not None:
+        _set_category(row, index, value)
+
+
 def _set_numeric(row: list[float], index: int, value: float) -> None:
     if index < len(row):
         row[index] = float(value)
+
+
+def _known_or_possible_values(known: str | None, possible: Sequence[str]) -> tuple[str, ...]:
+    if known:
+        return (known,)
+    return _compact_belief_values(possible)
+
+
+def _belief_values_category(prefix: str, values: Sequence[str], *, limit: int = 6) -> str | None:
+    compact = _compact_belief_values(values, limit=limit)
+    if not compact:
+        return None
+    return f"belief:{prefix}:{'|'.join(compact)}"
+
+
+def _compact_belief_values(values: Sequence[str], *, limit: int | None = None) -> tuple[str, ...]:
+    compact: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        key = _normalize_identifier(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        compact.append(value)
+        if limit is not None and len(compact) >= limit:
+            break
+    return tuple(compact)
 
 
 def _belief_for_species(

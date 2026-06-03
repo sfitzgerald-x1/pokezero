@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 
 from pokezero.actions import ACTION_COUNT
+from pokezero.belief import CandidateSetSummary
 from pokezero.observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
@@ -25,6 +26,27 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown"
 
 def fixture_lines(name: str) -> list[str]:
     return (FIXTURE_ROOT / name).read_text(encoding="utf-8").splitlines()
+
+
+class FakeSetSource:
+    def summarize(self, *, format_id, species, revealed_moves, **kwargs):
+        if species == "Xatu":
+            return CandidateSetSummary(
+                species=species,
+                candidate_count=2,
+                uncertainty=0.5,
+                possible_abilities=("Early Bird", "Synchronize"),
+                possible_items=("Leftovers",),
+                possible_moves=("psychic", "thunderwave", "wish"),
+            )
+        return CandidateSetSummary(
+            species=species,
+            candidate_count=1,
+            uncertainty=0.25,
+            possible_abilities=("Intimidate",),
+            possible_items=("Lum Berry", "Leftovers"),
+            possible_moves=tuple(revealed_moves),
+        )
 
 
 class ShowdownReplayNormalizationTest(unittest.TestCase):
@@ -178,6 +200,49 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             observation.categorical_ids[event_offset + damage_event_index][3],
             stable_category_id("event_target:opponent"),
         )
+
+    def test_observation_encodes_public_belief_summary_features(self) -> None:
+        replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(
+            replay,
+            player_id="agent",
+            player_name="PokeZeroBot",
+            format_id="gen3randombattle",
+            set_source=FakeSetSource(),
+        )
+
+        observation = observation_from_player_state(state)
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        xatu_offset = opponent_offset + 1
+
+        self.assertEqual(observation.numeric_features[xatu_offset][5], 2.0)
+        self.assertEqual(observation.numeric_features[xatu_offset][6], 0.5)
+        self.assertEqual(observation.numeric_features[xatu_offset][7], 2.0)
+        self.assertEqual(observation.numeric_features[xatu_offset][8], 1.0)
+        self.assertEqual(observation.numeric_features[xatu_offset][9], 3.0)
+        self.assertEqual(observation.numeric_features[xatu_offset][10], 0.0)
+        self.assertEqual(observation.numeric_features[xatu_offset][11], 0.0)
+        self.assertEqual(
+            observation.categorical_ids[xatu_offset][4],
+            stable_category_id("belief:ability:Early Bird|Synchronize"),
+        )
+        self.assertEqual(
+            observation.categorical_ids[xatu_offset][5],
+            stable_category_id("belief:item:Leftovers"),
+        )
+        self.assertEqual(
+            observation.categorical_ids[xatu_offset][6],
+            stable_category_id("belief:possible_moves:psychic|thunderwave|wish"),
+        )
+
+        active_belief = observation.metadata["opponent_active"]["belief"]
+        self.assertEqual(active_belief["species"], "Xatu")
+        self.assertEqual(active_belief["candidate_set_count"], 2)
+        self.assertEqual(active_belief["possible_abilities"], ["Early Bird", "Synchronize"])
+        self.assertEqual(active_belief["possible_items"], ["Leftovers"])
+        self.assertEqual(active_belief["possible_moves"], ["psychic", "thunderwave", "wish"])
+        self.assertNotIn("candidate_variants", active_belief)
+        self.assertEqual(observation.metadata["belief"]["opponent_pokemon"][1]["species"], "Xatu")
 
     def test_policy_action_translates_back_to_showdown_choice_for_detected_side(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
