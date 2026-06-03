@@ -108,6 +108,9 @@ python -m pokezero.selfplay_cli iterate \
   --games-per-iteration 200 \
   --workers 4 \
   --evaluation-games 50 \
+  --promotion-registry runs/promotions.json \
+  --promotion-artifact-dir runs/promoted-checkpoints \
+  --auto-promote \
   --showdown-root /path/to/pokemon-showdown
 ```
 
@@ -137,8 +140,13 @@ python -m pokezero.selfplay_cli iterate \
   --games-per-iteration 200 \
   --workers 4 \
   --evaluation-games 50 \
+  --promotion-registry runs/promotions.json \
+  --promotion-artifact-dir runs/promoted-checkpoints \
+  --auto-promote \
   --showdown-root /path/to/pokemon-showdown
 ```
+
+With `--auto-promote`, each iteration evaluates the same promotion gate used by `eval_cli promote` after the benchmark is written. Passing checkpoints are recorded in `--promotion-registry`, copied into `--promotion-artifact-dir` when supplied, and become eligible historical opponents for later iterations in the same run.
 
 Inspect the run:
 
@@ -193,7 +201,7 @@ python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
 
 The registry is append-only by default and embeds the full gate result for each accepted checkpoint. With `--artifact-dir`, promotion copies the accepted single-file checkpoint into a stable artifact directory, records that managed copy as the checkpoint used by later self-play, records a SHA-256 checksum, and preserves the original source checkpoint path for audit. The embedded gate result still reflects the source manifest and source checkpoint that were evaluated. Without `--artifact-dir`, the registry stores references to existing checkpoint files.
 
-The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint.
+The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint. With `--auto-promote`, that pool is refreshed after each passing iteration during the run.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 

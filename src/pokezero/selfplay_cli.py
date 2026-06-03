@@ -12,7 +12,14 @@ from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
-from .selfplay import _mapping, _sequence, load_selfplay_run_manifest, run_selfplay_iterations
+from .selfplay import (
+    SelfPlayPromotionConfig,
+    _mapping,
+    _sequence,
+    load_selfplay_run_manifest,
+    run_selfplay_iterations,
+)
+from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -51,6 +58,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional promotion registry. When set, historical opponents come from promoted checkpoints instead of raw iteration history.",
     )
+    iterate.add_argument(
+        "--auto-promote",
+        action="store_true",
+        help="After each iteration, evaluate the promotion gate and record passing checkpoints in --promotion-registry.",
+    )
+    iterate.add_argument(
+        "--promotion-artifact-dir",
+        type=Path,
+        default=None,
+        help="Optional artifact directory for auto-promoted checkpoint copies.",
+    )
+    iterate.add_argument(
+        "--promotion-label-prefix",
+        default="selfplay",
+        help="Label prefix for auto-promotion entries. Use an empty string to omit labels.",
+    )
+    iterate.add_argument("--promotion-notes", default=None, help="Optional notes stored on each auto-promotion entry.")
+    iterate.add_argument(
+        "--allow-duplicate-promotion",
+        action="store_true",
+        help="Allow auto-promotion to record a checkpoint already present in the registry.",
+    )
+    _add_gate_arguments(iterate)
     iterate.add_argument("--evaluation-games", type=int, default=0, help="Optional benchmark games per baseline matchup after each iteration.")
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic evaluation seed.")
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
@@ -95,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _iterate(args: argparse.Namespace) -> int:
+    if args.auto_promote and args.promotion_registry is None:
+        raise ValueError("--auto-promote requires --promotion-registry.")
+    if args.auto_promote and args.evaluation_games <= 0 and not args.allow_missing_benchmark:
+        raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -123,6 +157,7 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
     )
+    auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_selfplay_iterations(
         run_dir=args.run_dir,
         iterations=args.iterations,
@@ -138,6 +173,7 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_seed_start=args.evaluation_seed_start,
         validation_rollout_paths=tuple(args.validation_data or ()),
         promotion_registry_path=args.promotion_registry,
+        auto_promotion_config=auto_promotion_config,
         resume=args.resume,
         worker_count=args.workers,
     )
@@ -155,10 +191,33 @@ def _print_run_summary(result) -> None:
             f"decisions_per_second={iteration.metrics.decisions_per_second:.3f} "
             f"loss={final_epoch.loss:.6f} "
             f"accuracy={final_epoch.accuracy:.4f} "
+            f"promotion={_promotion_status(getattr(iteration, 'promotion', None))} "
             f"checkpoint={iteration.checkpoint_path}"
         )
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
+
+
+def _auto_promotion_config_from_args(args: argparse.Namespace) -> SelfPlayPromotionConfig | None:
+    if not args.auto_promote:
+        return None
+    gate_args = argparse.Namespace(**vars(args))
+    gate_args.registry = None
+    label_prefix = args.promotion_label_prefix if args.promotion_label_prefix else None
+    return SelfPlayPromotionConfig(
+        registry_path=args.promotion_registry,
+        gate_config=_gate_config_from_args(gate_args),
+        artifact_dir=args.promotion_artifact_dir,
+        label_prefix=label_prefix,
+        notes=args.promotion_notes,
+        allow_duplicate=args.allow_duplicate_promotion,
+    )
+
+
+def _promotion_status(promotion) -> str:
+    if promotion is None:
+        return "-"
+    return "recorded" if promotion.recorded else "failed"
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -183,7 +242,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
-        f"{'bench_wr':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} checkpoint"
+        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -199,12 +258,20 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{int(metrics.get('p2_wins', 0)):4d} "
             f"{int(metrics.get('ties', 0)):4d} "
             f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
+            f"{_manifest_promotion_status(iteration):>8} "
             f"{float(metrics.get('decisions_per_second', 0.0)):8.3f} "
             f"{fit_source:>5} "
             f"{_format_optional_float(fit_metrics.get('loss') if fit_metrics else None, digits=6):>10} "
             f"{_format_optional_float(fit_metrics.get('accuracy') if fit_metrics else None, digits=4):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
+
+
+def _manifest_promotion_status(iteration: Mapping[str, Any]) -> str:
+    promotion = iteration.get("promotion")
+    if promotion is None:
+        return "-"
+    return "yes" if _mapping(promotion).get("recorded") else "no"
 
 
 def _fit_metrics(training: Mapping[str, Any]) -> tuple[str, Mapping[str, Any] | None]:

@@ -18,9 +18,9 @@ Implemented:
 - Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
-- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, and run reporting.
+- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, auto-promotion, and run reporting.
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
-- Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, and filtering self-play historical opponents to promoted checkpoints.
+- Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, and filtering historical opponents to promoted checkpoints.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 
 Partially implemented:

@@ -125,6 +125,9 @@ python -m pokezero.selfplay_cli iterate \
   --workers 4 \
   --validation-data runs/heldout.jsonl \
   --evaluation-games 20 \
+  --promotion-registry runs/promotions.json \
+  --promotion-artifact-dir runs/promoted-checkpoints \
+  --auto-promote \
   --showdown-root /path/to/pokemon-showdown
 ```
 
@@ -135,6 +138,8 @@ Use `--workers N` to collect games in parallel within each iteration. Result fil
 Use `--validation-data` to attach one or more held-out rollout JSONL files to every training step. Validation metrics are stored in each iteration manifest and surfaced by the report command.
 
 Validation metrics measure imitation fit against the held-out rollout labels, not policy strength. Use benchmark win rate, capped-game rate, and head-to-head evaluation results for checkpoint promotion decisions.
+
+With `--auto-promote`, each completed iteration writes its manifest, evaluates the promotion gate, records passing checkpoints in `--promotion-registry`, and optionally copies them into `--promotion-artifact-dir`. Later iterations in the same run use newly promoted checkpoints as historical opponents when `--promotion-registry` is set. Auto-promotion uses the latest registry entry as the incumbent gate target unless `--incumbent-policy` is supplied.
 
 When reusing teacher bootstrap validation data during self-play, treat it as a teacher-retention regression check. A policy that improves past the teacher may become less teacher-faithful, so promotion still depends on benchmark strength and capped-game health.
 
@@ -196,6 +201,9 @@ python -m pokezero.selfplay_cli iterate \
   --games-per-iteration 200 \
   --workers 4 \
   --evaluation-games 50 \
+  --promotion-registry runs/promotions.json \
+  --promotion-artifact-dir runs/promoted-checkpoints \
+  --auto-promote \
   --showdown-root /path/to/pokemon-showdown
 ```
 
