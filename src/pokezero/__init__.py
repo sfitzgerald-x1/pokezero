@@ -104,6 +104,7 @@ from .promotion import (
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
+    SelfPlayPromotionConfig,
     SelfPlayRunResult,
     collect_selfplay_rollouts,
     load_selfplay_run_manifest,
@@ -184,6 +185,7 @@ __all__ = [
     "RolloutRecord",
     "SELFPLAY_RUN_SCHEMA_VERSION",
     "SelfPlayIterationResult",
+    "SelfPlayPromotionConfig",
     "SelfPlayRunResult",
     "ShowdownPokemon",
     "ShowdownPublicEvent",

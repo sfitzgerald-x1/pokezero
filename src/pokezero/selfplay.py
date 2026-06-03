@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from .collection import (
     BenchmarkMatchup,
@@ -36,7 +36,21 @@ from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .trajectory import BattleTrajectory
 
+if TYPE_CHECKING:
+    from .evaluation import PromotionGateConfig
+    from .promotion import PromotionRecordResult
+
 SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
+
+
+@dataclass(frozen=True)
+class SelfPlayPromotionConfig:
+    registry_path: Path
+    gate_config: "PromotionGateConfig"
+    artifact_dir: Path | None = None
+    label_prefix: str | None = "selfplay"
+    notes: str | None = None
+    allow_duplicate: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +69,7 @@ class SelfPlayIterationResult:
     metrics: CollectionMetrics
     training: LinearTrainingResult
     benchmark: BenchmarkReport | None = None
+    promotion: "PromotionRecordResult | None" = None
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -77,6 +92,7 @@ class SelfPlayIterationResult:
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
+            "promotion": self.promotion.to_dict() if self.promotion is not None else None,
         }
 
 
@@ -141,6 +157,7 @@ def run_selfplay_iterations(
     evaluation_seed_start: int = 1_000_000,
     validation_rollout_paths: Iterable[Path] | None = None,
     promotion_registry_path: Path | None = None,
+    auto_promotion_config: SelfPlayPromotionConfig | None = None,
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -160,7 +177,10 @@ def run_selfplay_iterations(
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
     validation_paths = tuple(Path(path) for path in (validation_rollout_paths or ()))
-    promoted_checkpoint_specs = _promoted_checkpoint_specs(promotion_registry_path)
+    promotion_pool_registry_path = promotion_registry_path or (
+        auto_promotion_config.registry_path if auto_promotion_config is not None else None
+    )
+    promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
 
     checkpoint_history: list[str] = []
     training_rollout_history: list[Path] = []
@@ -203,7 +223,7 @@ def run_selfplay_iterations(
         iteration_seed_start = next_seed_start + (offset * games_per_iteration)
         opponent_policy_specs = _opponent_pool(
             fixed_policy_specs=fixed_opponents,
-            checkpoint_history=promoted_checkpoint_specs if promotion_registry_path is not None else checkpoint_history,
+            checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
         )
@@ -233,9 +253,13 @@ def run_selfplay_iterations(
         save_linear_model(checkpoint_path, training.model)
         benchmark = None
         if evaluation_games:
+            benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
+                fallback_policy_spec=current_policy_spec,
+                promotion_config=auto_promotion_config,
+            )
             benchmark = _benchmark_checkpoint(
                 model_policy=LinearSoftmaxPolicy(model=training.model),
-                incumbent_policy_spec=current_policy_spec,
+                incumbent_policy_spec=benchmark_incumbent_policy_spec,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
@@ -260,6 +284,28 @@ def run_selfplay_iterations(
         )
         _write_json(manifest_path, result.to_manifest_dict())
         results.append(result)
+        run_manifest_path = run_dir / "manifest.json"
+        # The promotion gate consumes the top-level run-manifest shape, not the
+        # per-iteration manifest, so write it before evaluating auto-promotion.
+        _write_json(
+            run_manifest_path,
+            SelfPlayRunResult(
+                run_dir=run_dir,
+                iterations=tuple(results),
+                prior_iteration_manifests=tuple(prior_iteration_manifests),
+            ).to_dict(),
+        )
+        if auto_promotion_config is not None:
+            promotion = _record_auto_promotion(
+                manifest_path=run_manifest_path,
+                promotion_config=auto_promotion_config,
+                iteration=iteration,
+            )
+            result = replace(result, promotion=promotion)
+            results[-1] = result
+            _write_json(manifest_path, result.to_manifest_dict())
+            if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
+                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
         checkpoint_history.append(result.checkpoint_policy_spec)
         current_policy_spec = result.checkpoint_policy_spec
         current_model = training.model
@@ -479,6 +525,61 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
     from .promotion import load_promotion_registry
 
     return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+
+
+def _benchmark_incumbent_policy_spec(
+    *,
+    fallback_policy_spec: str,
+    promotion_config: SelfPlayPromotionConfig | None,
+) -> str:
+    if promotion_config is None:
+        return fallback_policy_spec
+    entry = _promotion_incumbent_entry(promotion_config)
+    if entry is None or not entry.checkpoint_path:
+        return fallback_policy_spec
+    return f"linear:{entry.checkpoint_path}"
+
+
+def _record_auto_promotion(
+    *,
+    manifest_path: Path,
+    promotion_config: SelfPlayPromotionConfig,
+    iteration: int,
+) -> "PromotionRecordResult":
+    from .promotion import record_promotion
+
+    gate_config = promotion_config.gate_config
+    if gate_config.incumbent_policy_id is None:
+        latest = _promotion_incumbent_entry(promotion_config)
+        if latest is not None and latest.policy_id:
+            gate_config = replace(gate_config, incumbent_policy_id=latest.policy_id)
+    label = (
+        f"{promotion_config.label_prefix}-{iteration:04d}"
+        if promotion_config.label_prefix
+        else None
+    )
+    return record_promotion(
+        manifest_path,
+        registry_path=promotion_config.registry_path,
+        config=gate_config,
+        label=label,
+        notes=promotion_config.notes,
+        artifact_dir=promotion_config.artifact_dir,
+        allow_duplicate=promotion_config.allow_duplicate,
+    )
+
+
+def _promotion_incumbent_entry(promotion_config: SelfPlayPromotionConfig):
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
+    incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
+    if incumbent_policy_id is None:
+        return registry.latest
+    for entry in reversed(registry.entries):
+        if entry.policy_id == incumbent_policy_id:
+            return entry
+    return None
 
 
 def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | None:
