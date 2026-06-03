@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
+import shutil
 from typing import Any, Mapping
 
 from .evaluation import PromotionGateConfig, PromotionGateResult, evaluate_promotion_gate
@@ -25,9 +27,11 @@ class PromotionRegistryEntry:
     label: str | None
     notes: str | None
     gate_result: Mapping[str, Any]
+    source_checkpoint_path: str | None = None
+    checkpoint_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "sequence": self.sequence,
             "policy_id": self.policy_id,
             "checkpoint_path": self.checkpoint_path,
@@ -39,6 +43,11 @@ class PromotionRegistryEntry:
             "notes": self.notes,
             "gate_result": dict(self.gate_result),
         }
+        if self.source_checkpoint_path is not None:
+            payload["source_checkpoint_path"] = self.source_checkpoint_path
+        if self.checkpoint_sha256 is not None:
+            payload["checkpoint_sha256"] = self.checkpoint_sha256
+        return payload
 
 
 @dataclass(frozen=True)
@@ -109,6 +118,7 @@ def record_promotion(
     label: str | None = None,
     notes: str | None = None,
     promoted_at: str | None = None,
+    artifact_dir: Path | None = None,
     allow_duplicate: bool = False,
 ) -> PromotionRecordResult:
     gate_result = evaluate_promotion_gate(manifest_path, config=config)
@@ -122,10 +132,23 @@ def record_promotion(
         )
     if not allow_duplicate:
         _reject_duplicate(registry, gate_result)
+    sequence = len(registry.entries) + 1
+    checkpoint_path = gate_result.checkpoint_path
+    source_checkpoint_path = None
+    checkpoint_sha256 = None
+    if artifact_dir is not None:
+        # Copy before writing the registry so retries can safely overwrite the same
+        # sequence-named orphan if the later registry write fails.
+        checkpoint_path, checkpoint_sha256 = _copy_checkpoint_artifact(
+            gate_result,
+            artifact_dir=artifact_dir,
+            sequence=sequence,
+        )
+        source_checkpoint_path = gate_result.checkpoint_path
     entry = PromotionRegistryEntry(
-        sequence=len(registry.entries) + 1,
+        sequence=sequence,
         policy_id=gate_result.candidate_policy_id,
-        checkpoint_path=gate_result.checkpoint_path,
+        checkpoint_path=checkpoint_path,
         manifest_path=str(gate_result.manifest_path),
         source_type=gate_result.source_type,
         source_iteration=gate_result.source_iteration,
@@ -133,6 +156,8 @@ def record_promotion(
         label=label,
         notes=notes,
         gate_result=gate_result.to_dict(),
+        source_checkpoint_path=source_checkpoint_path,
+        checkpoint_sha256=checkpoint_sha256,
     )
     updated = PromotionRegistry(path=registry.path, entries=(*registry.entries, entry))
     _write_registry(updated)
@@ -157,13 +182,81 @@ def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
         label=_optional_str(entry.get("label")),
         notes=_optional_str(entry.get("notes")),
         gate_result=_mapping(entry.get("gate_result", {})),
+        source_checkpoint_path=_optional_str(entry.get("source_checkpoint_path")),
+        checkpoint_sha256=_optional_str(entry.get("checkpoint_sha256")),
     )
 
 
 def _reject_duplicate(registry: PromotionRegistry, gate_result: PromotionGateResult) -> None:
     for entry in registry.entries:
-        if gate_result.checkpoint_path is not None and entry.checkpoint_path == gate_result.checkpoint_path:
+        if gate_result.checkpoint_path is None:
+            continue
+        if entry.checkpoint_path == gate_result.checkpoint_path or entry.source_checkpoint_path == gate_result.checkpoint_path:
             raise ValueError(f"checkpoint is already promoted: {gate_result.checkpoint_path}")
+
+
+def _copy_checkpoint_artifact(
+    gate_result: PromotionGateResult,
+    *,
+    artifact_dir: Path,
+    sequence: int,
+) -> tuple[str, str]:
+    if gate_result.checkpoint_path is None:
+        raise ValueError("cannot copy promoted artifact: gate result has no checkpoint path.")
+    source_path = _resolve_checkpoint_path(
+        gate_result.checkpoint_path,
+        manifest_path=gate_result.manifest_path,
+    )
+    if source_path is None:
+        raise FileNotFoundError(f"Promoted checkpoint does not exist: {gate_result.checkpoint_path}")
+    source_sha256 = _sha256_file(source_path)
+    target_dir = artifact_dir.expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / _artifact_file_name(
+        sequence=sequence,
+        policy_id=gate_result.candidate_policy_id,
+        source_path=source_path,
+    )
+    temporary_path = target_path.with_name(f".{target_path.name}.tmp")
+    shutil.copy2(source_path, temporary_path)
+    temporary_path.replace(target_path)
+    if _sha256_file(target_path) != source_sha256:
+        raise OSError(f"Promoted checkpoint copy checksum mismatch: {target_path}")
+    return str(target_path), source_sha256
+
+
+def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Path | None:
+    raw_path = Path(checkpoint_path).expanduser()
+    candidates = (raw_path,)
+    if not raw_path.is_absolute():
+        candidates = (
+            manifest_path.parent / raw_path,
+            manifest_path.parent.parent / raw_path,
+            raw_path,
+        )
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_file_name(*, sequence: int, policy_id: str | None, source_path: Path) -> str:
+    safe_policy_id = _safe_path_component(policy_id or "unknown-policy")
+    suffix = source_path.suffix or ".json"
+    return f"{sequence:06d}-{safe_policy_id}{suffix}"
+
+
+def _safe_path_component(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() or character in {"-", "_", "."} else "-" for character in value)
+    return cleaned.strip(".-") or "unknown"
 
 
 def _write_registry(registry: PromotionRegistry) -> None:

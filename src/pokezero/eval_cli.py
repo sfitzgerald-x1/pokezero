@@ -40,6 +40,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promote.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path. Also defaults the incumbent to the latest registry entry.")
     promote.add_argument("--label", default=None, help="Optional short label for the promotion entry.")
     promote.add_argument("--notes", default=None, help="Optional notes stored with the promotion entry.")
+    promote.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="Optional directory that receives a stable copy of the promoted checkpoint.",
+    )
     promote.add_argument("--allow-duplicate", action="store_true", help="Allow recording a checkpoint already present in the registry.")
     _add_gate_arguments(promote)
     promote.add_argument("--json", action="store_true", help="Print the promotion result as JSON.")
@@ -81,6 +87,7 @@ def _promote(args: argparse.Namespace) -> int:
         config=_gate_config_from_args(args),
         label=args.label,
         notes=args.notes,
+        artifact_dir=args.artifact_dir,
         allow_duplicate=args.allow_duplicate,
     )
     if args.json:
@@ -93,6 +100,8 @@ def _promote(args: argparse.Namespace) -> int:
             print(f"promotion_sequence: {result.entry.sequence}")
             print(f"promoted_policy: {result.entry.policy_id or '-'}")
             print(f"promoted_checkpoint: {result.entry.checkpoint_path or '-'}")
+            if result.entry.source_checkpoint_path is not None:
+                print(f"source_checkpoint: {result.entry.source_checkpoint_path}")
     return 0 if result.recorded else 2
 
 
@@ -110,9 +119,10 @@ def _promotions(args: argparse.Namespace) -> int:
         print("entries:")
         for entry in registry.entries:
             label = f" label={entry.label}" if entry.label else ""
+            source = f" source={entry.source_checkpoint_path}" if entry.source_checkpoint_path else ""
             print(
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
-                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}"
+                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}{source}"
             )
     return 0
 

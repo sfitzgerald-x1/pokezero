@@ -171,6 +171,7 @@ Record a gate-passing checkpoint in an append-only promotion registry:
 ```bash
 python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
   --registry runs/promotions.json \
+  --artifact-dir runs/promoted-checkpoints \
   --min-benchmark-win-rate 0.55 \
   --min-benchmark-games 50 \
   --label bootstrap-selfplay-0005
@@ -182,7 +183,7 @@ Inspect promoted checkpoints:
 python -m pokezero.eval_cli promotions --registry runs/promotions.json
 ```
 
-`promote` embeds the full gate result in the registry entry and refuses duplicate checkpoint entries by default. It does not copy checkpoint files; the registry is an audit trail and checkpoint-pool index over existing run artifacts. Passing `--promotion-registry runs/promotions.json` to `selfplay_cli iterate` makes the historical opponent pool draw from promoted checkpoints instead of every raw prior iteration checkpoint.
+`promote` embeds the full gate result in the registry entry and refuses duplicate checkpoint entries by default. With `--artifact-dir`, it copies the accepted single-file checkpoint into a stable artifact directory, stores that managed copy as the registry checkpoint path, records its SHA-256 checksum, and keeps the original source checkpoint path for audit. The embedded gate result still reflects the source manifest and source checkpoint that were evaluated. Without `--artifact-dir`, the registry stores references to existing run artifacts. Passing `--promotion-registry runs/promotions.json` to `selfplay_cli iterate` makes the historical opponent pool draw from promoted checkpoints instead of every raw prior iteration checkpoint.
 
 Start self-play from a bootstrap checkpoint by first training offline data with `linear_cli train`, then passing the resulting checkpoint as the initial policy:
 

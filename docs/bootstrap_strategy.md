@@ -184,13 +184,16 @@ Record accepted checkpoints in a promotion registry:
 ```bash
 python -m pokezero.eval_cli promote runs/bootstrap-selfplay \
   --registry runs/promotions.json \
+  --artifact-dir runs/promoted-checkpoints \
   --min-incumbent-win-rate 0.55 \
   --min-incumbent-games 200 \
   --min-benchmark-games 100 \
   --label bootstrap-selfplay-0005
 ```
 
-The registry is append-only by default and embeds the full gate result for each accepted checkpoint. It is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint. The registry intentionally stores references to existing checkpoint files rather than copying artifacts into a managed directory.
+The registry is append-only by default and embeds the full gate result for each accepted checkpoint. With `--artifact-dir`, promotion copies the accepted single-file checkpoint into a stable artifact directory, records that managed copy as the checkpoint used by later self-play, records a SHA-256 checksum, and preserves the original source checkpoint path for audit. The embedded gate result still reflects the source manifest and source checkpoint that were evaluated. Without `--artifact-dir`, the registry stores references to existing checkpoint files.
+
+The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 
