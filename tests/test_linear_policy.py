@@ -69,6 +69,34 @@ def separable_record() -> RolloutRecord:
     )
 
 
+def opponent_action_record() -> RolloutRecord:
+    trajectory = BattleTrajectory(battle_id="opponent-action-train", format_id="gen3randombattle", seed=5)
+    for turn_index in range(24):
+        opponent_action_index = turn_index % 2
+        value = 10 if opponent_action_index == 0 else 30
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=turn_index,
+                observation=observation(value),
+                legal_action_mask=LEGAL_TWO_ACTION_MASK,
+                action_index=0,
+                opponent_action_index=opponent_action_index,
+            )
+        )
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=24))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=trajectory.seed,
+        format_id=trajectory.format_id,
+        policy_ids={"p1": "oracle"},
+        decision_round_count=24,
+        elapsed_seconds=0.1,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
 def losing_action_record() -> RolloutRecord:
     trajectory = BattleTrajectory(battle_id="linear-losing", format_id="gen3randombattle", seed=2)
     trajectory.append(
@@ -246,6 +274,40 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertIsNotNone(result.validation_metrics)
         assert result.validation_metrics is not None
         self.assertEqual(result.validation_metrics.examples, 24)
+
+    def test_train_linear_policy_learns_opponent_action_auxiliary_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            write_record(data_path, opponent_action_record())
+
+            result = train_linear_policy(
+                data_path,
+                config=LinearTrainingConfig(
+                    feature_count=512,
+                    epochs=8,
+                    learning_rate=0.05,
+                    opponent_action_loss_weight=1.0,
+                    shuffle_buffer_size=0,
+                ),
+            )
+            metrics = evaluate_linear_policy(data_path, result.model)
+            features_for_zero = features_from_observation_window(
+                [observation(10)],
+                window_size=result.model.window_size,
+                feature_count=result.model.feature_count,
+            )
+            features_for_one = features_from_observation_window(
+                [observation(30)],
+                window_size=result.model.window_size,
+                feature_count=result.model.feature_count,
+            )
+
+        self.assertEqual(result.final_metrics.opponent_examples, 24)
+        self.assertGreater(result.final_metrics.opponent_accuracy, 0.9)
+        self.assertEqual(metrics.opponent_examples, 24)
+        self.assertEqual(metrics.opponent_accuracy, 1.0)
+        self.assertEqual(result.model.predict_opponent_action(features_for_zero), 0)
+        self.assertEqual(result.model.predict_opponent_action(features_for_one), 1)
 
     def test_reward_weighted_objective_ignores_losing_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

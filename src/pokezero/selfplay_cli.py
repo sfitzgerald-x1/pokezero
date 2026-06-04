@@ -85,6 +85,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic evaluation seed.")
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
     iterate.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    iterate.add_argument(
+        "--opponent-action-loss-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Auxiliary opponent-action prediction loss weight. The linear policy's "
+            "action weights are independent of this head, so it does not affect play; "
+            "it is opt-in scaffolding for future shared-representation models. "
+            "Off by default."
+        ),
+    )
     iterate.add_argument("--l2", type=float, default=0.0, help="L2 penalty applied on active features.")
     iterate.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
@@ -145,6 +156,7 @@ def _iterate(args: argparse.Namespace) -> int:
         objective=args.objective,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
+        opponent_action_loss_weight=args.opponent_action_loss_weight,
         l2=args.l2,
         shuffle_buffer_size=args.shuffle_buffer_size,
         shuffle_seed=args.shuffle_seed,
@@ -191,6 +203,7 @@ def _print_run_summary(result) -> None:
             f"decisions_per_second={iteration.metrics.decisions_per_second:.3f} "
             f"loss={final_epoch.loss:.6f} "
             f"accuracy={final_epoch.accuracy:.4f} "
+            f"opponent_accuracy={_format_optional_float(getattr(final_epoch, 'opponent_accuracy', None), digits=4)} "
             f"promotion={_promotion_status(getattr(iteration, 'promotion', None))} "
             f"checkpoint={iteration.checkpoint_path}"
         )
@@ -242,7 +255,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
-        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} checkpoint"
+        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} {'opp_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -263,6 +276,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{fit_source:>5} "
             f"{_format_optional_float(fit_metrics.get('loss') if fit_metrics else None, digits=6):>10} "
             f"{_format_optional_float(fit_metrics.get('accuracy') if fit_metrics else None, digits=4):>8} "
+            f"{_format_optional_float(fit_metrics.get('opponent_accuracy') if fit_metrics else None, digits=4):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
 

@@ -804,6 +804,8 @@ class SelfPlayTest(unittest.TestCase):
                         "random-legal",
                         "--workers",
                         "2",
+                        "--opponent-action-loss-weight",
+                        "0.3",
                         "--auto-promote",
                         "--promotion-registry",
                         "promotions.json",
@@ -841,6 +843,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_win_rate, 0.0)
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
+        self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.3)
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
         self.assertIn("latest_checkpoint", stdout.getvalue())
 

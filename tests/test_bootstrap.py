@@ -298,6 +298,8 @@ class TeacherBootstrapTest(unittest.TestCase):
                         "4",
                         "--epochs",
                         "2",
+                        "--opponent-action-loss-weight",
+                        "0.25",
                         "--benchmark-games",
                         "5",
                     ]
@@ -316,6 +318,7 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].feature_count, 64)
         self.assertEqual(kwargs["training_config"].window_size, 4)
         self.assertEqual(kwargs["training_config"].epochs, 2)
+        self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.25)
         expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
         self.assertIn(expected_showdown_root, kwargs["teacher_policy_spec"])
         self.assertEqual(len(kwargs["opponent_policy_specs"]), 1)
