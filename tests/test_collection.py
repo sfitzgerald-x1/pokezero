@@ -313,6 +313,7 @@ class CollectionTest(unittest.TestCase):
     def test_policy_from_spec_loads_scripted_teacher_options(self) -> None:
         policy = policy_from_spec(
             "scripted-teacher?showdown_root=/tmp/showdown&switch_margin=3&poor_move_threshold=20"
+            "&team_status_cure_score=70&statused_switch_penalty=12&low_hp_switch_bonus=44"
             "&allow_fallback=true&allow_unknown_moves=true"
         )
 
@@ -320,6 +321,9 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(policy.showdown_root, Path("/tmp/showdown"))
         self.assertEqual(policy.switch_margin, 3.0)
         self.assertEqual(policy.poor_move_threshold, 20.0)
+        self.assertEqual(policy.team_status_cure_score, 70.0)
+        self.assertEqual(policy.statused_switch_penalty, 12.0)
+        self.assertEqual(policy.low_hp_switch_bonus, 44.0)
         self.assertTrue(policy.allow_fallback)
         self.assertTrue(policy.allow_unknown_moves)
 

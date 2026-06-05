@@ -13,6 +13,16 @@ from .dex import ShowdownDex, load_showdown_dex_cached, normalize_id
 from .observation import PokeZeroObservationV0
 
 
+_STATUS_CURE_WEIGHTS = {
+    "par": 1.0,
+    "psn": 1.0,
+    "brn": 1.25,
+    "tox": 1.5,
+    "slp": 2.0,
+    "frz": 2.0,
+}
+
+
 @dataclass(frozen=True)
 class PolicyDecision:
     action_index: int
@@ -113,9 +123,12 @@ class ScriptedTeacherPolicy:
     allow_fallback: bool = False
     allow_unknown_moves: bool = False
     # Move scores are roughly base_power * effectiveness * STAB (0-250+);
-    # switch scores are roughly hp*40 plus a [-22, 35] matchup bonus.
+    # switch scores are roughly hp*40 plus matchup/context bonuses.
     switch_margin: float = 8.0
     poor_move_threshold: float = 35.0
+    team_status_cure_score: float = 64.0
+    statused_switch_penalty: float = 10.0
+    low_hp_switch_bonus: float = 35.0
 
     def select_action(
         self,
@@ -136,12 +149,24 @@ class ScriptedTeacherPolicy:
         if unknown_moves and not self.allow_unknown_moves:
             raise ValueError(f"scripted-teacher could not resolve legal move(s): {', '.join(unknown_moves)}")
         move_scores = tuple(
-            _move_score(candidate, observation.metadata, dex, allow_unknown_moves=self.allow_unknown_moves)
+            _move_score(
+                candidate,
+                observation.metadata,
+                dex,
+                allow_unknown_moves=self.allow_unknown_moves,
+                team_status_cure_score=self.team_status_cure_score,
+            )
             for candidate in candidates
             if candidate.get("kind") == "move"
         )
         switch_scores = tuple(
-            _switch_score(candidate, observation.metadata, dex)
+            _switch_score(
+                candidate,
+                observation.metadata,
+                dex,
+                statused_switch_penalty=self.statused_switch_penalty,
+                low_hp_switch_bonus=self.low_hp_switch_bonus,
+            )
             for candidate in candidates
             if candidate.get("kind") == "switch"
         )
@@ -263,6 +288,7 @@ def _move_score(
     dex: ShowdownDex,
     *,
     allow_unknown_moves: bool,
+    team_status_cure_score: float,
 ) -> _ActionScore:
     action_index = int(candidate["action_index"])
     move = dex.move_info(str(candidate.get("move_id") or candidate.get("move_name") or ""))
@@ -275,7 +301,7 @@ def _move_score(
     opponent_types = _metadata_species_types(metadata.get("opponent_active"), dex)
     hp_fraction = _metadata_hp_fraction(metadata.get("self_active"), default=1.0)
     if move.gen3_category == "Status" or move.base_power <= 0:
-        return _status_move_score(action_index, move, metadata, hp_fraction)
+        return _status_move_score(action_index, move, metadata, hp_fraction, team_status_cure_score=team_status_cure_score)
 
     effectiveness = dex.effectiveness(move.type, opponent_types)
     if effectiveness == 0.0:
@@ -302,6 +328,8 @@ def _status_move_score(
     move,
     metadata: Mapping[str, Any],
     hp_fraction: float,
+    *,
+    team_status_cure_score: float,
 ) -> _ActionScore:
     move_id = normalize_id(move.id or move.name)
     opponent_status = _metadata_status(metadata.get("opponent_active"))
@@ -315,12 +343,30 @@ def _status_move_score(
     if any(value > 0 for value in move.boosts.values()):
         score = 36.0 if hp_fraction >= 0.55 else 12.0
         return _ActionScore(action_index, "move", score, f"{move.name}: setup")
-    if move_id in {"rapidspin", "healbell", "aromatherapy"}:
-        return _ActionScore(action_index, "move", 28.0, f"{move.name}: utility")
+    if move_id in {"healbell", "aromatherapy"}:
+        status_weight = _team_status_cure_weight(metadata.get("self_team"))
+        if status_weight > 0.0:
+            score = min(team_status_cure_score, 36.0 + (14.0 * status_weight))
+            return _ActionScore(
+                action_index,
+                "move",
+                score,
+                f"{move.name}: team status cure weight={status_weight:g}",
+            )
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status")
+    if move_id in {"rapidspin"}:
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: hazard state unknown")
     return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status")
 
 
-def _switch_score(candidate: Mapping[str, Any], metadata: Mapping[str, Any], dex: ShowdownDex) -> _ActionScore:
+def _switch_score(
+    candidate: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    dex: ShowdownDex,
+    *,
+    statused_switch_penalty: float,
+    low_hp_switch_bonus: float,
+) -> _ActionScore:
     action_index = int(candidate["action_index"])
     pokemon = candidate.get("pokemon")
     if not isinstance(pokemon, Mapping):
@@ -337,8 +383,22 @@ def _switch_score(candidate: Mapping[str, Any], metadata: Mapping[str, Any], dex
         matchup_bonus = 20.0
     elif incoming > 1.0:
         matchup_bonus = -22.0
-    score = (hp_fraction * 40.0) + matchup_bonus
-    return _ActionScore(action_index, "switch", score, f"switch to {species}: hp={hp_fraction:.2f} incoming={incoming:g}")
+    active_hp_fraction = _metadata_hp_fraction(metadata.get("self_active"), default=1.0)
+    preservation_bonus = 0.0
+    if active_hp_fraction < 0.35:
+        preservation_bonus = ((0.35 - active_hp_fraction) / 0.35) * low_hp_switch_bonus
+        preservation_bonus *= hp_fraction * _switch_preservation_scale(incoming)
+    status_penalty = statused_switch_penalty if _has_status(pokemon) else 0.0
+    score = (hp_fraction * 40.0) + matchup_bonus + preservation_bonus - status_penalty
+    return _ActionScore(
+        action_index,
+        "switch",
+        score,
+        (
+            f"switch to {species}: hp={hp_fraction:.2f} incoming={incoming:g} "
+            f"preserve={preservation_bonus:.1f} status_penalty={status_penalty:.1f}"
+        ),
+    )
 
 
 def _metadata_species_types(raw_pokemon: Any, dex: ShowdownDex) -> tuple[str, ...]:
@@ -363,3 +423,29 @@ def _metadata_status(raw_pokemon: Any) -> str:
         return "none"
     status = str(raw_pokemon.get("status") or "none")
     return status or "none"
+
+
+def _switch_preservation_scale(incoming_effectiveness: float) -> float:
+    if incoming_effectiveness > 1.0:
+        return 0.0
+    if incoming_effectiveness == 1.0:
+        return 0.5
+    return 1.0
+
+
+def _team_status_cure_weight(raw_team: Any) -> float:
+    if not isinstance(raw_team, Sequence) or isinstance(raw_team, (str, bytes)):
+        return 0.0
+    total = 0.0
+    for pokemon in raw_team:
+        if _has_status(pokemon):
+            total += _STATUS_CURE_WEIGHTS.get(_metadata_status(pokemon).lower(), 1.0)
+    return total
+
+
+def _has_status(raw_pokemon: Any) -> bool:
+    status = _metadata_status(raw_pokemon).lower()
+    if status in {"", "none", "fnt", "unknown"}:
+        return False
+    hp_fraction = _metadata_hp_fraction(raw_pokemon, default=1.0)
+    return hp_fraction > 0.0
