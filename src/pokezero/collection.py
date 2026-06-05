@@ -489,7 +489,16 @@ def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
 
 
 def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
-    supported = {"showdown_root", "switch_margin", "poor_move_threshold", "allow_fallback", "allow_unknown_moves"}
+    supported = {
+        "showdown_root",
+        "switch_margin",
+        "poor_move_threshold",
+        "team_status_cure_score",
+        "statused_switch_penalty",
+        "low_hp_switch_bonus",
+        "allow_fallback",
+        "allow_unknown_moves",
+    }
     unknown = sorted(set(options) - supported)
     if unknown:
         raise ValueError(f"Unsupported scripted-teacher option(s): {', '.join(unknown)}.")
@@ -500,6 +509,12 @@ def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
         teacher_options["switch_margin"] = _optional_float(options, "switch_margin", default=8.0)
     if "poor_move_threshold" in options:
         teacher_options["poor_move_threshold"] = _optional_float(options, "poor_move_threshold", default=35.0)
+    if "team_status_cure_score" in options:
+        teacher_options["team_status_cure_score"] = _optional_float(options, "team_status_cure_score", default=64.0)
+    if "statused_switch_penalty" in options:
+        teacher_options["statused_switch_penalty"] = _optional_float(options, "statused_switch_penalty", default=10.0)
+    if "low_hp_switch_bonus" in options:
+        teacher_options["low_hp_switch_bonus"] = _optional_float(options, "low_hp_switch_bonus", default=35.0)
     allow_fallback = _optional_bool(options, "allow_fallback")
     if allow_fallback is not None:
         teacher_options["allow_fallback"] = allow_fallback
