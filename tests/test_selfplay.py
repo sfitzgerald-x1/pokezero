@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 from pokezero.collection import CollectionMetrics, read_rollout_records, rollout_record_to_dict
 from pokezero.env import StepResult, TerminalState
-from pokezero.linear_policy import LinearPolicyModel, LinearTrainingConfig, save_linear_model
+from pokezero.linear_policy import (
+    LINEAR_FEATURE_SCHEMA_VERSION,
+    LinearPolicyModel,
+    LinearTrainingConfig,
+    save_linear_model,
+)
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.evaluation import PromotionGateConfig
@@ -242,7 +247,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["training"]["model"]["policy_id"], "linear-selfplay-test-iter-0001")
         self.assertEqual(iteration_manifest["training"]["model"]["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
         self.assertEqual(iteration_manifest["training"]["model"]["action_schema_version"], "pokezero.action_space.v0")
-        self.assertEqual(iteration_manifest["training"]["model"]["feature_schema_version"], "pokezero.linear_features.v1")
+        self.assertEqual(iteration_manifest["training"]["model"]["feature_schema_version"], LINEAR_FEATURE_SCHEMA_VERSION)
         self.assertEqual(len(iteration_manifest["training_rollout_paths"]), 1)
         self.assertTrue(iteration_manifest["training_rollout_path"].endswith("training-rollouts.jsonl"))
         self.assertEqual(iteration_manifest["worker_count"], 1)

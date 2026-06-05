@@ -22,7 +22,7 @@ Implemented:
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
 - Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, and filtering historical opponents to promoted checkpoints.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
-- Compact public-belief observation features for revealed opposing Pokemon, including surviving candidate count, uncertainty, possible ability/item/move counts, hashed possible-fact signatures, and revealed ability/item flags.
+- Compact public-belief observation features for revealed opposing Pokemon, including surviving candidate count, uncertainty, possible ability/item/move counts, bucketed per-value possible-fact features, and revealed ability/item flags.
 
 Partially implemented:
 
@@ -37,7 +37,7 @@ Known limitations:
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
 - The initial scripted teacher uses local Showdown dex metadata and shallow move/switch scoring. It is a bootstrap data source, not the intended long-term policy.
-- Current observation belief features are compact hashed summaries and counts, not full explicit masks. Detailed candidate variants remain sidecar-only to avoid bloating every trajectory record.
+- Current observation belief features are compact bucketed facts and counts, not full explicit masks. Detailed candidate variants and evidence logs remain sidecar-only to avoid bloating every trajectory record.
 
 Not implemented yet:
 
@@ -53,7 +53,7 @@ The design below still describes the target direction, but the implementation de
 
 The current docs now separate the cold self-play baseline from the imitation-bootstrap path in `docs/bootstrap_strategy.md`. The implementation supports both at the harness level: cold runs can start from `random-legal`, while bootstrap runs can generate a scripted-teacher checkpoint through `bootstrap_cli teacher`, then start self-play from that checkpoint via `--initial-policy linear:<checkpoint>` and carry held-out validation JSONL with `--validation-data`.
 
-The Gen 3 belief work also started as a read-only sidecar and deterministic public-information engine rather than being immediately embedded into a learned policy. Compact belief summaries are now included in `PokeZeroObservationV0`; detailed candidate variants remain sidecar-only until a neural input format needs explicit masks or richer set-branch embeddings.
+The Gen 3 belief work also started as a read-only sidecar and deterministic public-information engine rather than being immediately embedded into a learned policy. Compact belief facts and counts are now included in `PokeZeroObservationV0`; detailed candidate variants and evidence logs remain sidecar-only until a neural input format needs explicit masks or richer set-branch embeddings.
 
 Parallelization has started at the single-machine collection layer with `--workers`. It is not yet a distributed rollout system.
 
@@ -105,7 +105,7 @@ The first observation format, `PokeZeroObservationV0`, is a fixed-shape structur
 - `recent_event_tokens[24]`: compact public events from recent turns, padded when fewer events are available.
 - `legal_action_mask[9]`: valid choices for the current request.
 
-Opponent belief features currently include compact hashed signatures for possible abilities, items, and moves; possible-fact counts; revealed move count; surviving set count; revealed ability/item flags; and a compact uncertainty scalar. A later neural observation format can replace these hash summaries with explicit masks or set-branch embeddings. The actor input is restricted to player-knowable state.
+Opponent belief features currently include bucketed per-value features for possible abilities, items, and moves; possible-fact counts; revealed move count; surviving set count; revealed ability/item flags; and a compact uncertainty scalar. A later neural observation format can replace these bucketed facts with explicit masks or set-branch embeddings. The actor input is restricted to player-knowable state.
 
 Token feature widths are uniform for batching. Token sections may use different subsets of the categorical and numeric columns; unused columns are padding.
 

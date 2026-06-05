@@ -18,7 +18,7 @@ from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
 LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v2"
-LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v1"
+LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v2"
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 
 
@@ -467,7 +467,14 @@ def features_from_window(
         _add_hashed_feature(features, feature_count, f"h:{history_index}", 1.0)
         for token_index, row in enumerate(_sequence(categorical_ids[history_index])):
             for column_index, value in enumerate(_sequence(row)):
-                _add_hashed_feature(features, feature_count, f"c:{history_index}:{token_index}:{column_index}:{int(value)}", 1.0)
+                categorical_value = int(value)
+                if categorical_value:
+                    _add_hashed_feature(
+                        features,
+                        feature_count,
+                        f"c:{history_index}:{token_index}:{column_index}:{categorical_value}",
+                        1.0,
+                    )
         for token_index, row in enumerate(_sequence(numeric_features[history_index])):
             for column_index, value in enumerate(_sequence(row)):
                 numeric_value = float(value)
