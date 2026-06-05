@@ -13,6 +13,16 @@ from .dex import ShowdownDex, load_showdown_dex_cached, normalize_id
 from .observation import PokeZeroObservationV0
 
 
+_STATUS_CURE_WEIGHTS = {
+    "par": 1.0,
+    "psn": 1.0,
+    "brn": 1.25,
+    "tox": 1.5,
+    "slp": 2.0,
+    "frz": 2.0,
+}
+
+
 @dataclass(frozen=True)
 class PolicyDecision:
     action_index: int
@@ -334,11 +344,18 @@ def _status_move_score(
         score = 36.0 if hp_fraction >= 0.55 else 12.0
         return _ActionScore(action_index, "move", score, f"{move.name}: setup")
     if move_id in {"healbell", "aromatherapy"}:
-        if _team_has_status(metadata.get("self_team")):
-            return _ActionScore(action_index, "move", team_status_cure_score, f"{move.name}: team status cure")
-        return _ActionScore(action_index, "move", 8.0, f"{move.name}: no team status")
+        status_weight = _team_status_cure_weight(metadata.get("self_team"))
+        if status_weight > 0.0:
+            score = min(team_status_cure_score, 36.0 + (14.0 * status_weight))
+            return _ActionScore(
+                action_index,
+                "move",
+                score,
+                f"{move.name}: team status cure weight={status_weight:g}",
+            )
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status")
     if move_id in {"rapidspin"}:
-        return _ActionScore(action_index, "move", 28.0, f"{move.name}: utility")
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: hazard state unknown")
     return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status")
 
 
@@ -370,6 +387,7 @@ def _switch_score(
     preservation_bonus = 0.0
     if active_hp_fraction < 0.35:
         preservation_bonus = ((0.35 - active_hp_fraction) / 0.35) * low_hp_switch_bonus
+        preservation_bonus *= hp_fraction * _switch_preservation_scale(incoming)
     status_penalty = statused_switch_penalty if _has_status(pokemon) else 0.0
     score = (hp_fraction * 40.0) + matchup_bonus + preservation_bonus - status_penalty
     return _ActionScore(
@@ -407,10 +425,22 @@ def _metadata_status(raw_pokemon: Any) -> str:
     return status or "none"
 
 
-def _team_has_status(raw_team: Any) -> bool:
+def _switch_preservation_scale(incoming_effectiveness: float) -> float:
+    if incoming_effectiveness > 1.0:
+        return 0.0
+    if incoming_effectiveness == 1.0:
+        return 0.5
+    return 1.0
+
+
+def _team_status_cure_weight(raw_team: Any) -> float:
     if not isinstance(raw_team, Sequence) or isinstance(raw_team, (str, bytes)):
-        return False
-    return any(_has_status(pokemon) for pokemon in raw_team)
+        return 0.0
+    total = 0.0
+    for pokemon in raw_team:
+        if _has_status(pokemon):
+            total += _STATUS_CURE_WEIGHTS.get(_metadata_status(pokemon).lower(), 1.0)
+    return total
 
 
 def _has_status(raw_pokemon: Any) -> bool:

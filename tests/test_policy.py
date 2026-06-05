@@ -240,6 +240,7 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 1)
         self.assertIn("team status cure", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 50.0)
 
     def test_scripted_teacher_penalizes_statused_switch_targets(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
@@ -293,6 +294,29 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 4)
         self.assertIn("preserve=", decision.metadata["teacher_reason"])
+
+    def test_scripted_teacher_does_not_panic_switch_low_hp_active_into_bad_matchup(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, True, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 0.1, "status": "none"},
+                "opponent_active": {"species": "Golem", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {
+                        "action_index": 4,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                    },
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
 
 
 def teacher_dex():
