@@ -47,6 +47,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     teacher.add_argument("--epochs", type=int, default=1, help="Training epochs for the bootstrap checkpoint.")
     teacher.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    teacher.add_argument(
+        "--opponent-action-loss-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Auxiliary opponent-action prediction loss weight. The linear policy's "
+            "action weights are independent of this head, so it does not affect play; "
+            "it is opt-in scaffolding for future shared-representation models. "
+            "Off by default."
+        ),
+    )
     teacher.add_argument("--l2", type=float, default=0.0, help="L2 penalty applied on active features.")
     teacher.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     teacher.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
@@ -94,6 +105,7 @@ def _teacher(args: argparse.Namespace) -> int:
             objective="behavior-cloning",
             epochs=args.epochs,
             learning_rate=args.learning_rate,
+            opponent_action_loss_weight=args.opponent_action_loss_weight,
             l2=args.l2,
             shuffle_buffer_size=args.shuffle_buffer_size,
             shuffle_seed=args.shuffle_seed,
@@ -134,6 +146,12 @@ def _print_teacher_summary(result) -> None:
         f"loss={final_epoch.loss:.6f} "
         f"accuracy={final_epoch.accuracy:.4f}"
     )
+    if getattr(final_epoch, "opponent_examples", 0):
+        print(
+            f"training opponent_examples={final_epoch.opponent_examples} "
+            f"opponent_loss={final_epoch.opponent_loss:.6f} "
+            f"opponent_accuracy={final_epoch.opponent_accuracy:.4f}"
+        )
     if result.training.validation_metrics is not None:
         metrics = result.training.validation_metrics
         print(
@@ -141,6 +159,12 @@ def _print_teacher_summary(result) -> None:
             f"loss={metrics.loss:.6f} "
             f"accuracy={metrics.accuracy:.4f}"
         )
+        if getattr(metrics, "opponent_examples", 0):
+            print(
+                f"validation opponent_examples={metrics.opponent_examples} "
+                f"opponent_loss={metrics.opponent_loss:.6f} "
+                f"opponent_accuracy={metrics.opponent_accuracy:.4f}"
+            )
     if result.benchmark is not None:
         print(f"benchmark_total_games: {result.benchmark.total_games}")
         for row in result.benchmark.head_to_head_results:

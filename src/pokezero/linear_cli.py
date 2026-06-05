@@ -32,6 +32,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
     train.add_argument("--epochs", type=int, default=1, help="Number of streaming training passes.")
     train.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    train.add_argument(
+        "--opponent-action-loss-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Auxiliary opponent-action prediction loss weight. The linear policy's "
+            "action weights are independent of this head, so it does not affect play; "
+            "it is opt-in scaffolding for future shared-representation models. "
+            "Off by default."
+        ),
+    )
     train.add_argument("--l2", type=float, default=0.0, help="L2 penalty applied on active features.")
     train.add_argument("--feature-count", type=int, default=131_072, help="Hashed feature bucket count.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window.")
@@ -90,6 +101,7 @@ def _train(args: argparse.Namespace) -> int:
         objective=args.objective,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
+        opponent_action_loss_weight=args.opponent_action_loss_weight,
         l2=args.l2,
         shuffle_buffer_size=args.shuffle_buffer_size,
         shuffle_seed=args.shuffle_seed,
@@ -99,18 +111,32 @@ def _train(args: argparse.Namespace) -> int:
     result = train_linear_policy(args.data, config=config, validation_paths=args.validation_data)
     save_linear_model(args.out, result.model)
     for metrics in result.epochs:
-        print(
+        line = (
             f"epoch={metrics.epoch} examples={metrics.examples} "
             f"loss={metrics.loss:.6f} accuracy={metrics.accuracy:.4f} "
             f"elapsed_seconds={metrics.elapsed_seconds:.3f}"
         )
+        if getattr(metrics, "opponent_examples", 0):
+            line += (
+                f" opponent_examples={metrics.opponent_examples} "
+                f"opponent_loss={metrics.opponent_loss:.6f} "
+                f"opponent_accuracy={metrics.opponent_accuracy:.4f}"
+            )
+        print(line)
     if result.validation_metrics is not None:
         metrics = result.validation_metrics
-        print(
+        line = (
             f"validation examples={metrics.examples} "
             f"loss={metrics.loss:.6f} accuracy={metrics.accuracy:.4f} "
             f"elapsed_seconds={metrics.elapsed_seconds:.3f}"
         )
+        if getattr(metrics, "opponent_examples", 0):
+            line += (
+                f" opponent_examples={metrics.opponent_examples} "
+                f"opponent_loss={metrics.opponent_loss:.6f} "
+                f"opponent_accuracy={metrics.opponent_accuracy:.4f}"
+            )
+        print(line)
     print(f"checkpoint: {args.out}")
     return 0
 
@@ -130,6 +156,10 @@ def _evaluate(args: argparse.Namespace) -> int:
         print(f"examples: {metrics.examples}")
         print(f"loss: {metrics.loss:.6f}")
         print(f"accuracy: {metrics.accuracy:.4f}")
+        if getattr(metrics, "opponent_examples", 0):
+            print(f"opponent_examples: {metrics.opponent_examples}")
+            print(f"opponent_loss: {metrics.opponent_loss:.6f}")
+            print(f"opponent_accuracy: {metrics.opponent_accuracy:.4f}")
         print(f"elapsed_seconds: {metrics.elapsed_seconds:.3f}")
     return 0
 

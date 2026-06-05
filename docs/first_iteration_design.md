@@ -15,6 +15,7 @@ Implemented:
 - Dataset streaming with left-padded temporal windows, terminal-winner-derived returns, and batch containers for training examples.
 - Random legal, simple legal, and initial scripted-teacher baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
+- Linear auxiliary opponent-action prediction head trained from recorded opponent move/switch labels.
 - Linear checkpoint save/load with version-tag compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
@@ -28,6 +29,7 @@ Partially implemented:
 
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
 - Belief tracking is wired into the observation path as compact summaries, but full explicit ability/item/move masks and neural-policy-specific belief embeddings are not implemented yet.
+- Opponent-action prediction exists in the linear baseline as an auxiliary supervised head, but not yet as a neural transformer head.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
@@ -42,7 +44,7 @@ Known limitations:
 Not implemented yet:
 
 - Transformer/entity-token policy model.
-- Value head, opponent-action auxiliary head, or PPO-style online actor-critic training.
+- Value head or PPO-style online actor-critic training.
 - GPU training path.
 - Large-scale experiment orchestration across multiple machines.
 - Long-run benchmark thresholds, automated regression detection, or richer managed checkpoint lifecycle tooling.
@@ -146,7 +148,7 @@ Outputs:
 - scalar value estimate
 - opponent-action prediction logits for auxiliary training
 
-The opponent-action prediction head should predict the opponent's chosen move or switch slot from the same information state. This auxiliary task should help train temporal prediction and belief use.
+The current linear baseline ships an optional supervised opponent-action auxiliary head trained from recorded opponent move/switch labels, off by default. Because the linear policy and aux head use independent weights over fixed hashed features, the head shares no representation with the policy and cannot influence play in the linear baseline — it is scaffolding that validates the label pipeline and metrics. The later transformer policy should keep this head and predict the opponent's chosen move or switch slot from the same information state; there it shares the trunk representation, so the auxiliary task can actually shape temporal prediction and belief use.
 
 ## Training Approach
 

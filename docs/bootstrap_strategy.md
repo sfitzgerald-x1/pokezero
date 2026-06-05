@@ -95,6 +95,8 @@ This does not eliminate DAgger-style compounding error. The first self-play iter
 
 The CLI keeps the scripted teacher strict by default. A short preflight run executes before the full collection so missing dex metadata, unresolved moves, or missing observation metadata fail early. If a policy spec deliberately enables `allow_unknown_moves=true` or `allow_fallback=true`, the manifest records teacher decision counters for unknown-move and fallback decisions so degraded data is visible.
 
+Linear training can train a supervised opponent-action auxiliary head via `--opponent-action-loss-weight`, but it is off by default (weight `0`). The linear policy's action weights are independent of this head, so enabling it does not change play; it exists as opt-in scaffolding so the later transformer policy can carry the same prediction task on a shared representation. Set a positive weight only to collect opponent-prediction metrics or to train the head in isolation.
+
 The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
 
 Use the generated checkpoint as the first self-play policy:

@@ -17,9 +17,10 @@ from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_e
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 
-LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v2"
+LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v3"
 LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v2"
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
+ALL_ACTIONS_LEGAL_MASK = tuple(True for _ in range(ACTION_COUNT))
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class LinearPolicyModel:
     feature_count: int
     window_size: int
     weights: tuple[tuple[float, ...], ...]
+    opponent_weights: tuple[tuple[float, ...], ...] = ()
     action_schema_version: str = ACTION_SCHEMA_VERSION
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
     feature_schema_version: str = LINEAR_FEATURE_SCHEMA_VERSION
@@ -43,9 +45,17 @@ class LinearPolicyModel:
             raise ValueError("feature_count must be greater than 1.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
+        if not self.opponent_weights:
+            object.__setattr__(
+                self,
+                "opponent_weights",
+                tuple(tuple(0.0 for _ in range(self.feature_count)) for _ in range(ACTION_COUNT)),
+            )
         if len(self.weights) != ACTION_COUNT:
             raise ValueError(f"weights must contain {ACTION_COUNT} action rows.")
-        for row in self.weights:
+        if len(self.opponent_weights) != ACTION_COUNT:
+            raise ValueError(f"opponent_weights must contain {ACTION_COUNT} action rows.")
+        for row in (*self.weights, *self.opponent_weights):
             if len(row) != self.feature_count:
                 raise ValueError("each weight row must match feature_count.")
 
@@ -62,6 +72,7 @@ class LinearPolicyModel:
             feature_count=feature_count,
             window_size=window_size,
             weights=tuple(tuple(0.0 for _ in range(feature_count)) for _ in range(ACTION_COUNT)),
+            opponent_weights=tuple(tuple(0.0 for _ in range(feature_count)) for _ in range(ACTION_COUNT)),
         )
 
     def logits(self, features: Mapping[int, float]) -> tuple[float, ...]:
@@ -91,6 +102,13 @@ class LinearPolicyModel:
         legal = legal_action_indices(legal_action_mask)
         return max(legal, key=lambda action_index: (probabilities[action_index], -action_index))
 
+    def opponent_action_probabilities(self, features: Mapping[int, float]) -> tuple[float, ...]:
+        return _probabilities_from_weights(self.opponent_weights, features, ALL_ACTIONS_LEGAL_MASK)
+
+    def predict_opponent_action(self, features: Mapping[int, float]) -> int:
+        probabilities = self.opponent_action_probabilities(features)
+        return max(range(ACTION_COUNT), key=lambda action_index: (probabilities[action_index], -action_index))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": LINEAR_POLICY_SCHEMA_VERSION,
@@ -101,6 +119,7 @@ class LinearPolicyModel:
             "feature_count": self.feature_count,
             "window_size": self.window_size,
             "weights": [list(row) for row in self.weights],
+            "opponent_weights": [list(row) for row in self.opponent_weights],
         }
 
     @classmethod
@@ -115,6 +134,10 @@ class LinearPolicyModel:
             feature_count=int(payload["feature_count"]),
             window_size=int(payload["window_size"]),
             weights=tuple(tuple(float(value) for value in row) for row in _sequence(payload["weights"])),
+            opponent_weights=tuple(
+                tuple(float(value) for value in row)
+                for row in _sequence(payload["opponent_weights"])
+            ),
         )
 
 
@@ -127,6 +150,7 @@ class LinearTrainingConfig:
     objective: LinearTrainingObjective = "behavior-cloning"
     epochs: int = 1
     learning_rate: float = 0.05
+    opponent_action_loss_weight: float = 0.0
     l2: float = 0.0
     shuffle_buffer_size: int = 1024
     shuffle_seed: int = 1
@@ -148,6 +172,8 @@ class LinearTrainingConfig:
             raise ValueError("epochs must be positive.")
         if self.learning_rate <= 0.0:
             raise ValueError("learning_rate must be positive.")
+        if self.opponent_action_loss_weight < 0.0:
+            raise ValueError("opponent_action_loss_weight must be non-negative.")
         if self.l2 < 0.0:
             raise ValueError("l2 must be non-negative.")
         if self.shuffle_buffer_size < 0:
@@ -163,6 +189,9 @@ class LinearEpochMetrics:
     loss: float
     accuracy: float
     elapsed_seconds: float
+    opponent_examples: int = 0
+    opponent_loss: float | None = None
+    opponent_accuracy: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,6 +200,9 @@ class LinearEpochMetrics:
             "loss": self.loss,
             "accuracy": self.accuracy,
             "elapsed_seconds": self.elapsed_seconds,
+            "opponent_examples": self.opponent_examples,
+            "opponent_loss": self.opponent_loss,
+            "opponent_accuracy": self.opponent_accuracy,
         }
 
 
@@ -192,6 +224,9 @@ class LinearEvaluationMetrics:
     loss: float
     accuracy: float
     elapsed_seconds: float
+    opponent_examples: int = 0
+    opponent_loss: float | None = None
+    opponent_accuracy: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -199,6 +234,9 @@ class LinearEvaluationMetrics:
             "loss": self.loss,
             "accuracy": self.accuracy,
             "elapsed_seconds": self.elapsed_seconds,
+            "opponent_examples": self.opponent_examples,
+            "opponent_loss": self.opponent_loss,
+            "opponent_accuracy": self.opponent_accuracy,
         }
 
 
@@ -286,12 +324,15 @@ def train_linear_policy(
         if initial_model.window_size != training_config.window_size:
             raise ValueError("initial_model window_size must match the training config.")
         weights = [list(row) for row in initial_model.weights]
+        opponent_weights = [list(row) for row in initial_model.opponent_weights]
     else:
-        weights = [list(row) for row in LinearPolicyModel.initialized(
+        initialized = LinearPolicyModel.initialized(
             feature_count=training_config.feature_count,
             window_size=training_config.window_size,
             policy_id=training_config.policy_id,
-        ).weights]
+        )
+        weights = [list(row) for row in initialized.weights]
+        opponent_weights = [list(row) for row in initialized.opponent_weights]
     epoch_metrics = []
     dataset_config = TrajectoryDatasetConfig(
         window_size=training_config.window_size,
@@ -304,6 +345,9 @@ def train_linear_policy(
         total_loss = 0.0
         correct = 0
         examples = 0
+        opponent_total_loss = 0.0
+        opponent_correct = 0
+        opponent_examples = 0
         for example in _iter_epoch_examples(
             paths,
             dataset_config=dataset_config,
@@ -325,6 +369,27 @@ def train_linear_policy(
                 learning_rate=training_config.learning_rate,
                 l2=training_config.l2,
             )
+            if example.opponent_action_index is not None and training_config.opponent_action_loss_weight:
+                opponent_probabilities = _probabilities_from_weights(
+                    opponent_weights,
+                    features,
+                    ALL_ACTIONS_LEGAL_MASK,
+                )
+                opponent_target = int(example.opponent_action_index)
+                opponent_total_loss += -math.log(max(opponent_probabilities[opponent_target], 1e-12))
+                if max(range(ACTION_COUNT), key=lambda index: (opponent_probabilities[index], -index)) == opponent_target:
+                    opponent_correct += 1
+                _sgd_update(
+                    weights=opponent_weights,
+                    features=features,
+                    probabilities=opponent_probabilities,
+                    legal_action_mask=ALL_ACTIONS_LEGAL_MASK,
+                    target_action=opponent_target,
+                    gradient_weight=training_config.opponent_action_loss_weight,
+                    learning_rate=training_config.learning_rate,
+                    l2=training_config.l2,
+                )
+                opponent_examples += 1
             examples += 1
             if training_config.max_examples is not None and examples >= training_config.max_examples:
                 break
@@ -337,6 +402,9 @@ def train_linear_policy(
                 loss=total_loss / examples,
                 accuracy=correct / examples,
                 elapsed_seconds=perf_counter() - start,
+                opponent_examples=opponent_examples,
+                opponent_loss=(opponent_total_loss / opponent_examples) if opponent_examples else None,
+                opponent_accuracy=(opponent_correct / opponent_examples) if opponent_examples else None,
             )
         )
 
@@ -345,6 +413,7 @@ def train_linear_policy(
         feature_count=training_config.feature_count,
         window_size=training_config.window_size,
         weights=tuple(tuple(row) for row in weights),
+        opponent_weights=tuple(tuple(row) for row in opponent_weights),
     )
     validation_metrics = None
     if validation_paths is not None:
@@ -382,6 +451,9 @@ def evaluate_linear_policy(
     total_loss = 0.0
     correct = 0
     examples = 0
+    opponent_total_loss = 0.0
+    opponent_correct = 0
+    opponent_examples = 0
 
     for example in iter_training_examples(paths, config=dataset_config):
         features = features_from_example(example, feature_count=model.feature_count)
@@ -389,6 +461,13 @@ def evaluate_linear_policy(
         total_loss += -math.log(max(probabilities[example.action_index], 1e-12))
         if model.predict_action(features, example.legal_action_mask) == example.action_index:
             correct += 1
+        if example.opponent_action_index is not None:
+            opponent_probabilities = model.opponent_action_probabilities(features)
+            opponent_target = int(example.opponent_action_index)
+            opponent_total_loss += -math.log(max(opponent_probabilities[opponent_target], 1e-12))
+            if model.predict_opponent_action(features) == opponent_target:
+                opponent_correct += 1
+            opponent_examples += 1
         examples += 1
         if max_examples is not None and examples >= max_examples:
             break
@@ -400,6 +479,9 @@ def evaluate_linear_policy(
         loss=total_loss / examples,
         accuracy=correct / examples,
         elapsed_seconds=perf_counter() - start,
+        opponent_examples=opponent_examples,
+        opponent_loss=(opponent_total_loss / opponent_examples) if opponent_examples else None,
+        opponent_accuracy=(opponent_correct / opponent_examples) if opponent_examples else None,
     )
 
 
