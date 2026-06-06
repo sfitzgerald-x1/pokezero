@@ -16,6 +16,7 @@ from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_di
 
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
 LINEAR_POLICY_SPEC_PREFIX = "linear:"
+NEURAL_POLICY_SPEC_PREFIX = "neural:"
 
 
 @dataclass(frozen=True)
@@ -426,9 +427,17 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         linear_options = _linear_policy_options(options)
         model = load_linear_model(Path(checkpoint))
         return lambda: LinearSoftmaxPolicy(model=model, **linear_options)
+    if lowered.startswith(NEURAL_POLICY_SPEC_PREFIX):
+        from .neural_policy import load_transformer_policy
+
+        checkpoint = policy_body[len(NEURAL_POLICY_SPEC_PREFIX) :].strip()
+        if not checkpoint:
+            raise ValueError("neural policy spec must include a checkpoint path after 'neural:'.")
+        neural_options = _neural_policy_options(options)
+        return lambda: load_transformer_policy(Path(checkpoint), **neural_options)
     raise ValueError(
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
-        "scripted-teacher, or linear:/path/to/checkpoint.json."
+        "scripted-teacher, linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
     )
 
 
@@ -486,6 +495,17 @@ def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
         "exploration_epsilon": exploration_epsilon,
         "sampling_temperature": sampling_temperature,
     }
+
+
+def _neural_policy_options(options: Mapping[str, str]) -> dict[str, object]:
+    supported = {"sample", "deterministic", "epsilon", "temperature", "device"}
+    unknown = sorted(set(options) - supported)
+    if unknown:
+        raise ValueError(f"Unsupported neural policy option(s): {', '.join(unknown)}.")
+    policy_options = _linear_policy_options({key: value for key, value in options.items() if key != "device"})
+    if options.get("device"):
+        policy_options["device"] = options["device"]
+    return policy_options
 
 
 def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:

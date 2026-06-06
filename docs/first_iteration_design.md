@@ -30,6 +30,7 @@ Partially implemented:
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
 - Belief tracking is wired into the observation path as compact summaries, but full explicit ability/item/move masks and neural-policy-specific belief embeddings are not implemented yet.
 - Opponent-action prediction exists in the linear baseline as an auxiliary supervised head, but not yet as a neural transformer head.
+- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading; it still needs torch-backed CI and benchmark validation.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
@@ -43,9 +44,9 @@ Known limitations:
 
 Not implemented yet:
 
-- Transformer/entity-token policy model.
+- Benchmark-validated transformer policy checkpoints in the self-play harness.
 - Value head or PPO-style online actor-critic training.
-- GPU training path.
+- Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.
 - Long-run benchmark thresholds, automated regression detection, or richer managed checkpoint lifecycle tooling.
 
@@ -133,7 +134,7 @@ Switch actions are dense candidates over the non-active team members in canonica
 
 ## Model Shape
 
-The first model should use a small transformer over entity, action, and history tokens.
+The first neural model should use a small transformer over entity, action, and history tokens. The initial PyTorch scaffold lives behind the optional `neural` extra so the base rollout/evaluation harness stays lightweight.
 
 Inputs:
 
@@ -148,7 +149,7 @@ Outputs:
 - scalar value estimate
 - opponent-action prediction logits for auxiliary training
 
-The current linear baseline ships an optional supervised opponent-action auxiliary head trained from recorded opponent move/switch labels, off by default. Because the linear policy and aux head use independent weights over fixed hashed features, the head shares no representation with the policy and cannot influence play in the linear baseline — it is scaffolding that validates the label pipeline and metrics. The later transformer policy should keep this head and predict the opponent's chosen move or switch slot from the same information state; there it shares the trunk representation, so the auxiliary task can actually shape temporal prediction and belief use.
+The current linear baseline ships an optional supervised opponent-action auxiliary head trained from recorded opponent move/switch labels, off by default. Because the linear policy and aux head use independent weights over fixed hashed features, the head shares no representation with the policy and cannot influence play in the linear baseline — it is scaffolding that validates the label pipeline and metrics. The transformer scaffold keeps this head and predicts the opponent's chosen move or switch slot from the same information state; once wired into training and self-play, it will share the trunk representation so the auxiliary task can shape temporal prediction and belief use.
 
 ## Training Approach
 
