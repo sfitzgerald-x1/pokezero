@@ -30,7 +30,7 @@ Partially implemented:
 - Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
 - Belief tracking is wired into the observation path as compact summaries, but full explicit ability/item/move masks and neural-policy-specific belief embeddings are not implemented yet.
 - Opponent-action prediction exists in the linear baseline as an auxiliary supervised head, but not yet as a neural transformer head.
-- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, but neural checkpoints are not yet wired into rollout/self-play policy specs.
+- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading; it still needs torch-backed CI and benchmark validation.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
@@ -44,7 +44,7 @@ Known limitations:
 
 Not implemented yet:
 
-- Runnable transformer policy checkpoints in the self-play harness.
+- Benchmark-validated transformer policy checkpoints in the self-play harness.
 - Value head or PPO-style online actor-critic training.
 - Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.

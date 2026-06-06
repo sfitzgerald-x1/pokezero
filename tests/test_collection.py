@@ -28,6 +28,7 @@ from pokezero.collection import (
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_linear_model
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
+from pokezero.neural_policy import TorchUnavailableError, torch_available
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy, ScriptedTeacherPolicy
 from pokezero.rollout import RolloutConfig
@@ -375,6 +376,20 @@ class CollectionTest(unittest.TestCase):
         self.assertTrue(policy.deterministic)
         self.assertEqual(policy.exploration_epsilon, 0.25)
         self.assertEqual(policy.sampling_temperature, 2.5)
+
+    def test_policy_from_spec_accepts_neural_checkpoint_specs(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch checkpoint fixture is not available in this test module.")
+        with self.assertRaisesRegex(TorchUnavailableError, "pip install -e"):
+            policy_from_spec("neural:/tmp/model.pt?deterministic=true&epsilon=0.1&temperature=0.9&device=cpu")
+
+    def test_policy_from_spec_rejects_empty_neural_checkpoint_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "after 'neural:'"):
+            policy_from_spec("neural:")
+
+    def test_policy_from_name_mentions_neural_policy_specs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "neural:/path/to/checkpoint.pt"):
+            policy_from_name("unknown")
 
     def test_policy_factory_from_spec_reuses_immutable_linear_model(self) -> None:
         model = LinearPolicyModel.initialized(

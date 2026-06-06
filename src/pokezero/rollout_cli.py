@@ -23,7 +23,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     collect.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
     collect.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
-    policy_help = "Policy spec. Supports random-legal, simple-legal, scripted-teacher, or linear:/path/to/checkpoint.json."
+    policy_help = (
+        "Policy spec. Supports random-legal, simple-legal, scripted-teacher, "
+        "linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
+    )
     collect.add_argument("--p1-policy", default="random-legal", help=f"Policy for p1. {policy_help}")
     collect.add_argument("--p2-policy", default="random-legal", help=f"Policy for p2. {policy_help}")
     collect.add_argument("--append", action="store_true", help="Append to the output JSONL instead of replacing it.")

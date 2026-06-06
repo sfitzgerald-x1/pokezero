@@ -11,11 +11,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from os import PathLike
 from pathlib import Path
+import random
 from typing import Any, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
 from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
+from .policy import PolicyDecision, legal_action_indices
 from .showdown import (
     ACTION_CANDIDATE_TOKEN_OFFSET,
     CATEGORY_ID_BUCKETS,
@@ -33,6 +35,8 @@ except ModuleNotFoundError:  # pragma: no cover - covered through require_torch.
 NEURAL_POLICY_SCHEMA_VERSION = "pokezero.neural_policy.v0"
 NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
+DEFAULT_CATEGORY_VOCAB_SIZE = CATEGORY_ID_BUCKETS + 1
+DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
 
 
 class TorchUnavailableError(RuntimeError):
@@ -45,7 +49,8 @@ class TransformerPolicyConfig:
 
     policy_id: str = "entity-transformer"
     window_size: int = 4
-    categorical_vocab_size: int = CATEGORY_ID_BUCKETS
+    categorical_vocab_size: int = DEFAULT_CATEGORY_VOCAB_SIZE
+    token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
     categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
     numeric_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count
     token_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.token_count
@@ -66,6 +71,8 @@ class TransformerPolicyConfig:
             raise ValueError("window_size must be positive.")
         if self.categorical_vocab_size <= 1:
             raise ValueError("categorical_vocab_size must be greater than 1.")
+        if self.token_type_vocab_size <= 1:
+            raise ValueError("token_type_vocab_size must be greater than 1.")
         if self.categorical_feature_count <= 0:
             raise ValueError("categorical_feature_count must be positive.")
         if self.numeric_feature_count <= 0:
@@ -91,21 +98,28 @@ class TransformerPolicyConfig:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
         return cls(
-            policy_id=str(payload.get("policy_id") or "entity-transformer"),
-            window_size=int(payload.get("window_size") or 4),
-            categorical_vocab_size=int(payload.get("categorical_vocab_size") or CATEGORY_ID_BUCKETS),
-            categorical_feature_count=int(
-                payload.get("categorical_feature_count") or DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
+            policy_id=_str_field(payload, "policy_id", "entity-transformer"),
+            window_size=_int_field(payload, "window_size", 4),
+            categorical_vocab_size=_int_field(payload, "categorical_vocab_size", DEFAULT_CATEGORY_VOCAB_SIZE),
+            token_type_vocab_size=_int_field(payload, "token_type_vocab_size", DEFAULT_TOKEN_TYPE_VOCAB_SIZE),
+            categorical_feature_count=_int_field(
+                payload,
+                "categorical_feature_count",
+                DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
             ),
-            numeric_feature_count=int(payload.get("numeric_feature_count") or DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count),
-            token_count=int(payload.get("token_count") or DEFAULT_REPLAY_OBSERVATION_SPEC.token_count),
-            embedding_dim=int(payload.get("embedding_dim") or 128),
-            transformer_layers=int(payload.get("transformer_layers") or 2),
-            attention_heads=int(payload.get("attention_heads") or 4),
-            feedforward_dim=int(payload.get("feedforward_dim") or 256),
-            dropout=float(payload.get("dropout", 0.1)),
-            action_schema_version=str(payload.get("action_schema_version") or ACTION_SCHEMA_VERSION),
-            observation_schema_version=str(payload.get("observation_schema_version") or OBSERVATION_SCHEMA_VERSION),
+            numeric_feature_count=_int_field(
+                payload,
+                "numeric_feature_count",
+                DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+            ),
+            token_count=_int_field(payload, "token_count", DEFAULT_REPLAY_OBSERVATION_SPEC.token_count),
+            embedding_dim=_int_field(payload, "embedding_dim", 128),
+            transformer_layers=_int_field(payload, "transformer_layers", 2),
+            attention_heads=_int_field(payload, "attention_heads", 4),
+            feedforward_dim=_int_field(payload, "feedforward_dim", 256),
+            dropout=_float_field(payload, "dropout", 0.1),
+            action_schema_version=_str_field(payload, "action_schema_version", ACTION_SCHEMA_VERSION),
+            observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
         )
 
 
@@ -201,7 +215,7 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             super().__init__()
             self.config = config
             self.category_embedding = nn.Embedding(config.categorical_vocab_size, config.embedding_dim, padding_idx=0)
-            self.token_type_embedding = nn.Embedding(config.categorical_vocab_size, config.embedding_dim, padding_idx=0)
+            self.token_type_embedding = nn.Embedding(config.token_type_vocab_size, config.embedding_dim)
             self.history_position_embedding = nn.Embedding(config.window_size, config.embedding_dim)
             self.numeric_projection = nn.Linear(config.numeric_feature_count, config.embedding_dim)
             encoder_layer = nn.TransformerEncoderLayer(
@@ -232,7 +246,7 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             clipped_categories = categorical_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1).long()
             category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
             token_embeddings = self.token_type_embedding(
-                token_type_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1).long()
+                token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
             )
             numeric_embeddings = self.numeric_projection(numeric_features.float())
             history_positions = torch.arange(window_size, device=categorical_ids.device)
@@ -303,7 +317,117 @@ def observation_window_to_torch(
         "token_type_ids": torch_module.tensor((token_type_ids,), dtype=torch_module.long, device=device),
         "attention_mask": torch_module.tensor((attention_mask,), dtype=torch_module.bool, device=device),
         "history_mask": torch_module.tensor((history_mask,), dtype=torch_module.bool, device=device),
+        "legal_action_mask": torch_module.tensor((tuple(observation.legal_action_mask),), dtype=torch_module.bool, device=device),
     }
+
+
+@dataclass
+class TransformerSoftmaxPolicy:
+    """Policy adapter that makes a transformer checkpoint playable in rollouts."""
+
+    model: Any
+    result: TransformerTrainingResult
+    deterministic: bool = True
+    exploration_epsilon: float = 0.0
+    sampling_temperature: float = 1.0
+    device: str | Any | None = None
+    policy_id: str | None = None
+    _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
+
+    def __post_init__(self) -> None:
+        require_torch()
+        if not 0.0 <= self.exploration_epsilon <= 1.0:
+            raise ValueError("exploration_epsilon must be between 0 and 1.")
+        if self.sampling_temperature <= 0.0:
+            raise ValueError("sampling_temperature must be positive.")
+        if self.policy_id is None:
+            self.policy_id = self.result.model_config.policy_id
+        if self._history_by_player is None:
+            self._history_by_player = {}
+        if hasattr(self.model, "eval"):
+            self.model.eval()
+        if self.device is not None and hasattr(self.model, "to"):
+            self.model.to(self.device)
+
+    def reset(self) -> None:
+        if self._history_by_player is not None:
+            self._history_by_player.clear()
+
+    def select_action(
+        self,
+        observation: PokeZeroObservationV0,
+        *,
+        rng: random.Random,
+    ) -> PolicyDecision:
+        torch_module = require_torch()
+        player_key = _observation_player_key(observation)
+        history_by_player = self._history_by_player if self._history_by_player is not None else {}
+        history = history_by_player.setdefault(player_key, [])
+        history.append(observation)
+        tensors = observation_window_to_torch(
+            history[-self.result.model_config.window_size :],
+            window_size=self.result.model_config.window_size,
+            device=self.device,
+        )
+        with torch_module.no_grad():
+            output = self.model(
+                categorical_ids=tensors["categorical_ids"],
+                numeric_features=tensors["numeric_features"],
+                token_type_ids=tensors["token_type_ids"],
+                attention_mask=tensors["attention_mask"],
+                history_mask=tensors["history_mask"],
+            )
+            probabilities = _masked_action_probabilities(
+                output.policy_logits[0],
+                tensors["legal_action_mask"][0],
+                temperature=self.sampling_temperature,
+            )
+        legal = legal_action_indices(observation.legal_action_mask)
+        greedy_action = max(legal, key=lambda index: (float(probabilities[index].item()), -index))
+        random_exploration = self.exploration_epsilon and rng.random() < self.exploration_epsilon
+        if random_exploration:
+            action_index = rng.choice(legal)
+        elif self.deterministic:
+            action_index = greedy_action
+        else:
+            action_index = _sample_action(tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)), legal, rng)
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=str(self.policy_id),
+            action_probability=_behavior_probability(
+                action_index=action_index,
+                probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+                legal=legal,
+                deterministic=self.deterministic,
+                greedy_action=greedy_action,
+                exploration_epsilon=self.exploration_epsilon,
+            ),
+            metadata={
+                "policy_family": "transformer-softmax",
+                "deterministic": self.deterministic,
+                "exploration_epsilon": self.exploration_epsilon,
+                "sampling_temperature": self.sampling_temperature,
+            },
+        )
+
+
+def load_transformer_policy(
+    path: str | PathLike[str] | Path,
+    *,
+    deterministic: bool = True,
+    exploration_epsilon: float = 0.0,
+    sampling_temperature: float = 1.0,
+    device: str | Any | None = None,
+) -> TransformerSoftmaxPolicy:
+    model, result = load_transformer_checkpoint(path, map_location=device)
+    return TransformerSoftmaxPolicy(
+        model=model,
+        result=result,
+        deterministic=deterministic,
+        exploration_epsilon=exploration_epsilon,
+        sampling_temperature=sampling_temperature,
+        device=device,
+    )
 
 
 def train_transformer_policy(
@@ -383,7 +507,7 @@ def save_transformer_checkpoint(
 
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
-    payload = torch_module.load(Path(path), map_location=map_location)
+    payload = torch_module.load(Path(path), map_location=map_location, weights_only=True)
     if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
         raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
     model_config = TransformerPolicyConfig.from_dict(payload["model_config"])
@@ -504,6 +628,44 @@ def _masked_mean(values: Any, mask: Any) -> Any:
     return (values * weights).sum(dim=1) / denominator
 
 
+def _masked_action_probabilities(logits: Any, legal_action_mask: Any, *, temperature: float) -> Any:
+    torch_module = require_torch()
+    masked_logits = logits.masked_fill(~legal_action_mask.bool(), -1e9)
+    return torch_module.nn.functional.softmax(masked_logits / temperature, dim=0)
+
+
+def _sample_action(probabilities: Sequence[float], legal: Sequence[int], rng: random.Random) -> int:
+    threshold = rng.random()
+    cumulative = 0.0
+    for action_index in legal:
+        cumulative += probabilities[action_index]
+        if threshold <= cumulative:
+            return action_index
+    return legal[-1]
+
+
+def _behavior_probability(
+    *,
+    action_index: int,
+    probabilities: Sequence[float],
+    legal: Sequence[int],
+    deterministic: bool,
+    greedy_action: int,
+    exploration_epsilon: float,
+) -> float:
+    if deterministic:
+        exploit_probability = 1.0 - exploration_epsilon if action_index == greedy_action else 0.0
+        explore_probability = exploration_epsilon / len(legal)
+        return exploit_probability + explore_probability
+    return probabilities[action_index]
+
+
+def _observation_player_key(observation: PokeZeroObservationV0) -> str:
+    if observation.perspective is None:
+        return "default"
+    return observation.perspective.player_id or observation.perspective.showdown_slot
+
+
 def _zeros_like(value: Any) -> Any:
     if isinstance(value, bool):
         return False
@@ -518,3 +680,21 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _int_field(payload: Mapping[str, Any], key: str, default: int) -> int:
+    if key not in payload:
+        return default
+    return int(payload[key])
+
+
+def _float_field(payload: Mapping[str, Any], key: str, default: float) -> float:
+    if key not in payload:
+        return default
+    return float(payload[key])
+
+
+def _str_field(payload: Mapping[str, Any], key: str, default: str) -> str:
+    if key not in payload:
+        return default
+    return str(payload[key])

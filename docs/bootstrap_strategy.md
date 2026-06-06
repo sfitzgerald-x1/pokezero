@@ -104,7 +104,7 @@ pip install -e '.[neural]'
 python -m pokezero.neural_cli describe
 ```
 
-The neural CLI can train an entity-token transformer checkpoint from rollout JSONL, but neural checkpoints are not yet accepted by `policy_from_spec` or self-play. Treat this as the training-path scaffold, not the production self-play policy path.
+The neural CLI can train an entity-token transformer checkpoint from rollout JSONL. Neural checkpoints can be used in rollout/self-play policy specs as `neural:/path/to/checkpoint.pt`, but this path still needs torch-backed smoke coverage and benchmark validation before it should be treated as a production self-play policy path.
 
 The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
 
