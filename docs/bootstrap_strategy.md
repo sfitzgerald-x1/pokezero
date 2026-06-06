@@ -97,6 +97,15 @@ The CLI keeps the scripted teacher strict by default. A short preflight run exec
 
 Linear training can train a supervised opponent-action auxiliary head via `--opponent-action-loss-weight`, but it is off by default (weight `0`). The linear policy's action weights are independent of this head, so enabling it does not change play; it exists as opt-in scaffolding so the later transformer policy can carry the same prediction task on a shared representation. Set a positive weight only to collect opponent-prediction metrics or to train the head in isolation.
 
+The first transformer scaffold is available behind the optional neural dependency extra:
+
+```bash
+pip install -e '.[neural]'
+python -m pokezero.neural_cli describe
+```
+
+The neural CLI can train an entity-token transformer checkpoint from rollout JSONL, but neural checkpoints are not yet accepted by `policy_from_spec` or self-play. Treat this as the training-path scaffold, not the production self-play policy path.
+
 The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
 
 Use the generated checkpoint as the first self-play policy:
