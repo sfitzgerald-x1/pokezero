@@ -106,6 +106,15 @@ python -m pokezero.neural_cli describe
 
 The neural CLI can train an entity-token transformer checkpoint from rollout JSONL. Neural checkpoints can be used in rollout/self-play policy specs as `neural:/path/to/checkpoint.pt`, but this path still needs torch-backed smoke coverage and benchmark validation before it should be treated as a production self-play policy path.
 
+Benchmark a neural checkpoint through the same local Showdown harness:
+
+```bash
+python -m pokezero.neural_cli benchmark \
+  --checkpoint runs/neural-bootstrap/entity-transformer.pt \
+  --games 50 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
 The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
 
 Use the generated checkpoint as the first self-play policy:

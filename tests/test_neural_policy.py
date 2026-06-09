@@ -138,6 +138,26 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_benchmark_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(["benchmark", "--checkpoint", "checkpoint.pt", "--games", "1"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
+    def test_neural_cli_help_lists_benchmark_command(self) -> None:
+        stdout = io.StringIO()
+
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stdout(stdout):
+            neural_cli_main(["--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("benchmark", stdout.getvalue())
+
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
