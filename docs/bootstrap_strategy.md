@@ -104,7 +104,7 @@ pip install -e '.[neural]'
 python -m pokezero.neural_cli describe
 ```
 
-The neural CLI can train an entity-token transformer checkpoint from rollout JSONL. Neural checkpoints can be used in rollout and benchmark policy specs as `neural:/path/to/checkpoint.pt`. The current self-play iteration CLI still trains linear checkpoints, so `--initial-policy neural:...` is intentionally rejected until a neural self-play training path exists.
+The neural CLI can train an entity-token transformer checkpoint from rollout JSONL. Neural checkpoints can be used in rollout and benchmark policy specs as `neural:/path/to/checkpoint.pt`. The linear self-play iteration CLI intentionally rejects `--initial-policy neural:...`; neural checkpoints use the separate neural iteration command below.
 
 Benchmark a neural checkpoint through the same local Showdown harness:
 
@@ -115,7 +115,22 @@ python -m pokezero.neural_cli benchmark \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-The default benchmark is intentionally small and serial. Increase `--benchmark-games` for promotion decisions; set it to `0` only for smoke runs where the manifest does not need strength evidence.
+Run a first neural self-play iteration loop:
+
+```bash
+python -m pokezero.neural_cli iterate \
+  --run-dir runs/neural-selfplay \
+  --initial-policy linear:runs/scripted-teacher-bootstrap/linear-bootstrap.json \
+  --iterations 3 \
+  --games-per-iteration 200 \
+  --workers 4 \
+  --evaluation-games 25 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+This neural loop collects current-policy-only rollout data, trains a transformer checkpoint from accumulated training rollouts each iteration, benchmarks the checkpoint when `--evaluation-games` is positive, and writes per-iteration manifests. It is still supervised/value-head training over rollout records, not PPO.
+
+The standalone neural benchmark is intentionally small and serial. Increase `--games` for strength checks. In the neural iteration command, increase `--evaluation-games` for per-iteration benchmark evidence or set it to `0` for smoke runs.
 
 Use the generated checkpoint as the first self-play policy:
 

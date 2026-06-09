@@ -27,10 +27,10 @@ Implemented:
 
 Partially implemented:
 
-- Temporal context exists in dataset windows and linear feature hashing, but the end-state model has not been implemented.
+- Temporal context exists in dataset windows, linear feature hashing, and the transformer scaffold; PPO-style online training is not implemented.
 - Belief tracking is wired into the observation path as compact summaries, but full explicit ability/item/move masks and neural-policy-specific belief embeddings are not implemented yet.
-- Opponent-action prediction exists in the linear baseline as an auxiliary supervised head, but not yet as a neural transformer head.
-- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading and a neural benchmark CLI; neural checkpoints are not yet trainable through the self-play iteration loop.
+- Opponent-action prediction exists in the linear baseline and transformer scaffold as an auxiliary supervised head.
+- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
@@ -44,8 +44,8 @@ Known limitations:
 
 Not implemented yet:
 
-- Benchmark-validated transformer policy checkpoints in the self-play harness.
-- Value head or PPO-style online actor-critic training.
+- PPO-style online actor-critic training.
+- Promotion-gated neural checkpoint registry integration.
 - Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.
 - Long-run benchmark thresholds, automated regression detection, or richer managed checkpoint lifecycle tooling.
