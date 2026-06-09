@@ -176,35 +176,17 @@ def _benchmark(args: argparse.Namespace) -> int:
             BenchmarkMatchup(
                 f"random-legal vs {policy_id}",
                 RandomLegalPolicy(),
-                _policy_from_checkpoint(
-                    args.checkpoint,
-                    deterministic=deterministic,
-                    exploration_epsilon=args.epsilon,
-                    sampling_temperature=args.temperature,
-                    device=args.device,
-                ),
+                checkpoint_policy,
             ),
             BenchmarkMatchup(
                 f"{policy_id} vs simple-legal",
-                _policy_from_checkpoint(
-                    args.checkpoint,
-                    deterministic=deterministic,
-                    exploration_epsilon=args.epsilon,
-                    sampling_temperature=args.temperature,
-                    device=args.device,
-                ),
+                checkpoint_policy,
                 SimpleLegalPolicy(),
             ),
             BenchmarkMatchup(
                 f"simple-legal vs {policy_id}",
                 SimpleLegalPolicy(),
-                _policy_from_checkpoint(
-                    args.checkpoint,
-                    deterministic=deterministic,
-                    exploration_epsilon=args.epsilon,
-                    sampling_temperature=args.temperature,
-                    device=args.device,
-                ),
+                checkpoint_policy,
             ),
         ),
     )
