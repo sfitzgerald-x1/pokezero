@@ -291,6 +291,29 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIsNotNone(iteration_manifest["training"]["validation_metrics"])
         self.assertGreater(iteration_manifest["training"]["validation_metrics"]["examples"], 0)
 
+    def test_run_selfplay_iterations_rejects_neural_initial_policy_before_collecting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with self.assertRaisesRegex(ValueError, "linear checkpoints.*neural: initial policies"):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=ResetFailingEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    initial_policy_spec="neural:/tmp/model.pt?deterministic=true",
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
+
+            self.assertFalse((run_dir / "iteration-0001").exists())
+
     def test_run_selfplay_iterations_benchmarks_candidate_against_linear_incumbent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

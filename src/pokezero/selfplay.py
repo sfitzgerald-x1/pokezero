@@ -13,6 +13,7 @@ from .collection import (
     BenchmarkMatchup,
     BenchmarkReport,
     CollectionMetrics,
+    NEURAL_POLICY_SPEC_PREFIX,
     RolloutRecord,
     benchmark_rollouts,
     iter_rollout_records,
@@ -205,6 +206,12 @@ def run_selfplay_iterations(
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
     else:
+        if _is_neural_policy_spec(initial_policy_spec):
+            raise ValueError(
+                "self-play iterate currently trains linear checkpoints; neural: initial policies are not "
+                "supported until a neural self-play training path exists. Use neural_cli benchmark for "
+                "neural checkpoint evaluation."
+            )
         current_policy_spec = initial_policy_spec
         current_model = _initial_model_from_policy_spec(initial_policy_spec)
         if current_model is not None:
@@ -587,6 +594,11 @@ def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | Non
     if isinstance(policy, LinearSoftmaxPolicy):
         return policy.model
     return None
+
+
+def _is_neural_policy_spec(policy_spec: str) -> bool:
+    policy_body = policy_spec.strip().partition("?")[0].strip().lower()
+    return policy_body.startswith(NEURAL_POLICY_SPEC_PREFIX)
 
 
 def _load_prior_iteration_manifests(

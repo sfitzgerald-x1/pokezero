@@ -7,13 +7,19 @@ import json
 from pathlib import Path
 import sys
 
+from .collection import BenchmarkMatchup, benchmark_rollouts
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
     TransformerPolicyConfig,
     TransformerTrainingConfig,
+    load_transformer_policy,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
 )
+from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .rollout import RolloutConfig
+from .rollout_cli import print_benchmark_report
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -45,6 +51,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
     train.add_argument("--policy-id", default="entity-transformer", help="Policy id stored in the checkpoint config.")
     train.set_defaults(func=_train)
+
+    benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
+    benchmark.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
+    benchmark.add_argument("--games", type=int, default=20, help="Number of games per matchup.")
+    benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed for every matchup.")
+    benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    benchmark.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to checkpoint load behavior.")
+    benchmark.add_argument("--sample", action="store_true", help="Sample from the checkpoint policy distribution instead of greedy selection.")
+    benchmark.add_argument("--epsilon", type=float, default=0.0, help="Random legal exploration rate during benchmark.")
+    benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
+    benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
+    benchmark.set_defaults(func=_benchmark)
 
     return parser
 
@@ -121,6 +142,76 @@ def _train(args: argparse.Namespace) -> int:
         print(line)
     print(f"checkpoint: {args.out}")
     return 0
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    deterministic = not bool(args.sample)
+    checkpoint_policy = _policy_from_checkpoint(
+        args.checkpoint,
+        deterministic=deterministic,
+        exploration_epsilon=args.epsilon,
+        sampling_temperature=args.temperature,
+        device=args.device,
+    )
+    policy_id = checkpoint_policy.policy_id
+    report = benchmark_rollouts(
+        games=args.games,
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=rollout_config,
+        seed_start=args.seed_start,
+        matchups=(
+            BenchmarkMatchup(
+                f"{policy_id} vs random-legal",
+                checkpoint_policy,
+                RandomLegalPolicy(),
+            ),
+            BenchmarkMatchup(
+                f"random-legal vs {policy_id}",
+                RandomLegalPolicy(),
+                checkpoint_policy,
+            ),
+            BenchmarkMatchup(
+                f"{policy_id} vs simple-legal",
+                checkpoint_policy,
+                SimpleLegalPolicy(),
+            ),
+            BenchmarkMatchup(
+                f"simple-legal vs {policy_id}",
+                SimpleLegalPolicy(),
+                checkpoint_policy,
+            ),
+        ),
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print_benchmark_report(report)
+    return 0
+
+
+def _policy_from_checkpoint(
+    checkpoint: Path,
+    *,
+    deterministic: bool,
+    exploration_epsilon: float,
+    sampling_temperature: float,
+    device: str | None,
+):
+    return load_transformer_policy(
+        checkpoint,
+        deterministic=deterministic,
+        exploration_epsilon=exploration_epsilon,
+        sampling_temperature=sampling_temperature,
+        device=device,
+    )
 
 
 if __name__ == "__main__":

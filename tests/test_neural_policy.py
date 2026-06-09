@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
@@ -137,6 +138,78 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
+    def test_neural_cli_benchmark_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(["benchmark", "--checkpoint", "checkpoint.pt", "--games", "1"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
+    def test_neural_cli_benchmark_wires_fixed_baseline_matchups(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        stdout = io.StringIO()
+        fake_policy = FakePolicy()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=fake_policy) as load,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "2",
+                    "--seed-start",
+                    "44",
+                    "--json",
+                ]
+            )
+
+        matchups = captured["matchups"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(captured["games"], 2)
+        self.assertEqual(captured["seed_start"], 44)
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke vs simple-legal",
+            "simple-legal vs neural-smoke",
+        ])
+        self.assertIs(matchups[0].p1_policy, fake_policy)
+        self.assertIs(matchups[1].p2_policy, fake_policy)
+        self.assertIs(matchups[2].p1_policy, fake_policy)
+        self.assertIs(matchups[3].p2_policy, fake_policy)
+        self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
+
+    def test_neural_cli_help_lists_benchmark_command(self) -> None:
+        stdout = io.StringIO()
+
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stdout(stdout):
+            neural_cli_main(["--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("benchmark", stdout.getvalue())
 
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():
