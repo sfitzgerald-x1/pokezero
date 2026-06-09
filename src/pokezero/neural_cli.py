@@ -71,6 +71,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate = subparsers.add_parser("iterate", help="Run neural-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
     iterate.add_argument("--iterations", type=int, required=True, help="Number of collect/train/evaluate iterations.")
+    iterate.add_argument("--resume", action="store_true", help="Continue an existing neural self-play run directory from its latest manifest.")
     iterate.add_argument("--games-per-iteration", type=int, required=True, help="Rollout games collected before each train step.")
     iterate.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers per iteration.")
     iterate.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
@@ -78,7 +79,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--seed-start", type=int, default=1, help="First deterministic self-play seed.")
     iterate.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
     iterate.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
-    iterate.add_argument("--initial-policy", default="random-legal", help="Policy spec used before the first checkpoint exists.")
+    iterate.add_argument("--initial-policy", required=True, help="Policy spec used before the first checkpoint exists.")
     iterate.add_argument(
         "--opponent-policy",
         action="append",
@@ -86,7 +87,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
-    iterate.add_argument("--evaluation-games", type=int, default=0, help="Benchmark games per matchup after each train step. Set 0 to disable.")
+    iterate.add_argument(
+        "--evaluation-games",
+        type=int,
+        default=0,
+        help="Benchmark games per matchup after each train step. Required to be positive for multi-iteration runs.",
+    )
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic benchmark seed.")
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
     iterate.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
@@ -289,6 +295,7 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
         worker_count=args.workers,
+        resume=args.resume,
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))

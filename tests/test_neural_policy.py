@@ -165,6 +165,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "1",
                     "--games-per-iteration",
                     "1",
+                    "--initial-policy",
+                    "random-legal",
                 ]
             )
 
@@ -267,6 +269,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "2",
                     "--workers",
                     "3",
+                    "--resume",
                     "--showdown-root",
                     "/tmp/showdown",
                     "--initial-policy",
@@ -289,6 +292,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
         self.assertEqual(kwargs["iterations"], 1)
+        self.assertTrue(kwargs["resume"])
         self.assertEqual(kwargs["games_per_iteration"], 2)
         self.assertEqual(kwargs["initial_policy_spec"], "simple-legal")
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
@@ -345,8 +349,33 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             restored_model, restored_result = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
             policy = TransformerSoftmaxPolicy(model=restored_model, result=restored_result, device="cpu")
             decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
+            _, continued_result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig(
+                    policy_id="neural-smoke-continued",
+                    window_size=2,
+                    categorical_vocab_size=32,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=1,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+                initial_model=restored_model,
+            )
 
         self.assertEqual(result.final_metrics.examples, 2)
+        self.assertEqual(continued_result.model_config.policy_id, "neural-smoke-continued")
         self.assertIn(decision.action_index, {0, 1})
         self.assertEqual(policy.policy_id, "neural-smoke")
 

@@ -30,7 +30,7 @@ Partially implemented:
 - Temporal context exists in dataset windows, linear feature hashing, and the transformer scaffold; PPO-style online training is not implemented.
 - Belief tracking is wired into the observation path as compact summaries, but full explicit ability/item/move masks and neural-policy-specific belief embeddings are not implemented yet.
 - Opponent-action prediction exists in the linear baseline and transformer scaffold as an auxiliary supervised head.
-- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records.
+- A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records with incumbent-gated collector advancement, warm starts, and resume support.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
@@ -39,6 +39,7 @@ Known limitations:
 - Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
+- Neural iteration advancement currently uses a simple incumbent head-to-head win check, not the full promotion registry/gate.
 - The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves and safer switching. It is a bootstrap data source, not the intended long-term policy, and it still lacks hazards and deeper sequence planning.
 - Current observation belief features are compact bucketed facts and counts, not full explicit masks. Detailed candidate variants and evidence logs remain sidecar-only to avoid bloating every trajectory record.
 

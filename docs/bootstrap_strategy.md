@@ -128,9 +128,11 @@ python -m pokezero.neural_cli iterate \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This neural loop collects current-policy-only rollout data, trains a transformer checkpoint from accumulated training rollouts each iteration, benchmarks the checkpoint when `--evaluation-games` is positive, and writes per-iteration manifests. It is still supervised/value-head training over rollout records, not PPO.
+This neural loop collects current-policy-only rollout data, trains a transformer checkpoint from accumulated training rollouts each iteration, benchmarks the checkpoint when `--evaluation-games` is positive, and writes per-iteration manifests. Multi-iteration runs require evaluation games because each candidate must beat the current incumbent before it becomes the next rollout collector. Passing candidates warm-start the next training step; failed candidates remain saved and measured but do not become the collector. Use `--resume` to continue an interrupted neural run from the latest manifest.
 
-The standalone neural benchmark is intentionally small and serial. Increase `--games` for strength checks. In the neural iteration command, increase `--evaluation-games` for per-iteration benchmark evidence or set it to `0` for smoke runs.
+This is still supervised/value-head training over rollout records, not PPO.
+
+The standalone neural benchmark is intentionally small and serial. Increase `--games` for strength checks. In the neural iteration command, increase `--evaluation-games` for per-iteration benchmark evidence; set it to `0` only for one-iteration smoke runs.
 
 Use the generated checkpoint as the first self-play policy:
 

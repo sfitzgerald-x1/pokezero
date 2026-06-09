@@ -114,6 +114,7 @@ from .neural_policy import (
 )
 from .neural_selfplay import (
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+    NeuralAdvancementDecision,
     NeuralSelfPlayIterationResult,
     NeuralSelfPlayRunResult,
     load_neural_selfplay_run_manifest,
@@ -184,6 +185,7 @@ __all__ = [
     "NEURAL_POLICY_SCHEMA_VERSION",
     "NEURAL_SELFPLAY_RUN_SCHEMA_VERSION",
     "NEURAL_TRAINING_SCHEMA_VERSION",
+    "NeuralAdvancementDecision",
     "NeuralSelfPlayIterationResult",
     "NeuralSelfPlayRunResult",
     "ObservationSpec",

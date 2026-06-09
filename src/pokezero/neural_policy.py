@@ -8,7 +8,7 @@ is available.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from os import PathLike
 from pathlib import Path
 import random
@@ -435,12 +435,17 @@ def train_transformer_policy(
     *,
     model_config: TransformerPolicyConfig | None = None,
     training_config: TransformerTrainingConfig | None = None,
+    initial_model: Any | None = None,
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
     resolved_model_config = model_config or TransformerPolicyConfig(window_size=resolved_training_config.window_size)
     device = resolved_training_config.device or ("cuda" if torch_module.cuda.is_available() else "cpu")
-    model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
+    if initial_model is None:
+        model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
+    else:
+        _validate_initial_model_config(initial_model, resolved_model_config)
+        model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
     optimizer = torch_module.optim.AdamW(
         model.parameters(),
         lr=resolved_training_config.learning_rate,
@@ -481,6 +486,15 @@ def train_transformer_policy(
         training_config=resolved_training_config,
         epochs=tuple(epoch_metrics),
     )
+
+
+def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig) -> None:
+    initial_config = getattr(model, "config", None)
+    if initial_config is None:
+        return
+    comparable_expected = replace(expected, policy_id=getattr(initial_config, "policy_id", expected.policy_id))
+    if initial_config != comparable_expected:
+        raise ValueError("initial_model config must match model_config except for policy_id.")
 
 
 def save_transformer_checkpoint(

@@ -18,12 +18,14 @@ from .collection import (
     BenchmarkReport,
     CollectionMetrics,
     benchmark_rollouts,
+    policy_factory_from_spec,
 )
 from .env import PokeZeroEnv
 from .neural_policy import (
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     TransformerTrainingResult,
+    load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
     save_transformer_checkpoint,
@@ -35,6 +37,30 @@ from .selfplay import collect_selfplay_rollouts
 
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
+
+
+@dataclass(frozen=True)
+class NeuralAdvancementDecision:
+    advance_collector: bool
+    reason: str
+    candidate_policy_id: str
+    incumbent_policy_id: str | None = None
+    incumbent_policy_spec: str | None = None
+    candidate_win_rate: float | None = None
+    incumbent_win_rate: float | None = None
+    games: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "advance_collector": self.advance_collector,
+            "reason": self.reason,
+            "candidate_policy_id": self.candidate_policy_id,
+            "incumbent_policy_id": self.incumbent_policy_id,
+            "incumbent_policy_spec": self.incumbent_policy_spec,
+            "candidate_win_rate": self.candidate_win_rate,
+            "incumbent_win_rate": self.incumbent_win_rate,
+            "games": self.games,
+        }
 
 
 @dataclass(frozen=True)
@@ -52,6 +78,7 @@ class NeuralSelfPlayIterationResult:
     metrics: CollectionMetrics
     training: TransformerTrainingResult
     benchmark: BenchmarkReport | None = None
+    advancement: NeuralAdvancementDecision | None = None
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -73,6 +100,12 @@ class NeuralSelfPlayIterationResult:
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
+            "advancement": self.advancement.to_dict() if self.advancement is not None else None,
+            "next_current_policy_spec": (
+                self.checkpoint_policy_spec
+                if self.advancement is not None and self.advancement.advance_collector
+                else self.current_policy_spec
+            ),
         }
 
 
@@ -80,19 +113,51 @@ class NeuralSelfPlayIterationResult:
 class NeuralSelfPlayRunResult:
     run_dir: Path
     iterations: tuple[NeuralSelfPlayIterationResult, ...]
+    prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
         if not self.iterations:
+            if self.prior_iteration_manifests:
+                checkpoint_path = self.prior_iteration_manifests[-1].get("checkpoint_path")
+                return Path(str(checkpoint_path)) if checkpoint_path is not None else None
             return None
         return self.iterations[-1].checkpoint_path
 
+    @property
+    def current_policy_spec(self) -> str | None:
+        if self.iterations:
+            latest = self.iterations[-1].to_manifest_dict()
+            return str(latest["next_current_policy_spec"])
+        if self.prior_iteration_manifests:
+            latest = self.prior_iteration_manifests[-1]
+            current = latest.get("next_current_policy_spec")
+            return str(current) if current is not None else str(latest.get("checkpoint_policy_spec"))
+        return None
+
+    @property
+    def latest_accepted_checkpoint_path(self) -> Path | None:
+        current_policy_spec = self.current_policy_spec
+        if current_policy_spec is None:
+            return None
+        body = current_policy_spec.partition("?")[0].strip()
+        if not body.lower().startswith("neural:"):
+            return None
+        checkpoint = body[len("neural:") :].strip()
+        return Path(checkpoint) if checkpoint else None
+
     def to_dict(self) -> dict[str, Any]:
+        iteration_manifests = [dict(iteration) for iteration in self.prior_iteration_manifests]
+        iteration_manifests.extend(iteration.to_manifest_dict() for iteration in self.iterations)
         return {
             "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
-            "iterations": [iteration.to_manifest_dict() for iteration in self.iterations],
+            "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
+            "current_policy_spec": self.current_policy_spec,
+            "latest_accepted_checkpoint_path": (
+                str(self.latest_accepted_checkpoint_path) if self.latest_accepted_checkpoint_path else None
+            ),
         }
 
 
@@ -123,6 +188,7 @@ def run_neural_selfplay_iterations(
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     worker_count: int = 1,
+    resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
     if iterations <= 0:
@@ -133,6 +199,8 @@ def run_neural_selfplay_iterations(
         raise ValueError("max_historical_opponents must be non-negative.")
     if evaluation_games < 0:
         raise ValueError("evaluation_games must be non-negative.")
+    if iterations > 1 and evaluation_games <= 0:
+        raise ValueError("evaluation_games must be positive for multi-iteration neural self-play advancement.")
     if worker_count <= 0:
         raise ValueError("worker_count must be positive.")
     fixed_opponents = tuple(fixed_opponent_policy_specs)
@@ -141,25 +209,42 @@ def run_neural_selfplay_iterations(
     if model_config.window_size != training_config.window_size:
         raise ValueError("model_config window_size must match training_config window_size.")
 
-    manifest_path = run_dir / "manifest.json"
-    if manifest_path.exists():
-        raise ValueError("neural self-play run manifest already exists; choose a new run_dir.")
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    current_policy_spec = initial_policy_spec
-    checkpoint_history: list[str] = []
-    training_rollout_history: list[Path] = []
+    prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
+    if prior_iteration_manifests:
+        last_iteration = prior_iteration_manifests[-1]
+        current_policy_spec = str(last_iteration.get("next_current_policy_spec") or last_iteration["checkpoint_policy_spec"])
+        current_model = _initial_neural_model_from_policy_spec(current_policy_spec, device=training_config.device)
+        checkpoint_history = [
+            str(iteration["checkpoint_policy_spec"])
+            for iteration in prior_iteration_manifests
+            if _advancement_from_manifest(iteration).get("advance_collector")
+        ]
+        training_rollout_history = [
+            Path(str(path))
+            for path in _sequence(last_iteration.get("training_rollout_paths", ()))
+        ]
+        first_iteration = int(last_iteration["iteration"]) + 1
+        next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
+    else:
+        current_policy_spec = initial_policy_spec
+        current_model = _initial_neural_model_from_policy_spec(current_policy_spec, device=training_config.device)
+        checkpoint_history = []
+        training_rollout_history = []
+        first_iteration = 1
+        next_seed_start = seed_start
     results: list[NeuralSelfPlayIterationResult] = []
 
     for offset in range(iterations):
-        iteration = offset + 1
+        iteration = first_iteration + offset
         iteration_dir = run_dir / f"iteration-{iteration:04d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         rollout_path = iteration_dir / "rollouts.jsonl"
         training_rollout_path = iteration_dir / "training-rollouts.jsonl"
         checkpoint_path = iteration_dir / "transformer-policy.pt"
         iteration_manifest_path = iteration_dir / "manifest.json"
-        iteration_seed_start = seed_start + (offset * games_per_iteration)
+        iteration_seed_start = next_seed_start + (offset * games_per_iteration)
         opponent_policy_specs = _opponent_pool(
             fixed_policy_specs=fixed_opponents,
             checkpoint_history=checkpoint_history,
@@ -187,18 +272,25 @@ def run_neural_selfplay_iterations(
             tuple(training_rollout_history),
             model_config=iteration_model_config,
             training_config=training_config,
+            initial_model=current_model,
         )
         save_transformer_checkpoint(checkpoint_path, model, result=training)
         benchmark = None
         if evaluation_games:
             benchmark = _benchmark_checkpoint(
                 checkpoint_path=checkpoint_path,
+                incumbent_policy_spec=current_policy_spec,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
                 seed_start=evaluation_seed_start + (offset * evaluation_games),
                 device=training_config.device,
             )
+        advancement = _advancement_decision(
+            benchmark=benchmark,
+            candidate_policy_id=training.model_config.policy_id,
+            incumbent_policy_spec=current_policy_spec,
+        )
 
         result = NeuralSelfPlayIterationResult(
             iteration=iteration,
@@ -214,19 +306,34 @@ def run_neural_selfplay_iterations(
             metrics=metrics,
             training=training,
             benchmark=benchmark,
+            advancement=advancement,
         )
         _write_json(iteration_manifest_path, result.to_manifest_dict())
         results.append(result)
-        _write_json(run_dir / "manifest.json", NeuralSelfPlayRunResult(run_dir=run_dir, iterations=tuple(results)).to_dict())
-        checkpoint_history.append(result.checkpoint_policy_spec)
-        current_policy_spec = result.checkpoint_policy_spec
+        _write_json(
+            run_dir / "manifest.json",
+            NeuralSelfPlayRunResult(
+                run_dir=run_dir,
+                iterations=tuple(results),
+                prior_iteration_manifests=tuple(prior_iteration_manifests),
+            ).to_dict(),
+        )
+        if advancement.advance_collector:
+            checkpoint_history.append(result.checkpoint_policy_spec)
+            current_policy_spec = result.checkpoint_policy_spec
+            current_model = model
 
-    return NeuralSelfPlayRunResult(run_dir=run_dir, iterations=tuple(results))
+    return NeuralSelfPlayRunResult(
+        run_dir=run_dir,
+        iterations=tuple(results),
+        prior_iteration_manifests=tuple(prior_iteration_manifests),
+    )
 
 
 def _benchmark_checkpoint(
     *,
     checkpoint_path: Path,
+    incumbent_policy_spec: str,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
     games: int,
@@ -235,6 +342,18 @@ def _benchmark_checkpoint(
 ) -> BenchmarkReport:
     model_policy = load_transformer_policy(checkpoint_path, deterministic=True, device=device)
     policy_id = str(model_policy.policy_id)
+    incumbent_policy = _policy_from_spec_for_evaluation(incumbent_policy_spec, device=device)
+    incumbent_policy_id = str(incumbent_policy.policy_id)
+    incumbent_matchups: tuple[BenchmarkMatchup, ...] = ()
+    if incumbent_policy_id not in {policy_id, "random-legal", "simple-legal"}:
+        incumbent_matchups = (
+            BenchmarkMatchup(f"{policy_id} vs {incumbent_policy_id}", model_policy, incumbent_policy),
+            BenchmarkMatchup(
+                f"{incumbent_policy_id} vs {policy_id}",
+                _policy_from_spec_for_evaluation(incumbent_policy_spec, device=device),
+                model_policy,
+            ),
+        )
     return benchmark_rollouts(
         games=games,
         env_factory=env_factory,
@@ -245,8 +364,101 @@ def _benchmark_checkpoint(
             BenchmarkMatchup(f"random-legal vs {policy_id}", RandomLegalPolicy(), model_policy),
             BenchmarkMatchup(f"{policy_id} vs simple-legal", model_policy, SimpleLegalPolicy()),
             BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), model_policy),
+            *incumbent_matchups,
         ),
     )
+
+
+def _advancement_decision(
+    *,
+    benchmark: BenchmarkReport | None,
+    candidate_policy_id: str,
+    incumbent_policy_spec: str,
+) -> NeuralAdvancementDecision:
+    if benchmark is None:
+        return NeuralAdvancementDecision(
+            advance_collector=False,
+            reason="not_evaluated",
+            candidate_policy_id=candidate_policy_id,
+            incumbent_policy_spec=incumbent_policy_spec,
+        )
+    incumbent_policy_id = str(_policy_from_spec_for_evaluation(incumbent_policy_spec, device=None).policy_id)
+    for result in benchmark.head_to_head_results:
+        ids = {result.first_policy_id, result.second_policy_id}
+        if ids != {candidate_policy_id, incumbent_policy_id}:
+            continue
+        if result.first_policy_id == candidate_policy_id:
+            candidate_win_rate = result.first_policy_win_rate
+            incumbent_win_rate = result.second_policy_win_rate
+        else:
+            candidate_win_rate = result.second_policy_win_rate
+            incumbent_win_rate = result.first_policy_win_rate
+        advance = candidate_win_rate > incumbent_win_rate
+        return NeuralAdvancementDecision(
+            advance_collector=advance,
+            reason="beat_incumbent" if advance else "failed_to_beat_incumbent",
+            candidate_policy_id=candidate_policy_id,
+            incumbent_policy_id=incumbent_policy_id,
+            incumbent_policy_spec=incumbent_policy_spec,
+            candidate_win_rate=candidate_win_rate,
+            incumbent_win_rate=incumbent_win_rate,
+            games=result.games,
+        )
+    return NeuralAdvancementDecision(
+        advance_collector=False,
+        reason="missing_incumbent_benchmark",
+        candidate_policy_id=candidate_policy_id,
+        incumbent_policy_id=incumbent_policy_id,
+        incumbent_policy_spec=incumbent_policy_spec,
+    )
+
+
+def _initial_neural_model_from_policy_spec(policy_spec: str, *, device: str | None):
+    policy_body = policy_spec.strip().partition("?")[0].strip()
+    if not policy_body.lower().startswith("neural:"):
+        return None
+    checkpoint = policy_body[len("neural:") :].strip()
+    if not checkpoint:
+        return None
+    model, _ = load_transformer_checkpoint(Path(checkpoint), map_location=device)
+    return model
+
+
+def _policy_from_spec_for_evaluation(policy_spec: str, *, device: str | None):
+    body, options = _split_policy_spec_options(policy_spec)
+    if body.lower().startswith("neural:"):
+        checkpoint = body[len("neural:") :].strip()
+        if not checkpoint:
+            raise ValueError("neural policy spec must include a checkpoint path after 'neural:'.")
+        return load_transformer_policy(
+            Path(checkpoint),
+            deterministic=True,
+            exploration_epsilon=0.0,
+            device=options.get("device") or device,
+        )
+    return policy_factory_from_spec(_deterministic_policy_spec(policy_spec))()
+
+
+def _deterministic_policy_spec(policy_spec: str) -> str:
+    body, options = _split_policy_spec_options(policy_spec)
+    lowered = body.lower()
+    if not (lowered.startswith("linear:") or lowered.startswith("neural:")):
+        return policy_spec
+    options.pop("sample", None)
+    options["deterministic"] = "true"
+    options["epsilon"] = "0.0"
+    from urllib.parse import urlencode
+
+    return f"{body}?{urlencode(options)}"
+
+
+def _split_policy_spec_options(policy_spec: str) -> tuple[str, dict[str, str]]:
+    body, separator, query = policy_spec.strip().partition("?")
+    if not separator:
+        return body, {}
+    from urllib.parse import parse_qsl
+
+    return body, {key: value for key, value in parse_qsl(query, keep_blank_values=True)}
 
 
 def _opponent_pool(
@@ -262,6 +474,38 @@ def _opponent_pool(
     else:
         historical = []
     return fixed_policy_specs + tuple(historical)
+
+
+def _load_prior_iteration_manifests(
+    run_dir: Path,
+    *,
+    resume: bool,
+) -> tuple[Mapping[str, Any], ...]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        if list(run_dir.glob("iteration-*")):
+            if not resume:
+                raise ValueError("run_dir already contains iteration directories; pass resume=True to inspect or continue it.")
+            raise ValueError("cannot resume: run directory contains no completed neural iteration manifest.")
+        if resume:
+            raise ValueError("cannot resume: neural self-play run manifest does not exist.")
+        return ()
+    if not resume:
+        raise ValueError("neural self-play run manifest already exists; pass resume=True to continue it.")
+    manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+    if manifest.get("schema_version") != NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported neural self-play run schema: {manifest.get('schema_version')!r}.")
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        raise ValueError("cannot resume: neural self-play run manifest contains no iterations.")
+    return iterations
+
+
+def _advancement_from_manifest(iteration: Mapping[str, Any]) -> Mapping[str, Any]:
+    advancement = iteration.get("advancement")
+    if advancement is None:
+        return {}
+    return _mapping(advancement)
 
 
 def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any]:
