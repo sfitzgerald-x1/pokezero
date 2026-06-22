@@ -181,6 +181,7 @@ class RunAuditResult:
     manifest_path: Path
     schema_version: str
     source_type: str
+    source_metadata: Mapping[str, Any]
     iterations: tuple[RunAuditIterationSummary, ...]
     best_benchmark_win_rate: float | None
     latest_benchmark_win_rate: float | None
@@ -207,6 +208,7 @@ class RunAuditResult:
             "manifest_path": str(self.manifest_path),
             "schema_version": self.schema_version,
             "source_type": self.source_type,
+            "source_metadata": dict(self.source_metadata),
             "iterations": [iteration.to_dict() for iteration in self.iterations],
             "latest_iteration": self.latest_iteration,
             "best_benchmark_win_rate": self.best_benchmark_win_rate,
@@ -229,6 +231,7 @@ class RunComparisonEntry:
     label: str
     manifest_path: Path
     source_type: str
+    source_metadata: Mapping[str, Any]
     iteration_count: int
     latest_iteration: int | None
     latest_policy_id: str | None
@@ -258,6 +261,7 @@ class RunComparisonEntry:
             "label": self.label,
             "manifest_path": str(self.manifest_path),
             "source_type": self.source_type,
+            "source_metadata": dict(self.source_metadata),
             "iteration_count": self.iteration_count,
             "latest_iteration": self.latest_iteration,
             "latest_policy_id": self.latest_policy_id,
@@ -489,6 +493,7 @@ def audit_run(
         manifest_path=manifest_path,
         schema_version=schema_version,
         source_type=source_type,
+        source_metadata=_manifest_source_metadata(manifest),
         iterations=iterations,
         best_benchmark_win_rate=best_benchmark_win_rate,
         latest_benchmark_win_rate=latest.benchmark_win_rate,
@@ -735,6 +740,7 @@ def _comparison_entry(
         label=_comparison_label(audit.manifest_path),
         manifest_path=audit.manifest_path,
         source_type=audit.source_type,
+        source_metadata=audit.source_metadata,
         iteration_count=len(audit.iterations),
         latest_iteration=audit.latest_iteration,
         latest_policy_id=latest.policy_id,
@@ -810,6 +816,11 @@ def _source_type(schema_version: str) -> str:
     if schema_version == NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
         return "neural_selfplay"
     raise ValueError(f"Unsupported run manifest schema: {schema_version!r}.")
+
+
+def _manifest_source_metadata(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    source = manifest.get("source")
+    return dict(source) if isinstance(source, Mapping) else {}
 
 
 def _iteration_summary(
