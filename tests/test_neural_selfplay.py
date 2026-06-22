@@ -345,6 +345,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
         ])
         self.assertEqual(trained_initial_models[-1], "entity-test-iter-0001")
+        self.assertEqual(len(run_manifest["invocation_configs"]), 2)
+        self.assertFalse(run_manifest["invocation_configs"][0]["resume"])
+        self.assertEqual(run_manifest["invocation_configs"][0]["seed_start_argument"], 20)
+        self.assertEqual(run_manifest["invocation_configs"][0]["first_iteration_seed_start"], 20)
+        self.assertTrue(run_manifest["invocation_configs"][1]["resume"])
+        self.assertEqual(run_manifest["invocation_configs"][1]["seed_start_argument"], 1)
+        self.assertEqual(run_manifest["invocation_configs"][1]["first_iteration_seed_start"], 22)
+        self.assertEqual(second_manifest["invocation_config"], run_manifest["invocation_configs"][1])
 
     def test_run_neural_selfplay_iterations_auto_promotes_managed_checkpoint(self) -> None:
         collected = []
@@ -376,16 +384,30 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 )
 
             registry = load_promotion_registry(registry_path)
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
             first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
             second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
             first_selection_spec = registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])
 
+        expected_pool_config = {
+            "fixed_opponent_policy_specs": ["random-legal"],
+            "max_historical_opponents": 2,
+            "promotion_registry_path": str(registry_path),
+            "promotion_pool_registry_path": str(registry_path),
+            "required_promoted_opponent_pool_size": None,
+            "promoted_checkpoint_policy_specs": [],
+        }
         self.assertEqual(len(registry.entries), 2)
         self.assertEqual(registry.entries[0].source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
         self.assertEqual(registry.entries[0].label, "neural-candidate-0001")
         self.assertTrue(registry.entries[0].checkpoint_path)
         self.assertEqual(Path(registry.entries[0].checkpoint_path or "").parent, artifact_dir)
         self.assertEqual(registry.entries[0].checkpoint_policy_spec, f"neural:{registry.entries[0].checkpoint_path}")
+        self.assertEqual(run_manifest["invocation_configs"][0]["opponent_pool"], expected_pool_config)
+        self.assertEqual(run_manifest["invocation_configs"][0]["auto_promotion"]["artifact_dir"], str(artifact_dir))
+        self.assertEqual(run_manifest["invocation_configs"][0]["auto_promotion"]["label_prefix"], "neural-candidate")
+        self.assertEqual(first_manifest["opponent_pool_config"], expected_pool_config)
+        self.assertEqual(first_manifest["invocation_config"]["opponent_pool"], expected_pool_config)
         self.assertEqual(first_manifest["promotion"]["recorded"], True)
         self.assertEqual(first_manifest["advancement"]["reason"], "promotion_recorded")
         self.assertEqual(first_manifest["next_current_policy_spec"], first_selection_spec)
