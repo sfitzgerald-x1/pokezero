@@ -270,6 +270,7 @@ def run_selfplay_iterations(
         promotion_registry_path=promotion_registry_path,
         promotion_pool_registry_path=promotion_pool_registry_path,
         required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,
+        promoted_checkpoint_policy_specs=promoted_checkpoint_specs,
     )
     invocation_config = {
         "resume": bool(prior_iteration_manifests),

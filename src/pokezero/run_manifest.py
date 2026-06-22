@@ -19,6 +19,7 @@ def opponent_pool_config_dict(
     promotion_registry_path: Path | None,
     promotion_pool_registry_path: Path | None,
     required_promoted_opponent_pool_size: int | None,
+    promoted_checkpoint_policy_specs: Iterable[str] = (),
 ) -> dict[str, Any]:
     return {
         "fixed_opponent_policy_specs": [str(spec) for spec in fixed_opponent_policy_specs],
@@ -26,6 +27,7 @@ def opponent_pool_config_dict(
         "promotion_registry_path": path_value(promotion_registry_path),
         "promotion_pool_registry_path": path_value(promotion_pool_registry_path),
         "required_promoted_opponent_pool_size": required_promoted_opponent_pool_size,
+        "promoted_checkpoint_policy_specs": [str(spec) for spec in promoted_checkpoint_policy_specs],
     }
 
 

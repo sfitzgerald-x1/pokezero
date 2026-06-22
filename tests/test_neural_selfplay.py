@@ -395,6 +395,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             "promotion_registry_path": str(registry_path),
             "promotion_pool_registry_path": str(registry_path),
             "required_promoted_opponent_pool_size": None,
+            "promoted_checkpoint_policy_specs": [],
         }
         self.assertEqual(len(registry.entries), 2)
         self.assertEqual(registry.entries[0].source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)

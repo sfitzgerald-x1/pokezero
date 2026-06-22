@@ -590,6 +590,7 @@ class SelfPlayTest(unittest.TestCase):
             "promotion_registry_path": str(registry_path),
             "promotion_pool_registry_path": str(registry_path),
             "required_promoted_opponent_pool_size": 1,
+            "promoted_checkpoint_policy_specs": [promoted_spec],
         }
         self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))

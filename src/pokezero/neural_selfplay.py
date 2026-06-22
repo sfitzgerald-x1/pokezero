@@ -288,6 +288,7 @@ def run_neural_selfplay_iterations(
         promotion_registry_path=promotion_registry_path,
         promotion_pool_registry_path=promotion_pool_registry_path,
         required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,
+        promoted_checkpoint_policy_specs=promoted_checkpoint_specs,
     )
     invocation_config = {
         "resume": bool(prior_iteration_manifests),
@@ -773,16 +774,25 @@ def _load_prior_iteration_manifests(
 
 def _load_prior_invocation_configs(run_dir: Path) -> tuple[Mapping[str, Any], ...]:
     manifest_path = run_dir / "manifest.json"
-    if not manifest_path.exists():
-        return ()
-    manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
-    configs = manifest.get("invocation_configs")
-    if configs is not None:
-        return tuple(_mapping(config) for config in _sequence(configs))
-    legacy_config = manifest.get("run_config")
-    if legacy_config is not None:
-        return (_mapping(legacy_config),)
-    return ()
+    if manifest_path.exists():
+        manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+        configs = manifest.get("invocation_configs")
+        if configs is not None:
+            return tuple(_mapping(config) for config in _sequence(configs))
+        legacy_config = manifest.get("run_config")
+        if legacy_config is not None:
+            return (_mapping(legacy_config),)
+    configs_by_fingerprint: dict[str, Mapping[str, Any]] = {}
+    for manifest_path in sorted(run_dir.glob("iteration-*/manifest.json")):
+        manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+        if manifest.get("schema_version") != NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported neural self-play iteration schema: {manifest.get('schema_version')!r}.")
+        config = manifest.get("invocation_config")
+        if config is None:
+            continue
+        mapped = _mapping(config)
+        configs_by_fingerprint.setdefault(json.dumps(mapped, sort_keys=True), mapped)
+    return tuple(configs_by_fingerprint.values())
 
 
 def _advancement_from_manifest(iteration: Mapping[str, Any]) -> Mapping[str, Any]:
