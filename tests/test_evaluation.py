@@ -609,7 +609,10 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("workers must be positive", stderr.getvalue())
 
     def test_eval_cli_cpu_smoke_run_executes_recipe_steps(self) -> None:
-        with tempfile.TemporaryDirectory() as showdown_root:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            showdown_root = Path(temp_dir) / "showdown"
+            showdown_root.mkdir()
+            run_root = Path(temp_dir) / "runs" / "smoke"
             with (
                 patch(
                     "pokezero.eval_cli.subprocess.run",
@@ -621,13 +624,14 @@ class PromotionGateTest(unittest.TestCase):
                     [
                         "cpu-smoke-run",
                         "--run-root",
-                        "runs/smoke",
+                        str(run_root),
                         "--python-binary",
                         "./.venv/bin/python",
                         "--showdown-root",
-                        showdown_root,
+                        str(showdown_root),
                     ]
                 )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_count, 5)
@@ -640,9 +644,22 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("cpu_smoke_run:", output)
         self.assertIn("running_step: 1/5 bootstrap teacher checkpoint", output)
         self.assertIn("cpu_smoke_run: PASS", output)
+        self.assertEqual(summary["schema_version"], "pokezero.cpu_smoke_run_summary.v1")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["failed_step"], None)
+        self.assertEqual(summary["recipe"]["run_root"], str(run_root))
+        self.assertEqual(len(summary["steps"]), 5)
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 5)
+        self.assertEqual([step["returncode"] for step in summary["steps"]], [0] * 5)
+        self.assertIn("started_at", summary)
+        self.assertIn("ended_at", summary)
+        self.assertIsInstance(summary["duration_seconds"], float)
 
     def test_eval_cli_cpu_smoke_run_stops_on_failed_step(self) -> None:
-        with tempfile.TemporaryDirectory() as showdown_root:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            showdown_root = Path(temp_dir) / "showdown"
+            showdown_root.mkdir()
+            run_root = Path(temp_dir) / "runs" / "smoke"
             with (
                 patch(
                     "pokezero.eval_cli.subprocess.run",
@@ -655,17 +672,26 @@ class PromotionGateTest(unittest.TestCase):
                     [
                         "cpu-smoke-run",
                         "--run-root",
-                        "runs/smoke",
+                        str(run_root),
                         "--python-binary",
                         "./.venv/bin/python",
                         "--showdown-root",
-                        showdown_root,
+                        str(showdown_root),
                     ]
                 )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 7)
         self.assertEqual(run.call_count, 2)
         self.assertIn("cpu smoke step 2 failed with exit code 7", stderr.getvalue())
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(
+            summary["failed_step"],
+            {"index": 2, "name": "run smoke self-play iteration loop", "returncode": 7},
+        )
+        self.assertEqual(len(summary["steps"]), 2)
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed", "failed"])
+        self.assertEqual([step["returncode"] for step in summary["steps"]], [0, 7])
 
     def test_eval_cli_cpu_smoke_run_rejects_missing_explicit_showdown_root(self) -> None:
         missing_root = "/tmp/pokezero-missing-showdown-root"
