@@ -3475,6 +3475,7 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
         summary,
         refresh=args.refresh_derived_audit,
     )
+    runtime_audit = _cpu_long_run_runtime_audit_report(summary)
     derived_audit_requirement_passed = (
         run_report.get("available") is True and run_report.get("audit_passed") is True
     )
@@ -3487,6 +3488,7 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
+        payload["runtime_audit"] = runtime_audit
         payload["derived_run_report"] = run_report
         payload["derived_run_report_source"] = run_report_source
         if args.require_derived_audit:
@@ -3518,6 +3520,7 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
             print("long_run_ready_reasons:")
             for reason in reasons:
                 print(f"- {reason}")
+    _print_cpu_long_run_runtime_audit_report(runtime_audit)
     _print_cpu_long_run_derived_run_report(run_report)
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
@@ -4441,6 +4444,104 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
     return report
 
 
+def _cpu_long_run_runtime_audit_report(summary: Mapping[str, object]) -> dict[str, object]:
+    recipe = summary.get("recipe")
+    if not isinstance(recipe, Mapping):
+        return {
+            "available": False,
+            "source": "unknown",
+            "audit_config_path": None,
+            "audit_profile": None,
+            "error": "recipe_unavailable",
+        }
+
+    payload: dict[str, object] = {
+        "available": False,
+        "source": _cpu_long_run_report_audit_source(recipe),
+        "audit_config_path": _cpu_long_run_report_runtime_audit_config_path(recipe),
+        "audit_profile": _cpu_long_run_report_runtime_audit_profile(recipe),
+    }
+    try:
+        audit_config = _cpu_long_run_report_audit_config(recipe)
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        payload["error"] = str(exc)
+        return payload
+
+    config_dict = run_audit_config_to_dict(audit_config)
+    minimum_evaluation_games = _minimum_selfplay_post_iteration_evaluation_games(config_dict)
+    recorded_evaluation_games = _cpu_long_run_report_recorded_evaluation_games(recipe)
+    payload.update(
+        {
+            "available": True,
+            "error": None,
+            "config": config_dict,
+            "minimum_evaluation_games": minimum_evaluation_games,
+            "recorded_evaluation_games": recorded_evaluation_games,
+            "post_iteration_command_flags": list(
+                _cpu_long_run_runtime_post_iteration_command_flags(
+                    recipe,
+                    config_dict,
+                    evaluation_games=recorded_evaluation_games or minimum_evaluation_games,
+                )
+            ),
+        }
+    )
+    return payload
+
+
+def _cpu_long_run_report_recorded_evaluation_games(recipe: Mapping[str, object]) -> int | None:
+    value = recipe.get("evaluation_games")
+    if value is not None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            return parsed
+
+    steps = recipe.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        argv = step.get("argv")
+        if not isinstance(argv, list):
+            continue
+        try:
+            index = argv.index("--evaluation-games")
+            parsed = int(argv[index + 1])
+        except (ValueError, TypeError, IndexError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def _cpu_long_run_runtime_post_iteration_command_flags(
+    recipe: Mapping[str, object],
+    config: Mapping[str, object],
+    *,
+    evaluation_games: int,
+) -> tuple[str, ...]:
+    flags: list[str] = []
+    if evaluation_games > 0:
+        flags.extend(("--evaluation-games", str(evaluation_games)))
+    flags.append("--audit-after-iteration")
+    if _cpu_long_run_report_audit_source(recipe) == "profile":
+        profile_name = _cpu_long_run_report_runtime_audit_profile(recipe)
+        if profile_name is not None:
+            flags.extend(("--audit-profile", profile_name))
+            return tuple(flags)
+
+    audit_config_path = _cpu_long_run_report_runtime_audit_config_path(recipe)
+    if audit_config_path is not None:
+        flags.extend(("--audit-config", audit_config_path))
+        return tuple(flags)
+
+    return _post_iteration_selfplay_command_flags(config)
+
+
 def _cpu_long_run_report_audit_config(recipe: Mapping[str, object]) -> RunAuditConfig:
     audit_source = _cpu_long_run_report_audit_source(recipe)
     if audit_source == "profile":
@@ -4500,6 +4601,24 @@ def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None
         print("failed_checks:")
         for check in failed_checks:
             print(f"- {check}")
+    if report.get("error") is not None:
+        print(f"error: {report['error']}")
+
+
+def _print_cpu_long_run_runtime_audit_report(report: Mapping[str, object]) -> None:
+    print("runtime_audit:")
+    print(f"available: {_format_optional_bool(report.get('available'))}")
+    print(f"source: {_format_summary_value(report.get('source'))}")
+    if report.get("audit_profile") is not None:
+        print(f"audit_profile: {_format_summary_value(report.get('audit_profile'))}")
+    if report.get("audit_config_path") is not None and report.get("source") != "profile":
+        print(f"audit_config_path: {_format_summary_value(report.get('audit_config_path'))}")
+    if report.get("available") is True:
+        print(f"minimum_evaluation_games: {_format_summary_value(report.get('minimum_evaluation_games'))}")
+        print(f"recorded_evaluation_games: {_format_summary_value(report.get('recorded_evaluation_games'))}")
+        print("post_iteration_command_flags:")
+        flags = tuple(str(flag) for flag in report.get("post_iteration_command_flags", ()))
+        print(" ".join(flags) if flags else "-")
     if report.get("error") is not None:
         print(f"error: {report['error']}")
 
@@ -4585,6 +4704,7 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         "runtime_audit_source": runtime_audit_source,
         "runtime_audit_config_path": None if runtime_audit_config_path is None else str(runtime_audit_config_path),
         "runtime_audit_profile": runtime_audit_profile,
+        "evaluation_games": args.evaluation_games,
         "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
         "long_run_ready": ready,
