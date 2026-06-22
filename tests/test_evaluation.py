@@ -815,6 +815,60 @@ class PromotionGateTest(unittest.TestCase):
         run.assert_not_called()
         self.assertIn(f"showdown-root does not exist: {missing_root}", stderr.getvalue())
 
+    def test_eval_cli_cpu_smoke_report_prints_passed_summary_from_run_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+            write_json(summary_path, cpu_smoke_summary(status="passed"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("cpu_smoke_report:", output)
+        self.assertIn("status: PASS", output)
+        self.assertIn("failed_step: -", output)
+        self.assertIn("- 1: PASS bootstrap teacher checkpoint returncode=0", output)
+
+    def test_eval_cli_cpu_smoke_report_failed_summary_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, cpu_smoke_summary(status="failed", failed_step_index=2))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("status: FAIL", output)
+        self.assertIn("failed_step: 2 run smoke self-play iteration loop returncode=7", output)
+        self.assertIn("- 2: FAIL run smoke self-play iteration loop returncode=7", output)
+
+    def test_eval_cli_cpu_smoke_report_json_includes_source_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, cpu_smoke_summary(status="passed"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["summary_source_path"], str(summary_path))
+        self.assertEqual(payload["status"], "passed")
+
+    def test_eval_cli_cpu_smoke_report_rejects_wrong_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, {"schema_version": "old", "status": "passed"})
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Unsupported cpu smoke summary schema", stderr.getvalue())
+
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
         manifest["iterations"][0]["benchmark"] = None
@@ -1084,6 +1138,49 @@ def failed_check_names(result) -> set[str]:
 
 def failed_check_names_from_payload(payload: dict) -> set[str]:
     return {check["name"] for check in payload["checks"] if not check["passed"]}
+
+
+def cpu_smoke_summary(*, status: str, failed_step_index: int | None = None) -> dict:
+    steps = [
+        {
+            "index": 1,
+            "name": "bootstrap teacher checkpoint",
+            "status": "passed",
+            "returncode": 0,
+            "duration_seconds": 1.25,
+        },
+        {
+            "index": 2,
+            "name": "run smoke self-play iteration loop",
+            "status": "failed" if failed_step_index == 2 else "passed",
+            "returncode": 7 if failed_step_index == 2 else 0,
+            "duration_seconds": 2.5,
+        },
+    ]
+    return {
+        "schema_version": "pokezero.cpu_smoke_run_summary.v1",
+        "status": status,
+        "summary_path": "run/cpu-smoke-run-summary.json",
+        "started_at": "2026-06-22T12:00:00.000Z",
+        "ended_at": "2026-06-22T12:01:00.000Z",
+        "duration_seconds": 60.0,
+        "recipe": {"run_root": "run", "steps": []},
+        "steps": steps,
+        "failed_step": (
+            None
+            if failed_step_index is None
+            else {
+                "index": failed_step_index,
+                "name": steps[failed_step_index - 1]["name"],
+                "returncode": steps[failed_step_index - 1]["returncode"],
+            }
+        ),
+    }
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def write_manifest(path: Path, payload: dict) -> None:
