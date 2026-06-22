@@ -963,6 +963,35 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
         self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
         self.assertIn("latest_process_peak_rss_mb", payload["entries"][0])
+        self.assertIsNone(payload["audit_profile"])
+        self.assertIsNone(payload["entries"][0]["audit_passed"])
+        self.assertEqual(payload["entries"][0]["audit_failed_checks"], [])
+
+    def test_eval_cli_compare_json_can_overlay_audit_profile_status(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--audit-profile",
+                        "long-run",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["audit_profile"], "long-run")
+        self.assertEqual(payload["entries"][0]["audit_profile"], "long-run")
+        self.assertFalse(payload["entries"][0]["audit_passed"])
+        self.assertIn("latest_benchmark_games", payload["entries"][0]["audit_failed_checks"])
 
     def test_eval_cli_compare_returns_nonzero_but_prints_json_when_a_manifest_fails(self) -> None:
         healthy_manifest = selfplay_manifest(
@@ -1016,6 +1045,33 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("44442", row)
         self.assertIn("11520", row)
         self.assertIn("16384.0", row)
+
+    def test_eval_cli_compare_text_can_overlay_audit_profile_status(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--audit-profile",
+                        "long-run",
+                    ]
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("audit_profile: long-run", output)
+        self.assertIn(" audit ", output)
+        row = next(line for line in output.splitlines() if line.startswith("linear-run"))
+        self.assertIn("    no ", row)
+        self.assertIn("audit_failures:", output)
+        self.assertIn("latest_benchmark_games", output)
 
     def test_eval_cli_audit_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest(

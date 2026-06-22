@@ -241,6 +241,9 @@ class RunComparisonEntry:
     latest_promotion_recorded: bool | None
     latest_advancement_recorded: bool | None
     latest_advancement_reason: str | None
+    audit_profile: str | None = None
+    audit_passed: bool | None = None
+    audit_failed_checks: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -267,6 +270,9 @@ class RunComparisonEntry:
             "latest_promotion_recorded": self.latest_promotion_recorded,
             "latest_advancement_recorded": self.latest_advancement_recorded,
             "latest_advancement_reason": self.latest_advancement_reason,
+            "audit_profile": self.audit_profile,
+            "audit_passed": self.audit_passed,
+            "audit_failed_checks": list(self.audit_failed_checks),
         }
 
 
@@ -289,6 +295,7 @@ class RunComparisonResult:
     entries: tuple[RunComparisonEntry, ...]
     errors: tuple[RunComparisonError, ...] = ()
     min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
+    audit_profile: str | None = None
 
     @property
     def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
@@ -309,6 +316,7 @@ class RunComparisonResult:
             "entries": [entry.to_dict() for entry in self.entries],
             "errors": [error.to_dict() for error in self.errors],
             "min_benchmark_games": self.min_benchmark_games,
+            "audit_profile": self.audit_profile,
             "best_latest_benchmark_label": (
                 self.best_latest_benchmark_entry.label
                 if self.best_latest_benchmark_entry is not None
@@ -476,6 +484,8 @@ def compare_run_manifests_with_threshold(
     paths: Iterable[Path],
     *,
     min_benchmark_games: int,
+    audit_config: RunAuditConfig | None = None,
+    audit_profile: str | None = None,
 ) -> RunComparisonResult:
     if min_benchmark_games < 0:
         raise ValueError("min_benchmark_games must be non-negative.")
@@ -486,7 +496,13 @@ def compare_run_manifests_with_threshold(
     errors: list[RunComparisonError] = []
     for path in selected_paths:
         try:
-            entries.append(_comparison_entry(path))
+            entries.append(
+                _comparison_entry(
+                    path,
+                    audit_config=audit_config,
+                    audit_profile=audit_profile,
+                )
+            )
         except Exception as exc:
             errors.append(
                 RunComparisonError(
@@ -499,6 +515,7 @@ def compare_run_manifests_with_threshold(
         entries=tuple(entries),
         errors=tuple(errors),
         min_benchmark_games=min_benchmark_games,
+        audit_profile=audit_profile,
     )
 
 
@@ -581,8 +598,14 @@ def calibrate_run_audit(
     )
 
 
-def _comparison_entry(path: Path) -> RunComparisonEntry:
+def _comparison_entry(
+    path: Path,
+    *,
+    audit_config: RunAuditConfig | None = None,
+    audit_profile: str | None = None,
+) -> RunComparisonEntry:
     audit = audit_run(path, config=_permissive_audit_config())
+    strict_audit = audit_run(path, config=audit_config) if audit_config is not None else None
     latest = audit.iterations[-1]
     process_peak_rss_mb = _max_optional(
         (
@@ -614,6 +637,13 @@ def _comparison_entry(path: Path) -> RunComparisonEntry:
         latest_promotion_recorded=latest.promotion_recorded,
         latest_advancement_recorded=latest.advancement_recorded,
         latest_advancement_reason=latest.advancement_reason,
+        audit_profile=audit_profile,
+        audit_passed=strict_audit.passed if strict_audit is not None else None,
+        audit_failed_checks=(
+            tuple(check.name for check in strict_audit.checks if not check.passed)
+            if strict_audit is not None
+            else ()
+        ),
     )
 
 
