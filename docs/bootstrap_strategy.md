@@ -100,7 +100,17 @@ Inspect the generated commands without running them:
 
 Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence; the generated smoke audit config proves the config path works but should not be reused as a long-run policy. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
 
-When changing scripted-teacher heuristics, add teacher branch gates to the smoke or pilot wrapper instead of running a separate manual preflight:
+When changing scripted-teacher heuristics, first run the deterministic scenario preflight for curated fixture states:
+
+```bash
+python -m pokezero.bootstrap_cli teacher-scenario-preflight \
+  --showdown-root /path/to/pokemon-showdown \
+  --out runs/scripted-teacher-scenarios.json
+```
+
+This preflight does not launch Showdown games. It runs fixed metadata-backed positions through the scripted teacher and checks that important branches still choose the expected action. Use `--scenario SCENARIO_ID` to narrow the run while iterating on one heuristic, and use `--json` when automation should consume the report.
+
+After deterministic scenarios pass, add sampled teacher branch gates to the smoke or pilot wrapper to prove the branch appears in actual rollout collection:
 
 ```bash
 ./.venv/bin/python -m pokezero.eval_cli cpu-smoke-run \
@@ -110,7 +120,7 @@ When changing scripted-teacher heuristics, add teacher branch gates to the smoke
   --min-teacher-branch-count status_pressure=1
 ```
 
-These flags insert a `teacher-benchmark` branch-coverage step before the teacher bootstrap step. `cpu-pilot-run` accepts the same flags and passes them through to each seeded smoke pilot.
+These flags insert a `teacher-benchmark` branch-coverage step before the teacher bootstrap step. `cpu-pilot-run` accepts the same flags and passes them through to each seeded smoke pilot. The benchmark gate is intentionally stochastic and rollout-backed; the scenario preflight is deterministic and branch-specific.
 
 Run a slightly broader CPU pilot suite when a single smoke run is not enough evidence to tune audit thresholds:
 
