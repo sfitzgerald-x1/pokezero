@@ -2017,6 +2017,7 @@ def _run_recipe_with_summary(
     for index, step in enumerate(recipe["steps"], start=1):
         print(f"running_step: {index}/{len(recipe['steps'])} {step['name']}", flush=True)
         print(_shell_join(step["argv"]), flush=True)
+        output_json_path = _step_output_json_path(step)
         step_started_monotonic = time.perf_counter()
         step_summary: dict[str, object] = {
             "index": index,
@@ -2029,6 +2030,14 @@ def _run_recipe_with_summary(
             "duration_seconds": None,
             "returncode": None,
         }
+        if output_json_path is not None:
+            step_summary.update(
+                {
+                    "output_json_path": str(output_json_path),
+                    "output_json_written": False,
+                    "output_json_valid": False,
+                }
+            )
         step_summaries.append(step_summary)
         summary_update_failed = _write_run_summary_update(
             summary_path,
@@ -2036,17 +2045,25 @@ def _run_recipe_with_summary(
             summary_label=summary_label,
             previous_failure=summary_update_failed,
         )
-        completed = subprocess.run(step["argv"])
+        if output_json_path is None:
+            completed = subprocess.run(step["argv"])
+            output_json_error = None
+        else:
+            completed = subprocess.run(step["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            output_json_error = _persist_step_json_output(output_json_path, completed, step_summary)
         step_summary["ended_at"] = _utc_timestamp()
         step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
         step_summary["returncode"] = int(completed.returncode)
-        if completed.returncode != 0:
+        if completed.returncode == 0 and output_json_error is not None:
+            step_summary["returncode"] = 70
+            step_summary["output_json_error"] = output_json_error
+        if step_summary["returncode"] != 0:
             step_summary["status"] = "failed"
             summary["status"] = "failed"
             summary["failed_step"] = {
                 "index": index,
                 "name": step["name"],
-                "returncode": int(completed.returncode),
+                "returncode": int(step_summary["returncode"]),
             }
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
@@ -2057,10 +2074,12 @@ def _run_recipe_with_summary(
                 previous_failure=summary_update_failed,
             )
             print(
-                f"error: {failure_label} step {index} failed with exit code {completed.returncode}: {step['name']}",
+                f"error: {failure_label} step {index} failed with exit code {step_summary['returncode']}: {step['name']}",
                 file=sys.stderr,
             )
-            return int(completed.returncode)
+            if output_json_error is not None:
+                print(f"error: {output_json_error}", file=sys.stderr)
+            return int(step_summary["returncode"])
         step_summary["status"] = "passed"
         summary_update_failed = _write_run_summary_update(
             summary_path,
@@ -2100,6 +2119,12 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         print(f"pilot_count: {_format_summary_value(recipe.get('pilot_count'))}")
         print(f"manifest_glob: {_format_summary_value(recipe.get('manifest_glob'))}")
         print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
+        print(f"calibration_output_path: {_format_summary_value(recipe.get('calibration_output_path'))}")
+        print(f"replay_output_path: {_format_summary_value(recipe.get('replay_output_path'))}")
+        replay_summary = _load_pilot_report_json_summary(recipe.get("replay_output_path"))
+        if replay_summary is not None:
+            print(f"replay_audit_failed: {_format_summary_value(replay_summary.get('audit_failed'))}")
+            print(f"replay_failed_check_count: {_comparison_failed_check_count(replay_summary)}")
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -2122,31 +2147,98 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
     return 0 if status == "passed" else 2
 
 
+def _step_output_json_path(step: Mapping[str, object]) -> Path | None:
+    output_path = step.get("output_json_path")
+    if output_path is None:
+        return None
+    return Path(str(output_path))
+
+
+def _persist_step_json_output(
+    path: Path,
+    completed: subprocess.CompletedProcess[str],
+    step_summary: dict[str, object],
+) -> str | None:
+    stdout_text = getattr(completed, "stdout", None) or ""
+    stderr_text = getattr(completed, "stderr", None) or ""
+    if stdout_text:
+        print(stdout_text, end="" if stdout_text.endswith("\n") else "\n")
+    if stderr_text:
+        print(stderr_text, end="" if stderr_text.endswith("\n") else "\n", file=sys.stderr)
+    if not stdout_text.strip():
+        return f"expected JSON stdout for artifact step but received no output: {path}"
+    try:
+        json.loads(stdout_text)
+    except json.JSONDecodeError as exc:
+        try:
+            _write_text_payload(path, stdout_text)
+            step_summary["output_json_written"] = True
+        except OSError as write_exc:
+            return f"failed to write invalid JSON stdout artifact {path}: {write_exc}"
+        return f"expected valid JSON stdout for artifact step {path}: {exc}"
+    try:
+        _write_text_payload(path, stdout_text)
+    except OSError as exc:
+        return f"failed to write JSON stdout artifact {path}: {exc}"
+    step_summary["output_json_written"] = True
+    step_summary["output_json_valid"] = True
+    return None
+
+
+def _load_pilot_report_json_summary(path_value: object) -> dict[str, object] | None:
+    if path_value is None:
+        return None
+    path = Path(str(path_value))
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _comparison_failed_check_count(payload: Mapping[str, object]) -> int:
+    failed_count = 0
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return failed_count
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        failed_checks = entry.get("audit_failed_checks")
+        if isinstance(failed_checks, list):
+            failed_count += len(failed_checks)
+    return failed_count
+
+
 def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
     run_root = args.run_root
     audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "pilot-audit-config.json"
+    calibration_output_path = run_root / "pilot-calibration-compare.json"
+    replay_output_path = run_root / "pilot-audit-replay.json"
     manifest_glob = run_root / "pilot-*" / "selfplay" / "manifest.json"
     python_binary = args.python_binary
-    steps: list[tuple[str, list[str]]] = []
+    steps: list[dict[str, object]] = []
     for index in range(args.pilot_count):
         pilot_index = index + 1
         pilot_root = run_root / f"pilot-{pilot_index:04d}"
         pilot_seed_start = args.seed_start + (index * args.seed_stride)
         steps.append(
-            (
-                f"run CPU smoke pilot {pilot_index}",
-                _cpu_pilot_smoke_run_argv(
+            {
+                "name": f"run CPU smoke pilot {pilot_index}",
+                "argv": _cpu_pilot_smoke_run_argv(
                     args,
                     pilot_root=pilot_root,
                     seed_start=pilot_seed_start,
                 ),
-            )
+            }
         )
     benchmark_iterations_required = args.pilot_count * args.selfplay_iterations
     steps.append(
-        (
-            "compare pilots and write calibrated audit config",
-            [
+        {
+            "name": "compare pilots and write calibrated audit config",
+            "argv": [
                 python_binary,
                 "-m",
                 "pokezero.eval_cli",
@@ -2166,12 +2258,13 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
                 str(audit_config_path),
                 "--json",
             ],
-        )
+            "output_json_path": str(calibration_output_path),
+        }
     )
     steps.append(
-        (
-            "compare pilots with calibrated audit config",
-            [
+        {
+            "name": "compare pilots with calibrated audit config",
+            "argv": [
                 python_binary,
                 "-m",
                 "pokezero.eval_cli",
@@ -2183,7 +2276,8 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "--fail-on-audit",
                 "--json",
             ],
-        )
+            "output_json_path": str(replay_output_path),
+        }
     )
     return {
         "purpose": "CPU-only pilot suite for threshold calibration evidence",
@@ -2197,15 +2291,18 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
         "seed_stride": args.seed_stride,
         "manifest_glob": str(manifest_glob),
         "audit_config_path": str(audit_config_path),
+        "calibration_output_path": str(calibration_output_path),
+        "replay_output_path": str(replay_output_path),
         "benchmark_iterations_required": benchmark_iterations_required,
         "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
         "steps": [
             {
-                "name": name,
-                "argv": argv,
-                "command": _shell_join(argv),
+                "name": step["name"],
+                "argv": step["argv"],
+                "command": _shell_join(step["argv"]),
+                **({"output_json_path": step["output_json_path"]} if "output_json_path" in step else {}),
             }
-            for name, argv in steps
+            for step in steps
         ],
     }
 
@@ -2524,6 +2621,13 @@ def _write_json_payload(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f".{path.name}.tmp")
     temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _write_text_payload(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(payload, encoding="utf-8")
     temporary_path.replace(path)
 
 

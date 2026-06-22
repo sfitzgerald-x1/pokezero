@@ -1139,6 +1139,8 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(recipe["seed_start"], 100)
         self.assertEqual(recipe["seed_stride"], 25)
         self.assertEqual(recipe["manifest_glob"], str(run_root / "pilot-*" / "selfplay" / "manifest.json"))
+        self.assertEqual(recipe["calibration_output_path"], str(run_root / "pilot-calibration-compare.json"))
+        self.assertEqual(recipe["replay_output_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertEqual(len(recipe["steps"]), 4)
         first_pilot_argv = recipe["steps"][0]["argv"]
         second_pilot_argv = recipe["steps"][1]["argv"]
@@ -1147,6 +1149,7 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(first_pilot_argv[first_pilot_argv.index("--seed-start") + 1], "100")
         self.assertEqual(second_pilot_argv[second_pilot_argv.index("--seed-start") + 1], "125")
         calibration_argv = recipe["steps"][2]["argv"]
+        self.assertEqual(recipe["steps"][2]["output_json_path"], str(run_root / "pilot-calibration-compare.json"))
         self.assertIn("--write-audit-config", calibration_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), calibration_argv)
         self.assertIn("--calibration-aggregate-mode", calibration_argv)
@@ -1154,6 +1157,7 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("--calibration-require-run-count", calibration_argv)
         self.assertIn("2", calibration_argv)
         audit_argv = recipe["steps"][3]["argv"]
+        self.assertEqual(recipe["steps"][3]["output_json_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertIn("--audit-config", audit_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), audit_argv)
 
@@ -1174,7 +1178,12 @@ class PromotionGateTest(unittest.TestCase):
                 patch("pokezero.eval_cli.collect_source_metadata", return_value=source),
                 patch(
                     "pokezero.eval_cli.subprocess.run",
-                    side_effect=[SimpleNamespace(returncode=0) for _ in range(4)],
+                    side_effect=[
+                        SimpleNamespace(returncode=0),
+                        SimpleNamespace(returncode=0),
+                        SimpleNamespace(returncode=0, stdout='{"audit_calibration_sufficient": true}\n', stderr=""),
+                        SimpleNamespace(returncode=0, stdout='{"audit_failed": false}\n', stderr=""),
+                    ],
                 ) as run,
                 patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -1196,6 +1205,8 @@ class PromotionGateTest(unittest.TestCase):
                     ]
                 )
             summary = json.loads((run_root / "cpu-pilot-suite-summary.json").read_text(encoding="utf-8"))
+            calibration_artifact = json.loads((run_root / "pilot-calibration-compare.json").read_text(encoding="utf-8"))
+            replay_artifact = json.loads((run_root / "pilot-audit-replay.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_count, 4)
@@ -1205,8 +1216,18 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(summary["source"], source)
         self.assertEqual(summary["recipe"]["pilot_count"], 2)
         self.assertEqual(summary["recipe"]["seed_start"], 200)
+        self.assertEqual(summary["recipe"]["calibration_output_path"], str(run_root / "pilot-calibration-compare.json"))
+        self.assertEqual(summary["recipe"]["replay_output_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertEqual(len(summary["steps"]), 4)
         self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 4)
+        self.assertEqual(summary["steps"][2]["output_json_path"], str(run_root / "pilot-calibration-compare.json"))
+        self.assertEqual(summary["steps"][2]["output_json_written"], True)
+        self.assertEqual(summary["steps"][2]["output_json_valid"], True)
+        self.assertEqual(summary["steps"][3]["output_json_path"], str(run_root / "pilot-audit-replay.json"))
+        self.assertEqual(summary["steps"][3]["output_json_written"], True)
+        self.assertEqual(summary["steps"][3]["output_json_valid"], True)
+        self.assertEqual(calibration_artifact["audit_calibration_sufficient"], True)
+        self.assertEqual(replay_artifact["audit_failed"], False)
         first_pilot_argv = run.call_args_list[0].args[0]
         second_pilot_argv = run.call_args_list[1].args[0]
         self.assertEqual(first_pilot_argv[:4], ["./.venv/bin/python", "-m", "pokezero.eval_cli", "cpu-smoke-run"])
@@ -1227,8 +1248,6 @@ class PromotionGateTest(unittest.TestCase):
             helper_path = temp_path / "pilot_child.py"
             helper_path.write_text(
                 f"""#!{sys.executable}
-import contextlib
-import io
 import json
 from pathlib import Path
 import sys
@@ -1327,8 +1346,7 @@ def main(argv):
         return write_smoke_manifest(argv[3:])
     if argv[:3] == ["-m", "pokezero.eval_cli", "compare"]:
         from pokezero.eval_cli import main as eval_main
-        with contextlib.redirect_stdout(io.StringIO()):
-            return eval_main(argv[2:])
+        return eval_main(argv[2:])
     print(f"unexpected argv: {{argv}}", file=sys.stderr)
     return 64
 
@@ -1365,6 +1383,8 @@ if __name__ == "__main__":
             )
             summary = json.loads((run_root / "cpu-pilot-suite-summary.json").read_text(encoding="utf-8"))
             audit_config = json.loads((run_root / "pilot-audit-config.json").read_text(encoding="utf-8"))
+            calibration_artifact = json.loads((run_root / "pilot-calibration-compare.json").read_text(encoding="utf-8"))
+            replay_artifact = json.loads((run_root / "pilot-audit-replay.json").read_text(encoding="utf-8"))
             pilot_1_manifest = json.loads((run_root / "pilot-0001" / "selfplay" / "manifest.json").read_text(encoding="utf-8"))
             pilot_2_manifest = json.loads((run_root / "pilot-0002" / "selfplay" / "manifest.json").read_text(encoding="utf-8"))
             pilot_1_manifest_exists = (run_root / "pilot-0001" / "selfplay" / "manifest.json").exists()
@@ -1373,7 +1393,11 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 0)
         self.assertEqual(summary["status"], "passed")
         self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 4)
+        self.assertEqual(summary["steps"][2]["output_json_valid"], True)
+        self.assertEqual(summary["steps"][3]["output_json_valid"], True)
         self.assertEqual(summary["recipe"]["benchmark_iterations_required"], 2)
+        self.assertEqual(calibration_artifact["audit_calibration_sufficient"], True)
+        self.assertEqual(replay_artifact["audit_failed"], False)
         self.assertTrue(pilot_1_manifest_exists)
         self.assertTrue(pilot_2_manifest_exists)
         self.assertEqual(pilot_1_manifest["iterations"][0]["benchmark"]["head_to_heads"][0]["first_policy_win_rate"], 0.25)
@@ -1418,6 +1442,48 @@ if __name__ == "__main__":
             {"index": 2, "name": "run CPU smoke pilot 2", "returncode": 9},
         )
 
+    def test_eval_cli_cpu_pilot_run_fails_when_compare_emits_no_json_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+            with (
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[
+                        SimpleNamespace(returncode=0),
+                        SimpleNamespace(returncode=0),
+                        SimpleNamespace(returncode=0, stdout="", stderr=""),
+                    ],
+                ) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--pilot-count",
+                        "2",
+                    ]
+                )
+            summary = json.loads((run_root / "cpu-pilot-suite-summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 70)
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(
+            summary["failed_step"],
+            {"index": 3, "name": "compare pilots and write calibrated audit config", "returncode": 70},
+        )
+        self.assertEqual(summary["steps"][2]["output_json_written"], False)
+        self.assertEqual(summary["steps"][2]["output_json_valid"], False)
+        self.assertIn("expected JSON stdout for artifact step", stderr.getvalue())
+
     def test_eval_cli_cpu_pilot_run_rejects_missing_explicit_showdown_root(self) -> None:
         missing_root = "/tmp/pokezero-missing-showdown-root"
         with (
@@ -1457,7 +1523,14 @@ if __name__ == "__main__":
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "pilots"
             summary_path = run_root / "cpu-pilot-suite-summary.json"
-            write_json(summary_path, cpu_pilot_summary(status="passed"))
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["calibration_output_path"] = str(run_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(run_root / "pilot-audit-replay.json")
+            write_json(summary_path, summary)
+            write_json(
+                run_root / "pilot-audit-replay.json",
+                {"audit_failed": False, "entries": [{"audit_failed_checks": []}]},
+            )
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = eval_cli_main(["cpu-pilot-report", str(run_root)])
@@ -1467,6 +1540,10 @@ if __name__ == "__main__":
         self.assertIn("cpu_pilot_report:", output)
         self.assertIn("status: PASS", output)
         self.assertIn("pilot_count: 2", output)
+        self.assertIn(f"calibration_output_path: {run_root / 'pilot-calibration-compare.json'}", output)
+        self.assertIn(f"replay_output_path: {run_root / 'pilot-audit-replay.json'}", output)
+        self.assertIn("replay_audit_failed: False", output)
+        self.assertIn("replay_failed_check_count: 0", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS run CPU smoke pilot 1 returncode=0", output)
 
@@ -1844,6 +1921,8 @@ def cpu_pilot_summary(*, status: str, failed_step_index: int | None = None) -> d
             "pilot_count": 2,
             "manifest_glob": "run/pilot-*/selfplay/manifest.json",
             "audit_config_path": "run/pilot-audit-config.json",
+            "calibration_output_path": "run/pilot-calibration-compare.json",
+            "replay_output_path": "run/pilot-audit-replay.json",
             "steps": [],
         },
         "steps": steps,
