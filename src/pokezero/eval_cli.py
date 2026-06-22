@@ -355,6 +355,8 @@ def _promotions(args: argparse.Namespace) -> int:
         registry,
         verification=verification,
         opponent_pool=opponent_pool,
+        available_opponent_pool=available_opponent_pool,
+        current_policy_spec=preview_current_policy_spec,
     )
     if args.json:
         payload = registry.to_dict()
@@ -398,6 +400,7 @@ def _promotions(args: argparse.Namespace) -> int:
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
                 f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at} "
                 f"status={status['verification_status']} selected={selected_as} "
+                f"pool={status['opponent_pool_status']} "
                 f"path={status['checkpoint_path_present']} exists={status['checkpoint_exists']} checksum={status['checksum']} "
                 f"loadable={status['loadable']}{label}{source}"
             )
@@ -458,6 +461,8 @@ def _promotion_entry_statuses(
     *,
     verification,
     opponent_pool,
+    available_opponent_pool,
+    current_policy_spec,
 ) -> list[dict[str, object]]:
     checks_by_sequence: dict[int, list[object]] = {}
     if verification is not None:
@@ -466,6 +471,7 @@ def _promotion_entry_statuses(
                 continue
             checks_by_sequence.setdefault(check.entry_sequence, []).append(check)
     opponent_pool_sequences = _opponent_pool_entry_sequences(registry, opponent_pool)
+    available_opponent_pool_sequences = _opponent_pool_entry_sequences(registry, available_opponent_pool)
     latest_sequence = registry.latest.sequence if registry.latest is not None else None
     statuses: list[dict[str, object]] = []
     for entry in registry.entries:
@@ -476,6 +482,14 @@ def _promotion_entry_statuses(
             selected_as.append("latest")
         if entry.sequence in opponent_pool_sequences:
             selected_as.append("opponent_pool")
+        opponent_pool_status, opponent_pool_skip_reason = _opponent_pool_entry_status(
+            entry,
+            selection_checkpoint_policy_spec=selection_checkpoint_policy_spec,
+            opponent_pool=opponent_pool,
+            opponent_pool_sequences=opponent_pool_sequences,
+            available_opponent_pool_sequences=available_opponent_pool_sequences,
+            current_policy_spec=current_policy_spec,
+        )
         failed_checks = [check.name for check in checks if not check.passed]
         checkpoint_path_present = _checkpoint_path_present_status(
             checks,
@@ -513,6 +527,8 @@ def _promotion_entry_statuses(
                 "source_iteration": entry.source_iteration,
                 "promoted_at": entry.promoted_at,
                 "selected_as": selected_as,
+                "opponent_pool_status": opponent_pool_status,
+                "opponent_pool_skip_reason": opponent_pool_skip_reason,
                 "verification_status": _entry_verification_status(
                     checks,
                     verification_enabled=verification is not None,
@@ -533,6 +549,28 @@ def _promotion_entry_statuses(
             }
         )
     return statuses
+
+
+def _opponent_pool_entry_status(
+    entry,
+    *,
+    selection_checkpoint_policy_spec,
+    opponent_pool,
+    opponent_pool_sequences: set[int],
+    available_opponent_pool_sequences: set[int],
+    current_policy_spec,
+) -> tuple[str, str | None]:
+    if opponent_pool is None:
+        return "not_requested", None
+    if entry.sequence in opponent_pool_sequences:
+        return "selected", None
+    if selection_checkpoint_policy_spec is None:
+        return "unselectable", "missing_selection_checkpoint"
+    if current_policy_spec is not None and selection_checkpoint_policy_spec == current_policy_spec:
+        return "excluded_current_policy", "matches_current_policy"
+    if entry.sequence in available_opponent_pool_sequences:
+        return "available_outside_requested_size", "outside_requested_pool_size"
+    return "not_selected", "not_in_available_pool"
 
 
 def _opponent_pool_entry_sequences(registry, opponent_pool) -> set[int]:

@@ -498,7 +498,11 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIsNone(payload["opponent_pool_verified"])
         self.assertEqual(len(payload["entry_statuses"]), 3)
         self.assertEqual(payload["entry_statuses"][0]["selected_as"], ["opponent_pool"])
+        self.assertEqual(payload["entry_statuses"][0]["opponent_pool_status"], "selected")
+        self.assertIsNone(payload["entry_statuses"][0]["opponent_pool_skip_reason"])
         self.assertEqual(payload["entry_statuses"][-1]["selected_as"], ["latest"])
+        self.assertEqual(payload["entry_statuses"][-1]["opponent_pool_status"], "excluded_current_policy")
+        self.assertEqual(payload["entry_statuses"][-1]["opponent_pool_skip_reason"], "matches_current_policy")
         self.assertEqual(payload["entry_statuses"][-1]["verification_status"], "not_verified")
         self.assertEqual(payload["entry_statuses"][-1]["checkpoint_exists"], "not_verified")
         self.assertEqual(payload["opponent_pool_requested_size"], 2)
@@ -531,6 +535,38 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(payload["opponent_pool_available_size"], 2)
         self.assertEqual(payload["opponent_pool_required_size"], 2)
         self.assertTrue(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_json_marks_entries_outside_requested_pool_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=4)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [status["opponent_pool_status"] for status in payload["entry_statuses"]],
+            [
+                "available_outside_requested_size",
+                "selected",
+                "selected",
+                "excluded_current_policy",
+            ],
+        )
+        self.assertEqual(
+            payload["entry_statuses"][0]["opponent_pool_skip_reason"],
+            "outside_requested_pool_size",
+        )
 
     def test_eval_cli_promotions_rejects_required_pool_size_above_requested_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -637,6 +673,8 @@ class PromotionRegistryTest(unittest.TestCase):
             ),
         )
         self.assertEqual(payload["opponent_pool_excluded_current_policy_spec"], middle_spec)
+        self.assertEqual(payload["entry_statuses"][1]["opponent_pool_status"], "excluded_current_policy")
+        self.assertEqual(payload["entry_statuses"][1]["opponent_pool_skip_reason"], "matches_current_policy")
 
     def test_eval_cli_promotions_json_marks_exact_duplicate_opponent_pool_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -661,8 +699,11 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(result["entry_statuses"][0]["selected_as"], [])
+        self.assertEqual(result["entry_statuses"][0]["opponent_pool_status"], "available_outside_requested_size")
         self.assertEqual(result["entry_statuses"][1]["selected_as"], ["opponent_pool"])
+        self.assertEqual(result["entry_statuses"][1]["opponent_pool_status"], "selected")
         self.assertEqual(result["entry_statuses"][2]["selected_as"], ["latest"])
+        self.assertEqual(result["entry_statuses"][2]["opponent_pool_status"], "excluded_current_policy")
 
     def test_eval_cli_promotions_text_prints_opponent_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -690,6 +731,8 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("status=not_verified", output)
         self.assertIn("selected=opponent_pool", output)
         self.assertIn("selected=latest", output)
+        self.assertIn("pool=selected", output)
+        self.assertIn("pool=excluded_current_policy", output)
         self.assertIn("pass --verify", output)
 
     def test_eval_cli_promotions_text_reports_failed_required_pool_size(self) -> None:
