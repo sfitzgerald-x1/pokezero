@@ -1,7 +1,9 @@
+import os
+from pathlib import Path
 import random
 import unittest
 
-from pokezero.dex import showdown_dex_from_payload
+from pokezero.dex import load_showdown_dex, showdown_dex_from_payload
 from pokezero.policy import PolicyDecision, ScriptedTeacherPolicy
 from pokezero.teacher_scenarios import (
     TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION,
@@ -22,6 +24,28 @@ class TeacherScenarioPreflightTest(unittest.TestCase):
         self.assertEqual(payload["scenario_count"], len(teacher_scenario_ids()))
         self.assertGreaterEqual(payload["teacher_branch_counts"]["damaging_move"], 1)
         self.assertGreaterEqual(payload["teacher_branch_counts"]["switch"], 1)
+
+    def test_default_scenarios_pass_against_real_showdown_dex_when_available(self) -> None:
+        root = Path(
+            os.environ.get(
+                "POKEZERO_SHOWDOWN_ROOT",
+                "/Users/scott/workspace/pokerena/vendor/pokemon-showdown",
+            )
+        )
+        if not (root / "dist" / "data" / "moves.js").exists():
+            self.skipTest("built Pokemon Showdown dex not available")
+        try:
+            dex = load_showdown_dex(root)
+        except Exception as exc:  # noqa: BLE001 - optional source integration test.
+            self.skipTest(f"built Pokemon Showdown dex not loadable: {exc}")
+
+        payload = run_teacher_scenario_preflight(
+            policy=ScriptedTeacherPolicy(dex=dex),
+        )
+
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["failed_count"], 0)
+        self.assertEqual(payload["scenario_count"], len(teacher_scenario_ids()))
 
     def test_subset_runs_only_requested_scenarios(self) -> None:
         payload = run_teacher_scenario_preflight(
@@ -155,8 +179,26 @@ def teacher_scenario_dex():
                     "name": "Rapid Spin",
                     "type": "Normal",
                     "category": "Physical",
-                    "basePower": 20,
+                    "basePower": 50,
                     "accuracy": 100,
+                },
+                "recover": {
+                    "id": "recover",
+                    "name": "Recover",
+                    "type": "Normal",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 0,
+                    "heal": True,
+                },
+                "swordsdance": {
+                    "id": "swordsdance",
+                    "name": "Swords Dance",
+                    "type": "Normal",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 0,
+                    "boosts": {"atk": 2},
                 },
                 "spikes": {
                     "id": "spikes",

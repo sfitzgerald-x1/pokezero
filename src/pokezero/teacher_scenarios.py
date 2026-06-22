@@ -67,17 +67,36 @@ def default_teacher_scenarios() -> tuple[TeacherScenario, ...]:
             scenario_id="status-pressure-glare-ghost",
             description="keeps Glare as status pressure into Ghost typing in Gen 3",
             observation=_observation(
-                (True, False, False, False, False, False, False, False, False),
+                (True, True, False, False, False, False, False, False, False),
                 metadata={
                     "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
                     "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
-                    "action_candidates": [_move(0, "glare", "Glare")],
+                    "action_candidates": [
+                        _move(0, "glare", "Glare"),
+                        _move(1, "tackle", "Tackle"),
+                    ],
                 },
             ),
             expected_action_index=0,
             expected_action_family="move",
             expected_teacher_branch="status_pressure",
             expected_reason_contains="status pressure",
+        ),
+        TeacherScenario(
+            scenario_id="damaging-no-effect-ghost-immunity",
+            description="marks Normal damage as ineffective into Ghost typing",
+            observation=_observation(
+                (True, False, False, False, False, False, False, False, False),
+                metadata={
+                    "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                    "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
+                    "action_candidates": [_move(0, "tackle", "Tackle")],
+                },
+            ),
+            expected_action_index=0,
+            expected_action_family="move",
+            expected_teacher_branch="damaging_no_effect",
+            expected_reason_contains="no effect",
         ),
         TeacherScenario(
             scenario_id="team-status-cure",
@@ -103,6 +122,44 @@ def default_teacher_scenarios() -> tuple[TeacherScenario, ...]:
             expected_reason_contains="team status cure",
         ),
         TeacherScenario(
+            scenario_id="recovery-low-hp",
+            description="uses recovery when the active Pokemon is below the recovery threshold",
+            observation=_observation(
+                (True, True, False, False, False, False, False, False, False),
+                metadata={
+                    "self_active": {"species": "Starmie", "hp_fraction": 0.3, "status": "none"},
+                    "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                    "action_candidates": [
+                        _move(0, "tackle", "Tackle"),
+                        _move(1, "recover", "Recover"),
+                    ],
+                },
+            ),
+            expected_action_index=1,
+            expected_action_family="move",
+            expected_teacher_branch="recovery",
+            expected_reason_contains="recovery",
+        ),
+        TeacherScenario(
+            scenario_id="setup-healthy-active",
+            description="uses setup when healthy and competing only with low-impact status",
+            observation=_observation(
+                (True, True, False, False, False, False, False, False, False),
+                metadata={
+                    "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                    "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                    "action_candidates": [
+                        _move(0, "growl", "Growl"),
+                        _move(1, "swordsdance", "Swords Dance"),
+                    ],
+                },
+            ),
+            expected_action_index=1,
+            expected_action_family="move",
+            expected_teacher_branch="setup",
+            expected_reason_contains="setup",
+        ),
+        TeacherScenario(
             scenario_id="rapid-spin-clear-hazards",
             description="uses Rapid Spin when own side has hazards and the opponent does not block it",
             observation=_observation(
@@ -123,15 +180,38 @@ def default_teacher_scenarios() -> tuple[TeacherScenario, ...]:
             expected_reason_contains="clears hazards",
         ),
         TeacherScenario(
+            scenario_id="rapid-spin-no-hazards-chip",
+            description="treats Rapid Spin without hazards as ordinary chip damage",
+            observation=_observation(
+                (True, True, False, False, False, False, False, False, False),
+                metadata={
+                    "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                    "self_side_conditions": [],
+                    "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                    "action_candidates": [
+                        _move(0, "tackle", "Tackle"),
+                        _move(1, "rapidspin", "Rapid Spin"),
+                    ],
+                },
+            ),
+            expected_action_index=1,
+            expected_action_family="move",
+            expected_teacher_branch="rapid_spin_no_hazards",
+            expected_reason_contains="no side hazards",
+        ),
+        TeacherScenario(
             scenario_id="rapid-spin-blocked-by-ghost",
             description="marks Rapid Spin as blocked by a Ghost target",
             observation=_observation(
-                (True, False, False, False, False, False, False, False, False),
+                (True, True, False, False, False, False, False, False, False),
                 metadata={
                     "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
                     "self_side_conditions": ["spikes"],
                     "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
-                    "action_candidates": [_move(0, "rapidspin", "Rapid Spin")],
+                    "action_candidates": [
+                        _move(0, "rapidspin", "Rapid Spin"),
+                        _move(1, "tackle", "Tackle"),
+                    ],
                 },
             ),
             expected_action_index=0,
@@ -164,13 +244,16 @@ def default_teacher_scenarios() -> tuple[TeacherScenario, ...]:
             scenario_id="spikes-maxed",
             description="recognizes Spikes are already maxed",
             observation=_observation(
-                (True, False, False, False, False, False, False, False, False),
+                (True, True, False, False, False, False, False, False, False),
                 metadata={
                     "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
-                    "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                    "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
                     "opponent_side_conditions": ["spikes"],
                     "opponent_side_condition_counts": {"spikes": 3},
-                    "action_candidates": [_move(0, "spikes", "Spikes")],
+                    "action_candidates": [
+                        _move(0, "spikes", "Spikes"),
+                        _move(1, "tackle", "Tackle"),
+                    ],
                 },
             ),
             expected_action_index=0,
