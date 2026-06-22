@@ -27,7 +27,9 @@ from .bootstrap import (
     DEFAULT_PREFLIGHT_GAMES,
     DEFAULT_PREFLIGHT_SEED_START,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
+    TeacherBenchmarkResult,
     TeacherBootstrapResult,
+    benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
 from .collection import (
@@ -351,6 +353,7 @@ __all__ = [
     "rollout_record_from_normalized_replay",
     "rollout_record_to_dict",
     "audit_run",
+    "benchmark_teacher_policy",
     "enforce_run_audit",
     "run_neural_selfplay_iterations",
     "run_selfplay_iterations",
@@ -361,6 +364,7 @@ __all__ = [
     "showdown_submission_for_action",
     "stable_category_id",
     "summarize_records",
+    "TeacherBenchmarkResult",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
     "torch_available",
