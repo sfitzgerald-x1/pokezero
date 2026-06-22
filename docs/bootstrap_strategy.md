@@ -72,6 +72,16 @@ Replay import remains valuable after a randbat replay source is identified. A no
 
 ## Supported Command Shape
 
+Run the smallest local CPU smoke workflow before larger experiments:
+
+```bash
+python -m pokezero.cpu_smoke_cli \
+  --run-dir runs/cpu-smoke \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+This command runs a tiny scripted-teacher bootstrap, starts one linear self-play iteration from the generated checkpoint, evaluates and records a smoke-profile promotion, audits the self-play manifest, calibrates starter audit flags from the smoke run, and writes `summary.json`. Defaults are intentionally small and use `--audit-profile smoke`; increase the game counts or switch to `--audit-profile default` only after the local harness is working.
+
 Import normalized replay decisions into standard rollout JSONL:
 
 ```bash

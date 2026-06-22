@@ -84,6 +84,7 @@ from .evaluation_profiles import (
     EvaluationProfile,
     evaluation_profile,
 )
+from .cpu_smoke import CPU_SMOKE_RUN_SCHEMA_VERSION, CPUSmokeRunResult, run_cpu_smoke_experiment
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .linear_policy import (
     LINEAR_FEATURE_FINGERPRINT_VERSION,
@@ -230,6 +231,8 @@ __all__ = [
     "DEFAULT_MIN_BENCHMARK_WIN_RATE",
     "DEFAULT_MIN_INCUMBENT_WIN_RATE",
     "DEFAULT_INCUMBENT_CONFIDENCE_Z",
+    "CPU_SMOKE_RUN_SCHEMA_VERSION",
+    "CPUSmokeRunResult",
     "DEFAULT_EVALUATION_PROFILE",
     "DEFAULT_PREFLIGHT_GAMES",
     "DEFAULT_PREFLIGHT_SEED_START",
@@ -373,6 +376,7 @@ __all__ = [
     "audit_run",
     "benchmark_teacher_policy",
     "enforce_run_audit",
+    "run_cpu_smoke_experiment",
     "run_neural_selfplay_iterations",
     "run_selfplay_iterations",
     "run_teacher_bootstrap",

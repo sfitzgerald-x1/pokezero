@@ -25,6 +25,7 @@ pokezero-bootstrap = "pokezero.bootstrap_cli:main"
 pokezero-eval = "pokezero.eval_cli:main"
 pokezero-neural = "pokezero.neural_cli:main"
 pokezero-replay-import = "pokezero.replay_import_cli:main"
+pokezero-cpu-smoke = "pokezero.cpu_smoke_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
