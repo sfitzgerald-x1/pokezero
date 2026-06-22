@@ -259,6 +259,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero unless the config includes calibration metadata.",
     )
+    audit_config_report.add_argument(
+        "--require-preflight",
+        action="store_true",
+        help="Return non-zero unless at least one supplied manifest was audited and all supplied manifests passed.",
+    )
     audit_config_report.add_argument("--json", action="store_true", help="Print the config report as JSON.")
     audit_config_report.set_defaults(func=_audit_config_report)
 
@@ -1806,6 +1811,7 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         preflight_passed=preflight_passed,
         require_source=args.require_source,
         require_calibration=args.require_calibration,
+        require_preflight=args.require_preflight,
     )
     passed = all(bool(check["passed"]) for check in checks)
     report = {
@@ -1878,6 +1884,7 @@ def _audit_config_report_checks(
     preflight_passed: bool | None,
     require_source: bool,
     require_calibration: bool,
+    require_preflight: bool,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = [
         {
@@ -1908,6 +1915,16 @@ def _audit_config_report_checks(
                 "observed": calibration_present,
                 "threshold": True,
                 "message": "calibration metadata is required",
+            }
+        )
+    if require_preflight:
+        checks.append(
+            {
+                "name": "preflight_audit_requested",
+                "passed": preflight_passed is not None,
+                "observed": preflight_passed is not None,
+                "threshold": True,
+                "message": "at least one supplied manifest must be audited with this config",
             }
         )
     if preflight_passed is not None:
