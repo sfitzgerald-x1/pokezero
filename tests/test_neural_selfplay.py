@@ -559,6 +559,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("dirty: yes", output)
         self.assertIn("repo_root: /repo", output)
         self.assertIn("iterations: 1", output)
+        self.assertIn("bench_wr", output)
+        self.assertIn("inc_wr", output)
+        self.assertIn("0.800", output)
         self.assertIn("0.600", output)
         self.assertIn("0.250000", output)
         self.assertIn("0.7500", output)
@@ -728,6 +731,16 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
                     "second_policy_wins": 8,
                     "ties": 0,
                     "capped_games": 1,
+                },
+                {
+                    "label": "entity-test-iter-0001 vs simple-legal",
+                    "first_policy_id": "entity-test-iter-0001",
+                    "second_policy_id": "simple-legal",
+                    "games": 20,
+                    "first_policy_wins": 20,
+                    "second_policy_wins": 0,
+                    "ties": 0,
+                    "capped_games": 0,
                 }
             ],
         },
@@ -736,6 +749,9 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
             "reason": "beat_incumbent",
             "candidate_policy_id": "entity-test-iter-0001",
             "incumbent_policy_id": "random-legal",
+            "candidate_win_rate": 0.6,
+            "incumbent_win_rate": 0.4,
+            "games": 20,
         },
         "promotion": {"recorded": False},
         "next_current_policy_spec": f"neural:{checkpoint_path}",

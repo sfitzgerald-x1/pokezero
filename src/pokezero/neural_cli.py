@@ -443,10 +443,10 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print(f"iterations: {len(iterations)}")
     if not iterations:
         return
-    print("note: benchmark win rate is the strength signal; fit metrics measure rollout-label training fit.")
+    print("note: incumbent win rate drives advancement; blended benchmark win rate is broad health.")
     print("")
     header = (
-        f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'advance':>7} {'promo':>8} "
+        f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
         f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'opp_acc':>8} checkpoint"
     )
     print(header)
@@ -460,6 +460,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{int(metrics.get('games', 0)):5d} "
             f"{int(metrics.get('capped_games', 0)):4d} "
             f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
+            f"{_format_optional_float(_incumbent_win_rate(iteration)):>8} "
             f"{_format_bool(advancement.get('advance_collector')):>7} "
             f"{_manifest_promotion_status(iteration):>8} "
             f"{_format_optional_float(final_epoch.get('loss') if final_epoch else None, digits=6):>10} "
@@ -506,6 +507,32 @@ def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:
             wins += int(metrics.get("p2_wins", 0))
             games += result_games
     return (wins / games) if games else None
+
+
+def _incumbent_win_rate(iteration: Mapping[str, Any]) -> float | None:
+    advancement = _optional_mapping(iteration.get("advancement"))
+    candidate_win_rate = advancement.get("candidate_win_rate")
+    if candidate_win_rate is not None:
+        return float(candidate_win_rate)
+    candidate_policy_id = advancement.get("candidate_policy_id")
+    incumbent_policy_id = advancement.get("incumbent_policy_id")
+    if not isinstance(candidate_policy_id, str) or not isinstance(incumbent_policy_id, str):
+        return None
+    benchmark = iteration.get("benchmark")
+    if benchmark is None:
+        return None
+    benchmark_payload = _mapping(benchmark)
+    for result in tuple(_mapping(result) for result in _sequence(benchmark_payload.get("head_to_heads", ()))):
+        ids = {result.get("first_policy_id"), result.get("second_policy_id")}
+        if ids != {candidate_policy_id, incumbent_policy_id}:
+            continue
+        games = int(result.get("games", 0))
+        if not games:
+            return None
+        if result.get("first_policy_id") == candidate_policy_id:
+            return int(result.get("first_policy_wins", 0)) / games
+        return int(result.get("second_policy_wins", 0)) / games
+    return None
 
 
 def _iteration_policy_id(iteration: Mapping[str, Any]) -> str | None:
