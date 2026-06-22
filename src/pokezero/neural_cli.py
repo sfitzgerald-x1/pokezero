@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 import sys
 
-from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
+from .cli_audit import (
+    add_post_iteration_audit_arguments,
+    post_iteration_audit_config_from_args,
+    validate_post_iteration_audit_evaluation_games,
+)
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
@@ -24,6 +28,9 @@ from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
+
+
+MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -296,15 +303,11 @@ def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
-    if (
-        post_iteration_audit_config is not None
-        and post_iteration_audit_config.require_benchmark
-        and args.evaluation_games <= 0
-    ):
-        raise ValueError(
-            "--audit-after-iteration requires --evaluation-games > 0 unless "
-            "--audit-allow-missing-benchmark is set."
-        )
+    validate_post_iteration_audit_evaluation_games(
+        post_iteration_audit_config,
+        evaluation_games=args.evaluation_games,
+        minimum_benchmark_matchups=MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS,
+    )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
