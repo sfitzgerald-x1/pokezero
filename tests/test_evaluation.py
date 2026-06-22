@@ -4199,6 +4199,10 @@ if __name__ == "__main__":
             second_root = temp_path / "second"
             first_summary = cpu_long_run_summary(status="passed")
             first_summary["recipe"]["run_dir"] = str(first_root)
+            first_summary["recipe"]["runtime_audit_source"] = "profile"
+            first_summary["recipe"]["runtime_audit_profile"] = "smoke"
+            first_summary["recipe"]["runtime_audit_config_path"] = None
+            first_summary["recipe"]["evaluation_games"] = 11
             first_summary["derived_run_report"] = long_run_derived_report(
                 latest_iteration=1,
                 latest_benchmark_games=20,
@@ -4212,6 +4216,10 @@ if __name__ == "__main__":
             )
             second_summary = cpu_long_run_summary(status="passed")
             second_summary["recipe"]["run_dir"] = str(second_root)
+            second_summary["recipe"]["runtime_audit_source"] = "profile"
+            second_summary["recipe"]["runtime_audit_profile"] = "smoke"
+            second_summary["recipe"]["runtime_audit_config_path"] = None
+            second_summary["recipe"]["evaluation_games"] = 13
             second_summary["derived_run_report"] = long_run_derived_report(
                 latest_iteration=1,
                 latest_benchmark_games=30,
@@ -4255,12 +4263,25 @@ if __name__ == "__main__":
         self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_command_flags"])
         self.assertIn("--audit-min-latest-benchmark-games", payload["suggested_post_iteration_command_flags"])
         self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
+        self.assertTrue(payload["samples"][0]["runtime_audit_available"])
+        self.assertEqual(payload["samples"][0]["runtime_audit_source"], "profile")
+        self.assertEqual(payload["samples"][0]["runtime_audit_resolved_source"], "profile")
+        self.assertEqual(payload["samples"][0]["runtime_audit_recorded_evaluation_games"], 11)
+        self.assertEqual(
+            payload["samples"][0]["runtime_audit_command_flags"],
+            ["--evaluation-games", "11", "--audit-after-iteration", "--audit-profile", "smoke"],
+        )
+        self.assertNotIn("config", payload["samples"][0]["runtime_audit"])
 
     def test_eval_cli_cpu_long_run_calibrate_text_prints_post_iteration_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "run"
             summary = cpu_long_run_summary(status="passed")
             summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "profile"
+            summary["recipe"]["runtime_audit_profile"] = "smoke"
+            summary["recipe"]["runtime_audit_config_path"] = None
+            summary["recipe"]["evaluation_games"] = 12
             summary["derived_run_report"] = long_run_derived_report(latest_benchmark_games=20)
             write_json(run_root / "cpu-long-run-run-summary.json", summary)
 
@@ -4273,8 +4294,48 @@ if __name__ == "__main__":
         self.assertIn("minimum_evaluation_games: 5", output)
         self.assertIn("suggested_post_iteration_command_flags:", output)
         self.assertIn("--evaluation-games 5 --audit-after-iteration", output)
+        self.assertIn("runtime_audit_samples:", output)
+        self.assertIn("recorded_eval=12", output)
+        self.assertIn("--evaluation-games 12 --audit-after-iteration --audit-profile smoke", output)
         self.assertIn("--audit-after-iteration", output)
         self.assertIn("--audit-min-latest-benchmark-games 20", output)
+
+    def test_eval_cli_cpu_long_run_calibrate_preserves_missing_runtime_audit_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "run"
+            missing_config_path = temp_path / "missing-audit-config.json"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "pilot-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(missing_config_path)
+            summary["recipe"]["evaluation_games"] = 9
+            summary["derived_run_report"] = long_run_derived_report(latest_benchmark_games=20)
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO) as text_stdout:
+                text_exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root)])
+
+        sample = payload["samples"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(text_exit_code, 0)
+        self.assertFalse(sample["runtime_audit_available"])
+        self.assertEqual(sample["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(sample["runtime_audit_resolved_source"], "pilot-audit-config")
+        self.assertEqual(sample["runtime_audit_config_path"], str(missing_config_path))
+        self.assertEqual(sample["runtime_audit_recorded_evaluation_games"], 9)
+        self.assertEqual(
+            sample["runtime_audit_command_flags"],
+            ["--evaluation-games", "9", "--audit-after-iteration", "--audit-config", str(missing_config_path)],
+        )
+        text_output = text_stdout.getvalue()
+        self.assertIn("runtime_audit_samples:", text_output)
+        self.assertIn("available=no", text_output)
+        self.assertIn(f"config={missing_config_path}", text_output)
+        self.assertIn("--evaluation-games 9 --audit-after-iteration --audit-config", text_output)
 
     def test_eval_cli_cpu_long_run_calibrate_reads_benchmark_games_from_older_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
