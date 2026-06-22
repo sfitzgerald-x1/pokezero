@@ -67,7 +67,7 @@ Replay import remains valuable after a randbat replay source is identified. A no
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
 - Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
-- Use `python -m pokezero.eval_cli audit-calibrate <run-dir> [<run-dir> ...]` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
+- Use `python -m pokezero.eval_cli cpu-pilot-run ...` to run multiple seeded CPU smoke pilots, calibrate starting audit thresholds from their manifests, and immediately replay those thresholds against the same pilot suite before enforcing them on longer unattended experiments.
 - Extend the normalized replay-to-rollout importer with a raw Showdown replay converter after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape
@@ -99,6 +99,32 @@ Inspect the generated commands without running them:
 ```
 
 Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence; the generated smoke audit config proves the config path works but should not be reused as a long-run policy. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
+
+Run a slightly broader CPU pilot suite when a single smoke run is not enough evidence to tune audit thresholds:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-pilot-run \
+  --run-root runs/cpu-pilots \
+  --showdown-root /path/to/pokemon-showdown \
+  --pilot-count 2 \
+  --seed-start 1 \
+  --seed-stride 10000
+```
+
+This wrapper runs `cpu-smoke-run` repeatedly under `RUN_ROOT/pilot-0001`, `RUN_ROOT/pilot-0002`, and so on, using deterministic seed offsets for each pilot. After the pilots finish, it compares `RUN_ROOT/pilot-*/selfplay/manifest.json`, writes `RUN_ROOT/pilot-audit-config.json` through compare-time audit calibration with sufficiency requirements, then reruns `compare --audit-config --fail-on-audit` against the pilot manifests. The suite writes `RUN_ROOT/cpu-pilot-suite-summary.json` with the executed recipe, source metadata, per-step exit codes, timestamps, and final pass/fail status.
+
+For pilot suites, `--audit-config-path` controls the suite-level calibrated audit config. Each nested smoke pilot still writes its own `PILOT_ROOT/smoke-audit-config.json`. Pilot seed offsets must stay within the smoke recipe's seed band, so `(pilot-count - 1) * seed-stride` must be less than `1_000_000`; this prevents pilot collection seeds from colliding with validation, benchmark, preflight, self-play, or evaluation seed bands.
+
+Inspect or preflight the pilot suite without rerunning games:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-pilot-plan \
+  --run-root runs/cpu-pilots \
+  --showdown-root /path/to/pokemon-showdown
+./.venv/bin/python -m pokezero.eval_cli cpu-pilot-report runs/cpu-pilots
+```
+
+Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
 
 Import normalized replay decisions into standard rollout JSONL:
 

@@ -36,6 +36,8 @@ from .source_metadata import collect_source_metadata
 
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
+CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_pilot_suite_summary.v1"
+CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
@@ -330,6 +332,39 @@ def build_arg_parser() -> argparse.ArgumentParser:
     smoke_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
     smoke_report.set_defaults(func=_cpu_smoke_report)
 
+    pilot_plan = subparsers.add_parser(
+        "cpu-pilot-plan",
+        help="Print a CPU-only multi-pilot recipe that runs smoke pilots and calibrates audit thresholds.",
+    )
+    _add_cpu_pilot_arguments(pilot_plan)
+    pilot_plan.add_argument("--json", action="store_true", help="Print the pilot recipe as JSON.")
+    pilot_plan.set_defaults(func=_cpu_pilot_plan)
+
+    pilot_run = subparsers.add_parser(
+        "cpu-pilot-run",
+        help="Execute a CPU-only multi-pilot recipe and write a suite summary artifact.",
+    )
+    _add_cpu_pilot_arguments(pilot_run)
+    pilot_run.add_argument(
+        "--summary-path",
+        type=Path,
+        default=None,
+        help="Where to write the pilot-suite summary JSON. Defaults to RUN_ROOT/cpu-pilot-suite-summary.json.",
+    )
+    pilot_run.set_defaults(func=_cpu_pilot_run)
+
+    pilot_report = subparsers.add_parser(
+        "cpu-pilot-report",
+        help="Inspect a cpu-pilot-run summary JSON artifact.",
+    )
+    pilot_report.add_argument(
+        "path",
+        type=Path,
+        help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
+    )
+    pilot_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    pilot_report.set_defaults(func=_cpu_pilot_report)
+
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
     compare.add_argument(
@@ -425,8 +460,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the smoke recipe.")
+def _add_cpu_smoke_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    run_root_default: Path = Path("runs/cpu-smoke"),
+    audit_config_help: str | None = None,
+) -> None:
+    parser.add_argument("--run-root", type=Path, default=run_root_default, help="Root directory used by the smoke recipe.")
     parser.add_argument(
         "--python-binary",
         default=sys.executable,
@@ -451,14 +491,41 @@ def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--feature-count", type=int, default=4096, help="Small linear feature count for the smoke run.")
     parser.add_argument("--window-size", type=int, default=4, help="Temporal window size for bootstrap and self-play.")
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap used by the smoke recipe.")
+    parser.add_argument("--seed-start", type=int, default=1, help="Base deterministic seed used by the smoke recipe.")
     parser.add_argument(
         "--audit-config-path",
         type=Path,
         default=None,
-        help=(
+        help=audit_config_help
+        or (
             "Where the smoke recipe writes its calibrated audit config. "
             "Defaults to RUN_ROOT/smoke-audit-config.json."
         ),
+    )
+
+
+def _add_cpu_pilot_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_cpu_smoke_arguments(
+        parser,
+        run_root_default=Path("runs/cpu-pilots"),
+        audit_config_help=(
+            "Where the pilot suite writes its calibrated audit config. "
+            "Defaults to RUN_ROOT/pilot-audit-config.json. Each per-pilot smoke run writes "
+            "PILOT_ROOT/smoke-audit-config.json."
+        ),
+    )
+    parser.add_argument("--pilot-count", type=int, default=2, help="Number of seeded CPU smoke pilots to run.")
+    parser.add_argument(
+        "--seed-stride",
+        type=int,
+        default=10_000,
+        help="Seed increment between pilot runs.",
+    )
+    parser.add_argument(
+        "--calibration-require-min-benchmark-games",
+        type=int,
+        default=1,
+        help="Minimum benchmark games each calibrated pilot iteration must include.",
     )
 
 
@@ -1825,85 +1892,19 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
     _validate_cpu_smoke_args(args, validate_showdown_root=True)
     recipe = _cpu_smoke_recipe(args)
     summary_path = args.summary_path if args.summary_path is not None else args.run_root / "cpu-smoke-run-summary.json"
-    run_started_at = _utc_timestamp()
-    run_started_monotonic = time.perf_counter()
-    step_summaries: list[dict[str, object]] = []
-    summary: dict[str, object] = {
-        "schema_version": CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION,
-        "status": "running",
-        "summary_path": str(summary_path),
-        "started_at": run_started_at,
-        "ended_at": None,
-        "duration_seconds": None,
-        "source": recipe["source"],
-        "recipe": recipe,
-        "steps": step_summaries,
-        "failed_step": None,
-    }
-    _write_json_payload(summary_path, summary)
-    summary_update_failed = False
-    print("cpu_smoke_run:")
-    print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
-    print("note: smoke-profile thresholds validate command flow, not policy strength.")
-    print("note: use a fresh --run-root; this command does not delete existing artifacts.")
-    print(f"summary: {summary_path}")
-    for index, step in enumerate(recipe["steps"], start=1):
-        print(f"running_step: {index}/{len(recipe['steps'])} {step['name']}", flush=True)
-        print(_shell_join(step["argv"]), flush=True)
-        step_started_monotonic = time.perf_counter()
-        step_summary: dict[str, object] = {
-            "index": index,
-            "name": step["name"],
-            "argv": step["argv"],
-            "command": step["command"],
-            "status": "running",
-            "started_at": _utc_timestamp(),
-            "ended_at": None,
-            "duration_seconds": None,
-            "returncode": None,
-        }
-        step_summaries.append(step_summary)
-        summary_update_failed = _write_cpu_smoke_summary_update(
-            summary_path,
-            summary,
-            previous_failure=summary_update_failed,
-        )
-        completed = subprocess.run(step["argv"])
-        step_summary["ended_at"] = _utc_timestamp()
-        step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
-        step_summary["returncode"] = int(completed.returncode)
-        if completed.returncode != 0:
-            step_summary["status"] = "failed"
-            summary["status"] = "failed"
-            summary["failed_step"] = {
-                "index": index,
-                "name": step["name"],
-                "returncode": int(completed.returncode),
-            }
-            summary["ended_at"] = _utc_timestamp()
-            summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-            summary_update_failed = _write_cpu_smoke_summary_update(
-                summary_path,
-                summary,
-                previous_failure=summary_update_failed,
-            )
-            print(
-                f"error: cpu smoke step {index} failed with exit code {completed.returncode}: {step['name']}",
-                file=sys.stderr,
-            )
-            return int(completed.returncode)
-        step_summary["status"] = "passed"
-        summary_update_failed = _write_cpu_smoke_summary_update(
-            summary_path,
-            summary,
-            previous_failure=summary_update_failed,
-        )
-    summary["status"] = "passed"
-    summary["ended_at"] = _utc_timestamp()
-    summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-    _write_cpu_smoke_summary_update(summary_path, summary, previous_failure=summary_update_failed)
-    print("cpu_smoke_run: PASS")
-    return 0
+    return _run_recipe_with_summary(
+        recipe=recipe,
+        summary_path=summary_path,
+        schema_version=CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION,
+        command_name="cpu_smoke_run",
+        purpose="tiny CPU-only bootstrap/self-play plumbing validation",
+        notes=(
+            "smoke-profile thresholds validate command flow, not policy strength.",
+            "use a fresh --run-root; this command does not delete existing artifacts.",
+        ),
+        failure_label="cpu smoke",
+        summary_label="cpu smoke",
+    )
 
 
 def _cpu_smoke_report(args: argparse.Namespace) -> int:
@@ -1948,6 +1949,305 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
     return 0 if status == "passed" else 2
 
 
+def _cpu_pilot_plan(args: argparse.Namespace) -> int:
+    _validate_cpu_pilot_args(args)
+    recipe = _cpu_pilot_recipe(args)
+    if args.json:
+        print(json.dumps(recipe, indent=2, sort_keys=True))
+        return 0
+    print("cpu_pilot_plan:")
+    print("purpose: CPU-only pilot suite for threshold calibration evidence")
+    print("note: runs multiple seeded smoke pilots, then compares and calibrates their manifests.")
+    print("note: pass --showdown-root or set the normal Showdown-root environment before running when needed.")
+    print("commands:")
+    for index, step in enumerate(recipe["steps"], start=1):
+        print(f"{index}. {step['name']}")
+        print(_shell_join(step["argv"]))
+    return 0
+
+
+def _cpu_pilot_run(args: argparse.Namespace) -> int:
+    _validate_cpu_pilot_args(args, validate_showdown_root=True)
+    recipe = _cpu_pilot_recipe(args)
+    summary_path = args.summary_path if args.summary_path is not None else args.run_root / "cpu-pilot-suite-summary.json"
+    return _run_recipe_with_summary(
+        recipe=recipe,
+        summary_path=summary_path,
+        schema_version=CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION,
+        command_name="cpu_pilot_run",
+        purpose="CPU-only pilot suite for threshold calibration evidence",
+        notes=("use a fresh --run-root; this command does not delete existing artifacts.",),
+        failure_label="cpu pilot",
+        summary_label="cpu pilot",
+    )
+
+
+def _run_recipe_with_summary(
+    *,
+    recipe: dict[str, object],
+    summary_path: Path,
+    schema_version: str,
+    command_name: str,
+    purpose: str,
+    notes: tuple[str, ...],
+    failure_label: str,
+    summary_label: str,
+) -> int:
+    run_started_monotonic = time.perf_counter()
+    step_summaries: list[dict[str, object]] = []
+    summary: dict[str, object] = {
+        "schema_version": schema_version,
+        "status": "running",
+        "summary_path": str(summary_path),
+        "started_at": _utc_timestamp(),
+        "ended_at": None,
+        "duration_seconds": None,
+        "source": recipe["source"],
+        "recipe": recipe,
+        "steps": step_summaries,
+        "failed_step": None,
+    }
+    _write_json_payload(summary_path, summary)
+    summary_update_failed = False
+    print(f"{command_name}:")
+    print(f"purpose: {purpose}")
+    for note in notes:
+        print(f"note: {note}")
+    print(f"summary: {summary_path}")
+    for index, step in enumerate(recipe["steps"], start=1):
+        print(f"running_step: {index}/{len(recipe['steps'])} {step['name']}", flush=True)
+        print(_shell_join(step["argv"]), flush=True)
+        step_started_monotonic = time.perf_counter()
+        step_summary: dict[str, object] = {
+            "index": index,
+            "name": step["name"],
+            "argv": step["argv"],
+            "command": step["command"],
+            "status": "running",
+            "started_at": _utc_timestamp(),
+            "ended_at": None,
+            "duration_seconds": None,
+            "returncode": None,
+        }
+        step_summaries.append(step_summary)
+        summary_update_failed = _write_run_summary_update(
+            summary_path,
+            summary,
+            summary_label=summary_label,
+            previous_failure=summary_update_failed,
+        )
+        completed = subprocess.run(step["argv"])
+        step_summary["ended_at"] = _utc_timestamp()
+        step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
+        step_summary["returncode"] = int(completed.returncode)
+        if completed.returncode != 0:
+            step_summary["status"] = "failed"
+            summary["status"] = "failed"
+            summary["failed_step"] = {
+                "index": index,
+                "name": step["name"],
+                "returncode": int(completed.returncode),
+            }
+            summary["ended_at"] = _utc_timestamp()
+            summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            _write_run_summary_update(
+                summary_path,
+                summary,
+                summary_label=summary_label,
+                previous_failure=summary_update_failed,
+            )
+            print(
+                f"error: {failure_label} step {index} failed with exit code {completed.returncode}: {step['name']}",
+                file=sys.stderr,
+            )
+            return int(completed.returncode)
+        step_summary["status"] = "passed"
+        summary_update_failed = _write_run_summary_update(
+            summary_path,
+            summary,
+            summary_label=summary_label,
+            previous_failure=summary_update_failed,
+        )
+    summary["status"] = "passed"
+    summary["ended_at"] = _utc_timestamp()
+    summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+    _write_run_summary_update(
+        summary_path,
+        summary,
+        summary_label=summary_label,
+        previous_failure=summary_update_failed,
+    )
+    print(f"{command_name}: PASS")
+    return 0
+
+
+def _cpu_pilot_report(args: argparse.Namespace) -> int:
+    summary_path, summary = _load_cpu_pilot_summary(args.path)
+    status = str(summary.get("status", "unknown"))
+    if args.json:
+        payload = dict(summary)
+        payload["summary_source_path"] = str(summary_path)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if status == "passed" else 2
+    print("cpu_pilot_report:")
+    print(f"summary: {summary_path}")
+    print(f"status: {_status_label(status)}")
+    print(f"started_at: {_format_summary_value(summary.get('started_at'))}")
+    print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
+    print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
+    recipe = summary.get("recipe")
+    if isinstance(recipe, Mapping):
+        print(f"pilot_count: {_format_summary_value(recipe.get('pilot_count'))}")
+        print(f"manifest_glob: {_format_summary_value(recipe.get('manifest_glob'))}")
+        print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
+    failed_step = summary.get("failed_step")
+    if isinstance(failed_step, dict):
+        print(
+            "failed_step: "
+            f"{failed_step.get('index')} {failed_step.get('name')} returncode={failed_step.get('returncode')}"
+        )
+    else:
+        print("failed_step: -")
+    steps = summary.get("steps")
+    if isinstance(steps, list):
+        print("steps:")
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            print(
+                f"- {step.get('index')}: {_status_label(str(step.get('status', 'unknown')))} "
+                f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
+                f"duration={_format_summary_value(step.get('duration_seconds'))}"
+            )
+    return 0 if status == "passed" else 2
+
+
+def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
+    run_root = args.run_root
+    audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "pilot-audit-config.json"
+    manifest_glob = run_root / "pilot-*" / "selfplay" / "manifest.json"
+    python_binary = args.python_binary
+    steps: list[tuple[str, list[str]]] = []
+    for index in range(args.pilot_count):
+        pilot_index = index + 1
+        pilot_root = run_root / f"pilot-{pilot_index:04d}"
+        pilot_seed_start = args.seed_start + (index * args.seed_stride)
+        steps.append(
+            (
+                f"run CPU smoke pilot {pilot_index}",
+                _cpu_pilot_smoke_run_argv(
+                    args,
+                    pilot_root=pilot_root,
+                    seed_start=pilot_seed_start,
+                ),
+            )
+        )
+    benchmark_iterations_required = args.pilot_count * args.selfplay_iterations
+    steps.append(
+        (
+            "compare pilots and write calibrated audit config",
+            [
+                python_binary,
+                "-m",
+                "pokezero.eval_cli",
+                "compare",
+                "--manifest-glob",
+                str(manifest_glob),
+                "--suggest-audit-calibration",
+                "--calibration-require-run-count",
+                str(args.pilot_count),
+                "--calibration-require-benchmark-iterations",
+                str(benchmark_iterations_required),
+                "--calibration-require-min-benchmark-games",
+                str(args.calibration_require_min_benchmark_games),
+                "--write-audit-config",
+                str(audit_config_path),
+                "--json",
+            ],
+        )
+    )
+    steps.append(
+        (
+            "compare pilots with calibrated audit config",
+            [
+                python_binary,
+                "-m",
+                "pokezero.eval_cli",
+                "compare",
+                "--manifest-glob",
+                str(manifest_glob),
+                "--audit-config",
+                str(audit_config_path),
+                "--fail-on-audit",
+                "--json",
+            ],
+        )
+    )
+    return {
+        "purpose": "CPU-only pilot suite for threshold calibration evidence",
+        "warning": "pilot-suite thresholds are starting evidence, not proof of policy strength",
+        "source": collect_source_metadata(),
+        "run_root": str(run_root),
+        "python_binary": python_binary,
+        "showdown_root": None if args.showdown_root is None else str(args.showdown_root),
+        "pilot_count": args.pilot_count,
+        "seed_start": args.seed_start,
+        "seed_stride": args.seed_stride,
+        "manifest_glob": str(manifest_glob),
+        "audit_config_path": str(audit_config_path),
+        "benchmark_iterations_required": benchmark_iterations_required,
+        "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
+        "steps": [
+            {
+                "name": name,
+                "argv": argv,
+                "command": _shell_join(argv),
+            }
+            for name, argv in steps
+        ],
+    }
+
+
+def _cpu_pilot_smoke_run_argv(args: argparse.Namespace, *, pilot_root: Path, seed_start: int) -> list[str]:
+    argv = [
+        args.python_binary,
+        "-m",
+        "pokezero.eval_cli",
+        "cpu-smoke-run",
+        "--run-root",
+        str(pilot_root),
+        "--python-binary",
+        args.python_binary,
+        "--workers",
+        str(args.workers),
+        "--train-games",
+        str(args.train_games),
+        "--validation-games",
+        str(args.validation_games),
+        "--bootstrap-benchmark-games",
+        str(args.bootstrap_benchmark_games),
+        "--selfplay-iterations",
+        str(args.selfplay_iterations),
+        "--selfplay-games",
+        str(args.selfplay_games),
+        "--evaluation-games",
+        str(args.evaluation_games),
+        "--feature-count",
+        str(args.feature_count),
+        "--window-size",
+        str(args.window_size),
+        "--max-decision-rounds",
+        str(args.max_decision_rounds),
+        "--seed-start",
+        str(seed_start),
+        "--audit-config-path",
+        str(pilot_root / "smoke-audit-config.json"),
+    ]
+    if args.showdown_root is not None:
+        argv.extend(["--showdown-root", str(args.showdown_root)])
+    return argv
+
+
 def _load_cpu_smoke_summary(path: Path) -> tuple[Path, dict[str, object]]:
     summary_path = (
         path / "cpu-smoke-run-summary.json"
@@ -1963,6 +2263,25 @@ def _load_cpu_smoke_summary(path: Path) -> tuple[Path, dict[str, object]]:
         raise ValueError(
             "Unsupported cpu smoke summary schema: "
             f"{payload.get('schema_version')!r}; expected {CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION!r}."
+        )
+    return summary_path, payload
+
+
+def _load_cpu_pilot_summary(path: Path) -> tuple[Path, dict[str, object]]:
+    summary_path = (
+        path / "cpu-pilot-suite-summary.json"
+        if path.is_dir() or (not path.exists() and path.suffix != ".json")
+        else path
+    )
+    if not summary_path.exists():
+        raise FileNotFoundError(f"cpu pilot summary not found: {summary_path}")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"cpu pilot summary must be a JSON object: {summary_path}")
+    if payload.get("schema_version") != CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported cpu pilot summary schema: "
+            f"{payload.get('schema_version')!r}; expected {CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION!r}."
         )
     return summary_path, payload
 
@@ -2002,6 +2321,21 @@ def _validate_cpu_smoke_args(args: argparse.Namespace, *, validate_showdown_root
         raise ValueError(f"showdown-root does not exist: {args.showdown_root}")
 
 
+def _validate_cpu_pilot_args(args: argparse.Namespace, *, validate_showdown_root: bool = False) -> None:
+    _validate_cpu_smoke_args(args, validate_showdown_root=validate_showdown_root)
+    if args.pilot_count <= 0:
+        raise ValueError("pilot-count must be positive.")
+    if args.seed_stride <= 0:
+        raise ValueError("seed-stride must be positive.")
+    if args.pilot_count > 1 and (args.pilot_count - 1) * args.seed_stride >= CPU_SMOKE_SEED_BAND_SPACING:
+        raise ValueError(
+            "pilot seed offsets must stay below the smoke seed-band spacing; "
+            f"reduce pilot-count or seed-stride so (pilot-count - 1) * seed-stride < {CPU_SMOKE_SEED_BAND_SPACING}."
+        )
+    if args.calibration_require_min_benchmark_games <= 0:
+        raise ValueError("calibration-require-min-benchmark-games must be positive.")
+
+
 def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     run_root = args.run_root
     teacher_dir = run_root / "teacher-bootstrap"
@@ -2012,6 +2346,12 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     python_binary = args.python_binary
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
     showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
+    seed_start = int(args.seed_start)
+    validation_seed_start = seed_start + CPU_SMOKE_SEED_BAND_SPACING
+    bootstrap_benchmark_seed_start = seed_start + (2 * CPU_SMOKE_SEED_BAND_SPACING)
+    preflight_seed_start = seed_start + (3 * CPU_SMOKE_SEED_BAND_SPACING)
+    selfplay_seed_start = seed_start + (4 * CPU_SMOKE_SEED_BAND_SPACING)
+    evaluation_seed_start = seed_start + (5 * CPU_SMOKE_SEED_BAND_SPACING)
     steps = (
         (
             "bootstrap teacher checkpoint",
@@ -2029,6 +2369,16 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "--workers",
                 str(args.workers),
                 *showdown_root_args,
+                "--seed-start",
+                str(seed_start),
+                "--shuffle-seed",
+                str(seed_start),
+                "--validation-seed-start",
+                str(validation_seed_start),
+                "--benchmark-seed-start",
+                str(bootstrap_benchmark_seed_start),
+                "--preflight-seed-start",
+                str(preflight_seed_start),
                 "--benchmark-games",
                 str(args.bootstrap_benchmark_games),
                 "--preflight-games",
@@ -2062,6 +2412,12 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 str(args.workers),
                 "--evaluation-games",
                 str(args.evaluation_games),
+                "--seed-start",
+                str(selfplay_seed_start),
+                "--evaluation-seed-start",
+                str(evaluation_seed_start),
+                "--shuffle-seed",
+                str(seed_start),
                 "--promotion-registry",
                 str(promotion_registry),
                 "--promotion-artifact-dir",
@@ -2145,6 +2501,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "run_root": str(run_root),
         "python_binary": python_binary,
         "showdown_root": showdown_root,
+        "seed_start": seed_start,
         "audit_config_path": str(audit_config_path),
         "steps": [
             {
@@ -2168,10 +2525,11 @@ def _write_json_payload(path: Path, payload: dict[str, object]) -> None:
     temporary_path.replace(path)
 
 
-def _write_cpu_smoke_summary_update(
+def _write_run_summary_update(
     path: Path,
     payload: dict[str, object],
     *,
+    summary_label: str,
     previous_failure: bool,
 ) -> bool:
     if previous_failure:
@@ -2179,7 +2537,7 @@ def _write_cpu_smoke_summary_update(
     try:
         _write_json_payload(path, payload)
     except OSError as exc:
-        print(f"warning: failed to update cpu smoke summary {path}: {exc}", file=sys.stderr)
+        print(f"warning: failed to update {summary_label} summary {path}: {exc}", file=sys.stderr)
         return True
     return False
 
