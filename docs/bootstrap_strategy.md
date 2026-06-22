@@ -128,10 +128,11 @@ python -m pokezero.neural_cli iterate \
   --promotion-registry runs/promotions.json \
   --promotion-artifact-dir runs/promoted-checkpoints \
   --auto-promote \
+  --min-incumbent-games 50 \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This neural loop collects current-policy-only rollout data, trains a transformer checkpoint from accumulated training rollouts each iteration, benchmarks the checkpoint when `--evaluation-games` is positive, and writes per-iteration manifests. Multi-iteration runs require evaluation games because each candidate must pass the advancement gate before it becomes the next rollout collector. With `--auto-promote`, passing candidates are recorded in the shared promotion registry and can be copied into the managed artifact directory; failed candidates remain saved and measured but do not become the collector. Use `--resume` to continue an interrupted neural run from the latest manifest.
+This neural loop collects current-policy-only rollout data, trains a transformer checkpoint from accumulated training rollouts each iteration, benchmarks the checkpoint when `--evaluation-games` is positive, and writes per-iteration manifests. Multi-iteration runs require evaluation games because each candidate must pass the advancement gate before it becomes the next rollout collector. With `--auto-promote`, passing candidates are recorded in the shared promotion registry and can be copied into the managed artifact directory; failed candidates remain saved and measured but do not become the collector. The example uses `--min-incumbent-games 50` because 25 evaluation games produce 50 mirrored incumbent games. Use `--resume` to continue an interrupted neural run from the latest manifest.
 
 This is still supervised/value-head training over rollout records, not PPO.
 

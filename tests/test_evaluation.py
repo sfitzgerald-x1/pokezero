@@ -234,6 +234,7 @@ class PromotionGateTest(unittest.TestCase):
         previous_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0001"
         latest_iteration["iteration"] = 2
         latest_iteration["checkpoint_path"] = "run/iteration-0002/transformer-policy.pt"
+        latest_iteration["current_policy_spec"] = previous_iteration["next_current_policy_spec"]
         latest_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0002"
         latest_iteration["benchmark"] = benchmark_payload(
             policy_id="entity-test-iter-0002",

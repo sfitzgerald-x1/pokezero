@@ -493,14 +493,58 @@ def _derived_neural_selfplay_incumbent_policy_id(
     *,
     manifest_path: Path,
 ) -> str | None:
+    latest = iterations[-1]
+    current_policy_id = _neural_current_policy_id(
+        iterations,
+        latest.get("current_policy_spec"),
+        manifest_path=manifest_path,
+    )
+    if current_policy_id:
+        return current_policy_id
+    if _is_fixed_no_incumbent_policy_spec(latest.get("current_policy_spec")):
+        return None
     if len(iterations) >= 2:
         previous_training = _mapping(iterations[-2].get("training", {}))
         previous_model_config = _mapping(previous_training.get("model_config", {}))
         previous_policy_id = _optional_str(previous_model_config.get("policy_id"))
         if previous_policy_id:
             return previous_policy_id
-    latest = iterations[-1]
     return _policy_id_from_policy_spec(latest.get("current_policy_spec"), manifest_path=manifest_path)
+
+
+def _neural_current_policy_id(
+    iterations: tuple[Mapping[str, Any], ...],
+    value: Any,
+    *,
+    manifest_path: Path,
+) -> str | None:
+    direct = _policy_id_from_policy_spec(value, manifest_path=manifest_path)
+    if direct is not None:
+        return direct
+    if value is None:
+        return None
+    current = str(value).strip()
+    if not current.lower().startswith("neural:"):
+        return None
+    for iteration in reversed(iterations[:-1]):
+        candidates = (
+            iteration.get("next_current_policy_spec"),
+            iteration.get("checkpoint_policy_spec"),
+        )
+        if current not in {str(candidate) for candidate in candidates if candidate is not None}:
+            continue
+        training = _mapping(iteration.get("training", {}))
+        model_config = _mapping(training.get("model_config", {}))
+        policy_id = _optional_str(model_config.get("policy_id"))
+        if policy_id:
+            return policy_id
+    return None
+
+
+def _is_fixed_no_incumbent_policy_spec(value: Any) -> bool:
+    if value is None:
+        return False
+    return str(value).partition("?")[0].strip().lower() in {"random-legal", "simple-legal"}
 
 
 def _policy_id_from_policy_spec(value: Any, *, manifest_path: Path) -> str | None:

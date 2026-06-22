@@ -313,18 +313,22 @@ def run_neural_selfplay_iterations(
                 seed_start=evaluation_seed_start + (offset * evaluation_games),
                 device=training_config.device,
             )
-        advancement = _advancement_decision(
-            benchmark=benchmark,
-            candidate_policy_id=training.model_config.policy_id,
-            incumbent_policy_spec=(
-                _benchmark_incumbent_policy_spec(
+        if auto_promotion_config is None:
+            advancement = _advancement_decision(
+                benchmark=benchmark,
+                candidate_policy_id=training.model_config.policy_id,
+                incumbent_policy_spec=current_policy_spec,
+            )
+        else:
+            advancement = NeuralAdvancementDecision(
+                advance_collector=False,
+                reason="pending_promotion_gate",
+                candidate_policy_id=training.model_config.policy_id,
+                incumbent_policy_spec=_benchmark_incumbent_policy_spec(
                     fallback_policy_spec=current_policy_spec,
                     promotion_config=auto_promotion_config,
-                )
-                if auto_promotion_config is not None
-                else current_policy_spec
-            ),
-        )
+                ),
+            )
 
         result = NeuralSelfPlayIterationResult(
             iteration=iteration,
@@ -523,11 +527,7 @@ def _promotion_advancement_decision(
         incumbent_policy_id=gate_result.incumbent_policy_id,
         incumbent_policy_spec=incumbent_policy_spec,
         candidate_win_rate=gate_result.incumbent_win_rate,
-        incumbent_win_rate=(
-            1.0 - gate_result.incumbent_win_rate
-            if gate_result.incumbent_win_rate is not None
-            else None
-        ),
+        incumbent_win_rate=None,
         games=gate_result.incumbent_games,
     )
 
