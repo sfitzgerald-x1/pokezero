@@ -491,6 +491,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Long-run run directory or cpu-long-run-run-summary.json path.",
     )
     long_run_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    long_run_report.add_argument(
+        "--require-derived-audit",
+        action="store_true",
+        help=(
+            "Return non-zero unless the nested self-play manifest is readable and the current derived "
+            "audit health passes."
+        ),
+    )
     long_run_report.set_defaults(func=_cpu_long_run_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -3020,12 +3028,23 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
 def _cpu_long_run_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_long_run_summary(args.path)
     status = str(summary.get("status", "unknown"))
-    exit_status = 0 if status == "passed" else 2
     run_report = _cpu_long_run_derived_run_report(summary)
+    derived_audit_requirement_passed = (
+        run_report.get("available") is True and run_report.get("audit_passed") is True
+    )
+    if status != "passed":
+        exit_status = 2
+    elif not args.require_derived_audit or derived_audit_requirement_passed:
+        exit_status = 0
+    else:
+        exit_status = 2 if run_report.get("available") is True else 1
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["derived_run_report"] = run_report
+        if args.require_derived_audit:
+            payload["derived_audit_required"] = True
+            payload["derived_audit_requirement_passed"] = derived_audit_requirement_passed
         print(json.dumps(payload, indent=2, sort_keys=True))
         return exit_status
 
@@ -3037,6 +3056,9 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
     print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
     print(f"failed_reason: {_format_summary_value(summary.get('failed_reason'))}")
+    if args.require_derived_audit:
+        print("derived_audit_required: yes")
+        print(f"derived_audit_requirement_passed: {_format_optional_bool(derived_audit_requirement_passed)}")
     if isinstance(recipe, Mapping):
         print(f"long_run_ready: {_format_optional_bool(recipe.get('long_run_ready'))}")
         print(f"pilot_summary: {_format_summary_value(recipe.get('pilot_summary_path'))}")
