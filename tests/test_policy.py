@@ -280,6 +280,7 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 1)
         self.assertIn("clears hazards=1", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_branch"], "rapid_spin_clear_hazards")
 
     def test_scripted_teacher_does_not_value_rapid_spin_without_hazards(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
@@ -361,6 +362,7 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 1)
         self.assertIn("layers=0/3", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_branch"], "spikes_available")
         self.assertEqual(decision.metadata["teacher_score"], 62.0)
 
     def test_scripted_teacher_values_spikes_when_layers_remain_available(self) -> None:
@@ -425,6 +427,7 @@ class PolicyBaselineTest(unittest.TestCase):
         decision = policy.select_action(obs, rng=random.Random(1))
 
         self.assertEqual(decision.action_index, 0)
+        self.assertNotEqual(decision.metadata["teacher_branch"], "spikes_available")
 
     def test_scripted_teacher_penalizes_statused_switch_targets(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())

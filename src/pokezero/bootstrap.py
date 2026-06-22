@@ -361,6 +361,7 @@ def _teacher_decision_summary_from_records(records: Iterable[RolloutRecord]) -> 
     unknown_move_decisions = 0
     fallback_decisions = 0
     fallback_reasons: dict[str, int] = {}
+    teacher_branch_counts: dict[str, int] = {}
     teacher_reason_counts: dict[str, int] = {}
     for record in records:
         for step in record.trajectory.steps:
@@ -368,7 +369,9 @@ def _teacher_decision_summary_from_records(records: Iterable[RolloutRecord]) -> 
             if step.metadata.get("policy_family") != "scripted-teacher":
                 continue
             scripted_teacher_decisions += 1
-            reason = str(step.metadata.get("teacher_reason") or "")
+            reason = str(step.metadata.get("teacher_reason") or "<missing>")
+            branch = str(step.metadata.get("teacher_branch") or "<missing>")
+            teacher_branch_counts[branch] = teacher_branch_counts.get(branch, 0) + 1
             teacher_reason_counts[reason] = teacher_reason_counts.get(reason, 0) + 1
             if reason == "unknown move":
                 unknown_move_decisions += 1
@@ -381,9 +384,20 @@ def _teacher_decision_summary_from_records(records: Iterable[RolloutRecord]) -> 
         "unknown_move_decisions": unknown_move_decisions,
         "fallback_decisions": fallback_decisions,
         "fallback_reasons": fallback_reasons,
-        "teacher_reason_counts": dict(sorted(teacher_reason_counts.items())),
+        "teacher_branch_counts": dict(sorted(teacher_branch_counts.items())),
+        "top_teacher_branches": _top_teacher_counts(teacher_branch_counts),
+        "teacher_reason_unique_count": len(teacher_reason_counts),
         "top_teacher_reasons": _top_teacher_reasons(teacher_reason_counts),
     }
+
+
+def _top_teacher_counts(counts: Mapping[str, int]) -> list[dict[str, int | str]]:
+    return [
+        {"branch": branch, "count": count}
+        for branch, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[
+            :MAX_TEACHER_REASON_SUMMARY
+        ]
+    ]
 
 
 def _top_teacher_reasons(reason_counts: Mapping[str, int]) -> list[dict[str, int | str]]:
