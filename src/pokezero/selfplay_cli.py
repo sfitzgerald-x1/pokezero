@@ -14,6 +14,7 @@ from .cli_audit import (
     validate_post_iteration_audit_evaluation_games,
 )
 from .collection import policy_spec_with_showdown_root
+from .evaluation_profiles import EVALUATION_PROFILES
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .run_audit import RunAuditFailure
@@ -34,6 +35,7 @@ MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pokezero.selfplay_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    profile_choices = tuple(sorted(EVALUATION_PROFILES))
 
     iterate = subparsers.add_parser("iterate", help="Run linear-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
@@ -108,6 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow auto-promotion to record a checkpoint already present in the registry.",
     )
+    iterate.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for auto-promotion gate checks.")
     _add_gate_arguments(iterate)
     iterate.add_argument("--evaluation-games", type=int, default=0, help="Optional benchmark games per baseline matchup after each iteration.")
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic evaluation seed.")
