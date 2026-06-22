@@ -2177,9 +2177,12 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
 def _cpu_smoke_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_smoke_summary(args.path)
     status = str(summary.get("status", "unknown"))
+    recipe = summary.get("recipe") if isinstance(summary.get("recipe"), Mapping) else {}
+    teacher_branch_preflight = _cpu_smoke_teacher_branch_preflight_report(recipe)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
+        payload["teacher_branch_preflight_report"] = teacher_branch_preflight
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0 if status == "passed" else 2
     print("cpu_smoke_report:")
@@ -2194,6 +2197,7 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
         print(f"source_branch: {_format_summary_value(source.get('branch'))}")
         print(f"source_head: {_format_summary_value(source.get('head'))}")
         print(f"source_dirty: {_format_summary_value(source.get('dirty'))}")
+    _print_cpu_smoke_teacher_branch_preflight_report(teacher_branch_preflight)
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -2214,6 +2218,104 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
     return 0 if status == "passed" else 2
+
+
+def _cpu_smoke_teacher_branch_preflight_report(recipe: Mapping[str, object]) -> dict[str, object]:
+    requested = recipe.get("teacher_branch_preflight_requested") is True
+    path_value = recipe.get("teacher_branch_preflight_output_path")
+    report: dict[str, object] = {
+        "requested": requested,
+        "path": None if path_value is None else str(path_value),
+        "available": False,
+        "passed": None,
+        "schema_version": None,
+        "teacher_branch_counts": {},
+        "failed_checks": [],
+        "error": None,
+        "required_teacher_branches": list(recipe.get("required_teacher_branches") or ()),
+        "min_teacher_branch_counts": list(recipe.get("min_teacher_branch_counts") or ()),
+    }
+    if not requested:
+        return report
+    if path_value is None:
+        report["error"] = "teacher_branch_preflight_output_path missing from recipe"
+        return report
+    path = Path(str(path_value))
+    if not path.exists():
+        report["error"] = "teacher branch preflight artifact not found"
+        return report
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        report["error"] = f"failed to read teacher branch preflight artifact: {exc}"
+        return report
+    if not isinstance(payload, dict):
+        report["error"] = "teacher branch preflight artifact must be a JSON object"
+        return report
+    report["available"] = True
+    report["passed"] = payload.get("passed") if isinstance(payload.get("passed"), bool) else None
+    schema_version = payload.get("schema_version")
+    report["schema_version"] = schema_version if isinstance(schema_version, str) else None
+
+    teacher_summary = payload.get("teacher_decision_summary")
+    if isinstance(teacher_summary, Mapping):
+        counts = teacher_summary.get("teacher_branch_counts")
+        if isinstance(counts, Mapping):
+            report["teacher_branch_counts"] = {
+                str(branch): count
+                for branch, count in sorted(counts.items(), key=lambda item: str(item[0]))
+                if isinstance(count, int)
+            }
+
+    checks = payload.get("checks")
+    failed_checks: list[dict[str, object]] = []
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, Mapping) or check.get("passed") is True:
+                continue
+            failed_checks.append(
+                {
+                    key: value
+                    for key, value in check.items()
+                    if key in {"name", "message", "observed", "threshold", "passed"}
+                }
+            )
+    report["failed_checks"] = failed_checks
+    return report
+
+
+def _print_cpu_smoke_teacher_branch_preflight_report(report: Mapping[str, object]) -> None:
+    if report.get("requested") is not True:
+        print("teacher_branch_preflight: not_requested")
+        return
+    status = "UNKNOWN"
+    if report.get("available") is not True:
+        status = "MISSING"
+    elif report.get("passed") is True:
+        status = "PASS"
+    elif report.get("passed") is False:
+        status = "FAIL"
+    print(f"teacher_branch_preflight: {status}")
+    print(f"teacher_branch_preflight_path: {_format_summary_value(report.get('path'))}")
+    error = report.get("error")
+    if error:
+        print(f"teacher_branch_preflight_error: {error}")
+    counts = report.get("teacher_branch_counts")
+    if isinstance(counts, Mapping) and counts:
+        print("teacher_branch_counts:")
+        for branch, count in sorted(counts.items(), key=lambda item: str(item[0])):
+            print(f"- {branch}: {count}")
+    failed_checks = report.get("failed_checks")
+    if isinstance(failed_checks, list) and failed_checks:
+        print("teacher_branch_failed_checks:")
+        for check in failed_checks:
+            if not isinstance(check, Mapping):
+                continue
+            name = _format_summary_value(check.get("name"))
+            message = _format_summary_value(check.get("message"))
+            observed = _format_summary_value(check.get("observed"))
+            threshold = _format_summary_value(check.get("threshold"))
+            print(f"- {name}: observed={observed} threshold={threshold} message={message}")
 
 
 def _cpu_pilot_plan(args: argparse.Namespace) -> int:

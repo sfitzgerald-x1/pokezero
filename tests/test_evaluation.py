@@ -1272,6 +1272,136 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(payload["summary_source_path"], str(summary_path))
         self.assertEqual(payload["status"], "passed")
 
+    def test_eval_cli_cpu_smoke_report_prints_teacher_branch_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            preflight_path = run_root / "teacher-branch-preflight.json"
+            summary = cpu_smoke_summary(status="passed")
+            summary["recipe"].update(
+                {
+                    "teacher_branch_preflight_requested": True,
+                    "teacher_branch_preflight_output_path": str(preflight_path),
+                    "required_teacher_branches": ["status_pressure"],
+                    "min_teacher_branch_counts": ["status_pressure=1"],
+                }
+            )
+            write_json(
+                preflight_path,
+                {
+                    "schema_version": "pokezero.teacher_benchmark.v1",
+                    "passed": True,
+                    "checks": [
+                        {
+                            "name": "teacher_branch_present:status_pressure",
+                            "passed": True,
+                            "message": "status_pressure observed.",
+                            "observed": 6,
+                            "threshold": 1,
+                        }
+                    ],
+                    "teacher_decision_summary": {
+                        "teacher_branch_counts": {"status_pressure": 6, "damaging_move": 12}
+                    },
+                },
+            )
+            write_json(run_root / "cpu-smoke-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("teacher_branch_preflight: PASS", output)
+        self.assertIn(f"teacher_branch_preflight_path: {preflight_path}", output)
+        self.assertIn("teacher_branch_counts:", output)
+        self.assertIn("- damaging_move: 12", output)
+        self.assertIn("- status_pressure: 6", output)
+
+    def test_eval_cli_cpu_smoke_report_json_includes_teacher_branch_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            preflight_path = run_root / "teacher-branch-preflight.json"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+            summary = cpu_smoke_summary(status="failed", failed_step_index=1)
+            summary["recipe"].update(
+                {
+                    "teacher_branch_preflight_requested": True,
+                    "teacher_branch_preflight_output_path": str(preflight_path),
+                    "required_teacher_branches": ["status_pressure"],
+                    "min_teacher_branch_counts": ["status_pressure=5"],
+                }
+            )
+            write_json(
+                preflight_path,
+                {
+                    "schema_version": "pokezero.teacher_benchmark.v1",
+                    "passed": False,
+                    "checks": [
+                        {
+                            "name": "teacher_branch_count:status_pressure",
+                            "passed": False,
+                            "message": "status_pressure count below required minimum.",
+                            "observed": 3,
+                            "threshold": 5,
+                        }
+                    ],
+                    "teacher_decision_summary": {"teacher_branch_counts": {"status_pressure": 3}},
+                },
+            )
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["teacher_branch_preflight_report"]
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(report["requested"])
+        self.assertTrue(report["available"])
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["schema_version"], "pokezero.teacher_benchmark.v1")
+        self.assertEqual(report["teacher_branch_counts"], {"status_pressure": 3})
+        self.assertEqual(report["required_teacher_branches"], ["status_pressure"])
+        self.assertEqual(report["min_teacher_branch_counts"], ["status_pressure=5"])
+        self.assertEqual(
+            report["failed_checks"],
+            [
+                {
+                    "name": "teacher_branch_count:status_pressure",
+                    "passed": False,
+                    "message": "status_pressure count below required minimum.",
+                    "observed": 3,
+                    "threshold": 5,
+                }
+            ],
+        )
+
+    def test_eval_cli_cpu_smoke_report_marks_missing_teacher_branch_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            preflight_path = run_root / "teacher-branch-preflight.json"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+            summary = cpu_smoke_summary(status="passed")
+            summary["recipe"].update(
+                {
+                    "teacher_branch_preflight_requested": True,
+                    "teacher_branch_preflight_output_path": str(preflight_path),
+                }
+            )
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["teacher_branch_preflight_report"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["requested"])
+        self.assertFalse(report["available"])
+        self.assertIsNone(report["passed"])
+        self.assertEqual(report["path"], str(preflight_path))
+        self.assertEqual(report["error"], "teacher branch preflight artifact not found")
+
     def test_eval_cli_cpu_smoke_report_rejects_wrong_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
