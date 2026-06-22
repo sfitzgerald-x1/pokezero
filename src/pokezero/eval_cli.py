@@ -951,7 +951,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     selfplay_dir = run_root / "selfplay"
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
-    python_binary = str(args.python_binary)
+    python_binary = args.python_binary
     showdown_root = str(args.showdown_root)
     steps = (
         (

@@ -516,10 +516,10 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("./.venv/bin/python -m pokezero.bootstrap_cli teacher", output)
         self.assertIn("--run-dir 'runs/local smoke/teacher-bootstrap'", output)
         self.assertIn("--showdown-root '/tmp/showdown root'", output)
-        self.assertIn("python -m pokezero.selfplay_cli iterate", output)
+        self.assertIn("./.venv/bin/python -m pokezero.selfplay_cli iterate", output)
         self.assertIn("--profile smoke", output)
         self.assertIn("--audit-profile smoke", output)
-        self.assertIn("python -m pokezero.eval_cli audit-calibrate", output)
+        self.assertIn("./.venv/bin/python -m pokezero.eval_cli audit-calibrate", output)
         self.assertIn("--compare-profile smoke", output)
 
     def test_eval_cli_cpu_smoke_plan_prints_json_recipe(self) -> None:

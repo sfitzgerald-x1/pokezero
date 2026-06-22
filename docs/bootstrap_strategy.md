@@ -75,9 +75,8 @@ Replay import remains valuable after a randbat replay source is identified. A no
 Print a tiny CPU smoke-run recipe before spending time on larger experiments:
 
 ```bash
-python -m pokezero.eval_cli cpu-smoke-plan \
+./.venv/bin/python -m pokezero.eval_cli cpu-smoke-plan \
   --run-root runs/cpu-smoke \
-  --python-binary ./.venv/bin/python \
   --showdown-root /path/to/pokemon-showdown
 ```
 
