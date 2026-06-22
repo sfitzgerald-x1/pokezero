@@ -314,7 +314,7 @@ def run_selfplay_iterations(
             results[-1] = result
             _write_json(manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
+                promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
         checkpoint_history.append(result.checkpoint_policy_spec)
         current_policy_spec = result.checkpoint_policy_spec
         current_model = training.model
@@ -545,7 +545,7 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         return ()
     from .promotion import load_promotion_registry, verify_promotion_registry
 
-    verification = verify_promotion_registry(promotion_registry_path)
+    verification = verify_promotion_registry(promotion_registry_path, verify_loadable=True)
     if not verification.passed:
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")

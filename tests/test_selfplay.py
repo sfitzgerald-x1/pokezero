@@ -377,7 +377,11 @@ class SelfPlayTest(unittest.TestCase):
                     policy_id="linear-promoted",
                 ),
             )
-            write_promotion_registry(registry_path, checkpoint_paths=(promoted_checkpoint_path,))
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(promoted_checkpoint_path,),
+                policy_ids=("linear-promoted",),
+            )
 
             result = run_selfplay_iterations(
                 run_dir=temp_path / "run",
@@ -409,6 +413,17 @@ class SelfPlayTest(unittest.TestCase):
             write_promotion_registry(registry_path, checkpoint_paths=(temp_path / "missing-linear.json",))
 
             with self.assertRaisesRegex(ValueError, "promotion registry verification failed"):
+                _promoted_checkpoint_specs(registry_path)
+
+    def test_promoted_checkpoint_specs_verify_loadable_registry_before_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "bad-linear.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_promotion_registry(registry_path, checkpoint_paths=(checkpoint_path,))
+
+            with self.assertRaisesRegex(ValueError, "checkpoint_policy_loadable"):
                 _promoted_checkpoint_specs(registry_path)
 
     def test_run_selfplay_iterations_auto_promotes_and_feeds_next_opponent_pool(self) -> None:
