@@ -559,6 +559,7 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(no_preflight_exit, 2)
         self.assertFalse(no_preflight_payload["passed"])
+        self.assertTrue(no_preflight_payload["preflight_required"])
         self.assertIn(
             "preflight_audit_requested",
             failed_check_names_from_payload(no_preflight_payload),
@@ -569,6 +570,73 @@ class PromotionGateTest(unittest.TestCase):
         self.assertTrue(preflight_payload["preflight_passed"])
         self.assertEqual(len(preflight_payload["preflight_runs"]), 1)
         self.assertEqual(preflight_payload["preflight_runs"][0]["manifest_path"], str(manifest_path))
+
+    def test_eval_cli_audit_config_report_require_preflight_handles_empty_glob(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            write_json(config_path, run_audit_config_payload(smoke_test_audit_config()))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                json_exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--require-preflight",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                text_exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--require-preflight",
+                    ]
+                )
+            text_output = stdout.getvalue()
+
+        self.assertEqual(json_exit_code, 2)
+        self.assertEqual(text_exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertTrue(payload["preflight_required"])
+        self.assertFalse(payload["preflight_requested"])
+        self.assertIn("--manifest-glob matched no paths", payload["preflight_expansion_error"])
+        self.assertIn("preflight: required_missing", text_output)
+        self.assertIn("preflight_error: --manifest-glob matched no paths", text_output)
+        self.assertIn("preflight_audit_requested", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_config_report_require_preflight_counts_missing_literal_path_as_failed_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            missing_manifest_path = temp_path / "missing-run" / "manifest.json"
+            write_json(config_path, run_audit_config_payload(smoke_test_audit_config()))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        str(missing_manifest_path),
+                        "--require-preflight",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["preflight_required"])
+        self.assertTrue(payload["preflight_requested"])
+        self.assertFalse(payload["preflight_passed"])
+        self.assertNotIn("preflight_audit_requested", failed_check_names_from_payload(payload))
+        self.assertIn("preflight_audit_passed", failed_check_names_from_payload(payload))
+        self.assertEqual(payload["preflight_runs"][0]["failed_checks"], ["manifest_error"])
 
     def test_eval_cli_audit_config_report_require_preflight_fails_failed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

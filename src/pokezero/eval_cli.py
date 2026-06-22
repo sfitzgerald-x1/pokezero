@@ -1792,11 +1792,18 @@ def _audit(args: argparse.Namespace) -> int:
 
 def _audit_config_report(args: argparse.Namespace) -> int:
     config_payload = _load_audit_config_report_payload(args.audit_config)
-    paths = (
-        _expanded_manifest_paths(args.paths, args.manifest_glob)
-        if args.paths or args.manifest_glob
-        else ()
-    )
+    preflight_expansion_error = None
+    try:
+        paths = (
+            _expanded_manifest_paths(args.paths, args.manifest_glob)
+            if args.paths or args.manifest_glob
+            else ()
+        )
+    except ValueError as exc:
+        if not args.require_preflight:
+            raise
+        paths = ()
+        preflight_expansion_error = str(exc)
     preflight_runs = tuple(
         _audit_config_preflight_run_payload(path, config=config_payload["config_object"])
         for path in paths
@@ -1812,6 +1819,7 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         require_source=args.require_source,
         require_calibration=args.require_calibration,
         require_preflight=args.require_preflight,
+        preflight_expansion_error=preflight_expansion_error,
     )
     passed = all(bool(check["passed"]) for check in checks)
     report = {
@@ -1821,6 +1829,8 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         "source": config_payload["source"],
         "calibration": config_payload["calibration"],
         "preflight_requested": bool(preflight_runs),
+        "preflight_required": bool(args.require_preflight),
+        "preflight_expansion_error": preflight_expansion_error,
         "preflight_passed": preflight_passed,
         "preflight_runs": list(preflight_runs),
         "checks": checks,
@@ -1885,6 +1895,7 @@ def _audit_config_report_checks(
     require_source: bool,
     require_calibration: bool,
     require_preflight: bool,
+    preflight_expansion_error: str | None,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = [
         {
@@ -1924,7 +1935,11 @@ def _audit_config_report_checks(
                 "passed": preflight_passed is not None,
                 "observed": preflight_passed is not None,
                 "threshold": True,
-                "message": "at least one supplied manifest must be audited with this config",
+                "message": (
+                    preflight_expansion_error
+                    if preflight_expansion_error is not None
+                    else "at least one supplied manifest must be audited with this config"
+                ),
             }
         )
     if preflight_passed is not None:
@@ -1970,7 +1985,12 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
             print(f"- {key}: {_format_summary_value(value)}")
     preflight_passed = report.get("preflight_passed")
     if preflight_passed is None:
-        print("preflight: not_requested")
+        if report.get("preflight_required"):
+            print("preflight: required_missing")
+            if report.get("preflight_expansion_error") is not None:
+                print(f"preflight_error: {report.get('preflight_expansion_error')}")
+        else:
+            print("preflight: not_requested")
     else:
         print(f"preflight: {'PASS' if preflight_passed else 'FAIL'}")
         print("preflight_runs:")
