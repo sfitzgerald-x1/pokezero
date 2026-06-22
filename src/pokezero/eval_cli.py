@@ -501,6 +501,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     long_run_report.set_defaults(func=_cpu_long_run_report)
 
+    long_run_compare = subparsers.add_parser(
+        "cpu-long-run-compare",
+        help="Compare CPU long-run wrapper summaries side by side.",
+    )
+    long_run_compare.add_argument(
+        "paths",
+        type=Path,
+        nargs="*",
+        help="Long-run run directories or cpu-long-run-run-summary.json paths.",
+    )
+    long_run_compare.add_argument(
+        "--summary-glob",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern for long-run directories or cpu-long-run-run-summary.json files. "
+            "May be repeated and is expanded in sorted order."
+        ),
+    )
+    long_run_compare.add_argument(
+        "--fail-on-non-passing",
+        action="store_true",
+        help="Return non-zero when any loaded summary is failed or its derived audit health is not passing.",
+    )
+    long_run_compare.add_argument("--json", action="store_true", help="Print the comparison payload as JSON.")
+    long_run_compare.set_defaults(func=_cpu_long_run_compare)
+
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
     compare.add_argument(
@@ -3119,6 +3146,171 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     return exit_status
 
 
+def _cpu_long_run_compare(args: argparse.Namespace) -> int:
+    paths = _expanded_cpu_long_run_summary_paths(args.paths, args.summary_glob)
+    entries: list[dict[str, object]] = []
+    errors: list[dict[str, object]] = []
+    for path in paths:
+        try:
+            summary_path, summary = _load_cpu_long_run_summary(path)
+        except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+            continue
+        entries.append(_cpu_long_run_compare_entry(summary_path, summary))
+
+    non_passing_count = sum(1 for entry in entries if entry.get("passing") is not True)
+    payload = {
+        "summary_count": len(entries),
+        "error_count": len(errors),
+        "non_passing_count": non_passing_count,
+        "fail_on_non_passing": args.fail_on_non_passing,
+        "entries": entries,
+        "errors": errors,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_cpu_long_run_compare(payload)
+
+    if errors:
+        return 1
+    if args.fail_on_non_passing and non_passing_count:
+        return 2
+    return 0
+
+
+def _expanded_cpu_long_run_summary_paths(paths: Iterable[Path], summary_globs: Iterable[str] | None) -> tuple[Path, ...]:
+    expanded: list[Path] = []
+    seen: set[str] = set()
+    unmatched_patterns: list[str] = []
+    for path in paths:
+        _append_discovered_cpu_long_run_summary_path(expanded, seen, path)
+    for pattern in summary_globs or ():
+        expanded_pattern = str(Path(pattern).expanduser())
+        matches = tuple(Path(match) for match in sorted(glob.glob(expanded_pattern, recursive=True)))
+        if not matches:
+            unmatched_patterns.append(pattern)
+            continue
+        for match in matches:
+            _append_discovered_cpu_long_run_summary_path(expanded, seen, match)
+    if not expanded:
+        if unmatched_patterns:
+            raise ValueError("--summary-glob matched no paths: " + ", ".join(unmatched_patterns))
+        raise ValueError("provide at least one path or --summary-glob.")
+    if unmatched_patterns:
+        print(
+            "warning: --summary-glob matched no paths: " + ", ".join(unmatched_patterns),
+            file=sys.stderr,
+        )
+    return tuple(expanded)
+
+
+def _append_discovered_cpu_long_run_summary_path(expanded: list[Path], seen: set[str], path: Path) -> None:
+    key = _cpu_long_run_summary_identity_key(path)
+    if key in seen:
+        return
+    seen.add(key)
+    expanded.append(path)
+
+
+def _cpu_long_run_summary_identity_key(path: Path) -> str:
+    expanded = path.expanduser()
+    if expanded.exists() and expanded.is_dir():
+        expanded = expanded / "cpu-long-run-run-summary.json"
+    elif not expanded.exists() and expanded.suffix != ".json":
+        expanded = expanded / "cpu-long-run-run-summary.json"
+    return str(expanded.resolve(strict=False))
+
+
+def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object]) -> dict[str, object]:
+    status = str(summary.get("status", "unknown"))
+    recipe = summary.get("recipe")
+    recipe_mapping = recipe if isinstance(recipe, Mapping) else {}
+    report = _cpu_long_run_derived_run_report(summary)
+    wrapper_passed = status == "passed"
+    derived_audit_passed = report.get("available") is True and report.get("audit_passed") is True
+    return {
+        "summary_path": str(summary_path),
+        "label": _cpu_long_run_compare_label(summary_path, recipe_mapping.get("run_dir")),
+        "status": status,
+        "wrapper_passed": wrapper_passed,
+        "passing": wrapper_passed and derived_audit_passed,
+        "failed_reason": summary.get("failed_reason"),
+        "run_dir": recipe_mapping.get("run_dir"),
+        "profile": recipe_mapping.get("profile"),
+        "runtime_audit_source": recipe_mapping.get("runtime_audit_source"),
+        "derived_run_report": report,
+        "derived_audit_passed": derived_audit_passed,
+        "latest_iteration": report.get("latest_iteration"),
+        "latest_benchmark_win_rate": report.get("latest_benchmark_win_rate"),
+        "best_benchmark_win_rate": report.get("best_benchmark_win_rate"),
+        "latest_collection_capped_rate": report.get("latest_collection_capped_rate"),
+        "latest_benchmark_capped_rate": report.get("latest_benchmark_capped_rate"),
+        "latest_average_decision_rounds": report.get("latest_average_decision_rounds"),
+        "latest_benchmark_average_decision_rounds": report.get("latest_benchmark_average_decision_rounds"),
+        "latest_process_peak_rss_mb": report.get("latest_process_peak_rss_mb"),
+        "derived_error": report.get("error"),
+        "failed_checks": list(report.get("failed_checks") or ()),
+    }
+
+
+def _cpu_long_run_compare_label(summary_path: Path, run_dir: object) -> str:
+    if isinstance(run_dir, str) and run_dir:
+        return Path(run_dir).name or run_dir
+    if summary_path.name == "cpu-long-run-run-summary.json":
+        return summary_path.parent.name or summary_path.name
+    return summary_path.name
+
+
+def _print_cpu_long_run_compare(payload: Mapping[str, object]) -> None:
+    entries = tuple(entry for entry in payload.get("entries", ()) if isinstance(entry, Mapping))
+    errors = tuple(error for error in payload.get("errors", ()) if isinstance(error, Mapping))
+    summary_width = 36
+    print("cpu_long_run_compare:")
+    print(f"summaries: {payload.get('summary_count')}")
+    print(f"errors: {payload.get('error_count')}")
+    print(f"non_passing: {payload.get('non_passing_count')}")
+    print(f"fail_on_non_passing: {_format_optional_bool(payload.get('fail_on_non_passing'))}")
+    header = (
+        f"{'summary':<{summary_width}} {'status':<8} {'pass':>5} {'audit':>5} {'iter':>4} "
+        f"{'bench_wr':>8} {'coll_cap':>8} {'bench_cap':>9} {'avg_dec':>8} "
+        f"{'bench_dec':>9} {'rss_mb':>8} run_dir"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in entries:
+        print(
+            f"{_format_summary_value(entry.get('label')):<{summary_width}.{summary_width}} "
+            f"{_status_label(str(entry.get('status', 'unknown'))):<8.8} "
+            f"{_format_optional_bool(entry.get('passing') if isinstance(entry.get('passing'), bool) else None):>5} "
+            f"{_format_optional_bool(entry.get('derived_audit_passed') if isinstance(entry.get('derived_audit_passed'), bool) else None):>5} "
+            f"{_format_optional_int(entry.get('latest_iteration')):>4} "
+            f"{_format_optional_float(entry.get('latest_benchmark_win_rate')):>8} "
+            f"{_format_optional_float(entry.get('latest_collection_capped_rate')):>8} "
+            f"{_format_optional_float(entry.get('latest_benchmark_capped_rate')):>9} "
+            f"{_format_optional_float(entry.get('latest_average_decision_rounds')):>8} "
+            f"{_format_optional_float(entry.get('latest_benchmark_average_decision_rounds')):>9} "
+            f"{_format_optional_one_decimal(entry.get('latest_process_peak_rss_mb')):>8} "
+            f"{_format_summary_value(entry.get('run_dir'))}"
+        )
+    failed_entries = tuple(entry for entry in entries if entry.get("passing") is not True)
+    if failed_entries:
+        print("")
+        print("non_passing_summaries:")
+        for entry in failed_entries:
+            failed_checks = ", ".join(str(check) for check in entry.get("failed_checks", ())) or "-"
+            print(
+                f"- {entry.get('summary_path')}: status={entry.get('status')} "
+                f"derived_error={_format_summary_value(entry.get('derived_error'))} "
+                f"failed_checks={failed_checks}"
+            )
+    if errors:
+        print("")
+        print("errors:")
+        for error in errors:
+            print(f"- {error.get('path')}: {error.get('error')}")
+
+
 def _finalize_cpu_long_run_summary(summary: dict[str, object]) -> None:
     summary["derived_run_report"] = _cpu_long_run_derived_run_report(summary)
 
@@ -5117,6 +5309,12 @@ def _format_optional_whole_number(value: object) -> str:
     if value is None:
         return "-"
     return f"{float(value):.0f}"
+
+
+def _format_optional_int(value: object) -> str:
+    if value is None:
+        return "-"
+    return str(int(value))
 
 
 def _format_optional_one_decimal(value: object) -> str:

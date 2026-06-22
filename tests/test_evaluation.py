@@ -3542,6 +3542,109 @@ if __name__ == "__main__":
         self.assertIn("derived_audit_requirement_passed: no", output)
         self.assertIn("error: manifest_not_found", output)
 
+    def test_eval_cli_cpu_long_run_compare_json_summarizes_wrapper_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            healthy_root = temp_path / "healthy"
+            failed_root = temp_path / "failed"
+            write_manifest(healthy_root / "manifest.json", selfplay_manifest())
+            healthy_summary = cpu_long_run_summary(status="passed")
+            healthy_summary["recipe"]["run_dir"] = str(healthy_root)
+            healthy_summary["recipe"]["profile"] = "smoke"
+            healthy_summary["recipe"]["runtime_audit_source"] = "profile"
+            healthy_summary["recipe"]["runtime_audit_profile"] = "smoke"
+            healthy_summary["recipe"]["runtime_audit_config_path"] = None
+            write_json(healthy_root / "cpu-long-run-run-summary.json", healthy_summary)
+            failed_summary = cpu_long_run_summary(
+                status="failed",
+                failed_reason="long_run_not_ready",
+                long_run_ready=False,
+                ready_reasons=["pilot_suite_status_not_passed"],
+                steps=[],
+            )
+            failed_summary["recipe"]["run_dir"] = str(failed_root)
+            write_json(failed_root / "cpu-long-run-run-summary.json", failed_summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-compare", str(healthy_root), str(failed_root), "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["summary_count"], 2)
+        self.assertEqual(payload["error_count"], 0)
+        self.assertEqual(payload["non_passing_count"], 1)
+        self.assertFalse(payload["fail_on_non_passing"])
+        self.assertTrue(payload["entries"][0]["passing"])
+        self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.65)
+        self.assertEqual(payload["entries"][0]["runtime_audit_source"], "profile")
+        self.assertFalse(payload["entries"][1]["passing"])
+        self.assertEqual(payload["entries"][1]["status"], "failed")
+        self.assertEqual(payload["entries"][1]["derived_error"], "manifest_not_found")
+
+    def test_eval_cli_cpu_long_run_compare_can_fail_on_non_passing_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "failed"
+            failed_summary = cpu_long_run_summary(
+                status="failed",
+                failed_reason="long_run_not_ready",
+                long_run_ready=False,
+                ready_reasons=["pilot_suite_status_not_passed"],
+                steps=[],
+            )
+            failed_summary["recipe"]["run_dir"] = str(run_root)
+            write_json(run_root / "cpu-long-run-run-summary.json", failed_summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-compare", str(run_root), "--json", "--fail-on-non-passing"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["summary_count"], 1)
+        self.assertEqual(payload["non_passing_count"], 1)
+        self.assertTrue(payload["fail_on_non_passing"])
+
+    def test_eval_cli_cpu_long_run_compare_discovers_globs_and_prints_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "run-0001"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["profile"] = "smoke"
+            summary["recipe"]["runtime_audit_source"] = "profile"
+            summary["recipe"]["runtime_audit_profile"] = "smoke"
+            summary["recipe"]["runtime_audit_config_path"] = None
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-compare", "--summary-glob", str(temp_path / "run-*")]
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("cpu_long_run_compare:", output)
+        self.assertIn("summaries: 1", output)
+        self.assertIn("non_passing: 0", output)
+        self.assertIn(str(run_root), output)
+
+    def test_eval_cli_cpu_long_run_compare_reports_load_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_root = Path(temp_dir) / "missing"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-compare", str(missing_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["summary_count"], 0)
+        self.assertEqual(payload["error_count"], 1)
+        self.assertIn("cpu long-run summary not found", payload["errors"][0]["error"])
+
     def test_eval_cli_cpu_long_run_report_json_includes_rejected_plan_reasons(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
