@@ -1665,8 +1665,65 @@ if __name__ == "__main__":
         self.assertIn("calibration_audit_config_write_error: -", output)
         self.assertIn("replay_audit_failed: False", output)
         self.assertIn("replay_failed_check_count: 0", output)
+        self.assertIn("audit_config_ready: yes", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS run CPU smoke pilot 1 returncode=0", output)
+
+    def test_eval_cli_cpu_pilot_report_json_includes_artifact_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "pilots"
+            summary_path = run_root / "cpu-pilot-suite-summary.json"
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["calibration_output_path"] = str(run_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(run_root / "pilot-audit-replay.json")
+            write_json(summary_path, summary)
+            write_json(
+                run_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(run_root / "pilot-audit-config.json"),
+                },
+            )
+            write_json(
+                run_root / "pilot-audit-replay.json",
+                {"audit_failed": False, "entries": [{"audit_failed_checks": []}]},
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-pilot-report", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        artifact_report = payload["pilot_artifact_report"]
+        self.assertEqual(artifact_report["audit_config_ready"], True)
+        self.assertEqual(artifact_report["audit_config_ready_reasons"], [])
+        self.assertEqual(artifact_report["calibration"]["available"], True)
+        self.assertEqual(artifact_report["calibration"]["sufficient"], True)
+        self.assertEqual(
+            artifact_report["calibration"]["written_audit_config_path"],
+            str(run_root / "pilot-audit-config.json"),
+        )
+        self.assertEqual(artifact_report["replay"]["available"], True)
+        self.assertEqual(artifact_report["replay"]["audit_failed"], False)
+        self.assertEqual(artifact_report["replay"]["failed_check_count"], 0)
+
+    def test_eval_cli_cpu_pilot_report_marks_missing_artifacts_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "pilots"
+            summary_path = run_root / "cpu-pilot-suite-summary.json"
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["calibration_output_path"] = str(run_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(run_root / "pilot-audit-replay.json")
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-pilot-report", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("audit_config_ready: no", output)
+        self.assertIn("- calibration_artifact_missing", output)
+        self.assertIn("- replay_artifact_missing", output)
 
     def test_eval_cli_cpu_pilot_report_failed_summary_returns_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
