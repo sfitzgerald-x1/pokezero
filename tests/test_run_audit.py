@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pokezero.cli_audit import post_iteration_audit_config_from_args
+from pokezero.cli_audit import (
+    MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+    post_iteration_audit_config_from_args,
+    validate_post_iteration_audit_evaluation_games,
+)
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.run_audit import (
     RUN_AUDIT_CONFIG_SCHEMA_VERSION,
@@ -37,6 +41,22 @@ def post_iteration_config_from_flags(flags: tuple[str, ...]) -> RunAuditConfig |
         ]
     )
     return post_iteration_audit_config_from_args(args)
+
+
+def selfplay_iterate_args_from_flags(flags: tuple[str, ...]):
+    parser = build_selfplay_arg_parser()
+    return parser.parse_args(
+        [
+            "iterate",
+            "--run-dir",
+            "run",
+            "--iterations",
+            "1",
+            "--games-per-iteration",
+            "1",
+            *flags,
+        ]
+    )
 
 
 class RunAuditTest(unittest.TestCase):
@@ -1951,12 +1971,25 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["preflight_runs"][0]["manifest_path"], str(manifest_path))
         self.assertEqual(payload["preflight_runs"][0]["failed_checks"], [])
         self.assertEqual(payload["config"]["min_latest_benchmark_win_rate"], 0.60)
+        self.assertEqual(payload["minimum_evaluation_games"], 5)
         self.assertIn("--audit-after-iteration", payload["post_iteration_flags"])
         self.assertIn("--audit-min-latest-benchmark-win-rate", payload["post_iteration_flags"])
         self.assertEqual(
             post_iteration_config_from_flags(tuple(payload["post_iteration_flags"])),
             RunAuditConfig(**payload["config"]),
         )
+        self.assertEqual(
+            payload["post_iteration_command_flags"][:2],
+            ["--evaluation-games", "5"],
+        )
+        selfplay_args = selfplay_iterate_args_from_flags(tuple(payload["post_iteration_command_flags"]))
+        command_config = post_iteration_audit_config_from_args(selfplay_args)
+        validate_post_iteration_audit_evaluation_games(
+            command_config,
+            evaluation_games=selfplay_args.evaluation_games,
+            minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+        )
+        self.assertEqual(command_config, RunAuditConfig(**payload["config"]))
         self.assertEqual(payload["checks"][-1]["name"], "preflight_audit_passed")
 
     def test_eval_cli_audit_config_report_requires_calibration_when_requested(self) -> None:
@@ -2112,6 +2145,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("post_iteration_flags:", output)
         self.assertIn("--audit-after-iteration", output)
         self.assertIn("--audit-min-latest-benchmark-win-rate 0.6", output)
+        self.assertIn("minimum_evaluation_games: 5", output)
+        self.assertIn("post_iteration_command_flags:", output)
+        self.assertIn("--evaluation-games 5", output)
         self.assertIn("preflight: PASS", output)
 
     def test_eval_cli_audit_rejects_profile_with_audit_config(self) -> None:
