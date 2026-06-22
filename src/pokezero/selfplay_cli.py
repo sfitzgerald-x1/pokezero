@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
-    if args.auto_promote and args.evaluation_games <= 0 and not args.allow_missing_benchmark:
+    if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
     if (

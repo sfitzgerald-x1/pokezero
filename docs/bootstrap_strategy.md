@@ -250,6 +250,15 @@ python -m pokezero.eval_cli compare \
 
 The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, collection and benchmark games-per-hour, latest process peak RSS high-water when recorded, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. The RSS value is a platform process high-water mark, not phase-isolated memory attribution, and resumed runs may reset the process counter. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
 
+Named evaluation profiles can be used instead of repeating every threshold flag:
+
+```bash
+python -m pokezero.eval_cli profiles
+python -m pokezero.eval_cli audit runs/bootstrap-selfplay --profile long-run
+```
+
+Profiles provide defaults only. Explicit threshold flags and boolean requirement flags such as `--require-benchmark` or `--allow-missing-benchmark` still override profile values. Use `--profile smoke` for plumbing checks, `--profile default` for current guardrails, and `--profile long-run` for stricter provisional CPU run checks.
+
 Gate a candidate before promotion:
 
 ```bash
@@ -260,7 +269,13 @@ python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
   --max-benchmark-capped-rate 0.10
 ```
 
-The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs.
+The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs; use `--require-benchmark` to tighten a permissive profile.
+
+The same gate can use a named profile:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay --profile long-run
+```
 
 Use opponent filters when a specific comparison matters more than broad baseline health:
 

@@ -18,7 +18,7 @@ At the start of each task, read those docs and identify the smallest unfinished 
 
 Based on the current plan, the next CPU-compatible work should focus on making long-running CPU experiments easier to trust and compare:
 
-- Strengthen long-run benchmark thresholds and regression detection.
+- Use named evaluation profiles and run-audit output to tune long-run benchmark thresholds from actual CPU experiments.
 - Improve managed checkpoint lifecycle tooling where it affects promoted-policy selection.
 - Use lightweight CPU experiment audits to tune practical long-run thresholds without GPU training.
 

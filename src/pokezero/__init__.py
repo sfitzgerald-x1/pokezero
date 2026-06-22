@@ -76,6 +76,14 @@ from .evaluation import (
     PromotionGateResult,
     evaluate_promotion_gate,
 )
+from .evaluation_profiles import (
+    DEFAULT_EVALUATION_PROFILE,
+    EVALUATION_PROFILES,
+    LONG_RUN_EVALUATION_PROFILE,
+    SMOKE_EVALUATION_PROFILE,
+    EvaluationProfile,
+    evaluation_profile,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .linear_policy import (
     LINEAR_FEATURE_FINGERPRINT_VERSION,
@@ -220,10 +228,13 @@ __all__ = [
     "DEFAULT_MIN_BENCHMARK_WIN_RATE",
     "DEFAULT_MIN_INCUMBENT_WIN_RATE",
     "DEFAULT_INCUMBENT_CONFIDENCE_Z",
+    "DEFAULT_EVALUATION_PROFILE",
     "DEFAULT_PREFLIGHT_GAMES",
     "DEFAULT_PREFLIGHT_SEED_START",
     "DEFAULT_REPLAY_POLICY_ID",
     "EntityTokenTransformerPolicy",
+    "EVALUATION_PROFILES",
+    "EvaluationProfile",
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
     "MoveInfo",
@@ -247,6 +258,7 @@ __all__ = [
     "LINEAR_FEATURE_FINGERPRINT_VERSION",
     "LINEAR_FEATURE_SCHEMA_VERSION",
     "LINEAR_POLICY_SCHEMA_VERSION",
+    "LONG_RUN_EVALUATION_PROFILE",
     "LinearEpochMetrics",
     "LinearEvaluationMetrics",
     "LinearPolicyModel",
@@ -294,6 +306,7 @@ __all__ = [
     "ShowdownDex",
     "ScriptedTeacherPolicy",
     "SpeciesInfo",
+    "SMOKE_EVALUATION_PROFILE",
     "TEACHER_BOOTSTRAP_SCHEMA_VERSION",
     "StepResult",
     "TerminalState",
@@ -318,6 +331,7 @@ __all__ = [
     "detect_showdown_slot",
     "examples_from_record",
     "evaluate_linear_policy",
+    "evaluation_profile",
     "evaluate_promotion_gate",
     "features_from_example",
     "historical_opponent_policy_specs",
