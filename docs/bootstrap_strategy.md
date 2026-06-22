@@ -152,6 +152,7 @@ python -m pokezero.selfplay_cli iterate \
   --promotion-registry runs/promotions.json \
   --promotion-artifact-dir runs/promoted-checkpoints \
   --auto-promote \
+  --audit-after-iteration \
   --showdown-root /path/to/pokemon-showdown
 ```
 
@@ -208,6 +209,8 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
 ```
 
 The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy.
+
+Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50` or `--audit-require-latest-promotion`.
 
 Gate a candidate before promotion:
 

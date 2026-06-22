@@ -17,6 +17,7 @@ from pokezero.linear_policy import (
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.evaluation import PromotionGateConfig
+from pokezero.run_audit import RunAuditConfig, RunAuditFailure
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
@@ -737,6 +738,33 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(resumed.iterations[0].seed_start, 21)
         self.assertEqual(len(final_manifest["iterations"]), 2)
 
+    def test_run_selfplay_iterations_post_iteration_audit_stops_before_next_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with self.assertRaisesRegex(RunAuditFailure, "latest_benchmark_available") as raised:
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    post_iteration_audit_config=RunAuditConfig(require_benchmark=True),
+                )
+
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(raised.exception.result.passed)
+        self.assertEqual(len(run_manifest["iterations"]), 1)
+        self.assertFalse((run_dir / "iteration-0002").exists())
+
     def test_run_selfplay_iterations_rejects_resume_config_mismatch_before_collecting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -858,6 +886,11 @@ class SelfPlayTest(unittest.TestCase):
                         "heldout-b.jsonl",
                         "--evaluation-games",
                         "3",
+                        "--audit-after-iteration",
+                        "--audit-min-latest-benchmark-games",
+                        "2",
+                        "--audit-allow-missing-benchmark",
+                        "--audit-require-latest-promotion",
                     ]
                 )
 
@@ -874,6 +907,9 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["auto_promotion_config"].artifact_dir, Path("promoted-checkpoints"))
         self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")
         self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_win_rate, 0.0)
+        self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
+        self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
+        self.assertTrue(kwargs["post_iteration_audit_config"].require_latest_promotion)
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.3)

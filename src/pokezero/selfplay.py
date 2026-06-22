@@ -40,6 +40,7 @@ from .trajectory import BattleTrajectory
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
     from .promotion import PromotionRecordResult
+    from .run_audit import RunAuditConfig, RunAuditResult
 
 SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
 
@@ -159,6 +160,7 @@ def run_selfplay_iterations(
     validation_rollout_paths: Iterable[Path] | None = None,
     promotion_registry_path: Path | None = None,
     auto_promotion_config: SelfPlayPromotionConfig | None = None,
+    post_iteration_audit_config: "RunAuditConfig | None" = None,
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -324,6 +326,7 @@ def run_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
             ).to_dict(),
         )
+        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
 
     run_result = SelfPlayRunResult(
         run_dir=run_dir,
@@ -332,6 +335,17 @@ def run_selfplay_iterations(
     )
     _write_json(run_dir / "manifest.json", run_result.to_dict())
     return run_result
+
+
+def _enforce_post_iteration_audit(
+    manifest_path: Path,
+    config: "RunAuditConfig | None",
+) -> "RunAuditResult | None":
+    if config is None:
+        return None
+    from .run_audit import enforce_run_audit
+
+    return enforce_run_audit(manifest_path, config=config)
 
 
 def collect_selfplay_rollouts(

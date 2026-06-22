@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
+from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
 from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -116,6 +117,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--shuffle-seed", type=int, default=1, help="Base deterministic shuffle seed.")
     iterate.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
     iterate.add_argument("--policy-id", default="linear-selfplay", help="Policy id prefix stored in checkpoints.")
+    add_post_iteration_audit_arguments(iterate)
     iterate.set_defaults(func=_iterate)
 
     report = subparsers.add_parser("report", help="Print a summary of a self-play run manifest.")
@@ -186,6 +188,7 @@ def _iterate(args: argparse.Namespace) -> int:
         validation_rollout_paths=tuple(args.validation_data or ()),
         promotion_registry_path=args.promotion_registry,
         auto_promotion_config=auto_promotion_config,
+        post_iteration_audit_config=post_iteration_audit_config_from_args(args),
         resume=args.resume,
         worker_count=args.workers,
     )

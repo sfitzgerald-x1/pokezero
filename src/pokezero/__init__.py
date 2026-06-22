@@ -139,10 +139,12 @@ from .run_audit import (
     DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
     RunAuditCheck,
     RunAuditConfig,
+    RunAuditFailure,
     RunAuditIterationSummary,
     RunAuditOpponentRegression,
     RunAuditResult,
     audit_run,
+    enforce_run_audit,
 )
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
@@ -241,6 +243,7 @@ __all__ = [
     "RolloutRecord",
     "RunAuditCheck",
     "RunAuditConfig",
+    "RunAuditFailure",
     "RunAuditIterationSummary",
     "RunAuditOpponentRegression",
     "RunAuditResult",
@@ -306,6 +309,7 @@ __all__ = [
     "rollout_record_from_dict",
     "rollout_record_to_dict",
     "audit_run",
+    "enforce_run_audit",
     "run_neural_selfplay_iterations",
     "run_selfplay_iterations",
     "run_teacher_bootstrap",

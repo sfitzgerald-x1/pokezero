@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 
+from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
@@ -141,6 +142,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     iterate.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
+    add_post_iteration_audit_arguments(iterate)
     iterate.add_argument("--json", action="store_true", help="Print the run manifest as JSON.")
     iterate.set_defaults(func=_iterate)
 
@@ -332,6 +334,7 @@ def _iterate(args: argparse.Namespace) -> int:
         worker_count=args.workers,
         promotion_registry_path=args.promotion_registry,
         auto_promotion_config=auto_promotion_config,
+        post_iteration_audit_config=post_iteration_audit_config_from_args(args),
         resume=args.resume,
     )
     if args.json:
