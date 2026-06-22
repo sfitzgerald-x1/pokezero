@@ -328,10 +328,11 @@ Preview the historical opponent pool that self-play would draw from before start
 ```bash
 python -m pokezero.eval_cli promotions \
   --registry runs/promotions.json \
-  --opponent-pool-size 3
+  --opponent-pool-size 3 \
+  --require-opponent-pool-size 3
 ```
 
-By default, the preview assumes the latest promoted checkpoint is the current collector and excludes it from the historical opponent slice, matching the steady-state auto-promotion loop. Add `--current-policy-spec linear:/path/to/current.json` to preview a different current collector. The report annotates each promotion entry with whether it is the latest checkpoint, part of the previewed opponent pool, and whether verification has checked checkpoint existence, checksums, loadability, and policy-id consistency.
+By default, the preview assumes the latest promoted checkpoint is the current collector and excludes it from the historical opponent slice, matching the steady-state auto-promotion loop. Add `--current-policy-spec linear:/path/to/current.json` to preview a different current collector. Add `--require-opponent-pool-size N` when using the command as a long-run preflight; it exits non-zero if fewer than `N` promoted historical opponents appear in the capped preview after current-policy exclusion. The requirement cannot exceed `--opponent-pool-size`. Use `--verify` or `--verify --verify-loadable` when the preflight must also prove those listed checkpoints exist, match checksums, and can be loaded by the runtime. The report annotates each promotion entry with whether it is the latest checkpoint, part of the previewed opponent pool, and whether verification has checked checkpoint existence, checksums, loadability, and policy-id consistency.
 
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 
