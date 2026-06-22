@@ -6,7 +6,15 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.eval_cli import main as eval_cli_main
-from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, calibrate_run_audits, compare_run_manifests
+from pokezero.run_audit import (
+    RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+    RunAuditConfig,
+    audit_run,
+    calibrate_run_audit,
+    calibrate_run_audits,
+    compare_run_manifests,
+    save_run_audit_config,
+)
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
@@ -1479,6 +1487,181 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
+
+    def test_eval_cli_audit_calibrate_can_write_reusable_config(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                calibrate_exit = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--write-config",
+                        str(config_path),
+                        "--json",
+                    ]
+                )
+            calibrate_payload = json.loads(stdout.getvalue())
+            config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as audit_stdout:
+                audit_exit = eval_cli_main(["audit", str(manifest_path), "--config", str(config_path), "--json"])
+            audit_payload = json.loads(audit_stdout.getvalue())
+
+        self.assertEqual(calibrate_exit, 0)
+        self.assertEqual(calibrate_payload["written_config_path"], str(config_path))
+        self.assertFalse(calibrate_payload["config_write_skipped"])
+        self.assertEqual(config_payload["schema_version"], RUN_AUDIT_CONFIG_SCHEMA_VERSION)
+        self.assertEqual(config_payload["config"]["min_latest_benchmark_games"], 20)
+        self.assertEqual(config_payload["source"]["command"], "audit-calibrate")
+        self.assertEqual(audit_exit, 0)
+        self.assertTrue(audit_payload["passed"])
+
+    def test_eval_cli_audit_calibrate_skips_config_write_when_sufficiency_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--require-run-count",
+                        "2",
+                        "--write-config",
+                        str(config_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["config_write_skipped"])
+        self.assertIsNone(payload["written_config_path"])
+        self.assertFalse(config_path.exists())
+
+    def test_eval_cli_audit_uses_config_file_and_allows_explicit_overrides(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            save_run_audit_config(
+                config_path,
+                RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                    max_latest_collection_capped_rate=0.20,
+                    max_latest_benchmark_capped_rate=0.10,
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as pass_stdout:
+                pass_exit = eval_cli_main(["audit", str(manifest_path), "--config", str(config_path), "--json"])
+            pass_payload = json.loads(pass_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as fail_stdout:
+                fail_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--config",
+                        str(config_path),
+                        "--min-latest-benchmark-win-rate",
+                        "0.90",
+                        "--json",
+                    ]
+                )
+            fail_payload = json.loads(fail_stdout.getvalue())
+
+        self.assertEqual(pass_exit, 0)
+        self.assertTrue(pass_payload["passed"])
+        self.assertEqual(fail_exit, 2)
+        self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(fail_payload))
+
+    def test_eval_cli_audit_rejects_wrong_config_schema(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            config_path.write_text(
+                json.dumps({"schema_version": "pokezero.run_audit_config.v0", "config": {}}),
+                encoding="utf-8",
+            )
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["audit", str(manifest_path), "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Unsupported run audit config schema", stderr.getvalue())
+
+    def test_eval_cli_audit_config_file_layers_over_profile_defaults(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 55, 45, 0),
+                        ("simple-legal", 55, 45, 0),
+                    ),
+                    promotion_recorded=True,
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+                        "config": {"min_latest_benchmark_games": 20},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--profile",
+                        "long-run",
+                        "--config",
+                        str(config_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        failed_checks = failed_check_names_from_payload(payload)
+        self.assertIn("latest_benchmark_win_rate", failed_checks)
+        self.assertNotIn("latest_benchmark_games", failed_checks)
 
     def test_eval_cli_audit_calibrate_json_can_compare_named_profile(self) -> None:
         manifest = selfplay_manifest(

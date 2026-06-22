@@ -26,6 +26,9 @@ from .run_audit import (
     calibrate_run_audit,
     calibrate_run_audits,
     compare_run_manifests_with_threshold,
+    load_run_audit_config,
+    run_audit_config_from_dict,
+    save_run_audit_config,
 )
 
 
@@ -109,6 +112,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit", help="Audit a self-play run manifest for regression health.")
     audit.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
     audit.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for audit checks.")
+    audit.add_argument("--config", type=Path, default=None, help="Run audit config JSON used as defaults after --profile.")
     audit.add_argument("--min-latest-benchmark-win-rate", type=float, default=None)
     audit.add_argument("--min-latest-benchmark-games", type=int, default=None)
     audit.add_argument("--max-latest-collection-capped-rate", type=float, default=None)
@@ -209,6 +213,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--fail-on-profile",
         action="store_true",
         help="With --compare-profile, return non-zero when any calibrated run fails that profile.",
+    )
+    audit_calibrate.add_argument(
+        "--write-config",
+        type=Path,
+        default=None,
+        help="Write the suggested audit config to this JSON file when calibration succeeds.",
     )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
@@ -930,6 +940,21 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         require_benchmark_iterations=args.require_benchmark_iterations,
         require_min_benchmark_games=args.require_min_benchmark_games,
     )
+    profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
+    write_config_blocked = bool(sufficiency_errors or (args.fail_on_profile and profile_failed))
+    written_config_path = None
+    config_write_skipped = False
+    if args.write_config is not None:
+        if write_config_blocked:
+            config_write_skipped = True
+        else:
+            audit_config = run_audit_config_from_dict(result.suggested_config())
+            save_run_audit_config(
+                args.write_config,
+                audit_config,
+                source=_audit_config_source_from_calibration(args, result),
+            )
+            written_config_path = str(args.write_config)
     if args.json:
         payload = result.to_dict()
         if profile_audit is not None:
@@ -937,6 +962,9 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         if sufficiency_requested:
             payload["calibration_sufficient"] = not sufficiency_errors
             payload["calibration_sufficiency_errors"] = list(sufficiency_errors)
+        if args.write_config is not None:
+            payload["written_config_path"] = written_config_path
+            payload["config_write_skipped"] = config_write_skipped
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_audit_calibration(result)
@@ -944,7 +972,12 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
             _print_profile_audit(profile_audit)
         if sufficiency_requested:
             _print_calibration_sufficiency(sufficiency_errors)
-    profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
+        if args.write_config is not None:
+            if config_write_skipped:
+                print("written_audit_config: -")
+                print("config_write_skipped: yes")
+            else:
+                print(f"written_audit_config: {written_config_path}")
     return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
 
 
@@ -1478,53 +1511,71 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
 
 def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
     profile_config = evaluation_profile(args.profile).audit_config
+    base_config = (
+        load_run_audit_config(args.config, defaults=profile_config)
+        if args.config is not None
+        else profile_config
+    )
     return RunAuditConfig(
         min_latest_benchmark_win_rate=_arg_or_default(
             args.min_latest_benchmark_win_rate,
-            profile_config.min_latest_benchmark_win_rate,
+            base_config.min_latest_benchmark_win_rate,
         ),
         min_latest_benchmark_games=_arg_or_default(
             args.min_latest_benchmark_games,
-            profile_config.min_latest_benchmark_games,
+            base_config.min_latest_benchmark_games,
         ),
         max_latest_collection_capped_rate=_arg_or_default(
             args.max_latest_collection_capped_rate,
-            profile_config.max_latest_collection_capped_rate,
+            base_config.max_latest_collection_capped_rate,
         ),
         max_latest_benchmark_capped_rate=_arg_or_default(
             args.max_latest_benchmark_capped_rate,
-            profile_config.max_latest_benchmark_capped_rate,
+            base_config.max_latest_benchmark_capped_rate,
         ),
         max_latest_average_decision_rounds=_arg_or_default(
             args.max_latest_average_decision_rounds,
-            profile_config.max_latest_average_decision_rounds,
+            base_config.max_latest_average_decision_rounds,
         ),
         max_latest_benchmark_average_decision_rounds=_arg_or_default(
             args.max_latest_benchmark_average_decision_rounds,
-            profile_config.max_latest_benchmark_average_decision_rounds,
+            base_config.max_latest_benchmark_average_decision_rounds,
         ),
         max_latest_process_peak_rss_mb=_arg_or_default(
             args.max_latest_process_peak_rss_mb,
-            profile_config.max_latest_process_peak_rss_mb,
+            base_config.max_latest_process_peak_rss_mb,
         ),
         max_benchmark_win_rate_drop=_arg_or_default(
             args.max_benchmark_win_rate_drop,
-            profile_config.max_benchmark_win_rate_drop,
+            base_config.max_benchmark_win_rate_drop,
         ),
         max_consecutive_promotion_failures=_arg_or_default(
             args.max_consecutive_promotion_failures,
-            profile_config.max_consecutive_promotion_failures,
+            base_config.max_consecutive_promotion_failures,
         ),
-        require_benchmark=_arg_or_default(args.require_benchmark, profile_config.require_benchmark),
+        require_benchmark=_arg_or_default(args.require_benchmark, base_config.require_benchmark),
         require_latest_promotion=_arg_or_default(
             args.require_latest_promotion,
-            profile_config.require_latest_promotion,
+            base_config.require_latest_promotion,
         ),
         require_benchmark_opponent_coverage=_arg_or_default(
             args.require_benchmark_opponent_coverage,
-            profile_config.require_benchmark_opponent_coverage,
+            base_config.require_benchmark_opponent_coverage,
         ),
     )
+
+
+def _audit_config_source_from_calibration(args: argparse.Namespace, result) -> dict[str, object]:
+    return {
+        "command": "audit-calibrate",
+        "paths": [str(path) for path in args.paths],
+        "margin": args.margin,
+        "aggregate_mode": args.aggregate_mode if len(args.paths) > 1 else None,
+        "source_type": result.source_type,
+        "run_count": getattr(result, "run_count", 1),
+        "iteration_count": result.iteration_count,
+        "benchmark_iteration_count": result.benchmark_iteration_count,
+    }
 
 
 def _print_audit_result(result) -> None:

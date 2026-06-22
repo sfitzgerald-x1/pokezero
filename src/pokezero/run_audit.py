@@ -29,7 +29,22 @@ DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
 DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 AUDIT_CALIBRATION_AGGREGATE_MODES = ("median", "envelope")
+RUN_AUDIT_CONFIG_SCHEMA_VERSION = "pokezero.run_audit_config.v1"
 _THRESHOLD_EPSILON = 1e-12
+_RUN_AUDIT_CONFIG_FIELDS = (
+    "min_latest_benchmark_win_rate",
+    "min_latest_benchmark_games",
+    "max_latest_collection_capped_rate",
+    "max_latest_benchmark_capped_rate",
+    "max_latest_average_decision_rounds",
+    "max_latest_benchmark_average_decision_rounds",
+    "max_latest_process_peak_rss_mb",
+    "max_benchmark_win_rate_drop",
+    "max_consecutive_promotion_failures",
+    "require_benchmark",
+    "require_latest_promotion",
+    "require_benchmark_opponent_coverage",
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,77 @@ class RunAuditConfig:
             value = float(getattr(self, field_name))
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{field_name} must be between 0 and 1.")
+
+
+def run_audit_config_to_dict(config: RunAuditConfig) -> dict[str, float | int | bool | None]:
+    return {
+        "min_latest_benchmark_win_rate": config.min_latest_benchmark_win_rate,
+        "min_latest_benchmark_games": config.min_latest_benchmark_games,
+        "max_latest_collection_capped_rate": config.max_latest_collection_capped_rate,
+        "max_latest_benchmark_capped_rate": config.max_latest_benchmark_capped_rate,
+        "max_latest_average_decision_rounds": config.max_latest_average_decision_rounds,
+        "max_latest_benchmark_average_decision_rounds": config.max_latest_benchmark_average_decision_rounds,
+        "max_latest_process_peak_rss_mb": config.max_latest_process_peak_rss_mb,
+        "max_benchmark_win_rate_drop": config.max_benchmark_win_rate_drop,
+        "max_consecutive_promotion_failures": config.max_consecutive_promotion_failures,
+        "require_benchmark": config.require_benchmark,
+        "require_latest_promotion": config.require_latest_promotion,
+        "require_benchmark_opponent_coverage": config.require_benchmark_opponent_coverage,
+    }
+
+
+def run_audit_config_from_dict(
+    payload: Mapping[str, Any],
+    *,
+    defaults: RunAuditConfig | None = None,
+) -> RunAuditConfig:
+    unknown_fields = tuple(sorted(set(payload) - set(_RUN_AUDIT_CONFIG_FIELDS)))
+    if unknown_fields:
+        raise ValueError(f"unknown run audit config fields: {', '.join(unknown_fields)}")
+    values = run_audit_config_to_dict(defaults) if defaults is not None else {}
+    values.update({field: payload[field] for field in _RUN_AUDIT_CONFIG_FIELDS if field in payload})
+    return RunAuditConfig(**values)
+
+
+def run_audit_config_payload(
+    config: RunAuditConfig,
+    *,
+    source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+        "config": run_audit_config_to_dict(config),
+    }
+    if source is not None:
+        payload["source"] = dict(source)
+    return payload
+
+
+def save_run_audit_config(
+    path: Path,
+    config: RunAuditConfig,
+    *,
+    source: Mapping[str, Any] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(
+        json.dumps(run_audit_config_payload(config, source=source), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def load_run_audit_config(path: Path, *, defaults: RunAuditConfig | None = None) -> RunAuditConfig:
+    payload = _mapping(json.loads(path.read_text(encoding="utf-8")))
+    schema_version = payload.get("schema_version")
+    if schema_version != RUN_AUDIT_CONFIG_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported run audit config schema: {schema_version!r}; "
+            f"expected {RUN_AUDIT_CONFIG_SCHEMA_VERSION!r}."
+        )
+    config = _mapping(payload.get("config"))
+    return run_audit_config_from_dict(config, defaults=defaults)
 
 
 @dataclass(frozen=True)

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
-from .run_audit import RunAuditConfig
+from .run_audit import RunAuditConfig, load_run_audit_config
 
 
 DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
@@ -29,6 +30,12 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
             "Named audit profile used as defaults for --audit-after-iteration. "
             "Omit to keep the looser post-iteration defaults."
         ),
+    )
+    parser.add_argument(
+        "--audit-config",
+        type=Path,
+        default=None,
+        help="Run audit config JSON used as defaults after --audit-profile.",
     )
     parser.add_argument("--audit-min-latest-benchmark-win-rate", type=float, default=None)
     parser.add_argument("--audit-min-latest-benchmark-games", type=int, default=None)
@@ -95,10 +102,15 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
 def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig | None:
     if not args.audit_after_iteration:
         return None
-    defaults = (
+    profile_defaults = (
         evaluation_profile(args.audit_profile).audit_config
         if args.audit_profile is not None
         else DEFAULT_POST_ITERATION_AUDIT_CONFIG
+    )
+    defaults = (
+        load_run_audit_config(args.audit_config, defaults=profile_defaults)
+        if args.audit_config is not None
+        else profile_defaults
     )
     return RunAuditConfig(
         min_latest_benchmark_win_rate=_arg_or_default(
