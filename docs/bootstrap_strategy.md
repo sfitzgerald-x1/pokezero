@@ -56,20 +56,31 @@ Curated Gen 3 randbat replays may still be useful, but the corpus source is unre
 
 Keep Path A running as a baseline, but build Path B around the scripted Gen 3 randbat teacher. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
 
-Replay import remains valuable after a randbat replay source is identified. It should share the same rollout JSONL schema and player-relative observation path, but it should not block the first bootstrap iteration.
+Replay import remains valuable after a randbat replay source is identified. A normalized replay-to-rollout scaffold now exists and writes the same rollout JSONL schema used by self-play collection. This normalized shape deliberately sits below raw Showdown replay parsing: it expects player-relative observations and action indices that a future corpus-specific converter must reconstruct. Raw Showdown replay discovery, curation, and conversion are still unresolved, so replay import should not block the first bootstrap iteration.
 
 ## Near-Term Implementation Plan
 
 - Use the initial capped-game scoring policy: self-play defaults to `--capped-terminal-value -0.25`, a mild double-loss penalty that can be tuned later.
-- Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, and low-HP active preservation; hazards and richer matchup context remain future work.
+- Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, and first-pass Spikes/Rapid Spin awareness; richer hazard planning and matchup context remain future work.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
-- Track benchmark win rate, capped-game rate, validation fit, and games per hour for both paths. Treat validation fit as imitation-health only.
-- Add a replay-to-trajectory importer after a useful Gen 3 randbat replay corpus is identified.
+- Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
+- Use `python -m pokezero.eval_cli audit-calibrate <run-dir>` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
+- Extend the normalized replay-to-rollout importer with a raw Showdown replay converter after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape
+
+Import normalized replay decisions into standard rollout JSONL:
+
+```bash
+python -m pokezero.replay_import_cli import \
+  --input data/normalized-replays/battle-001.json \
+  --output runs/replay-bootstrap/rollouts.jsonl
+```
+
+The importer expects one battle per input file, with player-relative observations and fixed action indices already encoded in the normalized replay file. Raw Showdown replay conversion remains the harder corpus-specific step.
 
 Generate the initial scripted-teacher bootstrap checkpoint in one command:
 
@@ -84,6 +95,16 @@ python -m pokezero.bootstrap_cli teacher \
 ```
 
 This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, baseline benchmark results, and `manifest.json`.
+
+Quickly benchmark the scripted teacher itself against fixed baselines before running a full bootstrap:
+
+```bash
+python -m pokezero.bootstrap_cli teacher-benchmark \
+  --games 50 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters alongside win rates, but it does not train a checkpoint or write a manifest.
 
 Default teacher bootstrap collection includes three opponent families:
 
@@ -152,6 +173,7 @@ python -m pokezero.selfplay_cli iterate \
   --promotion-registry runs/promotions.json \
   --promotion-artifact-dir runs/promoted-checkpoints \
   --auto-promote \
+  --audit-after-iteration \
   --showdown-root /path/to/pokemon-showdown
 ```
 
@@ -189,6 +211,8 @@ python -m pokezero.selfplay_cli iterate \
 
 With `--auto-promote`, each iteration evaluates the same promotion gate used by `eval_cli promote` after the benchmark is written. Passing checkpoints are recorded in `--promotion-registry`, copied into `--promotion-artifact-dir` when supplied, and become eligible historical opponents for later iterations in the same run. `--allow-missing-benchmark` bypasses the win-rate signal in this path too, so reserve it for smoke runs.
 
+When `--initial-policy` points at a linear checkpoint, self-play retains that checkpoint as a static benchmark reference across later iterations. This keeps the original bootstrap checkpoint visible after the incumbent benchmark rotates from bootstrap-vs-candidate to previous-iteration-vs-candidate. Use `--benchmark-reference-policy` to add any other fixed reference checkpoints that should remain in every iteration benchmark. These references are informational by default: they stay visible in benchmark reports, but they do not add promotion-gate floors unless explicitly named as required benchmark opponents.
+
 Inspect the run:
 
 ```bash
@@ -203,11 +227,28 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
   --min-latest-benchmark-games 50 \
   --max-latest-collection-capped-rate 0.10 \
   --max-latest-benchmark-capped-rate 0.10 \
+  --max-latest-average-decision-rounds 200 \
+  --max-latest-benchmark-average-decision-rounds 200 \
   --max-benchmark-win-rate-drop 0.05 \
   --max-consecutive-promotion-failures 1
 ```
 
-The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy.
+The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, optional collection and benchmark average decision-round upper bounds, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy. The average decision-round checks catch slow or stall-heavy runs; they do not by themselves detect degenerate-short games.
+
+By default, the audit also requires the latest benchmark to retain fixed baseline opponents, currently `random-legal` and `simple-legal`, once they have appeared in prior benchmark evidence. This prevents a run from looking healthy after silently dropping fixed baselines, while still allowing incumbent or historical checkpoint opponents to rotate. Use `--allow-missing-benchmark-opponents` only when intentionally changing the benchmark set.
+
+Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, or `--audit-require-latest-promotion`.
+
+Compare cold-start, teacher-bootstrap, and neural iteration runs side by side:
+
+```bash
+python -m pokezero.eval_cli compare \
+  runs/cold-selfplay \
+  runs/bootstrap-selfplay \
+  runs/neural-selfplay
+```
+
+The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, collection and benchmark games-per-hour, latest process peak RSS high-water when recorded, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. The RSS value is a platform process high-water mark, not phase-isolated memory attribution, and resumed runs may reset the process counter. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
 
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
@@ -273,13 +314,23 @@ The registry is append-only by default and embeds the full gate result for each 
 
 The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint. With `--auto-promote`, that pool is refreshed after each passing iteration during the run.
 
+Preview the historical opponent pool that self-play would draw from before starting a long run:
+
+```bash
+python -m pokezero.eval_cli promotions \
+  --registry runs/promotions.json \
+  --opponent-pool-size 3
+```
+
+By default, the preview assumes the latest promoted checkpoint is the current collector and excludes it from the historical opponent slice, matching the steady-state auto-promotion loop. Add `--current-policy-spec linear:/path/to/current.json` to preview a different current collector. The report annotates each promotion entry with whether it is the latest checkpoint, part of the previewed opponent pool, and whether verification has checked checkpoint existence, checksums, loadability, and policy-id consistency.
+
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 
 ```bash
-python -m pokezero.eval_cli promotions --registry runs/promotions.json --verify
+python -m pokezero.eval_cli promotions --registry runs/promotions.json --verify --verify-loadable
 ```
 
-This check is CPU-only and read-only. It uses the same raw checkpoint paths that policy selection consumes, so a relative path must resolve from the current working directory. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, or a stored checkpoint checksum no longer matches the file on disk. Add `--require-checksum` when every promoted entry is expected to come from a managed artifact copy with checksum metadata.
+This check is CPU-only and read-only. It uses the same raw checkpoint paths and policy specs that policy selection consumes, so a relative path must resolve from the current working directory. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, a promoted policy spec cannot be loaded, the loaded policy id disagrees with registry metadata, or a stored checkpoint checksum no longer matches the file on disk. Add `--require-checksum` when every promoted entry is expected to come from a managed artifact copy with checksum metadata.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 

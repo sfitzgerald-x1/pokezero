@@ -50,10 +50,15 @@ class EvaluationProfile:
                 "min_latest_benchmark_games": self.audit_config.min_latest_benchmark_games,
                 "max_latest_collection_capped_rate": self.audit_config.max_latest_collection_capped_rate,
                 "max_latest_benchmark_capped_rate": self.audit_config.max_latest_benchmark_capped_rate,
+                "max_latest_average_decision_rounds": self.audit_config.max_latest_average_decision_rounds,
+                "max_latest_benchmark_average_decision_rounds": (
+                    self.audit_config.max_latest_benchmark_average_decision_rounds
+                ),
                 "max_benchmark_win_rate_drop": self.audit_config.max_benchmark_win_rate_drop,
                 "max_consecutive_promotion_failures": self.audit_config.max_consecutive_promotion_failures,
                 "require_benchmark": self.audit_config.require_benchmark,
                 "require_latest_promotion": self.audit_config.require_latest_promotion,
+                "require_benchmark_opponent_coverage": self.audit_config.require_benchmark_opponent_coverage,
             },
         }
 
@@ -82,6 +87,7 @@ SMOKE_EVALUATION_PROFILE = EvaluationProfile(
         max_consecutive_promotion_failures=1000,
         require_benchmark=False,
         require_latest_promotion=False,
+        require_benchmark_opponent_coverage=False,
     ),
 )
 
@@ -112,10 +118,13 @@ LONG_RUN_EVALUATION_PROFILE = EvaluationProfile(
         min_latest_benchmark_games=100,
         max_latest_collection_capped_rate=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
         max_latest_benchmark_capped_rate=0.05,
+        max_latest_average_decision_rounds=200.0,
+        max_latest_benchmark_average_decision_rounds=200.0,
         max_benchmark_win_rate_drop=0.03,
         max_consecutive_promotion_failures=DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
         require_benchmark=True,
         require_latest_promotion=False,
+        require_benchmark_opponent_coverage=True,
     ),
 )
 

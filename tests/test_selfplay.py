@@ -17,6 +17,7 @@ from pokezero.linear_policy import (
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.evaluation import PromotionGateConfig
+from pokezero.run_audit import RunAuditConfig, RunAuditFailure
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
@@ -94,20 +95,22 @@ class SelfPlayTest(unittest.TestCase):
             output_path = Path(temp_dir) / "rollouts.jsonl"
             training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
 
-            metrics = collect_selfplay_rollouts(
-                output_path=output_path,
-                training_output_path=training_output_path,
-                games=2,
-                env_factory=OneTurnEnv,
-                rollout_config=RolloutConfig(max_decision_rounds=5),
-                seed_start=10,
-                current_policy_spec="simple-legal",
-                opponent_policy_specs=("random-legal",),
-            )
+            with patch("pokezero.collection.current_peak_rss_mb", return_value=88.0):
+                metrics = collect_selfplay_rollouts(
+                    output_path=output_path,
+                    training_output_path=training_output_path,
+                    games=2,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    seed_start=10,
+                    current_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                )
 
             records = read_rollout_records(output_path)
             training_records = read_rollout_records(training_output_path)
         self.assertEqual(metrics.games, 2)
+        self.assertEqual(metrics.peak_rss_mb, 88.0)
         self.assertEqual(records[0].policy_ids, {"p1": "simple-legal", "p2": "random-legal"})
         self.assertEqual(records[1].policy_ids, {"p1": "random-legal", "p2": "simple-legal"})
         self.assertEqual(training_records[0].policy_ids, {"p1": "simple-legal"})
@@ -249,6 +252,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["training"]["model"]["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
         self.assertEqual(iteration_manifest["training"]["model"]["action_schema_version"], "pokezero.action_space.v0")
         self.assertEqual(iteration_manifest["training"]["model"]["feature_schema_version"], LINEAR_FEATURE_SCHEMA_VERSION)
+        self.assertRegex(iteration_manifest["training"]["model"]["feature_fingerprint"], r"^[0-9a-f]{64}$")
         self.assertEqual(len(iteration_manifest["training_rollout_paths"]), 1)
         self.assertTrue(iteration_manifest["training_rollout_path"].endswith("training-rollouts.jsonl"))
         self.assertEqual(iteration_manifest["worker_count"], 1)
@@ -362,6 +366,181 @@ class SelfPlayTest(unittest.TestCase):
                 for row in iteration_manifest["benchmark"]["head_to_heads"]
             },
         )
+        self.assertEqual(iteration_manifest["benchmark_reference_policy_specs"], [f"linear:{bootstrap_path}"])
+
+    def test_run_selfplay_iterations_retains_static_linear_initial_benchmark_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+
+            second_manifest = json.loads((temp_path / "run" / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            benchmark = result.iterations[1].benchmark
+
+        self.assertIsNotNone(benchmark)
+        head_to_head_pairs = {
+            (row.first_policy_id, row.second_policy_id)
+            for row in (benchmark.head_to_head_results if benchmark is not None else ())
+        }
+        self.assertIn(("linear-selfplay-test-iter-0002", "linear-selfplay-test-iter-0001"), head_to_head_pairs)
+        self.assertIn(("linear-selfplay-test-iter-0002", "bootstrap-linear"), head_to_head_pairs)
+        self.assertEqual(
+            result.iterations[1].benchmark_reference_policy_specs,
+            (f"linear:{bootstrap_path}",),
+        )
+        self.assertEqual(second_manifest["benchmark_reference_policy_specs"], [f"linear:{bootstrap_path}"])
+        self.assertIn(
+            ("linear-selfplay-test-iter-0002", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in second_manifest["benchmark"]["head_to_heads"]
+            },
+        )
+
+    def test_run_selfplay_iterations_resume_preserves_static_benchmark_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+            first = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+
+            second = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                resume=True,
+            )
+
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first.iterations[0].benchmark_reference_policy_specs, (f"linear:{bootstrap_path}",))
+        self.assertEqual(second.iterations[0].benchmark_reference_policy_specs, (f"linear:{bootstrap_path}",))
+        self.assertIn(
+            ("linear-selfplay-test-iter-0002", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in second_manifest["benchmark"]["head_to_heads"]
+            },
+        )
+
+    def test_run_selfplay_iterations_resume_derives_static_reference_from_older_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+            run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+            run_manifest_path = run_dir / "manifest.json"
+            run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+            for iteration in run_manifest["iterations"]:
+                iteration.pop("benchmark_reference_policy_specs", None)
+            run_manifest_path.write_text(json.dumps(run_manifest), encoding="utf-8")
+            iteration_manifest_path = run_dir / "iteration-0001" / "manifest.json"
+            iteration_manifest = json.loads(iteration_manifest_path.read_text(encoding="utf-8"))
+            iteration_manifest.pop("benchmark_reference_policy_specs", None)
+            iteration_manifest_path.write_text(json.dumps(iteration_manifest), encoding="utf-8")
+
+            resumed = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                resume=True,
+            )
+
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(resumed.iterations[0].benchmark_reference_policy_specs, (f"linear:{bootstrap_path}",))
+        self.assertIn(
+            ("linear-selfplay-test-iter-0002", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in second_manifest["benchmark"]["head_to_heads"]
+            },
+        )
 
     def test_run_selfplay_iterations_uses_promotion_registry_for_historical_opponents(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -376,7 +555,11 @@ class SelfPlayTest(unittest.TestCase):
                     policy_id="linear-promoted",
                 ),
             )
-            write_promotion_registry(registry_path, checkpoint_paths=(promoted_checkpoint_path,))
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(promoted_checkpoint_path,),
+                policy_ids=("linear-promoted",),
+            )
 
             result = run_selfplay_iterations(
                 run_dir=temp_path / "run",
@@ -408,6 +591,17 @@ class SelfPlayTest(unittest.TestCase):
             write_promotion_registry(registry_path, checkpoint_paths=(temp_path / "missing-linear.json",))
 
             with self.assertRaisesRegex(ValueError, "promotion registry verification failed"):
+                _promoted_checkpoint_specs(registry_path)
+
+    def test_promoted_checkpoint_specs_verify_loadable_registry_before_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "bad-linear.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_promotion_registry(registry_path, checkpoint_paths=(checkpoint_path,))
+
+            with self.assertRaisesRegex(ValueError, "checkpoint_policy_loadable"):
                 _promoted_checkpoint_specs(registry_path)
 
     def test_run_selfplay_iterations_auto_promotes_and_feeds_next_opponent_pool(self) -> None:
@@ -458,6 +652,72 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_one_manifest["promotion"]["recorded"], True)
         self.assertEqual(iteration_two_manifest["promotion"]["recorded"], True)
         self.assertEqual(iteration_two_manifest["promotion"]["gate_result"]["incumbent_policy_id"], "linear-selfplay-test-iter-0001")
+
+    def test_run_selfplay_iterations_static_reference_does_not_gate_auto_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                auto_promotion_config=SelfPlayPromotionConfig(
+                    registry_path=registry_path,
+                    gate_config=PromotionGateConfig(
+                        min_benchmark_win_rate=1.0,
+                        min_incumbent_win_rate=0.0,
+                        min_benchmark_games=0,
+                        min_incumbent_games=0,
+                        max_collection_capped_rate=1.0,
+                        max_benchmark_capped_rate=1.0,
+                        max_incumbent_capped_rate=1.0,
+                        min_incumbent_win_rate_lower_bound=0.0,
+                        opponent_min_win_rates={
+                            "random-legal": 0.0,
+                            "simple-legal": 0.0,
+                        },
+                    ),
+                    label_prefix="candidate",
+                ),
+            )
+
+        second_promotion = result.iterations[1].promotion
+        self.assertTrue(second_promotion.recorded if second_promotion else False)
+        check_names = {
+            check["name"]
+            for check in second_promotion.gate_result.to_dict()["checks"]
+        } if second_promotion else set()
+        self.assertNotIn("benchmark_games:bootstrap-linear", check_names)
+        self.assertNotIn("benchmark_win_rate:bootstrap-linear", check_names)
+        self.assertIn(
+            "bootstrap-linear",
+            {
+                opponent.opponent_policy_id
+                for opponent in second_promotion.gate_result.benchmark_opponents
+            } if second_promotion else set(),
+        )
 
     def test_run_selfplay_iterations_auto_promotion_benchmarks_frozen_registry_champion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -737,6 +997,66 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(resumed.iterations[0].seed_start, 21)
         self.assertEqual(len(final_manifest["iterations"]), 2)
 
+    def test_run_selfplay_iterations_post_iteration_audit_stops_before_next_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with self.assertRaisesRegex(RunAuditFailure, "latest_benchmark_available") as raised:
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    post_iteration_audit_config=RunAuditConfig(require_benchmark=True),
+                )
+
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(raised.exception.result.passed)
+        self.assertEqual(len(run_manifest["iterations"]), 1)
+        self.assertFalse((run_dir / "iteration-0002").exists())
+
+    def test_run_selfplay_iterations_post_iteration_audit_passes_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            result = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                post_iteration_audit_config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.0,
+                    min_latest_benchmark_games=0,
+                    max_latest_benchmark_capped_rate=1.0,
+                    max_benchmark_win_rate_drop=1.0,
+                    require_benchmark=True,
+                ),
+            )
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest_exists = (run_dir / "iteration-0002" / "manifest.json").exists()
+
+        self.assertEqual(len(result.iterations), 2)
+        self.assertEqual(len(run_manifest["iterations"]), 2)
+        self.assertTrue(second_manifest_exists)
+
     def test_run_selfplay_iterations_rejects_resume_config_mismatch_before_collecting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -835,6 +1155,8 @@ class SelfPlayTest(unittest.TestCase):
                         "/tmp/showdown",
                         "--opponent-policy",
                         "random-legal",
+                        "--benchmark-reference-policy",
+                        "linear:bootstrap.json",
                         "--workers",
                         "2",
                         "--opponent-action-loss-weight",
@@ -858,6 +1180,16 @@ class SelfPlayTest(unittest.TestCase):
                         "heldout-b.jsonl",
                         "--evaluation-games",
                         "3",
+                        "--audit-after-iteration",
+                        "--audit-min-latest-benchmark-games",
+                        "2",
+                        "--audit-max-latest-average-decision-rounds",
+                        "200",
+                        "--audit-max-latest-benchmark-average-decision-rounds",
+                        "210",
+                        "--audit-allow-missing-benchmark",
+                        "--audit-allow-missing-benchmark-opponents",
+                        "--audit-require-latest-promotion",
                     ]
                 )
 
@@ -867,6 +1199,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertTrue(kwargs["resume"])
         self.assertEqual(kwargs["games_per_iteration"], 2)
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
+        self.assertEqual(kwargs["benchmark_reference_policy_specs"], ("linear:bootstrap.json",))
         self.assertEqual(kwargs["evaluation_games"], 3)
         self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
@@ -874,11 +1207,37 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["auto_promotion_config"].artifact_dir, Path("promoted-checkpoints"))
         self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")
         self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_win_rate, 0.0)
+        self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_average_decision_rounds, 200.0)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_benchmark_average_decision_rounds, 210.0)
+        self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
+        self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark_opponent_coverage)
+        self.assertTrue(kwargs["post_iteration_audit_config"].require_latest_promotion)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.3)
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
         self.assertIn("latest_checkpoint", stdout.getvalue())
+
+    def test_selfplay_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = selfplay_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--audit-after-iteration",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-after-iteration requires --evaluation-games", stderr.getvalue())
 
     def test_selfplay_cli_report_prints_manifest_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -896,6 +1255,10 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("0.600", output)
         self.assertIn("0.125000", output)
         self.assertIn("0.8750", output)
+        self.assertIn("avg_dec", output)
+        self.assertIn("peak_mb", output)
+        self.assertIn("2.000", output)
+        self.assertIn("77.500", output)
         self.assertIn(" val ", output)
         self.assertIn("fit metrics measure imitation", output)
         self.assertNotIn("0.250000", output)
@@ -1037,6 +1400,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
             "decisions_per_second": 3.0,
             "average_decision_rounds": 2.0,
             "average_simulator_turns": 1.67,
+            "peak_rss_mb": 77.5,
         },
         "training": {
             "config": {},

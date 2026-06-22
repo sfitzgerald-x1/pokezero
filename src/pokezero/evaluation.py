@@ -195,6 +195,12 @@ def evaluate_promotion_gate(
         else None
     )
     benchmark = _benchmark_without_opponent(all_benchmark, incumbent_policy_id)
+    excluded_gate_opponents = (
+        ()
+        if config.required_benchmark_opponents
+        else candidate.benchmark_reference_policy_ids
+    )
+    benchmark_for_gate = _benchmark_without_opponents(benchmark, excluded_gate_opponents)
     checks: list[PromotionGateCheck] = [
         _threshold_check(
             name="collection_capped_rate",
@@ -215,6 +221,7 @@ def evaluate_promotion_gate(
         gated_opponents = _gated_benchmark_opponents(
             benchmark.opponents,
             required_opponents=config.required_benchmark_opponents,
+            excluded_opponents=excluded_gate_opponents,
         )
         for missing_opponent in _missing_benchmark_opponents(
             benchmark.opponents,
@@ -254,14 +261,14 @@ def evaluate_promotion_gate(
                     message="benchmark win rate meets opponent-specific promotion floor",
                 )
             )
-        if benchmark.games:
+        if benchmark_for_gate.games:
             checks.extend(
                 (
                     _threshold_check(
                         name="benchmark_capped_rate",
-                        observed=benchmark.capped_rate,
+                        observed=benchmark_for_gate.capped_rate,
                         threshold=config.max_benchmark_capped_rate,
-                        passed=benchmark.capped_rate <= config.max_benchmark_capped_rate,
+                        passed=benchmark_for_gate.capped_rate <= config.max_benchmark_capped_rate,
                         message="benchmark capped-game rate is within limit",
                     ),
                 )
@@ -379,6 +386,7 @@ class _CandidateManifest:
     benchmark: Mapping[str, Any] | None
     teacher_degradation_rate: float | None
     derived_incumbent_policy_id: str | None = None
+    benchmark_reference_policy_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -432,6 +440,7 @@ def _candidate_from_selfplay_manifest(
         benchmark=_optional_mapping(latest.get("benchmark")),
         teacher_degradation_rate=None,
         derived_incumbent_policy_id=_derived_selfplay_incumbent_policy_id(iterations, manifest_path=manifest_path),
+        benchmark_reference_policy_ids=_benchmark_reference_policy_ids(latest, manifest_path=manifest_path),
     )
 
 
@@ -575,6 +584,19 @@ def _policy_id_from_policy_spec(value: Any, *, manifest_path: Path) -> str | Non
     return None
 
 
+def _benchmark_reference_policy_ids(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+) -> tuple[str, ...]:
+    policy_ids: list[str] = []
+    for policy_spec in _sequence(manifest.get("benchmark_reference_policy_specs", ())):
+        policy_id = _policy_id_from_policy_spec(policy_spec, manifest_path=manifest_path)
+        if policy_id is not None and policy_id not in policy_ids:
+            policy_ids.append(policy_id)
+    return tuple(policy_ids)
+
+
 def _candidate_checkpoint_paths(checkpoint_text: str, *, manifest_path: Path) -> tuple[Path, ...]:
     checkpoint_path = Path(checkpoint_text).expanduser()
     if checkpoint_path.is_absolute():
@@ -697,6 +719,24 @@ def _benchmark_without_opponent(
         return summary
     opponents = tuple(
         opponent for opponent in summary.opponents if opponent.opponent_policy_id != opponent_policy_id
+    )
+    return _BenchmarkSummary(
+        wins=sum(opponent.wins for opponent in opponents),
+        games=sum(opponent.games for opponent in opponents),
+        capped_games=sum(opponent.capped_games for opponent in opponents),
+        opponents=opponents,
+    )
+
+
+def _benchmark_without_opponents(
+    summary: _BenchmarkSummary,
+    opponent_policy_ids: IterableABC[str],
+) -> _BenchmarkSummary:
+    excluded = set(opponent_policy_ids)
+    if not excluded:
+        return summary
+    opponents = tuple(
+        opponent for opponent in summary.opponents if opponent.opponent_policy_id not in excluded
     )
     return _BenchmarkSummary(
         wins=sum(opponent.wins for opponent in opponents),

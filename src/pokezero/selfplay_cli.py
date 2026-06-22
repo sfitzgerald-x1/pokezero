@@ -8,9 +8,11 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
+from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
 from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .selfplay import (
     SelfPlayPromotionConfig,
@@ -50,6 +52,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
+    )
+    iterate.add_argument(
+        "--benchmark-reference-policy",
+        action="append",
+        default=None,
+        help=(
+            "Additional policy spec retained as a benchmark reference across iterations. "
+            "May be repeated. A linear --initial-policy checkpoint is retained by default."
+        ),
     )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
     iterate.add_argument(
@@ -116,6 +127,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--shuffle-seed", type=int, default=1, help="Base deterministic shuffle seed.")
     iterate.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
     iterate.add_argument("--policy-id", default="linear-selfplay", help="Policy id prefix stored in checkpoints.")
+    add_post_iteration_audit_arguments(iterate)
     iterate.set_defaults(func=_iterate)
 
     report = subparsers.add_parser("report", help="Print a summary of a self-play run manifest.")
@@ -130,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except RunAuditFailure as exc:
+        _print_run_audit_failure(exc)
+        return 3
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -140,6 +155,16 @@ def _iterate(args: argparse.Namespace) -> int:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
+    post_iteration_audit_config = post_iteration_audit_config_from_args(args)
+    if (
+        post_iteration_audit_config is not None
+        and post_iteration_audit_config.require_benchmark
+        and args.evaluation_games <= 0
+    ):
+        raise ValueError(
+            "--audit-after-iteration requires --evaluation-games > 0 unless "
+            "--audit-allow-missing-benchmark is set."
+        )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -169,6 +194,10 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
     )
+    benchmark_references = tuple(
+        policy_spec_with_showdown_root(spec, policy_showdown_root)
+        for spec in (args.benchmark_reference_policy or ())
+    )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_selfplay_iterations(
         run_dir=args.run_dir,
@@ -180,17 +209,25 @@ def _iterate(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         initial_policy_spec=initial_policy,
         fixed_opponent_policy_specs=fixed_opponents,
+        benchmark_reference_policy_specs=benchmark_references,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
         validation_rollout_paths=tuple(args.validation_data or ()),
         promotion_registry_path=args.promotion_registry,
         auto_promotion_config=auto_promotion_config,
+        post_iteration_audit_config=post_iteration_audit_config,
         resume=args.resume,
         worker_count=args.workers,
     )
     _print_run_summary(result)
     return 0
+
+
+def _print_run_audit_failure(exc: RunAuditFailure) -> None:
+    failed = [check.name for check in exc.result.checks if not check.passed]
+    print(f"audit_failed: {exc.result.manifest_path}", file=sys.stderr)
+    print(f"failed_checks: {', '.join(failed) if failed else 'unknown'}", file=sys.stderr)
 
 
 def _print_run_summary(result) -> None:
@@ -255,7 +292,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
-        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} {'opp_acc':>8} checkpoint"
+        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'avg_dec':>8} {'peak_mb':>8} "
+        f"{'fit':>5} {'fit_loss':>10} {'fit_acc':>8} {'opp_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -273,6 +311,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
             f"{_manifest_promotion_status(iteration):>8} "
             f"{float(metrics.get('decisions_per_second', 0.0)):8.3f} "
+            f"{_format_optional_float(metrics.get('average_decision_rounds')):>8} "
+            f"{_format_optional_float(metrics.get('peak_rss_mb')):>8} "
             f"{fit_source:>5} "
             f"{_format_optional_float(fit_metrics.get('loss') if fit_metrics else None, digits=6):>10} "
             f"{_format_optional_float(fit_metrics.get('accuracy') if fit_metrics else None, digits=4):>8} "

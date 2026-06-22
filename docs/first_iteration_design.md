@@ -12,18 +12,19 @@ Implemented:
 - Player-relative Showdown normalization where `self_*` and `opponent_*` are stable regardless of raw `p1` or `p2` seat.
 - Local Showdown environment backed by the built Pokemon Showdown simulator.
 - Rollout collection to JSONL with terminal outcome, capped-game marker, opponent action metadata, and policy identifiers.
+- Normalized replay-to-rollout JSONL import scaffold, so curated replay decisions can enter the existing training-data path once a Gen 3 randbat corpus/converter exists.
 - Dataset streaming with left-padded temporal windows, terminal-winner-derived returns, and batch containers for training examples.
 - Random legal, simple legal, and initial scripted-teacher baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear auxiliary opponent-action prediction head trained from recorded opponent move/switch labels.
-- Linear checkpoint save/load with version-tag compatibility checks.
+- Linear checkpoint save/load with version-tag checks plus a content-derived fingerprint over the current linear feature extractor source.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
-- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, auto-promotion, and run reporting.
+- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, auto-promotion, run reporting, and side-by-side run comparison.
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
 - Named smoke/default/long-run evaluation profiles shared by gate and audit CLIs.
-- Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, and stored artifact checksums.
-- Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, and filtering historical opponents to promoted checkpoints.
+- Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, optional policy loadability, and stored artifact checksums.
+- Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, filtering historical opponents to promoted checkpoints, and previewing the selected promoted opponent pool.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 - Compact public-belief observation features for revealed opposing Pokemon, including surviving candidate count, uncertainty, possible ability/item/move counts, bucketed per-value possible-fact features, and revealed ability/item flags.
 
@@ -34,24 +35,27 @@ Partially implemented:
 - Opponent-action prediction exists in the linear baseline and transformer scaffold as an auxiliary supervised head.
 - A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records with promotion-gated collector advancement, warm starts, resume support, and optional promotion-registry artifact management.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
-- CPU-only run audit CLI over linear and neural self-play manifests that checks latest benchmark health, capped-game rates, same-opponent benchmark regression from previous best, and trailing promotion failures.
+- CPU-only run audit CLI over linear and neural self-play manifests that checks latest benchmark health, capped-game rates, same-opponent benchmark regression from previous best, missing latest benchmark opponents, and trailing promotion failures. It can also enforce opt-in upper bounds on latest collection and benchmark average decision-round length, and suggest run-specific audit thresholds from observed manifest history.
+- Collection and benchmark metrics include best-effort process peak RSS high-water reporting when the local platform exposes it.
+- Optional post-iteration audit enforcement for linear and neural self-play runs, so long CPU experiments can stop after a bad manifest is written instead of continuing unattended.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
 Known limitations:
 
-- Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
-- Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
+- Linear checkpoint compatibility now includes a source-derived fingerprint over the current linear feature extractor; upstream observation semantics, neural checkpoints, and broader checkpoint compatibility still rely mostly on versioned schema and config tags.
+- Parallel collection caches immutable linear models per collection call, and manifests now record best-effort process peak RSS high-water marks. Larger checkpoints and high worker counts still need real-run memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
-- Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions; named profiles make current threshold intent explicit, but useful long-run settings still need empirical validation.
-- The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves and safer switching. It is a bootstrap data source, not the intended long-term policy, and it still lacks hazards and deeper sequence planning.
+- Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions. Named profiles make current threshold intent explicit, and audit calibration can propose starting thresholds from run history, but useful long-run settings still need empirical validation on larger experiments.
+- The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves, safer switching, and Spikes/Rapid Spin awareness. It is a bootstrap data source, not the intended long-term policy, and it still lacks deeper hazard planning and sequence planning.
 - Current observation belief features are compact bucketed facts and counts, not full explicit masks. Detailed candidate variants and evidence logs remain sidecar-only to avoid bloating every trajectory record.
+- Replay import currently expects normalized player-relative replay JSON, one battle per file, and writes standard rollout JSONL. Raw Showdown replay discovery, parsing, observation reconstruction, action-index mapping, and curation for Gen 3 randbats remain unresolved.
 
 Not implemented yet:
 
 - PPO-style online actor-critic training.
 - Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.
-- Empirically validated long-run benchmark thresholds or richer managed checkpoint lifecycle tooling.
+- Empirically validated long-run benchmark thresholds or richer managed checkpoint lifecycle tooling beyond registry verification and opponent-pool previews.
 
 ## Deviations From Original Plan
 

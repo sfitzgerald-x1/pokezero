@@ -114,6 +114,8 @@ def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"elapsed_seconds: {float(metrics['elapsed_seconds']):.3f}")
     print(f"games_per_second: {float(metrics['games_per_second']):.3f}")
     print(f"decisions_per_second: {float(metrics['decisions_per_second']):.3f}")
+    if metrics.get("peak_rss_mb") is not None:
+        print(f"peak_rss_mb: {float(metrics['peak_rss_mb']):.2f}")
     print(f"p1_wins: {metrics['p1_wins']}")
     print(f"p2_wins: {metrics['p2_wins']}")
     print(f"ties: {metrics['ties']}")
@@ -130,6 +132,8 @@ def print_benchmark_report(report: BenchmarkReport) -> None:
     print(f"elapsed_seconds: {report.elapsed_seconds:.3f}")
     print(f"games_per_second: {report.games_per_second:.3f}")
     print(f"decisions_per_second: {report.decisions_per_second:.3f}")
+    if report.peak_rss_mb is not None:
+        print(f"peak_rss_mb: {report.peak_rss_mb:.2f}")
     print("note: default --games is a throughput smoke; use larger N for policy-quality claims.")
     print("")
     header = (

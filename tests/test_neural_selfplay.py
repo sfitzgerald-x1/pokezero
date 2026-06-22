@@ -25,6 +25,7 @@ from pokezero.neural_selfplay import (
 )
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
+from pokezero.run_audit import RunAuditConfig, RunAuditFailure
 from pokezero.rollout import RolloutConfig
 
 
@@ -178,6 +179,71 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(second_manifest["current_policy_spec"], "random-legal")
         self.assertEqual(run_manifest["current_policy_spec"], "random-legal")
         self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
+
+    def test_run_neural_selfplay_iterations_post_iteration_audit_stops_before_next_iteration(self) -> None:
+        collected = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(collected=collected):
+                with self.assertRaisesRegex(RunAuditFailure, "latest_promotion_recorded") as raised:
+                    run_neural_selfplay_iterations(
+                        run_dir=run_dir,
+                        iterations=2,
+                        games_per_iteration=1,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        evaluation_games=1,
+                        post_iteration_audit_config=RunAuditConfig(
+                            min_latest_benchmark_games=0,
+                            require_latest_promotion=True,
+                        ),
+                    )
+
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertFalse(raised.exception.result.passed)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(len(run_manifest["iterations"]), 1)
+        self.assertFalse((run_dir / "iteration-0002").exists())
+
+    def test_run_neural_selfplay_iterations_post_iteration_audit_passes_and_continues(self) -> None:
+        collected = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(collected=collected):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    post_iteration_audit_config=RunAuditConfig(
+                        min_latest_benchmark_win_rate=0.0,
+                        min_latest_benchmark_games=0,
+                        max_latest_benchmark_capped_rate=1.0,
+                        max_benchmark_win_rate_drop=1.0,
+                        require_benchmark=True,
+                    ),
+                )
+
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+            second_manifest_exists = (run_dir / "iteration-0002" / "manifest.json").exists()
+
+        self.assertEqual(len(result.iterations), 2)
+        self.assertEqual(len(collected), 2)
+        self.assertEqual(len(run_manifest["iterations"]), 2)
+        self.assertTrue(second_manifest_exists)
 
     def test_run_neural_selfplay_iterations_resumes_from_manifest(self) -> None:
         collected = []

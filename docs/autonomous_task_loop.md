@@ -74,6 +74,7 @@ claude --dangerously-skip-permissions --model claude-opus-4-8
    - Prompt Claude to review the PR adversarially and skeptically, focusing on whether it achieves the selected task's goals.
    - This invocation is intentionally privileged because the local workflow uses Claude Code as an adversarial reviewer in the trusted checkout. The prompt must still instruct Claude to review only.
    - Claude should not modify files and should not merge the PR.
+   - Run Claude Code with a hard 15-minute timeout. If it fails, hangs, or produces unusable output, pivot to a fresh Codex instance for adversarial review instead of blocking progress.
    - After Claude exits, run `git status --short` before applying any findings. Treat unexpected file changes as review output that must be inspected before proceeding.
 
 8. Apply review findings.
@@ -82,7 +83,7 @@ claude --dangerously-skip-permissions --model claude-opus-4-8
    - Push updates to the same PR and update the PR description when verification changes.
 
 9. Merge or stop according to the active mode.
-   - When working under an explicit long-horizon `/goal`, do not wait for per-PR merge approval after the PR has passed local verification and adversarial review. The purpose of goal mode is to allow longer-horizon work to continue without stopping at every merge boundary.
+   - When working under an explicit long-horizon `/goal`, do not wait for per-PR merge approval after the PR has passed local verification and adversarial review. This is an intentional exception to the normal PR approval rule, because the purpose of goal mode is to allow longer-horizon work to continue across merge boundaries without stopping at every PR.
    - Outside explicit goal-mode work, stop for user approval before merging.
    - After merge, check out `main`, pull, then repeat the loop.
 
@@ -106,9 +107,7 @@ Be skeptical of whether this PR actually achieves the intended task. Focus on:
 Return prioritized findings only. Do not modify files and do not merge the PR.
 ```
 
-If the Claude CLI is unavailable, unauthenticated, or fails, record that failure in the handoff and continue from local verification evidence.
-
-Claude Code review should have a hard 15-minute timeout. If Claude does not complete within 15 minutes, fails repeatedly, or cannot produce usable review output, pivot to a fresh Codex instance for adversarial review instead of blocking the goal loop.
+If the Claude CLI is unavailable, unauthenticated, fails, or does not complete within the 15-minute timeout, record that failure in the handoff and use a fresh Codex instance for adversarial review instead of blocking the goal loop.
 
 ## Acceptance Criteria
 

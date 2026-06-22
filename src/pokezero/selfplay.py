@@ -33,6 +33,7 @@ from .linear_policy import (
     save_linear_model,
     train_linear_policy,
 )
+from .opponents import opponent_pool_policy_specs
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .trajectory import BattleTrajectory
@@ -40,6 +41,7 @@ from .trajectory import BattleTrajectory
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
     from .promotion import PromotionRecordResult
+    from .run_audit import RunAuditConfig, RunAuditResult
 
 SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
 
@@ -63,6 +65,7 @@ class SelfPlayIterationResult:
     manifest_path: Path
     current_policy_spec: str
     opponent_policy_specs: tuple[str, ...]
+    benchmark_reference_policy_specs: tuple[str, ...]
     training_rollout_paths: tuple[Path, ...]
     validation_rollout_paths: tuple[Path, ...]
     seed_start: int
@@ -86,6 +89,7 @@ class SelfPlayIterationResult:
             "checkpoint_policy_spec": self.checkpoint_policy_spec,
             "current_policy_spec": self.current_policy_spec,
             "opponent_policy_specs": list(self.opponent_policy_specs),
+            "benchmark_reference_policy_specs": list(self.benchmark_reference_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "validation_rollout_paths": [str(path) for path in self.validation_rollout_paths],
             "seed_start": self.seed_start,
@@ -153,12 +157,14 @@ def run_selfplay_iterations(
     seed_start: int = 1,
     initial_policy_spec: str = "random-legal",
     fixed_opponent_policy_specs: Iterable[str] = ("random-legal", "simple-legal"),
+    benchmark_reference_policy_specs: Iterable[str] | None = None,
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     validation_rollout_paths: Iterable[Path] | None = None,
     promotion_registry_path: Path | None = None,
     auto_promotion_config: SelfPlayPromotionConfig | None = None,
+    post_iteration_audit_config: "RunAuditConfig | None" = None,
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -177,6 +183,11 @@ def run_selfplay_iterations(
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
+    explicit_benchmark_references = (
+        ()
+        if benchmark_reference_policy_specs is None
+        else tuple(dict.fromkeys(str(spec) for spec in benchmark_reference_policy_specs))
+    )
     validation_paths = tuple(Path(path) for path in (validation_rollout_paths or ()))
     promotion_pool_registry_path = promotion_registry_path or (
         auto_promotion_config.registry_path if auto_promotion_config is not None else None
@@ -191,6 +202,12 @@ def run_selfplay_iterations(
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
         current_policy_spec = str(last_iteration["checkpoint_policy_spec"])
+        benchmark_references = _dedupe_policy_specs(
+            (
+                *_benchmark_reference_policy_specs_from_manifest_history(prior_iteration_manifests),
+                *explicit_benchmark_references,
+            )
+        )
         current_model = load_linear_model(Path(str(last_iteration["checkpoint_path"])))
         _validate_training_config_matches_model(training_config, current_model)
         checkpoint_history = [str(iteration["checkpoint_policy_spec"]) for iteration in prior_iteration_manifests]
@@ -213,6 +230,14 @@ def run_selfplay_iterations(
                 "neural checkpoint evaluation."
             )
         current_policy_spec = initial_policy_spec
+        benchmark_references = _dedupe_policy_specs(
+            (
+                *_default_benchmark_reference_policy_specs(
+                    initial_policy_spec=initial_policy_spec,
+                ),
+                *explicit_benchmark_references,
+            )
+        )
         current_model = _initial_model_from_policy_spec(initial_policy_spec)
         if current_model is not None:
             _validate_training_config_matches_model(training_config, current_model)
@@ -267,6 +292,7 @@ def run_selfplay_iterations(
             benchmark = _benchmark_checkpoint(
                 model_policy=LinearSoftmaxPolicy(model=training.model),
                 incumbent_policy_spec=benchmark_incumbent_policy_spec,
+                reference_policy_specs=benchmark_references,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
@@ -281,6 +307,7 @@ def run_selfplay_iterations(
             manifest_path=manifest_path,
             current_policy_spec=current_policy_spec,
             opponent_policy_specs=opponent_policy_specs,
+            benchmark_reference_policy_specs=benchmark_references,
             training_rollout_paths=tuple(training_rollout_history),
             validation_rollout_paths=validation_paths,
             seed_start=iteration_seed_start,
@@ -312,7 +339,7 @@ def run_selfplay_iterations(
             results[-1] = result
             _write_json(manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
+                promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
         checkpoint_history.append(result.checkpoint_policy_spec)
         current_policy_spec = result.checkpoint_policy_spec
         current_model = training.model
@@ -324,6 +351,7 @@ def run_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
             ).to_dict(),
         )
+        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
 
     run_result = SelfPlayRunResult(
         run_dir=run_dir,
@@ -332,6 +360,17 @@ def run_selfplay_iterations(
     )
     _write_json(run_dir / "manifest.json", run_result.to_dict())
     return run_result
+
+
+def _enforce_post_iteration_audit(
+    manifest_path: Path,
+    config: "RunAuditConfig | None",
+) -> "RunAuditResult | None":
+    if config is None:
+        return None
+    from .run_audit import enforce_run_audit
+
+    return enforce_run_audit(manifest_path, config=config)
 
 
 def collect_selfplay_rollouts(
@@ -518,12 +557,12 @@ def _opponent_pool(
     current_policy_spec: str,
     max_historical_opponents: int,
 ) -> tuple[str, ...]:
-    historical = [spec for spec in checkpoint_history if spec != current_policy_spec]
-    if max_historical_opponents:
-        historical = historical[-max_historical_opponents:]
-    else:
-        historical = []
-    return fixed_policy_specs + tuple(historical)
+    return opponent_pool_policy_specs(
+        fixed_policy_specs=fixed_policy_specs,
+        checkpoint_history=checkpoint_history,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+    )
 
 
 def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[str, ...]:
@@ -531,12 +570,39 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         return ()
     from .promotion import load_promotion_registry, verify_promotion_registry
 
-    verification = verify_promotion_registry(promotion_registry_path)
+    verification = verify_promotion_registry(promotion_registry_path, verify_loadable=True)
     if not verification.passed:
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
     return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+
+
+def _default_benchmark_reference_policy_specs(
+    *,
+    initial_policy_spec: str,
+) -> tuple[str, ...]:
+    if not _is_linear_policy_spec(initial_policy_spec):
+        return ()
+    return (initial_policy_spec,)
+
+
+def _dedupe_policy_specs(policy_specs: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(str(spec) for spec in policy_specs))
+
+
+def _benchmark_reference_policy_specs_from_manifest_history(
+    manifests: tuple[Mapping[str, Any], ...],
+) -> tuple[str, ...]:
+    for manifest in manifests:
+        references = tuple(str(spec) for spec in _sequence(manifest.get("benchmark_reference_policy_specs", ())))
+        if references:
+            return references
+    first = manifests[0]
+    initial_policy_spec = str(first.get("current_policy_spec", ""))
+    return _default_benchmark_reference_policy_specs(
+        initial_policy_spec=initial_policy_spec,
+    )
 
 
 def _benchmark_incumbent_policy_spec(
@@ -604,6 +670,11 @@ def _initial_model_from_policy_spec(policy_spec: str) -> LinearPolicyModel | Non
 def _is_neural_policy_spec(policy_spec: str) -> bool:
     policy_body = policy_spec.strip().partition("?")[0].strip().lower()
     return policy_body.startswith(NEURAL_POLICY_SPEC_PREFIX)
+
+
+def _is_linear_policy_spec(policy_spec: str) -> bool:
+    policy_body = policy_spec.strip().partition("?")[0].strip().lower()
+    return policy_body.startswith("linear:")
 
 
 def _load_prior_iteration_manifests(
@@ -681,18 +752,38 @@ def _benchmark_checkpoint(
     *,
     model_policy: LinearSoftmaxPolicy,
     incumbent_policy_spec: str | None = None,
+    reference_policy_specs: Iterable[str] = (),
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
     games: int,
     seed_start: int,
 ) -> BenchmarkReport:
     policy_id = str(model_policy.policy_id)
+    incumbent_matchups = _incumbent_benchmark_matchups(
+        model_policy=model_policy,
+        incumbent_policy_spec=incumbent_policy_spec,
+    )
+    excluded_reference_policy_ids = {
+        policy_id,
+        "random-legal",
+        "simple-legal",
+        *(
+            policy_id
+            for matchup in incumbent_matchups
+            for policy_id in (matchup.p1_policy.policy_id, matchup.p2_policy.policy_id)
+        ),
+    }
     matchups = (
         BenchmarkMatchup(f"{policy_id} vs random-legal", model_policy, RandomLegalPolicy()),
         BenchmarkMatchup(f"random-legal vs {policy_id}", RandomLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
         BenchmarkMatchup(f"{policy_id} vs simple-legal", LinearSoftmaxPolicy(model=model_policy.model), SimpleLegalPolicy()),
         BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), LinearSoftmaxPolicy(model=model_policy.model)),
-        *_incumbent_benchmark_matchups(model_policy=model_policy, incumbent_policy_spec=incumbent_policy_spec),
+        *incumbent_matchups,
+        *_reference_benchmark_matchups(
+            model_policy=model_policy,
+            reference_policy_specs=reference_policy_specs,
+            excluded_policy_ids=excluded_reference_policy_ids,
+        ),
     )
     return benchmark_rollouts(
         games=games,
@@ -730,6 +821,39 @@ def _incumbent_benchmark_matchups(
     )
 
 
+def _reference_benchmark_matchups(
+    *,
+    model_policy: LinearSoftmaxPolicy,
+    reference_policy_specs: Iterable[str],
+    excluded_policy_ids: Iterable[str],
+) -> tuple[BenchmarkMatchup, ...]:
+    policy_id = str(model_policy.policy_id)
+    seen_policy_ids = set(excluded_policy_ids)
+    matchups: list[BenchmarkMatchup] = []
+    for reference_policy_spec in reference_policy_specs:
+        reference_factory = policy_factory_from_spec(reference_policy_spec)
+        reference_policy = reference_factory()
+        reference_policy_id = str(reference_policy.policy_id)
+        if reference_policy_id in seen_policy_ids:
+            continue
+        seen_policy_ids.add(reference_policy_id)
+        matchups.extend(
+            (
+                BenchmarkMatchup(
+                    f"{policy_id} vs {reference_policy_id}",
+                    LinearSoftmaxPolicy(model=model_policy.model),
+                    reference_policy,
+                ),
+                BenchmarkMatchup(
+                    f"{reference_policy_id} vs {policy_id}",
+                    reference_factory(),
+                    LinearSoftmaxPolicy(model=model_policy.model),
+                ),
+            )
+        )
+    return tuple(matchups)
+
+
 def _training_result_to_dict(result: LinearTrainingResult) -> dict[str, Any]:
     return {
         "config": {
@@ -753,6 +877,7 @@ def _training_result_to_dict(result: LinearTrainingResult) -> dict[str, Any]:
             "action_schema_version": result.model.action_schema_version,
             "observation_schema_version": result.model.observation_schema_version,
             "feature_schema_version": result.model.feature_schema_version,
+            "feature_fingerprint": result.model.feature_fingerprint,
             "feature_count": result.model.feature_count,
             "window_size": result.model.window_size,
         },

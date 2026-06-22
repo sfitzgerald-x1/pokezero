@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.eval_cli import main as eval_cli_main
-from pokezero.run_audit import RunAuditConfig, audit_run
+from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, compare_run_manifests
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
@@ -39,6 +39,8 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_iteration, 2)
         self.assertEqual(result.latest_benchmark_win_rate, 0.70)
         self.assertEqual(result.best_benchmark_win_rate, 0.70)
+        self.assertEqual(result.latest_average_decision_rounds, 10.0)
+        self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
@@ -102,6 +104,170 @@ class RunAuditTest(unittest.TestCase):
             [("random-legal", 0.0)],
         )
 
+    def test_audit_fails_when_latest_benchmark_drops_prior_opponent(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ("simple-legal",))
+        self.assertIn("latest_benchmark_opponent_coverage", failed_check_names(result))
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertEqual(coverage_check.observed, "simple-legal")
+
+    def test_audit_allows_missing_prior_benchmark_opponent_when_disabled(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_benchmark_win_rate_drop=0.05,
+                    require_benchmark_opponent_coverage=False,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ("simple-legal",))
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+        self.assertEqual(coverage_check.observed, "optional")
+
+    def test_audit_allows_rotating_incumbent_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-selfplay-test-iter-0001", 12, 8, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=3,
+                    rows=(
+                        ("random-legal", 19, 1, 0),
+                        ("simple-legal", 15, 5, 0),
+                        ("linear-selfplay-test-iter-0002", 12, 8, 0),
+                    ),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=60,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ())
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+
+    def test_audit_allows_slow_rotating_incumbent_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-incumbent-a", 12, 8, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-incumbent-a", 13, 7, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=3,
+                    rows=(
+                        ("random-legal", 19, 1, 0),
+                        ("simple-legal", 15, 5, 0),
+                        ("linear-incumbent-b", 12, 8, 0),
+                    ),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=60,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ())
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+
     def test_audit_fails_when_latest_benchmark_disappears_after_prior_evidence(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -157,6 +323,127 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_capped_rate", failed)
         self.assertIn("consecutive_promotion_failures", failed)
 
+    def test_audit_fails_latest_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn("latest_average_decision_rounds", failed_check_names(result))
+        average_check = next(check for check in result.checks if check.name == "latest_average_decision_rounds")
+        self.assertEqual(average_check.observed, 225.0)
+        self.assertEqual(average_check.threshold, 200.0)
+
+    def test_audit_fails_latest_benchmark_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn("latest_benchmark_average_decision_rounds", failed_check_names(result))
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertEqual(average_check.observed, 225.0)
+        self.assertEqual(average_check.threshold, 200.0)
+        self.assertIn("exceed", average_check.message)
+
+    def test_audit_passes_latest_benchmark_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertTrue(average_check.passed)
+        self.assertEqual(average_check.observed, 12.0)
+        self.assertEqual(average_check.threshold, 200.0)
+        self.assertIn("within limit", average_check.message)
+
+    def test_audit_allows_missing_optional_benchmark_with_benchmark_average_threshold(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    require_benchmark=False,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertTrue(average_check.passed)
+        self.assertIsNone(average_check.observed)
+        self.assertIn("optional", average_check.message)
+
+    def test_audit_derives_benchmark_average_decision_rounds_from_matchups(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        benchmark = manifest["iterations"][0]["benchmark"]
+        benchmark.pop("average_decision_rounds")
+        benchmark["matchups"] = [
+            {"metrics": {"games": 2, "average_decision_rounds": 40.0}},
+            {"metrics": {"games": 6, "average_decision_rounds": 20.0}},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(min_latest_benchmark_win_rate=0.50, min_latest_benchmark_games=20),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.latest_benchmark_average_decision_rounds, 25.0)
+
     def test_audit_supports_neural_selfplay_manifest_without_torch(self) -> None:
         manifest = neural_selfplay_manifest(
             iterations=(
@@ -176,6 +463,253 @@ class RunAuditTest(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(result.source_type, "neural_selfplay")
         self.assertEqual(result.iterations[-1].policy_id, "entity-test-iter-0002")
+
+    def test_calibrate_run_audit_suggests_thresholds_from_observed_history(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, rows=(("random-legal", 18, 2, 0),), promotion_recorded=True),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 16, 4, 2),),
+                    promotion_recorded=False,
+                ),
+                selfplay_iteration(
+                    iteration=3,
+                    rows=(("random-legal", 17, 3, 1),),
+                    promotion_recorded=False,
+                ),
+            )
+        )
+        manifest["iterations"][1]["collection_metrics"]["capped_games"] = 2
+        manifest["iterations"][1]["collection_metrics"]["average_decision_rounds"] = 30.0
+        manifest["iterations"][2]["collection_metrics"]["average_decision_rounds"] = 20.0
+        manifest["iterations"][2]["benchmark"]["average_decision_rounds"] = 40.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path, margin=0.10)
+
+        self.assertEqual(result.iteration_count, 3)
+        self.assertEqual(result.benchmark_iteration_count, 3)
+        self.assertTrue(result.require_benchmark)
+        self.assertEqual(result.min_latest_benchmark_win_rate, 0.72)
+        self.assertEqual(result.min_latest_benchmark_games, 20)
+        self.assertEqual(result.max_latest_collection_capped_rate, 0.22)
+        self.assertEqual(result.max_latest_benchmark_capped_rate, 0.11)
+        self.assertEqual(result.max_latest_average_decision_rounds, 33.0)
+        self.assertEqual(result.max_latest_benchmark_average_decision_rounds, 44.0)
+        self.assertEqual(result.max_benchmark_win_rate_drop, 0.11)
+        self.assertEqual(result.max_consecutive_promotion_failures, 2)
+        self.assertTrue(result.require_benchmark_opponent_coverage)
+        self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
+
+    def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
+        pilot = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=2, rows=(("random-legal", 15, 5, 0),), promotion_recorded=True),
+            )
+        )
+        comparable = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=2, rows=(("random-legal", 15, 5, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=3, rows=(("random-legal", 14, 6, 1),), promotion_recorded=False),
+            )
+        )
+        comparable["iterations"][2]["collection_metrics"]["capped_games"] = 1
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pilot_path = Path(temp_dir) / "pilot.json"
+            comparable_path = Path(temp_dir) / "comparable.json"
+            write_manifest(pilot_path, pilot)
+            write_manifest(comparable_path, comparable)
+
+            calibration = calibrate_run_audit(pilot_path, margin=0.10)
+            audit = audit_run(comparable_path, config=RunAuditConfig(**calibration.suggested_config()))
+
+        self.assertEqual(calibration.max_latest_collection_capped_rate, 0.10)
+        self.assertEqual(calibration.max_latest_benchmark_capped_rate, 0.10)
+        self.assertEqual(calibration.max_benchmark_win_rate_drop, 0.05)
+        self.assertEqual(calibration.max_consecutive_promotion_failures, 1)
+        self.assertTrue(audit.passed)
+
+    def test_calibrate_run_audit_allows_missing_benchmark_when_history_has_none(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, benchmark=False),
+                selfplay_iteration(iteration=2, benchmark=False),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path)
+
+        self.assertFalse(result.require_benchmark)
+        self.assertFalse(result.require_benchmark_opponent_coverage)
+        self.assertEqual(result.min_latest_benchmark_games, 0)
+        self.assertIsNone(result.min_latest_benchmark_win_rate)
+        self.assertIn("--allow-missing-benchmark", result.suggested_cli_flags())
+        self.assertIn("--allow-missing-benchmark-opponents", result.suggested_cli_flags())
+        self.assertNotIn("--min-latest-benchmark-games", result.suggested_cli_flags())
+        self.assertIn("No benchmark iterations", result.notes[0])
+
+    def test_calibrate_run_audit_rejects_negative_margin(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with self.assertRaisesRegex(ValueError, "margin must be non-negative"):
+                calibrate_run_audit(manifest_path, margin=-0.1)
+
+    def test_calibrate_run_audit_accepts_zero_margin(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=2),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path, margin=0.0)
+
+        self.assertEqual(result.margin, 0.0)
+        self.assertEqual(result.min_latest_benchmark_win_rate, 0.65)
+        self.assertEqual(result.max_latest_benchmark_capped_rate, 0.10)
+
+    def test_calibrate_run_audit_supports_neural_selfplay_manifest(self) -> None:
+        manifest = neural_selfplay_manifest(
+            iterations=(
+                neural_iteration(iteration=1, wins=13, losses=7, capped_games=0),
+                neural_iteration(iteration=2, wins=14, losses=6, capped_games=0),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path)
+
+        self.assertEqual(result.source_type, "neural_selfplay")
+        self.assertEqual(result.benchmark_iteration_count, 2)
+        self.assertEqual(result.min_latest_benchmark_win_rate, 0.585)
+
+    def test_compare_run_manifests_summarizes_linear_and_neural_runs(self) -> None:
+        linear_manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, wins=30, losses=20, capped_games=0),
+                selfplay_iteration(iteration=2, wins=40, losses=10, capped_games=1, promotion_recorded=True),
+            )
+        )
+        linear_manifest["iterations"][1]["collection_metrics"]["games_per_second"] = 2.5
+        linear_manifest["iterations"][1]["collection_metrics"]["peak_rss_mb"] = 512.25
+        linear_manifest["iterations"][1]["benchmark"]["games_per_second"] = 1.25
+        linear_manifest["iterations"][1]["benchmark"]["peak_rss_mb"] = 640.5
+        neural_manifest = neural_selfplay_manifest(
+            iterations=(
+                neural_iteration(iteration=1, wins=30, losses=20, capped_games=0),
+                neural_iteration(iteration=2, wins=35, losses=15, capped_games=0),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            linear_path = temp_path / "linear-run" / "manifest.json"
+            neural_path = temp_path / "neural-run" / "manifest.json"
+            write_manifest(linear_path, linear_manifest)
+            write_manifest(neural_path, neural_manifest)
+
+            result = compare_run_manifests((linear_path, neural_path))
+
+        self.assertEqual([entry.label for entry in result.entries], ["linear-run", "neural-run"])
+        self.assertEqual(result.entries[0].source_type, "linear_selfplay")
+        self.assertEqual(result.entries[1].source_type, "neural_selfplay")
+        self.assertEqual(result.entries[0].latest_policy_id, "linear-selfplay-test-iter-0002")
+        self.assertEqual(result.entries[1].latest_policy_id, "entity-test-iter-0002")
+        self.assertAlmostEqual(result.entries[0].latest_benchmark_win_rate or 0.0, 0.8)
+        self.assertAlmostEqual(result.entries[1].latest_benchmark_win_rate or 0.0, 0.7)
+        self.assertEqual(result.best_latest_benchmark_entry.label if result.best_latest_benchmark_entry else None, "linear-run")
+        self.assertEqual(
+            result.best_historical_benchmark_entry.label if result.best_historical_benchmark_entry else None,
+            "linear-run",
+        )
+        self.assertEqual(result.entries[0].latest_collection_games_per_hour, 9000.0)
+        self.assertEqual(result.entries[0].latest_benchmark_games_per_hour, 4500.0)
+        self.assertEqual(result.entries[0].latest_collection_peak_rss_mb, 512.25)
+        self.assertEqual(result.entries[0].latest_benchmark_peak_rss_mb, 640.5)
+        self.assertEqual(result.entries[0].latest_process_peak_rss_mb, 640.5)
+        self.assertTrue(result.entries[0].latest_promotion_recorded)
+        self.assertTrue(result.entries[1].latest_advancement_recorded)
+
+    def test_compare_run_manifests_derives_benchmark_throughput_from_elapsed_seconds(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["total_games"] = 50
+        manifest["iterations"][0]["benchmark"]["elapsed_seconds"] = 10.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = compare_run_manifests((manifest_path,))
+
+        self.assertEqual(result.entries[0].latest_benchmark_games_per_hour, 18000.0)
+
+    def test_compare_run_manifests_best_labels_require_minimum_benchmark_games(self) -> None:
+        solid_manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(("random-legal", 800, 200, 0),),
+                ),
+            )
+        )
+        tiny_manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(("random-legal", 1, 0, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            solid_path = temp_path / "solid-run" / "manifest.json"
+            tiny_path = temp_path / "tiny-run" / "manifest.json"
+            write_manifest(solid_path, solid_manifest)
+            write_manifest(tiny_path, tiny_manifest)
+
+            result = compare_run_manifests((solid_path, tiny_path))
+
+        self.assertEqual(result.entries[0].latest_benchmark_games, 1000)
+        self.assertEqual(result.entries[1].latest_benchmark_games, 1)
+        self.assertAlmostEqual(result.entries[1].latest_benchmark_win_rate or 0.0, 1.0)
+        self.assertEqual(result.min_benchmark_games, 50)
+        self.assertEqual(result.best_latest_benchmark_entry.label if result.best_latest_benchmark_entry else None, "solid-run")
+        self.assertEqual(result.best_historical_benchmark_entry.label if result.best_historical_benchmark_entry else None, "solid-run")
+
+    def test_compare_run_manifests_preserves_healthy_entries_when_one_manifest_is_bad(self) -> None:
+        healthy_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        bad_manifest = {
+            "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+            "run_dir": "bad-run",
+            "latest_checkpoint_path": None,
+            "iterations": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            healthy_path = temp_path / "healthy-run" / "manifest.json"
+            bad_path = temp_path / "bad-run" / "manifest.json"
+            write_manifest(healthy_path, healthy_manifest)
+            write_manifest(bad_path, bad_manifest)
+
+            result = compare_run_manifests((healthy_path, bad_path))
+
+        self.assertEqual([entry.label for entry in result.entries], ["healthy-run"])
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(result.errors[0].label, "bad-run")
+        self.assertIn("no iterations", result.errors[0].error)
 
     def test_eval_cli_audit_prints_json_and_returns_nonzero_on_failure(self) -> None:
         manifest = selfplay_manifest(
@@ -201,7 +735,148 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertFalse(payload["passed"])
+        self.assertEqual(payload["latest_average_decision_rounds"], 10.0)
+        self.assertEqual(payload["latest_benchmark_average_decision_rounds"], 12.0)
         self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_reports_missing_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["missing_latest_benchmark_opponents"], ["simple-legal"])
+        self.assertIn("latest_benchmark_opponent_coverage", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_allows_missing_benchmark_opponents_flag(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--allow-missing-benchmark-opponents",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["missing_latest_benchmark_opponents"], ["simple-legal"])
+        self.assertNotIn("latest_benchmark_opponent_coverage", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_average_decision_rounds_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-average-decision-rounds",
+                        "200",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_average_decision_rounds", failed_check_names_from_payload(payload))
+        average_check = next(check for check in payload["checks"] if check["name"] == "latest_average_decision_rounds")
+        self.assertEqual(average_check["observed"], 225.0)
+        self.assertEqual(average_check["threshold"], 200.0)
+        self.assertIn("exceed", average_check["message"])
+
+    def test_eval_cli_audit_benchmark_average_decision_rounds_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-benchmark-average-decision-rounds",
+                        "200",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_benchmark_average_decision_rounds", failed_check_names_from_payload(payload))
+        average_check = next(
+            check for check in payload["checks"] if check["name"] == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertEqual(average_check["observed"], 225.0)
+        self.assertEqual(average_check["threshold"], 200.0)
+        self.assertIn("exceed", average_check["message"])
 
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(
@@ -226,6 +901,121 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("status: PASS", stdout.getvalue())
         self.assertIn("latest_benchmark_win_rate: 0.650", stdout.getvalue())
+        self.assertIn("latest_average_decision_rounds: 10.000", stdout.getvalue())
+        self.assertIn("latest_benchmark_average_decision_rounds: 12.000", stdout.getvalue())
+
+    def test_eval_cli_audit_calibrate_prints_json(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-calibrate", str(manifest_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["suggested_config"]["min_latest_benchmark_win_rate"], 0.585)
+        self.assertEqual(payload["suggested_config"]["max_benchmark_win_rate_drop"], 0.05)
+        self.assertIn("No same-opponent regression history", payload["notes"][0])
+        self.assertIn("--min-latest-benchmark-win-rate", payload["suggested_cli_flags"])
+
+    def test_eval_cli_audit_calibrate_prints_text_flags(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-calibrate", str(manifest_path)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("suggested_audit_flags:", stdout.getvalue())
+        self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
+
+    def test_eval_cli_compare_prints_json(self) -> None:
+        linear_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        neural_manifest = neural_selfplay_manifest(
+            iterations=(neural_iteration(iteration=1, wins=35, losses=15, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            linear_path = temp_path / "linear-run" / "manifest.json"
+            neural_path = temp_path / "neural-run" / "manifest.json"
+            write_manifest(linear_path, linear_manifest)
+            write_manifest(neural_path, neural_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(linear_path), str(neural_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["min_benchmark_games"], 50)
+        self.assertEqual(payload["best_latest_benchmark_label"], "linear-run")
+        self.assertEqual([entry["label"] for entry in payload["entries"]], ["linear-run", "neural-run"])
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
+        self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
+        self.assertIn("latest_process_peak_rss_mb", payload["entries"][0])
+
+    def test_eval_cli_compare_returns_nonzero_but_prints_json_when_a_manifest_fails(self) -> None:
+        healthy_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        bad_manifest = {
+            "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+            "run_dir": "bad-run",
+            "latest_checkpoint_path": None,
+            "iterations": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            healthy_path = temp_path / "healthy-run" / "manifest.json"
+            bad_path = temp_path / "bad-run" / "manifest.json"
+            write_manifest(healthy_path, healthy_manifest)
+            write_manifest(bad_path, bad_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(healthy_path), str(bad_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual([entry["label"] for entry in payload["entries"]], ["healthy-run"])
+        self.assertEqual(payload["errors"][0]["label"], "bad-run")
+
+    def test_eval_cli_compare_prints_text_table(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["games_per_second"] = 12.345
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 8192.0
+        manifest["iterations"][0]["benchmark"]["games_per_second"] = 3.2
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 16384.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(manifest_path)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("best_latest_benchmark: linear-run", stdout.getvalue())
+        self.assertIn("min_benchmark_games_for_best: 50", stdout.getvalue())
+        self.assertIn("linear-run", stdout.getvalue())
+        self.assertIn("bench_wr", stdout.getvalue())
+        self.assertIn("coll_gph", stdout.getvalue())
+        self.assertIn("bench_gph", stdout.getvalue())
+        self.assertIn("rss_hi_mb", stdout.getvalue())
+        row = next(line for line in stdout.getvalue().splitlines() if line.startswith("linear-run"))
+        self.assertIn("44442", row)
+        self.assertIn("11520", row)
+        self.assertIn("16384.0", row)
 
     def test_eval_cli_audit_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest(
@@ -450,6 +1240,7 @@ def benchmark_payload(
         "format_id": "gen3randombattle",
         "max_decision_rounds": 250,
         "games_per_matchup": games_per_matchup,
+        "average_decision_rounds": 12.0,
         "head_to_heads": [
             benchmark_row(
                 policy_id=policy_id,
@@ -486,6 +1277,7 @@ def collection_metrics(*, games: int, capped_games: int) -> dict:
         "elapsed_seconds": 1.0,
         "total_decision_rounds": games,
         "total_simulator_turns": games,
+        "average_decision_rounds": 10.0,
         "p1_wins": games - capped_games,
         "p2_wins": 0,
         "ties": 0,

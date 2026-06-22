@@ -31,6 +31,7 @@ from .neural_policy import (
     save_transformer_checkpoint,
     train_transformer_policy,
 )
+from .opponents import opponent_pool_policy_specs
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
@@ -38,6 +39,7 @@ from .selfplay import collect_selfplay_rollouts
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
     from .promotion import PromotionRecordResult, PromotionRegistryEntry
+    from .run_audit import RunAuditConfig, RunAuditResult
 
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
@@ -207,6 +209,7 @@ def run_neural_selfplay_iterations(
     worker_count: int = 1,
     promotion_registry_path: Path | None = None,
     auto_promotion_config: NeuralSelfPlayPromotionConfig | None = None,
+    post_iteration_audit_config: "RunAuditConfig | None" = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -395,12 +398,24 @@ def run_neural_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
             ).to_dict(),
         )
+        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,
         iterations=tuple(results),
         prior_iteration_manifests=tuple(prior_iteration_manifests),
     )
+
+
+def _enforce_post_iteration_audit(
+    manifest_path: Path,
+    config: "RunAuditConfig | None",
+) -> "RunAuditResult | None":
+    if config is None:
+        return None
+    from .run_audit import enforce_run_audit
+
+    return enforce_run_audit(manifest_path, config=config)
 
 
 def _benchmark_checkpoint(
@@ -636,12 +651,12 @@ def _opponent_pool(
     current_policy_spec: str,
     max_historical_opponents: int,
 ) -> tuple[str, ...]:
-    historical = [spec for spec in checkpoint_history if spec != current_policy_spec]
-    if max_historical_opponents:
-        historical = historical[-max_historical_opponents:]
-    else:
-        historical = []
-    return fixed_policy_specs + tuple(historical)
+    return opponent_pool_policy_specs(
+        fixed_policy_specs=fixed_policy_specs,
+        checkpoint_history=checkpoint_history,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+    )
 
 
 def _load_prior_iteration_manifests(

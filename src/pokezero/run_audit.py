@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
@@ -24,6 +24,9 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
+DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
+DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
+_THRESHOLD_EPSILON = 1e-12
 
 
 @dataclass(frozen=True)
@@ -32,16 +35,26 @@ class RunAuditConfig:
     min_latest_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
     max_latest_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
     max_latest_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
+    max_latest_average_decision_rounds: float | None = None
+    max_latest_benchmark_average_decision_rounds: float | None = None
     max_benchmark_win_rate_drop: float = DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
     max_consecutive_promotion_failures: int = DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES
     require_benchmark: bool = True
     require_latest_promotion: bool = False
+    require_benchmark_opponent_coverage: bool = True
 
     def __post_init__(self) -> None:
         if self.min_latest_benchmark_games < 0:
             raise ValueError("min_latest_benchmark_games must be non-negative.")
         if self.max_consecutive_promotion_failures < 0:
             raise ValueError("max_consecutive_promotion_failures must be non-negative.")
+        if self.max_latest_average_decision_rounds is not None and self.max_latest_average_decision_rounds < 0.0:
+            raise ValueError("max_latest_average_decision_rounds must be non-negative.")
+        if (
+            self.max_latest_benchmark_average_decision_rounds is not None
+            and self.max_latest_benchmark_average_decision_rounds < 0.0
+        ):
+            raise ValueError("max_latest_benchmark_average_decision_rounds must be non-negative.")
         for field_name in (
             "min_latest_benchmark_win_rate",
             "max_latest_collection_capped_rate",
@@ -103,10 +116,16 @@ class RunAuditIterationSummary:
     policy_id: str | None
     checkpoint_path: str | None
     collection_games: int
+    collection_games_per_hour: float | None
     collection_capped_rate: float | None
+    collection_peak_rss_mb: float | None
+    average_decision_rounds: float | None
     benchmark_win_rate: float | None
     benchmark_games: int
+    benchmark_games_per_hour: float | None
     benchmark_capped_rate: float | None
+    benchmark_peak_rss_mb: float | None
+    benchmark_average_decision_rounds: float | None
     benchmark_opponents: tuple[RunAuditBenchmarkOpponent, ...]
     promotion_recorded: bool | None
     advancement_recorded: bool | None
@@ -118,10 +137,16 @@ class RunAuditIterationSummary:
             "policy_id": self.policy_id,
             "checkpoint_path": self.checkpoint_path,
             "collection_games": self.collection_games,
+            "collection_games_per_hour": self.collection_games_per_hour,
             "collection_capped_rate": self.collection_capped_rate,
+            "collection_peak_rss_mb": self.collection_peak_rss_mb,
+            "average_decision_rounds": self.average_decision_rounds,
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_games": self.benchmark_games,
+            "benchmark_games_per_hour": self.benchmark_games_per_hour,
             "benchmark_capped_rate": self.benchmark_capped_rate,
+            "benchmark_peak_rss_mb": self.benchmark_peak_rss_mb,
+            "benchmark_average_decision_rounds": self.benchmark_average_decision_rounds,
             "benchmark_opponents": [opponent.to_dict() for opponent in self.benchmark_opponents],
             "promotion_recorded": self.promotion_recorded,
             "advancement_recorded": self.advancement_recorded,
@@ -154,7 +179,10 @@ class RunAuditResult:
     best_benchmark_win_rate: float | None
     latest_benchmark_win_rate: float | None
     latest_collection_capped_rate: float | None
+    latest_average_decision_rounds: float | None
     latest_benchmark_capped_rate: float | None
+    latest_benchmark_average_decision_rounds: float | None
+    missing_latest_benchmark_opponents: tuple[str, ...]
     benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
     checks: tuple[RunAuditCheck, ...]
@@ -177,12 +205,202 @@ class RunAuditResult:
             "best_benchmark_win_rate": self.best_benchmark_win_rate,
             "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
+            "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "missing_latest_benchmark_opponents": list(self.missing_latest_benchmark_opponents),
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
         }
+
+
+@dataclass(frozen=True)
+class RunComparisonEntry:
+    label: str
+    manifest_path: Path
+    source_type: str
+    iteration_count: int
+    latest_iteration: int | None
+    latest_policy_id: str | None
+    latest_checkpoint_path: str | None
+    latest_benchmark_win_rate: float | None
+    best_benchmark_win_rate: float | None
+    best_benchmark_games: int
+    latest_benchmark_games: int
+    latest_collection_games_per_hour: float | None
+    latest_benchmark_games_per_hour: float | None
+    latest_collection_capped_rate: float | None
+    latest_benchmark_capped_rate: float | None
+    latest_collection_peak_rss_mb: float | None
+    latest_benchmark_peak_rss_mb: float | None
+    latest_process_peak_rss_mb: float | None
+    latest_average_decision_rounds: float | None
+    latest_benchmark_average_decision_rounds: float | None
+    latest_promotion_recorded: bool | None
+    latest_advancement_recorded: bool | None
+    latest_advancement_reason: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "manifest_path": str(self.manifest_path),
+            "source_type": self.source_type,
+            "iteration_count": self.iteration_count,
+            "latest_iteration": self.latest_iteration,
+            "latest_policy_id": self.latest_policy_id,
+            "latest_checkpoint_path": self.latest_checkpoint_path,
+            "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
+            "best_benchmark_win_rate": self.best_benchmark_win_rate,
+            "best_benchmark_games": self.best_benchmark_games,
+            "latest_benchmark_games": self.latest_benchmark_games,
+            "latest_collection_games_per_hour": self.latest_collection_games_per_hour,
+            "latest_benchmark_games_per_hour": self.latest_benchmark_games_per_hour,
+            "latest_collection_capped_rate": self.latest_collection_capped_rate,
+            "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_collection_peak_rss_mb": self.latest_collection_peak_rss_mb,
+            "latest_benchmark_peak_rss_mb": self.latest_benchmark_peak_rss_mb,
+            "latest_process_peak_rss_mb": self.latest_process_peak_rss_mb,
+            "latest_average_decision_rounds": self.latest_average_decision_rounds,
+            "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "latest_promotion_recorded": self.latest_promotion_recorded,
+            "latest_advancement_recorded": self.latest_advancement_recorded,
+            "latest_advancement_reason": self.latest_advancement_reason,
+        }
+
+
+@dataclass(frozen=True)
+class RunComparisonError:
+    label: str
+    path: str
+    error: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "path": self.path,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class RunComparisonResult:
+    entries: tuple[RunComparisonEntry, ...]
+    errors: tuple[RunComparisonError, ...] = ()
+    min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
+
+    @property
+    def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.latest_benchmark_games >= self.min_benchmark_games),
+            "latest_benchmark_win_rate",
+        )
+
+    @property
+    def best_historical_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.best_benchmark_games >= self.min_benchmark_games),
+            "best_benchmark_win_rate",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entries": [entry.to_dict() for entry in self.entries],
+            "errors": [error.to_dict() for error in self.errors],
+            "min_benchmark_games": self.min_benchmark_games,
+            "best_latest_benchmark_label": (
+                self.best_latest_benchmark_entry.label
+                if self.best_latest_benchmark_entry is not None
+                else None
+            ),
+            "best_historical_benchmark_label": (
+                self.best_historical_benchmark_entry.label
+                if self.best_historical_benchmark_entry is not None
+                else None
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class RunAuditCalibrationResult:
+    manifest_path: Path
+    schema_version: str
+    source_type: str
+    iteration_count: int
+    benchmark_iteration_count: int
+    margin: float
+    require_benchmark: bool
+    min_latest_benchmark_win_rate: float | None
+    min_latest_benchmark_games: int
+    max_latest_collection_capped_rate: float | None
+    max_latest_benchmark_capped_rate: float | None
+    max_latest_average_decision_rounds: float | None
+    max_latest_benchmark_average_decision_rounds: float | None
+    max_benchmark_win_rate_drop: float | None
+    max_consecutive_promotion_failures: int
+    require_benchmark_opponent_coverage: bool
+    notes: tuple[str, ...] = ()
+
+    def suggested_config(self) -> dict[str, float | int | bool | None]:
+        return {
+            "min_latest_benchmark_win_rate": self.min_latest_benchmark_win_rate,
+            "min_latest_benchmark_games": self.min_latest_benchmark_games,
+            "max_latest_collection_capped_rate": self.max_latest_collection_capped_rate,
+            "max_latest_benchmark_capped_rate": self.max_latest_benchmark_capped_rate,
+            "max_latest_average_decision_rounds": self.max_latest_average_decision_rounds,
+            "max_latest_benchmark_average_decision_rounds": self.max_latest_benchmark_average_decision_rounds,
+            "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
+            "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
+            "require_benchmark": self.require_benchmark,
+            "require_benchmark_opponent_coverage": self.require_benchmark_opponent_coverage,
+        }
+
+    def suggested_cli_flags(self) -> tuple[str, ...]:
+        flags: list[str] = []
+        for field_name, flag_name in (
+            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
+            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
+            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
+            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
+            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
+            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
+            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                    continue
+                flags.extend((flag_name, str(value)))
+        if not self.require_benchmark:
+            flags.append("--allow-missing-benchmark")
+        if not self.require_benchmark_opponent_coverage:
+            flags.append("--allow-missing-benchmark-opponents")
+        return tuple(flags)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "manifest_path": str(self.manifest_path),
+            "schema_version": self.schema_version,
+            "source_type": self.source_type,
+            "iteration_count": self.iteration_count,
+            "benchmark_iteration_count": self.benchmark_iteration_count,
+            "margin": self.margin,
+            "suggested_config": self.suggested_config(),
+            "suggested_cli_flags": list(self.suggested_cli_flags()),
+            "notes": list(self.notes),
+        }
+
+
+class RunAuditFailure(RuntimeError):
+    def __init__(self, result: RunAuditResult) -> None:
+        self.result = result
+        failed = tuple(check.name for check in result.checks if not check.passed)
+        failed_summary = ", ".join(failed) if failed else "unknown"
+        super().__init__(
+            f"run audit failed for {result.manifest_path}: {failed_summary}"
+        )
 
 
 def audit_run(
@@ -209,10 +427,14 @@ def audit_run(
     )
     best_benchmark_win_rate = max(benchmark_values) if benchmark_values else None
     benchmark_regressions = _opponent_regressions(iterations)
+    missing_latest_benchmark_opponents = _missing_latest_benchmark_opponents(iterations)
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
     checks = (
         _latest_collection_capped_check(latest, config),
+        *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
+        *_latest_benchmark_average_decision_rounds_checks(latest, config),
+        _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
         _latest_promotion_check(latest, config),
@@ -225,11 +447,213 @@ def audit_run(
         best_benchmark_win_rate=best_benchmark_win_rate,
         latest_benchmark_win_rate=latest.benchmark_win_rate,
         latest_collection_capped_rate=latest.collection_capped_rate,
+        latest_average_decision_rounds=latest.average_decision_rounds,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
+        latest_benchmark_average_decision_rounds=latest.benchmark_average_decision_rounds,
+        missing_latest_benchmark_opponents=missing_latest_benchmark_opponents,
         benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
         checks=checks,
     )
+
+
+def enforce_run_audit(
+    path: Path,
+    *,
+    config: RunAuditConfig = RunAuditConfig(),
+) -> RunAuditResult:
+    result = audit_run(path, config=config)
+    if not result.passed:
+        raise RunAuditFailure(result)
+    return result
+
+
+def compare_run_manifests(paths: Iterable[Path]) -> RunComparisonResult:
+    return compare_run_manifests_with_threshold(paths, min_benchmark_games=DEFAULT_MIN_BENCHMARK_GAMES)
+
+
+def compare_run_manifests_with_threshold(
+    paths: Iterable[Path],
+    *,
+    min_benchmark_games: int,
+) -> RunComparisonResult:
+    if min_benchmark_games < 0:
+        raise ValueError("min_benchmark_games must be non-negative.")
+    selected_paths = tuple(paths)
+    if not selected_paths:
+        raise ValueError("at least one run path is required.")
+    entries: list[RunComparisonEntry] = []
+    errors: list[RunComparisonError] = []
+    for path in selected_paths:
+        try:
+            entries.append(_comparison_entry(path))
+        except Exception as exc:
+            errors.append(
+                RunComparisonError(
+                    label=_comparison_error_label(path),
+                    path=str(path),
+                    error=str(exc),
+                )
+            )
+    return RunComparisonResult(
+        entries=tuple(entries),
+        errors=tuple(errors),
+        min_benchmark_games=min_benchmark_games,
+    )
+
+
+def calibrate_run_audit(
+    path: Path,
+    *,
+    margin: float = DEFAULT_AUDIT_CALIBRATION_MARGIN,
+) -> RunAuditCalibrationResult:
+    if margin < 0.0:
+        raise ValueError("margin must be non-negative.")
+    result = audit_run(path, config=_permissive_audit_config())
+    benchmark_iterations = tuple(iteration for iteration in result.iterations if iteration.benchmark_games > 0)
+    notes: list[str] = []
+    if not benchmark_iterations:
+        notes.append("No benchmark iterations were present; suggested audit config allows missing benchmarks.")
+    observed_drop = _max_observed_same_opponent_drop(result.iterations)
+    if benchmark_iterations and observed_drop is None:
+        notes.append("No same-opponent regression history was present; using the default benchmark drop threshold.")
+    min_benchmark_games = (
+        min(iteration.benchmark_games for iteration in benchmark_iterations)
+        if benchmark_iterations
+        else 0
+    )
+    if benchmark_iterations and min_benchmark_games < DEFAULT_MIN_BENCHMARK_GAMES:
+        notes.append(
+            "Observed benchmark game counts are below the default audit minimum; "
+            "calibration keeps the observed minimum so the pilot remains reproducible."
+        )
+
+    return RunAuditCalibrationResult(
+        manifest_path=result.manifest_path,
+        schema_version=result.schema_version,
+        source_type=result.source_type,
+        iteration_count=len(result.iterations),
+        benchmark_iteration_count=len(benchmark_iterations),
+        margin=margin,
+        require_benchmark=bool(benchmark_iterations),
+        min_latest_benchmark_win_rate=_floor_observed_rate(
+            _min_optional(iteration.benchmark_win_rate for iteration in benchmark_iterations),
+            margin=margin,
+        ),
+        min_latest_benchmark_games=min_benchmark_games,
+        max_latest_collection_capped_rate=_ceiling_observed_rate(
+            _max_optional(iteration.collection_capped_rate for iteration in result.iterations),
+            margin=margin,
+            minimum=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
+        ),
+        max_latest_benchmark_capped_rate=_ceiling_observed_rate(
+            _max_optional(iteration.benchmark_capped_rate for iteration in benchmark_iterations),
+            margin=margin,
+            minimum=DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
+        ),
+        max_latest_average_decision_rounds=_ceiling_observed_float(
+            _max_optional(iteration.average_decision_rounds for iteration in result.iterations),
+            margin=margin,
+        ),
+        max_latest_benchmark_average_decision_rounds=_ceiling_observed_float(
+            _max_optional(iteration.benchmark_average_decision_rounds for iteration in benchmark_iterations),
+            margin=margin,
+        ),
+        max_benchmark_win_rate_drop=(
+            (
+                DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
+                if observed_drop is None
+                else _ceiling_observed_rate(
+                    observed_drop,
+                    margin=margin,
+                    minimum=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
+                )
+            )
+            if benchmark_iterations
+            else None
+        ),
+        max_consecutive_promotion_failures=max(
+            DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+            _max_consecutive_promotion_failures(result.iterations),
+        ),
+        require_benchmark_opponent_coverage=bool(benchmark_iterations),
+        notes=tuple(notes),
+    )
+
+
+def _comparison_entry(path: Path) -> RunComparisonEntry:
+    audit = audit_run(path, config=_permissive_audit_config())
+    latest = audit.iterations[-1]
+    process_peak_rss_mb = _max_optional(
+        (
+            latest.collection_peak_rss_mb,
+            latest.benchmark_peak_rss_mb,
+        )
+    )
+    return RunComparisonEntry(
+        label=_comparison_label(audit.manifest_path),
+        manifest_path=audit.manifest_path,
+        source_type=audit.source_type,
+        iteration_count=len(audit.iterations),
+        latest_iteration=audit.latest_iteration,
+        latest_policy_id=latest.policy_id,
+        latest_checkpoint_path=latest.checkpoint_path,
+        latest_benchmark_win_rate=audit.latest_benchmark_win_rate,
+        best_benchmark_win_rate=audit.best_benchmark_win_rate,
+        best_benchmark_games=_best_benchmark_games(audit.iterations),
+        latest_benchmark_games=latest.benchmark_games,
+        latest_collection_games_per_hour=latest.collection_games_per_hour,
+        latest_benchmark_games_per_hour=latest.benchmark_games_per_hour,
+        latest_collection_capped_rate=audit.latest_collection_capped_rate,
+        latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
+        latest_collection_peak_rss_mb=latest.collection_peak_rss_mb,
+        latest_benchmark_peak_rss_mb=latest.benchmark_peak_rss_mb,
+        latest_process_peak_rss_mb=process_peak_rss_mb,
+        latest_average_decision_rounds=audit.latest_average_decision_rounds,
+        latest_benchmark_average_decision_rounds=audit.latest_benchmark_average_decision_rounds,
+        latest_promotion_recorded=latest.promotion_recorded,
+        latest_advancement_recorded=latest.advancement_recorded,
+        latest_advancement_reason=latest.advancement_reason,
+    )
+
+
+def _comparison_label(manifest_path: Path) -> str:
+    parent = manifest_path.parent
+    if parent.name:
+        return parent.name
+    return manifest_path.name
+
+
+def _comparison_error_label(path: Path) -> str:
+    candidate = path.expanduser()
+    if candidate.name == "manifest.json" and candidate.parent.name:
+        return candidate.parent.name
+    return candidate.name or str(candidate)
+
+
+def _best_benchmark_games(iterations: tuple[RunAuditIterationSummary, ...]) -> int:
+    benchmark_iterations = tuple(
+        iteration
+        for iteration in iterations
+        if iteration.benchmark_win_rate is not None and iteration.benchmark_games > 0
+    )
+    if not benchmark_iterations:
+        return 0
+    best = max(
+        benchmark_iterations,
+        key=lambda iteration: (float(iteration.benchmark_win_rate or 0.0), iteration.benchmark_games),
+    )
+    return best.benchmark_games
+
+
+def _best_entry_by_optional_value(
+    entries: tuple[RunComparisonEntry, ...],
+    field_name: str,
+) -> RunComparisonEntry | None:
+    present = tuple(entry for entry in entries if getattr(entry, field_name) is not None)
+    if not present:
+        return None
+    return max(present, key=lambda entry: float(getattr(entry, field_name)))
 
 
 def _source_type(schema_version: str) -> str:
@@ -257,10 +681,20 @@ def _iteration_summary(
         policy_id=policy_id,
         checkpoint_path=_optional_str(iteration.get("checkpoint_path")),
         collection_games=collection_games,
+        collection_games_per_hour=_games_per_hour(collection_metrics),
         collection_capped_rate=_capped_rate(collection_metrics),
+        collection_peak_rss_mb=_optional_float(collection_metrics.get("peak_rss_mb")),
+        average_decision_rounds=_optional_float(collection_metrics.get("average_decision_rounds")),
         benchmark_win_rate=benchmark_summary.win_rate if benchmark_summary.games else None,
         benchmark_games=benchmark_summary.games,
+        benchmark_games_per_hour=_games_per_hour(benchmark),
         benchmark_capped_rate=benchmark_summary.capped_rate if benchmark_summary.games else None,
+        benchmark_peak_rss_mb=(
+            None
+            if benchmark is None
+            else _optional_float(benchmark.get("peak_rss_mb"))
+        ),
+        benchmark_average_decision_rounds=_benchmark_average_decision_rounds(benchmark),
         benchmark_opponents=tuple(
             RunAuditBenchmarkOpponent(
                 opponent_policy_id=opponent.opponent_policy_id,
@@ -317,6 +751,30 @@ def _latest_collection_capped_check(
     )
 
 
+def _latest_average_decision_rounds_checks(
+    latest: RunAuditIterationSummary,
+    config: RunAuditConfig,
+) -> tuple[RunAuditCheck, ...]:
+    if config.max_latest_average_decision_rounds is None:
+        return ()
+    observed = latest.average_decision_rounds
+    if observed is None:
+        message = "latest collection average decision rounds are unavailable"
+    elif observed <= config.max_latest_average_decision_rounds:
+        message = "latest collection average decision rounds are within limit"
+    else:
+        message = "latest collection average decision rounds exceed limit"
+    return (
+        RunAuditCheck(
+            name="latest_average_decision_rounds",
+            passed=observed is not None and observed <= config.max_latest_average_decision_rounds,
+            observed=observed,
+            threshold=config.max_latest_average_decision_rounds,
+            message=message,
+        ),
+    )
+
+
 def _latest_benchmark_checks(
     latest: RunAuditIterationSummary,
     config: RunAuditConfig,
@@ -362,6 +820,37 @@ def _latest_benchmark_checks(
     )
 
 
+def _latest_benchmark_average_decision_rounds_checks(
+    latest: RunAuditIterationSummary,
+    config: RunAuditConfig,
+) -> tuple[RunAuditCheck, ...]:
+    if config.max_latest_benchmark_average_decision_rounds is None:
+        return ()
+    observed = latest.benchmark_average_decision_rounds
+    if observed is None:
+        passed = latest.benchmark_games <= 0 and not config.require_benchmark
+        message = (
+            "latest benchmark average decision rounds are unavailable because latest benchmark is optional"
+            if passed
+            else "latest benchmark average decision rounds are unavailable"
+        )
+    elif observed <= config.max_latest_benchmark_average_decision_rounds:
+        passed = True
+        message = "latest benchmark average decision rounds are within limit"
+    else:
+        passed = False
+        message = "latest benchmark average decision rounds exceed limit"
+    return (
+        RunAuditCheck(
+            name="latest_benchmark_average_decision_rounds",
+            passed=passed,
+            observed=observed,
+            threshold=config.max_latest_benchmark_average_decision_rounds,
+            message=message,
+        ),
+    )
+
+
 def _benchmark_regression_check(
     iterations: tuple[RunAuditIterationSummary, ...],
     regressions: tuple[RunAuditOpponentRegression, ...],
@@ -396,10 +885,48 @@ def _benchmark_regression_check(
     max_drop = max(regression.drop for regression in regressions)
     return RunAuditCheck(
         name="benchmark_win_rate_drop_by_opponent",
-        passed=max_drop <= config.max_benchmark_win_rate_drop,
+        passed=_threshold_lte(max_drop, config.max_benchmark_win_rate_drop),
         observed=max_drop,
         threshold=config.max_benchmark_win_rate_drop,
         message="latest same-opponent benchmark win rates have not regressed too far from previous best",
+    )
+
+
+def _benchmark_opponent_coverage_check(
+    latest: RunAuditIterationSummary,
+    missing_opponents: tuple[str, ...],
+    config: RunAuditConfig,
+) -> RunAuditCheck:
+    if latest.benchmark_games <= 0:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=not config.require_benchmark,
+            observed=None,
+            threshold="required" if config.require_benchmark else "optional",
+            message="latest benchmark evidence is unavailable for opponent coverage",
+        )
+    if not config.require_benchmark_opponent_coverage:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=True,
+            observed="optional",
+            threshold="required_baseline_opponents",
+            message="latest fixed-baseline benchmark opponent coverage is optional for this audit",
+        )
+    if missing_opponents:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=False,
+            observed=", ".join(missing_opponents),
+            threshold="required_baseline_opponents",
+            message="latest benchmark is missing fixed baseline opponents that appeared in prior benchmark evidence",
+        )
+    return RunAuditCheck(
+        name="latest_benchmark_opponent_coverage",
+        passed=True,
+        observed=None,
+        threshold="required_baseline_opponents",
+        message="latest benchmark includes required fixed baseline opponents",
     )
 
 
@@ -476,6 +1003,48 @@ def _opponent_regressions(
     return tuple(regressions)
 
 
+def _missing_latest_benchmark_opponents(
+    iterations: tuple[RunAuditIterationSummary, ...],
+) -> tuple[str, ...]:
+    if len(iterations) < 2:
+        return ()
+    if iterations[-1].benchmark_games <= 0:
+        return ()
+    prior_opponents = {
+        opponent.opponent_policy_id
+        for iteration in iterations[:-1]
+        if iteration.benchmark_games > 0
+        for opponent in iteration.benchmark_opponents
+    }
+    required_prior_opponents = set(DEFAULT_REQUIRED_BENCHMARK_OPPONENTS) & prior_opponents
+    latest_opponents = {
+        opponent.opponent_policy_id
+        for opponent in iterations[-1].benchmark_opponents
+    }
+    return tuple(sorted(required_prior_opponents - latest_opponents))
+
+
+def _benchmark_average_decision_rounds(benchmark: Mapping[str, Any] | None) -> float | None:
+    if benchmark is None:
+        return None
+    direct = benchmark.get("average_decision_rounds")
+    if direct is not None:
+        return float(direct)
+    total_games = 0
+    total_decision_rounds = 0.0
+    for result in tuple(_mapping(result) for result in _sequence(benchmark.get("matchups", ()))):
+        metrics = _mapping(result.get("metrics", {}))
+        games = int(metrics.get("games", 0))
+        average = metrics.get("average_decision_rounds")
+        if games <= 0 or average is None:
+            continue
+        total_games += games
+        total_decision_rounds += float(average) * games
+    if total_games <= 0:
+        return None
+    return total_decision_rounds / total_games
+
+
 def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
     if value is None:
         return None
@@ -486,3 +1055,106 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _games_per_hour(metrics: Mapping[str, Any] | None) -> float | None:
+    if metrics is None:
+        return None
+    games_per_second = _optional_float(metrics.get("games_per_second"))
+    if games_per_second is not None:
+        return games_per_second * 3600.0
+    raw_games = metrics.get("games", metrics.get("total_games"))
+    raw_elapsed = metrics.get("elapsed_seconds")
+    if raw_games is None or raw_elapsed is None:
+        return None
+    elapsed_seconds = float(raw_elapsed)
+    if elapsed_seconds <= 0.0:
+        return 0.0
+    return (float(raw_games) / elapsed_seconds) * 3600.0
+
+
+def _permissive_audit_config() -> RunAuditConfig:
+    return RunAuditConfig(
+        min_latest_benchmark_win_rate=0.0,
+        min_latest_benchmark_games=0,
+        max_latest_collection_capped_rate=1.0,
+        max_latest_benchmark_capped_rate=1.0,
+        max_benchmark_win_rate_drop=1.0,
+        max_consecutive_promotion_failures=1_000_000,
+        require_benchmark=False,
+    )
+
+
+def _min_optional(values: Any) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return min(present) if present else None
+
+
+def _max_optional(values: Any) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return max(present) if present else None
+
+
+def _floor_observed_rate(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(max(0.0, value * (1.0 - margin)))
+
+
+def _ceiling_observed_rate(
+    value: float | None,
+    *,
+    margin: float,
+    minimum: float = 0.0,
+) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(min(1.0, max(minimum, value * (1.0 + margin))))
+
+
+def _ceiling_observed_float(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(value * (1.0 + margin))
+
+
+def _round_threshold(value: float) -> float:
+    return round(value, 6)
+
+
+def _threshold_lte(observed: float, threshold: float) -> bool:
+    return observed <= threshold + _THRESHOLD_EPSILON
+
+
+def _max_observed_same_opponent_drop(iterations: tuple[RunAuditIterationSummary, ...]) -> float | None:
+    previous_best: dict[str, float] = {}
+    drops: list[float] = []
+    for iteration in iterations:
+        if iteration.benchmark_games <= 0:
+            continue
+        for opponent in iteration.benchmark_opponents:
+            best_previous = previous_best.get(opponent.opponent_policy_id)
+            if best_previous is not None:
+                drops.append(max(0.0, best_previous - opponent.win_rate))
+                previous_best[opponent.opponent_policy_id] = max(best_previous, opponent.win_rate)
+            else:
+                previous_best[opponent.opponent_policy_id] = opponent.win_rate
+    return max(drops) if drops else None
+
+
+def _max_consecutive_promotion_failures(iterations: tuple[RunAuditIterationSummary, ...]) -> int:
+    longest = 0
+    current = 0
+    for iteration in iterations:
+        if iteration.promotion_recorded is False:
+            current += 1
+            longest = max(longest, current)
+            continue
+        current = 0
+    return longest

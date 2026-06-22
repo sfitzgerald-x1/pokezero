@@ -11,12 +11,14 @@ from pokezero.bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
+    TeacherBenchmarkResult,
+    benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
 from pokezero.bootstrap_cli import main as bootstrap_cli_main
-from pokezero.collection import CollectionMetrics, read_rollout_records
+from pokezero.collection import BenchmarkMatchupResult, BenchmarkReport, CollectionMetrics, read_rollout_records
 from pokezero.env import StepResult, TerminalState
-from pokezero.linear_policy import LinearTrainingConfig
+from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.rollout import RolloutConfig
 
@@ -114,7 +116,9 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(manifest["teacher_decision_summary"]["fallback_decisions"], 0)
         self.assertIsNotNone(manifest["training"]["validation_metrics"])
         self.assertGreater(manifest["training"]["validation_metrics"]["examples"], 0)
+        self.assertEqual(manifest["training"]["model"]["feature_fingerprint"], linear_feature_fingerprint())
         self.assertEqual(checkpoint_payload["policy_id"], "linear-bootstrap-test")
+        self.assertEqual(checkpoint_payload["feature_fingerprint"], linear_feature_fingerprint())
         self.assertEqual(
             [record.policy_ids for record in full_train_records],
             [
@@ -207,6 +211,72 @@ class TeacherBootstrapTest(unittest.TestCase):
         labels = [matchup.label for matchup in result.benchmark.matchups] if result.benchmark is not None else []
         self.assertIn("linear-bootstrap-test vs simple-legal", labels)
         self.assertNotIn("linear-bootstrap-test vs scripted-teacher", labels)
+
+    def test_benchmark_teacher_policy_runs_teacher_against_baseline_in_both_seats(self) -> None:
+        result = benchmark_teacher_policy(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            teacher_policy_spec="simple-legal",
+            baseline_policy_specs=("random-legal",),
+            games=1,
+            seed_start=10,
+        )
+        report = result.benchmark
+
+        self.assertEqual(report.total_games, 2)
+        self.assertEqual(
+            [matchup.label for matchup in report.matchups],
+            ["simple-legal vs random-legal", "random-legal vs simple-legal"],
+        )
+        self.assertEqual(len(report.head_to_head_results), 1)
+        head_to_head = report.head_to_head_results[0]
+        self.assertEqual(head_to_head.first_policy_id, "simple-legal")
+        self.assertEqual(head_to_head.second_policy_id, "random-legal")
+        self.assertEqual(head_to_head.first_policy_wins, 1)
+        self.assertEqual(head_to_head.second_policy_wins, 1)
+        self.assertEqual(result.teacher_decision_summary["total_decisions"], 4)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 0)
+
+    def test_benchmark_teacher_policy_reports_scripted_teacher_fallbacks(self) -> None:
+        result = benchmark_teacher_policy(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            teacher_policy_spec="scripted-teacher?allow_fallback=true",
+            baseline_policy_specs=("random-legal",),
+            games=1,
+            seed_start=10,
+        )
+
+        self.assertEqual(result.benchmark.total_games, 2)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_reasons"]["dex unavailable"], 2)
+
+    def test_benchmark_teacher_policy_rejects_non_positive_games(self) -> None:
+        with self.assertRaisesRegex(ValueError, "games must be positive"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=("random-legal",),
+                games=0,
+            )
+
+    def test_benchmark_teacher_policy_rejects_empty_or_same_teacher_baselines(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one baseline"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=(),
+            )
+        with self.assertRaisesRegex(ValueError, "distinct from the teacher"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=("simple-legal",),
+            )
 
     def test_run_teacher_bootstrap_refuses_existing_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -373,3 +443,74 @@ class TeacherBootstrapTest(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertIsNone(kwargs["opponent_policy_specs"])
         self.assertEqual(kwargs["benchmark_games"], DEFAULT_BENCHMARK_GAMES)
+
+    def test_bootstrap_cli_teacher_benchmark_wires_arguments_and_json(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=2,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher vs random-legal",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+            },
+        )
+
+        with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result) as benchmark:
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = bootstrap_cli_main(
+                    [
+                        "teacher-benchmark",
+                        "--games",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--max-decision-rounds",
+                        "12",
+                        "--seed-start",
+                        "10",
+                        "--teacher-policy",
+                        "scripted-teacher?allow_fallback=true",
+                        "--baseline-policy",
+                        "random-legal",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = benchmark.call_args.kwargs
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["seed_start"], 10)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 12)
+        expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
+        self.assertIn(expected_showdown_root, kwargs["teacher_policy_spec"])
+        self.assertEqual(len(kwargs["baseline_policy_specs"]), 1)
+        self.assertEqual(kwargs["baseline_policy_specs"][0], "random-legal")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["benchmark"]["total_games"], 2)
+        self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
+        self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)

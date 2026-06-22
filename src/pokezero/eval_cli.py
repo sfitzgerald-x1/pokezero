@@ -8,14 +8,18 @@ from pathlib import Path
 import sys
 
 from .evaluation import (
+    DEFAULT_MIN_BENCHMARK_GAMES,
     PromotionGateConfig,
     evaluate_promotion_gate,
 )
 from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
+    DEFAULT_AUDIT_CALIBRATION_MARGIN,
     RunAuditConfig,
     audit_run,
+    calibrate_run_audit,
+    compare_run_manifests_with_threshold,
 )
 
 
@@ -54,6 +58,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promotions.add_argument("--verify", action="store_true", help="Verify promoted checkpoint paths and stored checksums.")
     promotions.add_argument("--skip-checksum", action="store_true", help="With --verify, skip checksum validation even when metadata exists.")
     promotions.add_argument("--require-checksum", action="store_true", help="With --verify, fail entries that do not include checksum metadata.")
+    promotions.add_argument("--verify-loadable", action="store_true", help="With --verify, load each promoted policy spec through the normal policy selection path.")
+    promotions.add_argument(
+        "--opponent-pool-size",
+        type=int,
+        default=None,
+        help=(
+            "Preview the latest N promoted policy specs that self-play would use as historical opponents. "
+            "By default, excludes the latest promoted policy as the assumed current collector."
+        ),
+    )
+    promotions.add_argument(
+        "--current-policy-spec",
+        default=None,
+        help="Policy spec to exclude from --opponent-pool-size instead of the latest promoted policy.",
+    )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
 
@@ -68,6 +87,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument("--min-latest-benchmark-games", type=int, default=None)
     audit.add_argument("--max-latest-collection-capped-rate", type=float, default=None)
     audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=None)
+    audit.add_argument("--max-latest-average-decision-rounds", type=float, default=None)
+    audit.add_argument("--max-latest-benchmark-average-decision-rounds", type=float, default=None)
     audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=None)
     audit.add_argument(
         "--max-consecutive-promotion-failures",
@@ -93,8 +114,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Do not fail solely because the latest iteration did not record a promotion.",
     )
+    benchmark_opponent_group = audit.add_mutually_exclusive_group()
+    benchmark_opponent_group.add_argument(
+        "--require-benchmark-opponents",
+        dest="require_benchmark_opponent_coverage",
+        action="store_true",
+        default=None,
+        help="Fail when the latest benchmark omits fixed baseline opponents seen in prior benchmark evidence.",
+    )
+    benchmark_opponent_group.add_argument(
+        "--allow-missing-benchmark-opponents",
+        dest="require_benchmark_opponent_coverage",
+        action="store_false",
+        default=None,
+        help="Do not fail when the latest benchmark omits fixed baseline opponents seen in prior benchmark evidence.",
+    )
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
+
+    audit_calibrate = subparsers.add_parser("audit-calibrate", help="Suggest audit thresholds from an observed self-play run.")
+    audit_calibrate.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
+    audit_calibrate.add_argument(
+        "--margin",
+        type=float,
+        default=DEFAULT_AUDIT_CALIBRATION_MARGIN,
+        help="Fractional safety margin applied to observed threshold suggestions.",
+    )
+    audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
+    audit_calibrate.set_defaults(func=_audit_calibrate)
+
+    compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
+    compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
+    compare.add_argument(
+        "--min-benchmark-games",
+        type=int,
+        default=DEFAULT_MIN_BENCHMARK_GAMES,
+        help="Minimum benchmark games required for a run to be eligible for best-run labels.",
+    )
+    compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
+    compare.set_defaults(func=_compare)
     return parser
 
 
@@ -148,18 +206,44 @@ def _promote(args: argparse.Namespace) -> int:
 def _promotions(args: argparse.Namespace) -> int:
     if args.skip_checksum and args.require_checksum:
         raise ValueError("--skip-checksum cannot be combined with --require-checksum.")
+    if args.verify_loadable and not args.verify:
+        raise ValueError("--verify-loadable requires --verify.")
+    if args.current_policy_spec is not None and args.opponent_pool_size is None:
+        raise ValueError("--current-policy-spec requires --opponent-pool-size.")
     registry = load_promotion_registry(args.registry)
+    preview_current_policy_spec = args.current_policy_spec
+    if preview_current_policy_spec is None and args.opponent_pool_size is not None and registry.latest is not None:
+        preview_current_policy_spec = registry.latest.checkpoint_policy_spec
+    opponent_pool = (
+        registry.opponent_pool_policy_specs(
+            max_historical_opponents=args.opponent_pool_size,
+            current_policy_spec=preview_current_policy_spec,
+        )
+        if args.opponent_pool_size is not None
+        else None
+    )
     verification = (
         verify_promotion_registry(
             args.registry,
             verify_checksums=not args.skip_checksum,
             require_checksums=args.require_checksum,
+            verify_loadable=args.verify_loadable,
         )
         if args.verify
         else None
     )
+    entry_statuses = _promotion_entry_statuses(
+        registry,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
     if args.json:
         payload = registry.to_dict()
+        payload["entry_statuses"] = entry_statuses
+        if opponent_pool is not None:
+            payload["opponent_pool_policy_specs"] = list(opponent_pool)
+            payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
+            payload["opponent_pool_verified"] = verification.passed if verification is not None else None
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -171,16 +255,181 @@ def _promotions(args: argparse.Namespace) -> int:
         print(f"latest_checkpoint: {registry.latest.checkpoint_path or '-'}")
     if registry.entries:
         print("entries:")
+        status_by_sequence = {status["sequence"]: status for status in entry_statuses}
         for entry in registry.entries:
             label = f" label={entry.label}" if entry.label else ""
             source = f" source={entry.source_checkpoint_path}" if entry.source_checkpoint_path else ""
+            status = status_by_sequence[entry.sequence]
+            selected_as = ",".join(status["selected_as"]) if status["selected_as"] else "-"
             print(
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
-                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}{source}"
+                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at} "
+                f"status={status['verification_status']} selected={selected_as} "
+                f"path={status['checkpoint_path_present']} exists={status['checkpoint_exists']} checksum={status['checksum']} "
+                f"loadable={status['loadable']}{label}{source}"
             )
+    if opponent_pool is not None:
+        print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
+        print("opponent_pool_policy_specs:")
+        for spec in opponent_pool:
+            print(f"- {spec}")
+        if verification is None:
+            print("note: pass --verify to confirm the previewed registry is selectable by runtime.")
     if verification is not None:
         _print_registry_verification(verification)
     return 0 if verification is None or verification.passed else 2
+
+
+def _promotion_entry_statuses(
+    registry,
+    *,
+    verification,
+    opponent_pool,
+) -> list[dict[str, object]]:
+    checks_by_sequence: dict[int, list[object]] = {}
+    if verification is not None:
+        for check in verification.checks:
+            if check.entry_sequence is None:
+                continue
+            checks_by_sequence.setdefault(check.entry_sequence, []).append(check)
+    opponent_pool_sequences = _opponent_pool_entry_sequences(registry, opponent_pool)
+    latest_sequence = registry.latest.sequence if registry.latest is not None else None
+    statuses: list[dict[str, object]] = []
+    for entry in registry.entries:
+        checks = tuple(checks_by_sequence.get(entry.sequence, ()))
+        selected_as = []
+        if entry.sequence == latest_sequence:
+            selected_as.append("latest")
+        if entry.sequence in opponent_pool_sequences:
+            selected_as.append("opponent_pool")
+        failed_checks = [check.name for check in checks if not check.passed]
+        checkpoint_path_present = _checkpoint_path_present_status(
+            checks,
+            verification_enabled=verification is not None,
+        )
+        checkpoint_exists = _checkpoint_exists_status(
+            checks,
+            verification_enabled=verification is not None,
+        )
+        checksum = _verification_check_status(
+            checks,
+            ("checkpoint_sha256", "checkpoint_sha256_present"),
+            verification_enabled=verification is not None,
+        )
+        loadable = _verification_check_status(
+            checks,
+            ("checkpoint_policy_loadable",),
+            verification_enabled=verification is not None,
+        )
+        policy_id_matches = _verification_check_status(
+            checks,
+            ("checkpoint_policy_id",),
+            verification_enabled=verification is not None,
+        )
+        statuses.append(
+            {
+                "sequence": entry.sequence,
+                "policy_id": entry.policy_id,
+                "label": entry.label,
+                "checkpoint_path": entry.checkpoint_path,
+                "checkpoint_policy_spec": entry.checkpoint_policy_spec,
+                "source_checkpoint_path": entry.source_checkpoint_path,
+                "source_type": entry.source_type,
+                "source_iteration": entry.source_iteration,
+                "promoted_at": entry.promoted_at,
+                "selected_as": selected_as,
+                "verification_status": _entry_verification_status(
+                    checks,
+                    verification_enabled=verification is not None,
+                    detail_statuses=(
+                        checkpoint_path_present,
+                        checkpoint_exists,
+                        checksum,
+                        loadable,
+                        policy_id_matches,
+                    ),
+                ),
+                "checkpoint_path_present": checkpoint_path_present,
+                "checkpoint_exists": checkpoint_exists,
+                "checksum": checksum,
+                "loadable": loadable,
+                "policy_id_matches": policy_id_matches,
+                "failed_checks": failed_checks,
+            }
+        )
+    return statuses
+
+
+def _opponent_pool_entry_sequences(registry, opponent_pool) -> set[int]:
+    if opponent_pool is None:
+        return set()
+    wanted_specs = list(reversed(opponent_pool))
+    selected_sequences: set[int] = set()
+    wanted_index = 0
+    for entry in reversed(registry.entries):
+        if wanted_index >= len(wanted_specs):
+            break
+        if entry.checkpoint_policy_spec == wanted_specs[wanted_index]:
+            selected_sequences.add(entry.sequence)
+            wanted_index += 1
+    return selected_sequences
+
+
+def _entry_verification_status(
+    checks: tuple[object, ...],
+    *,
+    verification_enabled: bool,
+    detail_statuses: tuple[str, ...],
+) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    if any(not check.passed for check in checks):
+        return "fail"
+    if any(status == "not_checked" for status in detail_statuses):
+        return "partial"
+    return "pass"
+
+
+def _verification_check_status(
+    checks: tuple[object, ...],
+    names: tuple[str, ...],
+    *,
+    verification_enabled: bool,
+) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    for check in checks:
+        if check.name in names:
+            return "pass" if check.passed else "fail"
+    return "not_checked"
+
+
+def _checkpoint_path_present_status(checks: tuple[object, ...], *, verification_enabled: bool) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    for check in checks:
+        if check.name == "checkpoint_path_present":
+            return "pass" if check.passed else "fail"
+    for check in checks:
+        if check.name == "checkpoint_exists":
+            return "pass"
+    return "not_checked"
+
+
+def _checkpoint_exists_status(checks: tuple[object, ...], *, verification_enabled: bool) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    checkpoint_path_present = _checkpoint_path_present_status(
+        checks,
+        verification_enabled=verification_enabled,
+    )
+    if checkpoint_path_present == "fail":
+        return "fail"
+    return _verification_check_status(
+        checks,
+        ("checkpoint_exists",),
+        verification_enabled=verification_enabled,
+    )
 
 
 def _audit(args: argparse.Namespace) -> int:
@@ -217,12 +466,34 @@ def _profiles(args: argparse.Namespace) -> int:
             f"min_latest_games={profile.audit_config.min_latest_benchmark_games} "
             f"max_latest_collection_capped={profile.audit_config.max_latest_collection_capped_rate:.3f} "
             f"max_latest_benchmark_capped={profile.audit_config.max_latest_benchmark_capped_rate:.3f} "
+            f"max_latest_avg_dec={_format_optional_float(profile.audit_config.max_latest_average_decision_rounds)} "
+            "max_latest_benchmark_avg_dec="
+            f"{_format_optional_float(profile.audit_config.max_latest_benchmark_average_decision_rounds)} "
             f"max_win_rate_drop={profile.audit_config.max_benchmark_win_rate_drop:.3f} "
             f"max_promotion_failures={profile.audit_config.max_consecutive_promotion_failures} "
             f"require_benchmark={profile.audit_config.require_benchmark} "
+            f"require_benchmark_opponents={profile.audit_config.require_benchmark_opponent_coverage} "
             f"require_latest_promotion={profile.audit_config.require_latest_promotion}"
         )
     return 0
+
+
+def _audit_calibrate(args: argparse.Namespace) -> int:
+    result = calibrate_run_audit(args.path, margin=args.margin)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_audit_calibration(result)
+    return 0
+
+
+def _compare(args: argparse.Namespace) -> int:
+    result = compare_run_manifests_with_threshold(args.paths, min_benchmark_games=args.min_benchmark_games)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_run_comparison(result)
+    return 2 if result.errors else 0
 
 
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
@@ -335,6 +606,14 @@ def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
             args.max_latest_benchmark_capped_rate,
             profile_config.max_latest_benchmark_capped_rate,
         ),
+        max_latest_average_decision_rounds=_arg_or_default(
+            args.max_latest_average_decision_rounds,
+            profile_config.max_latest_average_decision_rounds,
+        ),
+        max_latest_benchmark_average_decision_rounds=_arg_or_default(
+            args.max_latest_benchmark_average_decision_rounds,
+            profile_config.max_latest_benchmark_average_decision_rounds,
+        ),
         max_benchmark_win_rate_drop=_arg_or_default(
             args.max_benchmark_win_rate_drop,
             profile_config.max_benchmark_win_rate_drop,
@@ -347,6 +626,10 @@ def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
         require_latest_promotion=_arg_or_default(
             args.require_latest_promotion,
             profile_config.require_latest_promotion,
+        ),
+        require_benchmark_opponent_coverage=_arg_or_default(
+            args.require_benchmark_opponent_coverage,
+            profile_config.require_benchmark_opponent_coverage,
         ),
     )
 
@@ -361,7 +644,16 @@ def _print_audit_result(result) -> None:
     print(f"latest_benchmark_win_rate: {_format_optional_float(result.latest_benchmark_win_rate)}")
     print(f"best_benchmark_win_rate: {_format_optional_float(result.best_benchmark_win_rate)}")
     print(f"latest_collection_capped_rate: {_format_optional_float(result.latest_collection_capped_rate)}")
+    print(f"latest_average_decision_rounds: {_format_optional_float(result.latest_average_decision_rounds)}")
     print(f"latest_benchmark_capped_rate: {_format_optional_float(result.latest_benchmark_capped_rate)}")
+    print(
+        "latest_benchmark_average_decision_rounds: "
+        f"{_format_optional_float(result.latest_benchmark_average_decision_rounds)}"
+    )
+    if result.missing_latest_benchmark_opponents:
+        print("missing_latest_benchmark_opponents:")
+        for opponent in result.missing_latest_benchmark_opponents:
+            print(f"- {opponent}")
     print(f"consecutive_promotion_failures: {result.consecutive_promotion_failures}")
     if result.benchmark_regressions:
         print("benchmark_regressions:")
@@ -378,11 +670,78 @@ def _print_audit_result(result) -> None:
         print(f"- {check_status} {check.name}: observed={check.observed} threshold={check.threshold}")
 
 
+def _print_audit_calibration(result) -> None:
+    print(f"source: {result.source_type}")
+    print(f"manifest: {result.manifest_path}")
+    print(f"iterations: {result.iteration_count}")
+    print(f"benchmark_iterations: {result.benchmark_iteration_count}")
+    print(f"margin: {result.margin:.3f}")
+    print("suggested_config:")
+    for key, value in result.suggested_config().items():
+        if isinstance(value, float):
+            rendered = _format_optional_float(value)
+        elif value is None:
+            rendered = "-"
+        else:
+            rendered = str(value)
+        print(f"- {key}: {rendered}")
+    print("suggested_audit_flags:")
+    flags = result.suggested_cli_flags()
+    print(" ".join(flags) if flags else "-")
+    if result.notes:
+        print("notes:")
+        for note in result.notes:
+            print(f"- {note}")
+
+
+def _print_run_comparison(result) -> None:
+    print(f"runs: {len(result.entries)}")
+    print(f"errors: {len(result.errors)}")
+    print(f"min_benchmark_games_for_best: {result.min_benchmark_games}")
+    latest = result.best_latest_benchmark_entry
+    historical = result.best_historical_benchmark_entry
+    print(f"best_latest_benchmark: {latest.label if latest is not None else '-'}")
+    print(f"best_historical_benchmark: {historical.label if historical is not None else '-'}")
+    print("")
+    header = (
+        f"{'run':<24} {'src':<15} {'iter':>4} {'bench_wr':>8} {'best_wr':>8} {'bench_g':>7} "
+        f"{'coll_cap':>8} {'bench_cap':>9} {'coll_gph':>8} {'bench_gph':>9} {'rss_hi_mb':>9} "
+        f"{'avg_dec':>8} {'bench_dec':>9} {'promo':>6} {'adv':>6} checkpoint"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in result.entries:
+        print(
+            f"{entry.label:<24.24} "
+            f"{entry.source_type:<15.15} "
+            f"{(entry.latest_iteration if entry.latest_iteration is not None else 0):4d} "
+            f"{_format_optional_float(entry.latest_benchmark_win_rate):>8} "
+            f"{_format_optional_float(entry.best_benchmark_win_rate):>8} "
+            f"{entry.latest_benchmark_games:7d} "
+            f"{_format_optional_float(entry.latest_collection_capped_rate):>8} "
+            f"{_format_optional_float(entry.latest_benchmark_capped_rate):>9} "
+            f"{_format_optional_whole_number(entry.latest_collection_games_per_hour):>8} "
+            f"{_format_optional_whole_number(entry.latest_benchmark_games_per_hour):>9} "
+            f"{_format_optional_one_decimal(entry.latest_process_peak_rss_mb):>9} "
+            f"{_format_optional_float(entry.latest_average_decision_rounds):>8} "
+            f"{_format_optional_float(entry.latest_benchmark_average_decision_rounds):>9} "
+            f"{_format_optional_bool(entry.latest_promotion_recorded):>6} "
+            f"{_format_optional_bool(entry.latest_advancement_recorded):>6} "
+            f"{entry.latest_checkpoint_path or '-'}"
+        )
+    if result.errors:
+        print("")
+        print("errors:")
+        for error in result.errors:
+            print(f"- {error.label}: {error.error}")
+
+
 def _print_registry_verification(result) -> None:
     status = "PASS" if result.passed else "FAIL"
     print(f"verification_status: {status}")
     print(f"checked_checkpoints: {result.checked_checkpoint_count}")
     print(f"verified_checksums: {result.verified_checksum_count}")
+    print(f"verified_loadable: {result.verified_loadable_count}")
     print("verification_checks:")
     for check in result.checks:
         check_status = "pass" if check.passed else "fail"
@@ -433,6 +792,24 @@ def _format_optional_float(value: object) -> str:
     if value is None:
         return "-"
     return f"{float(value):.3f}"
+
+
+def _format_optional_whole_number(value: object) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.0f}"
+
+
+def _format_optional_one_decimal(value: object) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.1f}"
+
+
+def _format_optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "yes" if value else "no"
 
 
 def _parse_opponent_win_rates(values: tuple[str, ...]) -> dict[str, float]:

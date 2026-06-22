@@ -11,6 +11,7 @@ import shutil
 from typing import Any, Mapping
 
 from .evaluation import PromotionGateConfig, PromotionGateResult, evaluate_promotion_gate
+from .opponents import historical_opponent_policy_specs
 
 PROMOTION_REGISTRY_SCHEMA_VERSION = "pokezero.promotion_registry.v1"
 NEURAL_SELFPLAY_SOURCE_TYPE = "pokezero.neural_selfplay_run.v1"
@@ -83,6 +84,18 @@ class PromotionRegistry:
             if entry.checkpoint_policy_spec is not None
         )
 
+    def opponent_pool_policy_specs(
+        self,
+        *,
+        max_historical_opponents: int,
+        current_policy_spec: str | None = None,
+    ) -> tuple[str, ...]:
+        return historical_opponent_policy_specs(
+            self.checkpoint_policy_specs(),
+            current_policy_spec=current_policy_spec,
+            max_historical_opponents=max_historical_opponents,
+        )
+
 
 @dataclass(frozen=True)
 class PromotionRecordResult:
@@ -131,6 +144,7 @@ class PromotionRegistryVerificationResult:
     entry_count: int
     checked_checkpoint_count: int
     verified_checksum_count: int
+    verified_loadable_count: int
     checks: tuple[PromotionRegistryVerificationCheck, ...]
 
     @property
@@ -143,6 +157,7 @@ class PromotionRegistryVerificationResult:
             "entry_count": self.entry_count,
             "checked_checkpoint_count": self.checked_checkpoint_count,
             "verified_checksum_count": self.verified_checksum_count,
+            "verified_loadable_count": self.verified_loadable_count,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
         }
@@ -225,6 +240,7 @@ def verify_promotion_registry(
     *,
     verify_checksums: bool = True,
     require_checksums: bool = False,
+    verify_loadable: bool = False,
 ) -> PromotionRegistryVerificationResult:
     registry = load_promotion_registry(path)
     checks: list[PromotionRegistryVerificationCheck] = [
@@ -232,6 +248,7 @@ def verify_promotion_registry(
     ]
     checked_checkpoint_count = 0
     verified_checksum_count = 0
+    verified_loadable_count = 0
     for entry in registry.entries:
         checks.append(_gate_result_passed_check(entry))
         if not entry.checkpoint_path:
@@ -260,6 +277,13 @@ def verify_promotion_registry(
         if resolved_checkpoint is None:
             continue
         checked_checkpoint_count += 1
+        if verify_loadable:
+            loadable_check, policy_id_check = _policy_loadable_checks(entry)
+            checks.append(loadable_check)
+            if loadable_check.passed:
+                verified_loadable_count += 1
+            if policy_id_check is not None:
+                checks.append(policy_id_check)
         if verify_checksums and entry.checkpoint_sha256 is not None:
             observed_sha256 = _sha256_file(resolved_checkpoint)
             verified_checksum_count += 1
@@ -289,6 +313,7 @@ def verify_promotion_registry(
         entry_count=len(registry.entries),
         checked_checkpoint_count=checked_checkpoint_count,
         verified_checksum_count=verified_checksum_count,
+        verified_loadable_count=verified_loadable_count,
         checks=tuple(checks),
     )
 
@@ -335,6 +360,60 @@ def _gate_result_passed_check(entry: PromotionRegistryEntry) -> PromotionRegistr
         expected=True,
         message="promotion entry embeds a passing gate result",
     )
+
+
+def _policy_loadable_checks(
+    entry: PromotionRegistryEntry,
+) -> tuple[PromotionRegistryVerificationCheck, PromotionRegistryVerificationCheck | None]:
+    policy_spec = entry.checkpoint_policy_spec
+    if policy_spec is None:
+        return (
+            PromotionRegistryVerificationCheck(
+                name="checkpoint_policy_loadable",
+                passed=False,
+                entry_sequence=entry.sequence,
+                observed=None,
+                expected="loadable policy spec",
+                message="promotion checkpoint must have a loadable policy spec",
+            ),
+            None,
+        )
+    try:
+        from .collection import policy_from_spec
+
+        policy = policy_from_spec(policy_spec)
+    except Exception as exc:
+        return (
+            PromotionRegistryVerificationCheck(
+                name="checkpoint_policy_loadable",
+                passed=False,
+                entry_sequence=entry.sequence,
+                observed=f"{type(exc).__name__}: {exc}",
+                expected="loadable policy spec",
+                message="promotion checkpoint loads through the policy selection path",
+            ),
+            None,
+        )
+    loaded_policy_id = getattr(policy, "policy_id", None)
+    loadable_check = PromotionRegistryVerificationCheck(
+        name="checkpoint_policy_loadable",
+        passed=True,
+        entry_sequence=entry.sequence,
+        observed=policy_spec,
+        expected="loadable policy spec",
+        message="promotion checkpoint loads through the policy selection path",
+    )
+    if entry.policy_id is None:
+        return loadable_check, None
+    policy_id_check = PromotionRegistryVerificationCheck(
+        name="checkpoint_policy_id",
+        passed=loaded_policy_id == entry.policy_id,
+        entry_sequence=entry.sequence,
+        observed=str(loaded_policy_id) if loaded_policy_id is not None else None,
+        expected=entry.policy_id,
+        message="loaded policy id matches registry metadata",
+    )
+    return loadable_check, policy_id_check
 
 
 def _reject_duplicate(registry: PromotionRegistry, gate_result: PromotionGateResult) -> None:

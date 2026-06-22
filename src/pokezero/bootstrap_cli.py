@@ -11,6 +11,7 @@ from .bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
     DEFAULT_PREFLIGHT_SEED_START,
+    benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
 from .collection import policy_spec_with_showdown_root
@@ -67,6 +68,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     teacher.add_argument("--policy-id", default="linear-bootstrap", help="Policy id stored in the bootstrap checkpoint.")
     teacher.add_argument("--json", action="store_true", help="Print the bootstrap manifest as JSON.")
     teacher.set_defaults(func=_teacher)
+
+    teacher_benchmark = subparsers.add_parser("teacher-benchmark", help="Benchmark a teacher policy against fixed baselines.")
+    teacher_benchmark.add_argument("--games", type=int, default=DEFAULT_BENCHMARK_GAMES, help="Benchmark games per matchup.")
+    teacher_benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    teacher_benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    teacher_benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic benchmark seed.")
+    teacher_benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    teacher_benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    teacher_benchmark.add_argument("--teacher-policy", default="scripted-teacher", help="Teacher policy spec.")
+    teacher_benchmark.add_argument(
+        "--baseline-policy",
+        action="append",
+        default=None,
+        help="Baseline policy spec. May be repeated. Defaults to simple-legal and random-legal.",
+    )
+    teacher_benchmark.add_argument("--json", action="store_true", help="Print the benchmark report as JSON.")
+    teacher_benchmark.set_defaults(func=_teacher_benchmark)
     return parser
 
 
@@ -131,6 +149,36 @@ def _teacher(args: argparse.Namespace) -> int:
     return 0
 
 
+def _teacher_benchmark(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    teacher_policy = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
+    baseline_policies = (
+        tuple(policy_spec_with_showdown_root(spec, policy_showdown_root) for spec in args.baseline_policy)
+        if args.baseline_policy is not None
+        else None
+    )
+    result = benchmark_teacher_policy(
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=RolloutConfig(
+            max_decision_rounds=args.max_decision_rounds,
+            format_id=args.format_id,
+        ),
+        teacher_policy_spec=teacher_policy,
+        baseline_policy_specs=baseline_policies,
+        games=args.games,
+        seed_start=args.seed_start,
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_teacher_benchmark_result(result)
+    return 0
+
+
 def _print_teacher_summary(result) -> None:
     final_epoch = result.training.final_metrics
     print(f"run_dir: {result.run_dir}")
@@ -182,6 +230,35 @@ def _print_teacher_summary(result) -> None:
             f"fallbacks={summary.get('fallback_decisions', 0)}"
         )
     print(f"manifest: {result.manifest_path}")
+
+
+def _print_teacher_benchmark_result(result) -> None:
+    report = result.benchmark
+    print(f"format: {report.format_id}")
+    print(f"games_per_matchup: {report.games_per_matchup}")
+    print(f"total_games: {report.total_games}")
+    print(f"average_decision_rounds: {report.average_decision_rounds:.3f}")
+    for row in report.head_to_head_results:
+        print(
+            f"benchmark {row.label}: "
+            f"{row.first_policy_id}_wr={row.first_policy_win_rate:.3f} "
+            f"{row.second_policy_id}_wr={row.second_policy_win_rate:.3f} "
+            f"capped={row.capped_games}"
+        )
+    if any(row.capped_games for row in report.head_to_head_results):
+        print("note: benchmark win rates include capped games in the denominator.")
+    summary = result.teacher_decision_summary
+    print(
+        "teacher_decisions: "
+        f"scripted={summary.get('scripted_teacher_decisions', 0)} "
+        f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
+        f"fallbacks={summary.get('fallback_decisions', 0)}"
+    )
+    fallback_reasons = summary.get("fallback_reasons") or {}
+    if fallback_reasons:
+        print("teacher_fallback_reasons:")
+        for reason, count in sorted(fallback_reasons.items()):
+            print(f"- {reason}: {count}")
 
 
 if __name__ == "__main__":
