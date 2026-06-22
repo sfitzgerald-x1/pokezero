@@ -14,6 +14,10 @@ import sys
 import time
 from typing import Iterable, Mapping
 
+from .cli_audit import (
+    MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+    validate_post_iteration_audit_evaluation_games,
+)
 from .evaluation import (
     DEFAULT_MIN_BENCHMARK_GAMES,
     PromotionGateConfig,
@@ -39,6 +43,7 @@ from .source_metadata import collect_source_metadata
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_pilot_suite_summary.v1"
+CPU_LONG_RUN_PLAN_SCHEMA_VERSION = "pokezero.cpu_long_run_plan.v1"
 CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
@@ -450,6 +455,102 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Return non-zero unless the generated audit config's calibrated benchmark-game floor meets this value.",
     )
     pilot_report.set_defaults(func=_cpu_pilot_report)
+
+    long_run_plan = subparsers.add_parser(
+        "cpu-long-run-plan",
+        help="Print a guarded self-play long-run command from a ready CPU pilot-suite summary.",
+    )
+    long_run_plan.add_argument(
+        "pilot_path",
+        type=Path,
+        help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
+    )
+    long_run_plan.add_argument("--run-dir", type=Path, required=True, help="Output directory for the long self-play run.")
+    long_run_plan.add_argument(
+        "--initial-policy",
+        required=True,
+        help="Initial policy spec for the long run, for example linear:runs/bootstrap/linear-bootstrap.json.",
+    )
+    long_run_plan.add_argument(
+        "--validation-data",
+        type=Path,
+        action="append",
+        default=None,
+        help="Held-out rollout JSONL passed through to selfplay_cli. May be repeated.",
+    )
+    long_run_plan.add_argument(
+        "--python-binary",
+        default=sys.executable,
+        help="Python executable used in the emitted command. Defaults to the interpreter running this command.",
+    )
+    long_run_plan.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    long_run_plan.add_argument("--iterations", type=int, default=20, help="Self-play iterations for the long run.")
+    long_run_plan.add_argument("--games-per-iteration", type=int, default=100, help="Rollout games per long-run iteration.")
+    long_run_plan.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
+    long_run_plan.add_argument("--evaluation-games", type=int, default=50, help="Benchmark games per matchup after each iteration.")
+    long_run_plan.add_argument("--seed-start", type=int, default=10_000_000, help="First deterministic self-play seed.")
+    long_run_plan.add_argument(
+        "--evaluation-seed-start",
+        type=int,
+        default=20_000_000,
+        help="First deterministic evaluation seed.",
+    )
+    long_run_plan.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    long_run_plan.add_argument("--feature-count", type=int, default=131_072, help="Hashed linear feature bucket count.")
+    long_run_plan.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    long_run_plan.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
+    long_run_plan.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    long_run_plan.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
+    long_run_plan.add_argument(
+        "--require-promoted-opponent-pool-size",
+        type=int,
+        default=None,
+        help="Pass through to selfplay_cli to require a minimum promoted historical opponent pool before collection.",
+    )
+    long_run_plan.add_argument("--policy-id", default="linear-long-run", help="Policy id prefix stored in checkpoints.")
+    long_run_plan.add_argument(
+        "--promotion-registry",
+        type=Path,
+        default=None,
+        help="Promotion registry path. Defaults to RUN_DIR/promotions.json.",
+    )
+    long_run_plan.add_argument(
+        "--promotion-artifact-dir",
+        type=Path,
+        default=None,
+        help="Promotion artifact directory. Defaults to RUN_DIR/promoted-checkpoints.",
+    )
+    long_run_plan.add_argument(
+        "--promotion-label-prefix",
+        default="long-run",
+        help="Label prefix for auto-promotion entries.",
+    )
+    long_run_plan.add_argument("--promotion-notes", default=None, help="Optional notes stored on each auto-promotion entry.")
+    long_run_plan.add_argument(
+        "--require-smoke-ready",
+        action="store_true",
+        help="Also require nested smoke pilot summaries and requested preflights to be ready.",
+    )
+    long_run_plan.add_argument(
+        "--require-calibration-run-count",
+        type=int,
+        default=0,
+        help="Require the generated audit config to record at least this many source runs.",
+    )
+    long_run_plan.add_argument(
+        "--require-calibration-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Require the generated audit config to record at least this many benchmarked iterations.",
+    )
+    long_run_plan.add_argument(
+        "--require-calibration-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Require the generated audit config's calibrated benchmark-game floor to meet this value.",
+    )
+    long_run_plan.add_argument("--json", action="store_true", help="Print the long-run plan as JSON.")
+    long_run_plan.set_defaults(func=_cpu_long_run_plan)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
@@ -2784,6 +2885,235 @@ def _cpu_pilot_report_exit_code(
     if require_smoke_ready and (smoke_report is None or smoke_report.get("smoke_report_ready") is not True):
         return 2
     return 0
+
+
+def _cpu_long_run_plan(args: argparse.Namespace) -> int:
+    _validate_cpu_long_run_plan_args(args)
+    summary_path, summary = _load_cpu_pilot_summary(args.pilot_path)
+    status = str(summary.get("status", "unknown"))
+    recipe = summary.get("recipe")
+    artifact_report = (
+        _cpu_pilot_artifact_report(
+            summary,
+            recipe,
+            require_calibration_run_count=args.require_calibration_run_count,
+            require_calibration_benchmark_iterations=args.require_calibration_benchmark_iterations,
+            require_calibration_min_benchmark_games=args.require_calibration_min_benchmark_games,
+        )
+        if isinstance(recipe, Mapping)
+        else None
+    )
+    smoke_report = (
+        _cpu_pilot_smoke_report(summary, recipe, summary_path=summary_path)
+        if isinstance(recipe, Mapping)
+        else None
+    )
+    audit_config_path = _cpu_long_run_audit_config_path(recipe)
+    ready_reasons = _cpu_long_run_not_ready_reasons(
+        status,
+        recipe=recipe,
+        artifact_report=artifact_report,
+        smoke_report=smoke_report,
+        require_smoke_ready=args.require_smoke_ready,
+        audit_config_path=audit_config_path,
+    )
+    audit_feasibility_error = None
+    if not ready_reasons and audit_config_path is not None:
+        try:
+            validate_post_iteration_audit_evaluation_games(
+                load_run_audit_config(audit_config_path),
+                evaluation_games=args.evaluation_games,
+                minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+            )
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            audit_feasibility_error = str(exc)
+            ready_reasons.append("audit_config_not_satisfiable_by_evaluation_games")
+    ready = not ready_reasons
+    steps = [
+        {
+            "name": "run guarded CPU self-play long run",
+            "argv": _cpu_long_run_selfplay_argv(args, audit_config_path=audit_config_path),
+        }
+    ] if ready and audit_config_path is not None else []
+    payload = {
+        "schema_version": CPU_LONG_RUN_PLAN_SCHEMA_VERSION,
+        "purpose": "guarded CPU self-play long-run launch plan",
+        "source": collect_source_metadata(),
+        "pilot_summary_path": str(summary_path),
+        "pilot_status": status,
+        "pilot_artifact_report": artifact_report,
+        "pilot_smoke_report": smoke_report,
+        "run_dir": str(args.run_dir),
+        "audit_config_path": None if audit_config_path is None else str(audit_config_path),
+        "audit_feasibility_error": audit_feasibility_error,
+        "long_run_ready": ready,
+        "long_run_ready_reasons": ready_reasons,
+        "steps": [
+            {
+                "name": step["name"],
+                "argv": step["argv"],
+                "command": _shell_join(step["argv"]),
+            }
+            for step in steps
+        ],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if ready else 2
+    _print_cpu_long_run_plan(payload)
+    return 0 if ready else 2
+
+
+def _validate_cpu_long_run_plan_args(args: argparse.Namespace) -> None:
+    _validate_cpu_pilot_report_args(args)
+    positive_fields = (
+        "iterations",
+        "games_per_iteration",
+        "workers",
+        "evaluation_games",
+        "max_decision_rounds",
+        "feature_count",
+        "window_size",
+        "epochs",
+        "max_historical_opponents",
+    )
+    for field_name in positive_fields:
+        if getattr(args, field_name) <= 0:
+            raise ValueError(f"{field_name.replace('_', '-')} must be positive.")
+    if args.learning_rate <= 0.0:
+        raise ValueError("learning-rate must be positive.")
+    if (
+        args.require_promoted_opponent_pool_size is not None
+        and args.require_promoted_opponent_pool_size > args.max_historical_opponents
+    ):
+        raise ValueError("require-promoted-opponent-pool-size cannot exceed max-historical-opponents.")
+
+
+def _cpu_long_run_audit_config_path(recipe: object) -> Path | None:
+    if not isinstance(recipe, Mapping):
+        return None
+    raw_path = recipe.get("audit_config_path")
+    return None if raw_path is None else Path(str(raw_path))
+
+
+def _cpu_long_run_not_ready_reasons(
+    status: str,
+    *,
+    recipe: object,
+    artifact_report: Mapping[str, object] | None,
+    smoke_report: Mapping[str, object] | None,
+    require_smoke_ready: bool,
+    audit_config_path: Path | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if status != "passed":
+        reasons.append("pilot_suite_status_not_passed")
+    if not isinstance(recipe, Mapping):
+        reasons.append("pilot_recipe_unavailable")
+    if audit_config_path is None:
+        reasons.append("pilot_audit_config_path_unavailable")
+    if artifact_report is None:
+        reasons.append("pilot_artifact_report_unavailable")
+    elif artifact_report.get("audit_config_ready") is not True:
+        for reason in artifact_report.get("audit_config_ready_reasons", ()):
+            reasons.append(f"pilot_audit_config_not_ready:{reason}")
+    if require_smoke_ready:
+        if smoke_report is None:
+            reasons.append("pilot_smoke_report_unavailable")
+        elif smoke_report.get("smoke_report_ready") is not True:
+            for reason in smoke_report.get("smoke_report_ready_reasons", ()):
+                reasons.append(f"pilot_smoke_not_ready:{reason}")
+    return reasons
+
+
+def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: Path) -> list[str]:
+    promotion_registry = args.promotion_registry if args.promotion_registry is not None else args.run_dir / "promotions.json"
+    promotion_artifact_dir = (
+        args.promotion_artifact_dir
+        if args.promotion_artifact_dir is not None
+        else args.run_dir / "promoted-checkpoints"
+    )
+    argv = [
+        args.python_binary,
+        "-m",
+        "pokezero.selfplay_cli",
+        "iterate",
+        "--run-dir",
+        str(args.run_dir),
+        "--initial-policy",
+        args.initial_policy,
+        "--iterations",
+        str(args.iterations),
+        "--games-per-iteration",
+        str(args.games_per_iteration),
+        "--workers",
+        str(args.workers),
+        "--evaluation-games",
+        str(args.evaluation_games),
+        "--seed-start",
+        str(args.seed_start),
+        "--evaluation-seed-start",
+        str(args.evaluation_seed_start),
+        "--max-decision-rounds",
+        str(args.max_decision_rounds),
+        "--feature-count",
+        str(args.feature_count),
+        "--window-size",
+        str(args.window_size),
+        "--epochs",
+        str(args.epochs),
+        "--learning-rate",
+        str(args.learning_rate),
+        "--policy-id",
+        args.policy_id,
+        "--max-historical-opponents",
+        str(args.max_historical_opponents),
+        "--promotion-registry",
+        str(promotion_registry),
+        "--promotion-artifact-dir",
+        str(promotion_artifact_dir),
+        "--promotion-label-prefix",
+        args.promotion_label_prefix,
+        "--auto-promote",
+        "--profile",
+        "long-run",
+        "--audit-after-iteration",
+        "--audit-config",
+        str(audit_config_path),
+    ]
+    if args.promotion_notes is not None:
+        argv.extend(["--promotion-notes", args.promotion_notes])
+    if args.require_promoted_opponent_pool_size is not None:
+        argv.extend(["--require-promoted-opponent-pool-size", str(args.require_promoted_opponent_pool_size)])
+    for validation_data in args.validation_data or ():
+        argv.extend(["--validation-data", str(validation_data)])
+    if args.showdown_root is not None:
+        argv.extend(["--showdown-root", str(args.showdown_root)])
+    return argv
+
+
+def _print_cpu_long_run_plan(payload: Mapping[str, object]) -> None:
+    print("cpu_long_run_plan:")
+    print(f"ready: {_format_optional_bool(bool(payload.get('long_run_ready')))}")
+    print(f"pilot_summary: {_format_summary_value(payload.get('pilot_summary_path'))}")
+    print(f"audit_config_path: {_format_summary_value(payload.get('audit_config_path'))}")
+    if payload.get("audit_feasibility_error"):
+        print(f"audit_feasibility_error: {payload['audit_feasibility_error']}")
+    reasons = payload.get("long_run_ready_reasons")
+    if isinstance(reasons, list) and reasons:
+        print("long_run_ready_reasons:")
+        for reason in reasons:
+            print(f"- {reason}")
+    steps = payload.get("steps")
+    if not isinstance(steps, list) or not steps:
+        print("commands: -")
+        return
+    print("commands:")
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, Mapping):
+            continue
+        print(f"{index}. {step.get('name')}")
+        print(step.get("command"))
 
 
 def _validate_cpu_pilot_report_args(args: argparse.Namespace) -> None:

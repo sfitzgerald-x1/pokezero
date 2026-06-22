@@ -9,6 +9,7 @@ import sys
 from typing import Any, Mapping
 
 from .cli_audit import (
+    MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
     add_post_iteration_audit_arguments,
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
@@ -27,9 +28,6 @@ from .selfplay import (
     run_selfplay_iterations,
 )
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
-
-
-MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

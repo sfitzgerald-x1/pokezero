@@ -13,6 +13,7 @@ DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
     max_benchmark_win_rate_drop=0.15,
     max_consecutive_promotion_failures=3,
 )
+MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 
 
 def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:

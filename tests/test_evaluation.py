@@ -2655,6 +2655,183 @@ if __name__ == "__main__":
         )
         self.assertIsNotNone(artifact_report["audit_config"]["read_error"])
 
+    def test_eval_cli_cpu_long_run_plan_emits_guarded_selfplay_command_from_ready_pilot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root = temp_path / "pilots"
+            long_run_dir = temp_path / "long-run"
+            audit_config_path = pilot_root / "pilot-audit-config.json"
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["calibration_output_path"] = str(pilot_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(pilot_root / "pilot-audit-replay.json")
+            write_json(pilot_root / "cpu-pilot-suite-summary.json", summary)
+            write_json(
+                pilot_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(audit_config_path),
+                },
+            )
+            write_json(pilot_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+            write_json(
+                audit_config_path,
+                run_audit_config_payload(
+                    smoke_test_audit_config(),
+                    calibration={
+                        "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
+                        "run_count": 2,
+                        "benchmark_iteration_count": 4,
+                        "min_latest_benchmark_games": 20,
+                    },
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(long_run_dir),
+                        "--initial-policy",
+                        "linear:runs/bootstrap/linear-bootstrap.json",
+                        "--validation-data",
+                        "runs/bootstrap/validation-rollouts.jsonl",
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--iterations",
+                        "3",
+                        "--games-per-iteration",
+                        "12",
+                        "--evaluation-games",
+                        "5",
+                        "--require-calibration-run-count",
+                        "2",
+                        "--require-calibration-benchmark-iterations",
+                        "4",
+                        "--require-calibration-min-benchmark-games",
+                        "20",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["long_run_ready_reasons"], [])
+        self.assertEqual(payload["audit_config_path"], str(audit_config_path))
+        step = payload["steps"][0]
+        argv = step["argv"]
+        self.assertEqual(argv[:4], ["./.venv/bin/python", "-m", "pokezero.selfplay_cli", "iterate"])
+        self.assertIn("--audit-after-iteration", argv)
+        self.assertIn("--audit-config", argv)
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
+        self.assertIn("--auto-promote", argv)
+        self.assertEqual(argv[argv.index("--profile") + 1], "long-run")
+        self.assertEqual(argv[argv.index("--promotion-registry") + 1], str(long_run_dir / "promotions.json"))
+        self.assertEqual(argv[argv.index("--promotion-artifact-dir") + 1], str(long_run_dir / "promoted-checkpoints"))
+        self.assertEqual(argv[argv.index("--validation-data") + 1], "runs/bootstrap/validation-rollouts.jsonl")
+
+    def test_eval_cli_cpu_long_run_plan_fails_when_required_generated_audit_config_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root = temp_path / "pilots"
+            audit_config_path = pilot_root / "pilot-audit-config.json"
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["calibration_output_path"] = str(pilot_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(pilot_root / "pilot-audit-replay.json")
+            write_json(pilot_root / "cpu-pilot-suite-summary.json", summary)
+            write_json(
+                pilot_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(audit_config_path),
+                },
+            )
+            write_json(pilot_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--require-calibration-run-count",
+                        "1",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["long_run_ready"])
+        self.assertEqual(payload["steps"], [])
+        self.assertIn(
+            "pilot_audit_config_not_ready:audit_config_unavailable_for_calibration_requirements",
+            payload["long_run_ready_reasons"],
+        )
+
+    def test_eval_cli_cpu_long_run_plan_rejects_evaluation_games_below_audit_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root = temp_path / "pilots"
+            audit_config_path = pilot_root / "pilot-audit-config.json"
+            summary = cpu_pilot_summary(status="passed")
+            summary["recipe"]["audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["calibration_output_path"] = str(pilot_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(pilot_root / "pilot-audit-replay.json")
+            write_json(pilot_root / "cpu-pilot-suite-summary.json", summary)
+            write_json(
+                pilot_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(audit_config_path),
+                },
+            )
+            write_json(pilot_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+            write_json(
+                audit_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_games=50,
+                        require_benchmark_opponent_coverage=False,
+                    ),
+                    calibration={
+                        "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
+                        "run_count": 1,
+                        "benchmark_iteration_count": 1,
+                        "min_latest_benchmark_games": 50,
+                    },
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--evaluation-games",
+                        "10",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["long_run_ready"])
+        self.assertEqual(payload["steps"], [])
+        self.assertIn("audit_config_not_satisfiable_by_evaluation_games", payload["long_run_ready_reasons"])
+        self.assertIn("at least 50 aggregate benchmark games are required", payload["audit_feasibility_error"])
+
     def test_eval_cli_cpu_pilot_report_includes_pilot_smoke_preflight_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "pilots"

@@ -138,6 +138,23 @@ Inspect or preflight the pilot suite without rerunning games:
 
 The pilot report surfaces the calibrated audit config path, persisted compare artifact paths, calibration sufficiency/write status, replay audit status, and a derived `audit_config_ready` verdict. It also rolls up each nested smoke pilot summary, including per-pilot smoke pass/fail state and any requested teacher-branch preflight counts; aggregate branch counts include only passing preflight artifacts. That verdict means only that the pilot suite passed, the calibration artifact says the audit config was written from sufficient pilot evidence, and the replay artifact says the generated config passed against the same pilots. It is a reuse/readiness check for the generated guardrail config, not a policy-strength claim. Use `cpu-pilot-report --json` when automation needs the same derived artifact and per-pilot smoke reports. By default, the report exit code still reflects the wrapper summary status for backward compatibility; add `--require-ready` when shell automation should also fail unless `audit_config_ready` is true, and add `--require-smoke-ready` when automation should also fail unless every discovered nested smoke pilot has a readable passing summary and every requested teacher-branch preflight passed. Add `--require-calibration-run-count`, `--require-calibration-benchmark-iterations`, and `--require-calibration-min-benchmark-games` when the report should also re-check the generated audit config's saved calibration metadata before treating it as reusable. Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
 
+After a pilot suite is ready, generate the guarded long-run command from that same summary instead of hand-copying the audit config path:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-long-run-plan runs/cpu-pilots \
+  --run-dir runs/linear-long-run \
+  --initial-policy linear:runs/bootstrap/linear-bootstrap.json \
+  --validation-data runs/bootstrap/validation-rollouts.jsonl \
+  --iterations 20 \
+  --games-per-iteration 100 \
+  --evaluation-games 50 \
+  --require-calibration-run-count 2 \
+  --require-calibration-benchmark-iterations 4 \
+  --require-calibration-min-benchmark-games 50
+```
+
+The long-run plan is read-only. It fails closed unless the pilot suite passed, the generated audit config is ready under the requested calibration floors, and the requested `--evaluation-games` can satisfy the audit config's benchmark-game floor during post-iteration audit. When ready, it emits a `selfplay_cli iterate` command wired with `--audit-after-iteration --audit-config <generated-config>`, `--auto-promote`, and managed promotion artifact paths under the requested long-run directory. The `--initial-policy` remains explicit because the pilot suite calibrates guardrails; it does not decide which checkpoint should seed a longer experiment.
+
 Import normalized replay decisions into standard rollout JSONL:
 
 ```bash
