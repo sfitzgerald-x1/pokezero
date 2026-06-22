@@ -37,6 +37,7 @@ from .source_metadata import collect_source_metadata
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_pilot_suite_summary.v1"
+CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
@@ -459,8 +460,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the smoke recipe.")
+def _add_cpu_smoke_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    run_root_default: Path = Path("runs/cpu-smoke"),
+    audit_config_help: str | None = None,
+) -> None:
+    parser.add_argument("--run-root", type=Path, default=run_root_default, help="Root directory used by the smoke recipe.")
     parser.add_argument(
         "--python-binary",
         default=sys.executable,
@@ -490,7 +496,8 @@ def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
         "--audit-config-path",
         type=Path,
         default=None,
-        help=(
+        help=audit_config_help
+        or (
             "Where the smoke recipe writes its calibrated audit config. "
             "Defaults to RUN_ROOT/smoke-audit-config.json."
         ),
@@ -498,8 +505,15 @@ def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_cpu_pilot_arguments(parser: argparse.ArgumentParser) -> None:
-    _add_cpu_smoke_arguments(parser)
-    parser.set_defaults(run_root=Path("runs/cpu-pilots"))
+    _add_cpu_smoke_arguments(
+        parser,
+        run_root_default=Path("runs/cpu-pilots"),
+        audit_config_help=(
+            "Where the pilot suite writes its calibrated audit config. "
+            "Defaults to RUN_ROOT/pilot-audit-config.json. Each per-pilot smoke run writes "
+            "PILOT_ROOT/smoke-audit-config.json."
+        ),
+    )
     parser.add_argument("--pilot-count", type=int, default=2, help="Number of seeded CPU smoke pilots to run.")
     parser.add_argument(
         "--seed-stride",
@@ -2313,6 +2327,11 @@ def _validate_cpu_pilot_args(args: argparse.Namespace, *, validate_showdown_root
         raise ValueError("pilot-count must be positive.")
     if args.seed_stride <= 0:
         raise ValueError("seed-stride must be positive.")
+    if args.pilot_count > 1 and (args.pilot_count - 1) * args.seed_stride >= CPU_SMOKE_SEED_BAND_SPACING:
+        raise ValueError(
+            "pilot seed offsets must stay below the smoke seed-band spacing; "
+            f"reduce pilot-count or seed-stride so (pilot-count - 1) * seed-stride < {CPU_SMOKE_SEED_BAND_SPACING}."
+        )
     if args.calibration_require_min_benchmark_games <= 0:
         raise ValueError("calibration-require-min-benchmark-games must be positive.")
 
@@ -2328,11 +2347,11 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
     showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
     seed_start = int(args.seed_start)
-    validation_seed_start = seed_start + 1_000_000
-    bootstrap_benchmark_seed_start = seed_start + 2_000_000
-    preflight_seed_start = seed_start + 3_000_000
-    selfplay_seed_start = seed_start + 4_000_000
-    evaluation_seed_start = seed_start + 5_000_000
+    validation_seed_start = seed_start + CPU_SMOKE_SEED_BAND_SPACING
+    bootstrap_benchmark_seed_start = seed_start + (2 * CPU_SMOKE_SEED_BAND_SPACING)
+    preflight_seed_start = seed_start + (3 * CPU_SMOKE_SEED_BAND_SPACING)
+    selfplay_seed_start = seed_start + (4 * CPU_SMOKE_SEED_BAND_SPACING)
+    evaluation_seed_start = seed_start + (5 * CPU_SMOKE_SEED_BAND_SPACING)
     steps = (
         (
             "bootstrap teacher checkpoint",
@@ -2351,6 +2370,8 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 str(args.workers),
                 *showdown_root_args,
                 "--seed-start",
+                str(seed_start),
+                "--shuffle-seed",
                 str(seed_start),
                 "--validation-seed-start",
                 str(validation_seed_start),

@@ -113,6 +113,8 @@ Run a slightly broader CPU pilot suite when a single smoke run is not enough evi
 
 This wrapper runs `cpu-smoke-run` repeatedly under `RUN_ROOT/pilot-0001`, `RUN_ROOT/pilot-0002`, and so on, using deterministic seed offsets for each pilot. After the pilots finish, it compares `RUN_ROOT/pilot-*/selfplay/manifest.json`, writes `RUN_ROOT/pilot-audit-config.json` through compare-time audit calibration with sufficiency requirements, then reruns `compare --audit-config --fail-on-audit` against the pilot manifests. The suite writes `RUN_ROOT/cpu-pilot-suite-summary.json` with the executed recipe, source metadata, per-step exit codes, timestamps, and final pass/fail status.
 
+For pilot suites, `--audit-config-path` controls the suite-level calibrated audit config. Each nested smoke pilot still writes its own `PILOT_ROOT/smoke-audit-config.json`. Pilot seed offsets must stay within the smoke recipe's seed band, so `(pilot-count - 1) * seed-stride` must be less than `1_000_000`; this prevents pilot collection seeds from colliding with validation, benchmark, preflight, self-play, or evaluation seed bands.
+
 Inspect or preflight the pilot suite without rerunning games:
 
 ```bash

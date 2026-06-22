@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -803,6 +804,7 @@ class PromotionGateTest(unittest.TestCase):
         bootstrap_argv = recipe["steps"][0]["argv"]
         self.assertIn("--seed-start", bootstrap_argv)
         self.assertEqual(bootstrap_argv[bootstrap_argv.index("--seed-start") + 1], "42")
+        self.assertEqual(bootstrap_argv[bootstrap_argv.index("--shuffle-seed") + 1], "42")
         selfplay_argv = recipe["steps"][1]["argv"]
         self.assertEqual(selfplay_argv[selfplay_argv.index("--seed-start") + 1], "4000042")
         self.assertEqual(selfplay_argv[selfplay_argv.index("--evaluation-seed-start") + 1], "5000042")
@@ -1216,6 +1218,160 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("running_step: 1/4 run CPU smoke pilot 1", output)
         self.assertIn("cpu_pilot_run: PASS", output)
 
+    def test_eval_cli_cpu_pilot_run_composes_real_subprocesses_for_calibration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            helper_path = temp_path / "pilot_child.py"
+            helper_path.write_text(
+                f"""#!{sys.executable}
+import contextlib
+import io
+import json
+from pathlib import Path
+import sys
+
+
+def value_after(argv, flag, default=None):
+    if flag not in argv:
+        return default
+    return argv[argv.index(flag) + 1]
+
+
+def write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def collection_metrics():
+    return {{
+        "games": 4,
+        "elapsed_seconds": 1.0,
+        "total_decision_rounds": 4,
+        "total_simulator_turns": 4,
+        "p1_wins": 4,
+        "p2_wins": 0,
+        "ties": 0,
+        "capped_games": 0,
+    }}
+
+
+def benchmark_payload(policy_id):
+    return {{
+        "format_id": "gen3randombattle",
+        "max_decision_rounds": 250,
+        "games_per_matchup": 4,
+        "head_to_heads": [
+            {{
+                "label": f"{{policy_id}} vs random-legal",
+                "first_policy_id": policy_id,
+                "second_policy_id": "random-legal",
+                "games": 4,
+                "first_policy_wins": 4,
+                "second_policy_wins": 0,
+                "ties": 0,
+                "capped_games": 0,
+                "first_policy_win_rate": 1.0,
+                "second_policy_win_rate": 0.0,
+            }}
+        ],
+        "matchups": [],
+    }}
+
+
+def write_smoke_manifest(argv):
+    run_root = Path(value_after(argv, "--run-root"))
+    seed_start = value_after(argv, "--seed-start", "0")
+    selfplay_dir = run_root / "selfplay"
+    policy_id = f"pilot-child-{{seed_start}}"
+    manifest = {{
+        "schema_version": "pokezero.selfplay_run.v1",
+        "run_dir": str(selfplay_dir),
+        "latest_checkpoint_path": str(selfplay_dir / "iteration-0001" / "linear-policy.json"),
+        "iterations": [
+            {{
+                "schema_version": "pokezero.selfplay_run.v1",
+                "iteration": 1,
+                "checkpoint_path": str(selfplay_dir / "iteration-0001" / "linear-policy.json"),
+                "collection_metrics": collection_metrics(),
+                "training": {{"model": {{"policy_id": policy_id}}}},
+                "benchmark": benchmark_payload(policy_id),
+            }}
+        ],
+    }}
+    write_json(selfplay_dir / "manifest.json", manifest)
+    write_json(
+        run_root / "cpu-smoke-run-summary.json",
+        {{
+            "schema_version": "pokezero.cpu_smoke_run_summary.v1",
+            "status": "passed",
+            "summary_path": str(run_root / "cpu-smoke-run-summary.json"),
+            "started_at": "2026-06-22T12:00:00.000Z",
+            "ended_at": "2026-06-22T12:00:01.000Z",
+            "duration_seconds": 1.0,
+            "source": {{"available": False}},
+            "recipe": {{"run_root": str(run_root), "seed_start": int(seed_start), "steps": []}},
+            "steps": [],
+            "failed_step": None,
+        }},
+    )
+    return 0
+
+
+def main(argv):
+    if argv[:3] == ["-m", "pokezero.eval_cli", "cpu-smoke-run"]:
+        return write_smoke_manifest(argv[3:])
+    if argv[:3] == ["-m", "pokezero.eval_cli", "compare"]:
+        from pokezero.eval_cli import main as eval_main
+        with contextlib.redirect_stdout(io.StringIO()):
+            return eval_main(argv[2:])
+    print(f"unexpected argv: {{argv}}", file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
+""",
+                encoding="utf-8",
+            )
+            helper_path.chmod(0o755)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-run",
+                        "--run-root",
+                        str(run_root),
+                        "--python-binary",
+                        str(helper_path),
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--pilot-count",
+                        "2",
+                        "--selfplay-iterations",
+                        "1",
+                        "--seed-start",
+                        "300",
+                        "--seed-stride",
+                        "10",
+                    ]
+            )
+            summary = json.loads((run_root / "cpu-pilot-suite-summary.json").read_text(encoding="utf-8"))
+            audit_config = json.loads((run_root / "pilot-audit-config.json").read_text(encoding="utf-8"))
+            pilot_1_manifest_exists = (run_root / "pilot-0001" / "selfplay" / "manifest.json").exists()
+            pilot_2_manifest_exists = (run_root / "pilot-0002" / "selfplay" / "manifest.json").exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 4)
+        self.assertEqual(summary["recipe"]["benchmark_iterations_required"], 2)
+        self.assertTrue(pilot_1_manifest_exists)
+        self.assertTrue(pilot_2_manifest_exists)
+        self.assertEqual(audit_config["schema_version"], "pokezero.run_audit_config.v1")
+        self.assertEqual(audit_config["calibration"]["run_count"], 2)
+
     def test_eval_cli_cpu_pilot_run_stops_on_failed_step(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1271,6 +1427,21 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         run.assert_not_called()
         self.assertIn(f"showdown-root does not exist: {missing_root}", stderr.getvalue())
+
+    def test_eval_cli_cpu_pilot_plan_rejects_seed_band_overlap(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-pilot-plan",
+                    "--pilot-count",
+                    "101",
+                    "--seed-stride",
+                    "10000",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("pilot seed offsets must stay below the smoke seed-band spacing", stderr.getvalue())
 
     def test_eval_cli_cpu_pilot_report_prints_passed_summary_from_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
