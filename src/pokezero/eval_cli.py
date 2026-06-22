@@ -487,7 +487,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     long_run_plan.add_argument("--iterations", type=int, default=20, help="Self-play iterations for the long run.")
     long_run_plan.add_argument("--games-per-iteration", type=int, default=100, help="Rollout games per long-run iteration.")
     long_run_plan.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
-    long_run_plan.add_argument("--evaluation-games", type=int, default=50, help="Benchmark games per matchup after each iteration.")
+    long_run_plan.add_argument("--evaluation-games", type=int, default=200, help="Benchmark games per matchup after each iteration.")
     long_run_plan.add_argument("--seed-start", type=int, default=10_000_000, help="First deterministic self-play seed.")
     long_run_plan.add_argument(
         "--evaluation-seed-start",
@@ -2917,17 +2917,27 @@ def _cpu_long_run_plan(args: argparse.Namespace) -> int:
         require_smoke_ready=args.require_smoke_ready,
         audit_config_path=audit_config_path,
     )
+    ready_reasons.extend(_cpu_long_run_input_not_ready_reasons(args))
+    promotion_gate_feasibility_error = _cpu_long_run_promotion_gate_feasibility_error(args.evaluation_games)
+    if promotion_gate_feasibility_error is not None:
+        ready_reasons.append("promotion_gate_not_satisfiable_by_evaluation_games")
     audit_feasibility_error = None
     if not ready_reasons and audit_config_path is not None:
         try:
-            validate_post_iteration_audit_evaluation_games(
-                load_run_audit_config(audit_config_path),
-                evaluation_games=args.evaluation_games,
-                minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
-            )
+            audit_config = load_run_audit_config(audit_config_path)
         except (OSError, TypeError, ValueError, KeyError) as exc:
             audit_feasibility_error = str(exc)
-            ready_reasons.append("audit_config_not_satisfiable_by_evaluation_games")
+            ready_reasons.append("audit_config_unavailable_for_audit_feasibility")
+        else:
+            try:
+                validate_post_iteration_audit_evaluation_games(
+                    audit_config,
+                    evaluation_games=args.evaluation_games,
+                    minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+                )
+            except ValueError as exc:
+                audit_feasibility_error = str(exc)
+                ready_reasons.append("audit_config_not_satisfiable_by_evaluation_games")
     ready = not ready_reasons
     steps = [
         {
@@ -2945,6 +2955,7 @@ def _cpu_long_run_plan(args: argparse.Namespace) -> int:
         "pilot_smoke_report": smoke_report,
         "run_dir": str(args.run_dir),
         "audit_config_path": None if audit_config_path is None else str(audit_config_path),
+        "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
         "long_run_ready": ready,
         "long_run_ready_reasons": ready_reasons,
@@ -2987,6 +2998,45 @@ def _validate_cpu_long_run_plan_args(args: argparse.Namespace) -> None:
         and args.require_promoted_opponent_pool_size > args.max_historical_opponents
     ):
         raise ValueError("require-promoted-opponent-pool-size cannot exceed max-historical-opponents.")
+
+
+def _cpu_long_run_input_not_ready_reasons(args: argparse.Namespace) -> list[str]:
+    reasons: list[str] = []
+    initial_checkpoint = _checkpoint_path_from_policy_spec(args.initial_policy)
+    if initial_checkpoint is not None and (str(initial_checkpoint) in ("", ".") or not initial_checkpoint.exists()):
+        reasons.append("initial_policy_checkpoint_missing")
+    for validation_data in args.validation_data or ():
+        if not validation_data.exists():
+            reasons.append("validation_data_missing")
+            break
+    return reasons
+
+
+def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
+    body = policy_spec.strip().partition("?")[0].strip()
+    lowered = body.lower()
+    for prefix in ("linear:", "neural:"):
+        if lowered.startswith(prefix):
+            checkpoint_path = body[len(prefix) :].strip()
+            return Path(checkpoint_path)
+    return None
+
+
+def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int) -> str | None:
+    gate_config = evaluation_profile("long-run").gate_config
+    if gate_config.require_benchmark and evaluation_games < gate_config.min_benchmark_games:
+        return (
+            "long-run auto-promotion requires enough --evaluation-games to satisfy the per-opponent "
+            f"benchmark-game floor: at least {gate_config.min_benchmark_games} games per benchmark "
+            f"opponent are required, but evaluation-games is {evaluation_games}."
+        )
+    if gate_config.min_incumbent_games > 0 and evaluation_games < gate_config.min_incumbent_games:
+        return (
+            "long-run auto-promotion requires enough --evaluation-games to satisfy the incumbent "
+            f"benchmark-game floor: at least {gate_config.min_incumbent_games} incumbent games are "
+            f"required, but evaluation-games is {evaluation_games}."
+        )
+    return None
 
 
 def _cpu_long_run_audit_config_path(recipe: object) -> Path | None:
@@ -3097,6 +3147,8 @@ def _print_cpu_long_run_plan(payload: Mapping[str, object]) -> None:
     print(f"ready: {_format_optional_bool(bool(payload.get('long_run_ready')))}")
     print(f"pilot_summary: {_format_summary_value(payload.get('pilot_summary_path'))}")
     print(f"audit_config_path: {_format_summary_value(payload.get('audit_config_path'))}")
+    if payload.get("promotion_gate_feasibility_error"):
+        print(f"promotion_gate_feasibility_error: {payload['promotion_gate_feasibility_error']}")
     if payload.get("audit_feasibility_error"):
         print(f"audit_feasibility_error: {payload['audit_feasibility_error']}")
     reasons = payload.get("long_run_ready_reasons")

@@ -147,7 +147,7 @@ After a pilot suite is ready, generate the guarded long-run command from that sa
   --validation-data runs/bootstrap/validation-rollouts.jsonl \
   --iterations 20 \
   --games-per-iteration 100 \
-  --evaluation-games 50 \
+  --evaluation-games 200 \
   --require-calibration-run-count 2 \
   --require-calibration-benchmark-iterations 4 \
   --require-calibration-min-benchmark-games 50
