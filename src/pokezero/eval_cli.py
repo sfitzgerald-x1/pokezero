@@ -2671,6 +2671,7 @@ def _run_recipe_with_summary(
     notes: tuple[str, ...],
     failure_label: str,
     summary_label: str,
+    extra_summary_fields: Mapping[str, object] | None = None,
 ) -> int:
     run_started_monotonic = time.perf_counter()
     step_summaries: list[dict[str, object]] = []
@@ -2686,6 +2687,8 @@ def _run_recipe_with_summary(
         "steps": step_summaries,
         "failed_step": None,
     }
+    if extra_summary_fields is not None:
+        summary.update(dict(extra_summary_fields))
     _write_json_payload(summary_path, summary)
     summary_update_failed = False
     print(f"{command_name}:")
@@ -2724,12 +2727,43 @@ def _run_recipe_with_summary(
             summary_label=summary_label,
             previous_failure=summary_update_failed,
         )
-        if output_json_path is None:
-            completed = subprocess.run(step["argv"])
-            output_json_error = None
-        else:
-            completed = subprocess.run(step["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            output_json_error = _persist_step_json_output(output_json_path, completed, step_summary)
+        try:
+            if output_json_path is None:
+                completed = subprocess.run(step["argv"])
+                output_json_error = None
+            else:
+                completed = subprocess.run(step["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                output_json_error = _persist_step_json_output(output_json_path, completed, step_summary)
+        except BaseException as exc:
+            step_summary["ended_at"] = _utc_timestamp()
+            step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
+            step_summary["returncode"] = None
+            step_summary["status"] = "failed"
+            step_summary["error_type"] = type(exc).__name__
+            step_summary["error_message"] = str(exc)
+            summary["status"] = "failed"
+            summary["failed_step"] = {
+                "index": index,
+                "name": step["name"],
+                "returncode": None,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            if "failed_reason" in summary:
+                summary["failed_reason"] = "step_exception"
+            summary["ended_at"] = _utc_timestamp()
+            summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            _write_run_summary_update(
+                summary_path,
+                summary,
+                summary_label=summary_label,
+                previous_failure=summary_update_failed,
+            )
+            print(
+                f"error: {failure_label} step {index} raised {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise
         step_summary["ended_at"] = _utc_timestamp()
         step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
         step_summary["returncode"] = int(completed.returncode)
@@ -2744,6 +2778,8 @@ def _run_recipe_with_summary(
                 "name": step["name"],
                 "returncode": int(step_summary["returncode"]),
             }
+            if "failed_reason" in summary:
+                summary["failed_reason"] = "step_failed"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
             _write_run_summary_update(
@@ -2942,6 +2978,10 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
         ),
         failure_label="cpu long run",
         summary_label="cpu long run",
+        extra_summary_fields={
+            "failed_reason": None,
+            "long_run_ready_reasons": [],
+        },
     )
 
 

@@ -3033,7 +3033,7 @@ if __name__ == "__main__":
             temp_path = Path(temp_dir)
             pilot_root, audit_config_path, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
             long_run_dir = temp_path / "long-run"
-            summary_path = temp_path / "long-run-summary.json"
+            summary_path = long_run_dir / "cpu-long-run-run-summary.json"
             completed = subprocess.CompletedProcess(args=["unused"], returncode=0)
 
             with (
@@ -3044,8 +3044,6 @@ if __name__ == "__main__":
                     [
                         "cpu-long-run-run",
                         str(pilot_root),
-                        "--summary-path",
-                        str(summary_path),
                         "--run-dir",
                         str(long_run_dir),
                         "--initial-policy",
@@ -3082,6 +3080,8 @@ if __name__ == "__main__":
         self.assertEqual(summary["steps"][0]["argv"], argv)
         self.assertEqual(summary["steps"][0]["status"], "passed")
         self.assertIsNone(summary["failed_step"])
+        self.assertIsNone(summary["failed_reason"])
+        self.assertEqual(summary["long_run_ready_reasons"], [])
 
     def test_eval_cli_cpu_long_run_run_writes_failed_summary_without_launch_when_plan_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3154,8 +3154,48 @@ if __name__ == "__main__":
         self.assertEqual(failed_summary["status"], "failed")
         self.assertEqual(failed_summary["failed_step"]["index"], 1)
         self.assertEqual(failed_summary["failed_step"]["returncode"], 33)
+        self.assertEqual(failed_summary["failed_reason"], "step_failed")
+        self.assertEqual(failed_summary["long_run_ready_reasons"], [])
         self.assertEqual(failed_summary["steps"][0]["status"], "failed")
         self.assertEqual(failed_summary["steps"][0]["returncode"], 33)
+
+    def test_eval_cli_cpu_long_run_run_records_subprocess_launch_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            summary_path = temp_path / "long-run-summary.json"
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=FileNotFoundError("missing python")),
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--evaluation-games",
+                        "200",
+                    ]
+                )
+            failed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("missing python", stderr.getvalue())
+        self.assertEqual(failed_summary["status"], "failed")
+        self.assertEqual(failed_summary["failed_reason"], "step_exception")
+        self.assertEqual(failed_summary["failed_step"]["error_type"], "FileNotFoundError")
+        self.assertEqual(failed_summary["steps"][0]["status"], "failed")
+        self.assertEqual(failed_summary["steps"][0]["returncode"], None)
+        self.assertEqual(failed_summary["steps"][0]["error_type"], "FileNotFoundError")
 
     def test_eval_cli_cpu_pilot_report_includes_pilot_smoke_preflight_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
