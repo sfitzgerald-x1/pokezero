@@ -19,6 +19,7 @@ At the start of each task, read those docs and identify the smallest unfinished 
 Based on the current plan, the next CPU-compatible work should focus on making long-running CPU experiments easier to trust and compare:
 
 - Use named evaluation profiles and run-audit output to tune long-run benchmark thresholds from actual CPU experiments.
+- Prefer the CPU pilot-suite wrapper for repeatable threshold-calibration pilots before promoting audit configs into longer unattended runs.
 - Use managed checkpoint lifecycle previews and recoverable archiving to keep promoted-policy selection auditable during long runs.
 - Use lightweight CPU experiment audits to tune practical long-run thresholds without GPU training.
 
