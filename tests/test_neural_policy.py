@@ -26,6 +26,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
+from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, CATEGORY_ID_BUCKETS, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
@@ -429,6 +430,75 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertFalse(audit_config.require_benchmark)
         self.assertTrue(audit_config.require_latest_promotion)
         self.assertTrue(audit_config.require_benchmark_opponent_coverage)
+
+    def test_neural_cli_iterate_uses_post_iteration_audit_config_file(self) -> None:
+        fake_epoch = type(
+            "FakeEpoch",
+            (),
+            {"loss": 0.25, "policy_accuracy": 0.75},
+        )()
+        fake_iteration = type(
+            "FakeIteration",
+            (),
+            {
+                "iteration": 1,
+                "metrics": type("FakeMetrics", (), {"games": 2})(),
+                "checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "training": type("FakeTraining", (), {"final_metrics": fake_epoch})(),
+                "benchmark": None,
+            },
+        )()
+        fake_result = type(
+            "FakeResult",
+            (),
+            {
+                "run_dir": Path("run"),
+                "iterations": (fake_iteration,),
+                "latest_checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "to_dict": lambda self: {"ok": True},
+            },
+        )()
+        audit_defaults = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.72,
+            min_latest_benchmark_games=8,
+            require_benchmark=True,
+            require_benchmark_opponent_coverage=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            config_path.write_text(json.dumps(run_audit_config_payload(audit_defaults), indent=2), encoding="utf-8")
+            with (
+                patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--initial-policy",
+                        "random-legal",
+                        "--evaluation-games",
+                        "2",
+                        "--audit-after-iteration",
+                        "--audit-config",
+                        str(config_path),
+                        "--audit-min-latest-benchmark-games",
+                        "4",
+                        "--audit-allow-missing-benchmark-opponents",
+                    ]
+                )
+
+        audit_config = run.call_args.kwargs["post_iteration_audit_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(audit_config.min_latest_benchmark_win_rate, 0.72)
+        self.assertEqual(audit_config.min_latest_benchmark_games, 4)
+        self.assertTrue(audit_config.require_benchmark)
+        self.assertFalse(audit_config.require_benchmark_opponent_coverage)
 
     def test_neural_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
         stderr = io.StringIO()

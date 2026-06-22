@@ -26,6 +26,9 @@ from .run_audit import (
     calibrate_run_audit,
     calibrate_run_audits,
     compare_run_manifests_with_threshold,
+    load_run_audit_config,
+    run_audit_config_from_dict,
+    run_audit_config_payload,
 )
 from .source_metadata import collect_source_metadata
 
@@ -127,7 +130,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     audit = subparsers.add_parser("audit", help="Audit a self-play run manifest for regression health.")
     audit.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
-    audit.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for audit checks.")
+    audit.add_argument("--profile", choices=profile_choices, default=None, help="Named threshold profile used as defaults for audit checks.")
+    audit.add_argument(
+        "--audit-config",
+        type=Path,
+        default=None,
+        help="Versioned run-audit config JSON used as defaults. Explicit threshold flags override this file.",
+    )
     audit.add_argument("--min-latest-benchmark-win-rate", type=float, default=None)
     audit.add_argument("--min-latest-benchmark-games", type=int, default=None)
     audit.add_argument("--max-latest-collection-capped-rate", type=float, default=None)
@@ -229,6 +238,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --compare-profile, return non-zero when any calibrated run fails that profile.",
     )
+    audit_calibrate.add_argument(
+        "--write-config",
+        type=Path,
+        default=None,
+        help=(
+            "Write the suggested audit thresholds as a reusable run-audit config JSON. "
+            "Requires at least one --require-* sufficiency flag and writes only when sufficiency/profile checks pass."
+        ),
+    )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
 
@@ -278,6 +296,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=profile_choices,
         default=None,
         help="Also evaluate each compared run against this named audit profile and include pass/fail status.",
+    )
+    compare.add_argument(
+        "--audit-config",
+        type=Path,
+        default=None,
+        help="Also evaluate each compared run against a versioned run-audit config JSON.",
     )
     compare.add_argument(
         "--fail-on-audit",
@@ -1146,13 +1170,51 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     if args.compare_profile is not None:
         profile = evaluation_profile(args.compare_profile)
         profile_audit = _profile_audit_payload(args.paths, profile_name=profile.name, config=profile.audit_config)
-    sufficiency_requested = args.require_run_count > 0 or args.require_benchmark_iterations > 0
+    sufficiency_requested = (
+        args.require_run_count > 0
+        or args.require_benchmark_iterations > 0
+        or args.require_min_benchmark_games > 0
+    )
     sufficiency_errors = _calibration_sufficiency_errors(
         result,
         require_run_count=args.require_run_count,
         require_benchmark_iterations=args.require_benchmark_iterations,
         require_min_benchmark_games=args.require_min_benchmark_games,
     )
+    profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
+    wrote_config_path = None
+    if args.write_config is not None:
+        if not sufficiency_requested:
+            raise ValueError(
+                "--write-config requires at least one calibration sufficiency requirement "
+                "(--require-run-count, --require-benchmark-iterations, or --require-min-benchmark-games)."
+            )
+        if sufficiency_errors:
+            raise ValueError("--write-config requires calibration sufficiency checks to pass.")
+        if profile_failed:
+            raise ValueError("--write-config requires the selected profile audit to pass.")
+        config = run_audit_config_from_dict(result.suggested_config())
+        calibration_paths = (
+            tuple(result.paths)
+            if hasattr(result, "paths")
+            else (result.manifest_path,)
+        )
+        config_payload = run_audit_config_payload(
+            config,
+            source=collect_source_metadata(),
+            calibration={
+                "margin": result.margin,
+                "source_type": result.source_type,
+                "run_count": getattr(result, "run_count", 1),
+                "iteration_count": result.iteration_count,
+                "benchmark_iteration_count": result.benchmark_iteration_count,
+                "aggregate_mode": getattr(result, "aggregate_mode", None),
+                "paths": [str(path) for path in calibration_paths],
+                "notes": list(getattr(result, "notes", ())),
+            },
+        )
+        _write_json_payload(args.write_config, config_payload)
+        wrote_config_path = args.write_config
     if args.json:
         payload = result.to_dict()
         if profile_audit is not None:
@@ -1160,6 +1222,8 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         if sufficiency_requested:
             payload["calibration_sufficient"] = not sufficiency_errors
             payload["calibration_sufficiency_errors"] = list(sufficiency_errors)
+        if wrote_config_path is not None:
+            payload["written_config_path"] = str(wrote_config_path)
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_audit_calibration(result)
@@ -1167,7 +1231,8 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
             _print_profile_audit(profile_audit)
         if sufficiency_requested:
             _print_calibration_sufficiency(sufficiency_errors)
-    profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
+        if wrote_config_path is not None:
+            print(f"written_config: {wrote_config_path}")
     return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
 
 
@@ -1534,8 +1599,10 @@ def _utc_timestamp() -> str:
 
 
 def _compare(args: argparse.Namespace) -> int:
-    if args.fail_on_audit and args.audit_profile is None:
-        raise ValueError("--fail-on-audit requires --audit-profile.")
+    if args.audit_profile is not None and args.audit_config is not None:
+        raise ValueError("--audit-profile cannot be combined with --audit-config.")
+    if args.fail_on_audit and args.audit_profile is None and args.audit_config is None:
+        raise ValueError("--fail-on-audit requires --audit-profile or --audit-config.")
     if args.calibration_require_run_count < 0:
         raise ValueError("calibration_require_run_count must be non-negative.")
     if args.calibration_require_benchmark_iterations < 0:
@@ -1552,11 +1619,21 @@ def _compare(args: argparse.Namespace) -> int:
     ):
         raise ValueError("calibration sufficiency requirements require --suggest-audit-calibration.")
     audit_profile = evaluation_profile(args.audit_profile) if args.audit_profile is not None else None
+    audit_config = (
+        load_run_audit_config(args.audit_config)
+        if args.audit_config is not None
+        else audit_profile.audit_config if audit_profile is not None else None
+    )
+    audit_label = (
+        str(args.audit_config)
+        if args.audit_config is not None
+        else audit_profile.name if audit_profile is not None else None
+    )
     result = compare_run_manifests_with_threshold(
         args.paths,
         min_benchmark_games=args.min_benchmark_games,
-        audit_config=audit_profile.audit_config if audit_profile is not None else None,
-        audit_profile=audit_profile.name if audit_profile is not None else None,
+        audit_config=audit_config,
+        audit_profile=audit_label,
     )
     calibration = None
     calibration_error = None
@@ -1708,7 +1785,11 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
 
 
 def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
+    if getattr(args, "audit_config", None) is not None and getattr(args, "profile", None) is not None:
+        raise ValueError("--profile cannot be combined with --audit-config.")
     profile_config = evaluation_profile(args.profile).audit_config
+    if getattr(args, "audit_config", None) is not None:
+        profile_config = load_run_audit_config(args.audit_config)
     return RunAuditConfig(
         min_latest_benchmark_win_rate=_arg_or_default(
             args.min_latest_benchmark_win_rate,
