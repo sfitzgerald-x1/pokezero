@@ -261,6 +261,45 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertIn("team status cure", decision.metadata["teacher_reason"])
         self.assertEqual(decision.metadata["teacher_score"], 50.0)
 
+    def test_scripted_teacher_marks_type_immune_status_move_as_no_effect(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Golem", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "thunderwave", "move_name": "Thunder Wave"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["teacher_branch"], "status_no_effect")
+        self.assertIn("no effect", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 4.0)
+
+    def test_scripted_teacher_prefers_damage_over_type_immune_status_pressure(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Golem", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "thunderwave", "move_name": "Thunder Wave"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["teacher_branch"], "damaging_move")
+
     def test_scripted_teacher_values_rapid_spin_when_own_side_has_hazards(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
@@ -573,6 +612,16 @@ def teacher_dex():
                     "accuracy": True,
                     "priority": 0,
                 },
+                "thunderwave": {
+                    "id": "thunderwave",
+                    "name": "Thunder Wave",
+                    "type": "Electric",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 100,
+                    "priority": 0,
+                    "status": "par",
+                },
             },
             "species": {
                 "charizard": {"id": "charizard", "name": "Charizard", "types": ["Fire", "Flying"], "baseStats": {}},
@@ -588,7 +637,7 @@ def teacher_dex():
                 "psychic": {"Ghost": 1},
                 "ghost": {"Normal": 3, "Ghost": 2},
                 "rock": {"Fire": 2, "Water": 1},
-                "ground": {"Water": 1},
+                "ground": {"Electric": 3, "Water": 1},
                 "water": {"Fire": 2, "Rock": 2, "Ground": 2},
                 "normal": {"Ghost": 3},
             },
