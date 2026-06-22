@@ -538,6 +538,96 @@ class NeuralSelfPlayTest(unittest.TestCase):
             },
         )
 
+    def test_neural_cli_report_prints_manifest_summary_without_torch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            source = neural_report_source_metadata(branch="scott/neural-report", head="abc123", dirty=True)
+            write_neural_report_manifest(run_dir, source=source)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("current_policy: neural:", output)
+        self.assertIn("latest_checkpoint:", output)
+        self.assertIn("latest_accepted_checkpoint:", output)
+        self.assertIn("source_metadata:", output)
+        self.assertIn("available: yes", output)
+        self.assertIn("branch: scott/neural-report", output)
+        self.assertIn("head: abc123", output)
+        self.assertIn("dirty: yes", output)
+        self.assertIn("repo_root: /repo", output)
+        self.assertIn("iterations: 1", output)
+        self.assertIn("bench_wr", output)
+        self.assertIn("inc_wr", output)
+        self.assertIn("0.800", output)
+        self.assertIn("0.600", output)
+        self.assertIn("0.250000", output)
+        self.assertIn("0.7500", output)
+        self.assertIn("0.100000", output)
+        self.assertIn("0.5000", output)
+
+    def test_neural_cli_report_can_print_json_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            source = neural_report_source_metadata(branch="scott/json-report", head="def456", dirty=False)
+            write_neural_report_manifest(run_dir, source=source)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir), "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(payload["source"], source)
+        self.assertEqual(payload["iterations"][0]["iteration"], 1)
+        self.assertNotIn("source_metadata:", stdout.getvalue())
+
+    def test_neural_cli_report_reconstructs_from_iteration_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            source = neural_report_source_metadata(branch="scott/reconstructed", head="ghi789", dirty=False)
+            write_neural_report_manifest(run_dir, top_level=False, source=source)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("iterations: 1", output)
+        self.assertIn("branch: scott/reconstructed", output)
+        self.assertIn("head: ghi789", output)
+        self.assertIn("dirty: no", output)
+
+    def test_neural_cli_report_handles_missing_and_unavailable_source_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_run_dir = Path(temp_dir) / "missing"
+            unavailable_run_dir = Path(temp_dir) / "unavailable"
+            write_neural_report_manifest(missing_run_dir)
+            write_neural_report_manifest(
+                unavailable_run_dir,
+                source={
+                    "available": False,
+                    "repo_root": None,
+                    "branch": None,
+                    "head": None,
+                    "dirty": None,
+                    "error": "RuntimeError: git unavailable",
+                },
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as missing_stdout:
+                missing_exit = neural_cli_main(["report", "--run-dir", str(missing_run_dir)])
+            with patch("sys.stdout", new_callable=io.StringIO) as unavailable_stdout:
+                unavailable_exit = neural_cli_main(["report", "--run-dir", str(unavailable_run_dir)])
+
+        self.assertEqual(missing_exit, 0)
+        self.assertIn("source_metadata: -", missing_stdout.getvalue())
+        self.assertEqual(unavailable_exit, 0)
+        self.assertIn("available: no", unavailable_stdout.getvalue())
+        self.assertIn("error: RuntimeError: git unavailable", unavailable_stdout.getvalue())
+
     def test_torch_smoke_runs_train_save_load_benchmark_chain(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
@@ -577,6 +667,127 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
         self.assertIsNotNone(result.iterations[0].benchmark)
+
+
+def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict | None = None) -> None:
+    checkpoint_path = run_dir / "iteration-0001" / "transformer-policy.pt"
+    iteration_dir = run_dir / "iteration-0001"
+    iteration_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text("checkpoint", encoding="utf-8")
+    iteration_manifest = {
+        "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+        "iteration": 1,
+        "rollout_path": str(iteration_dir / "rollouts.jsonl"),
+        "training_rollout_path": str(iteration_dir / "training-rollouts.jsonl"),
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_policy_spec": f"neural:{checkpoint_path}",
+        "current_policy_spec": "random-legal",
+        "opponent_policy_specs": ["random-legal"],
+        "opponent_pool_config": {},
+        "invocation_config": {},
+        "training_rollout_paths": [str(iteration_dir / "training-rollouts.jsonl")],
+        "seed_start": 20,
+        "worker_count": 2,
+        "collection_metrics": {
+            "games": 3,
+            "elapsed_seconds": 2.0,
+            "total_decision_rounds": 6,
+            "total_simulator_turns": 5,
+            "p1_wins": 2,
+            "p2_wins": 0,
+            "ties": 0,
+            "capped_games": 1,
+        },
+        "training": {
+            "model_config": {"policy_id": "entity-test-iter-0001"},
+            "config": {},
+            "epochs": [
+                {
+                    "epoch": 1,
+                    "examples": 6,
+                    "loss": 0.25,
+                    "policy_loss": 0.2,
+                    "policy_accuracy": 0.75,
+                    "value_loss": 0.1,
+                    "opponent_loss": 0.05,
+                    "opponent_accuracy": 0.5,
+                }
+            ],
+        },
+        "benchmark": {
+            "format_id": "gen3randombattle",
+            "max_decision_rounds": 250,
+            "games_per_matchup": 10,
+            "total_games": 20,
+            "elapsed_seconds": 4.0,
+            "matchups": [],
+            "head_to_heads": [
+                {
+                    "label": "entity-test-iter-0001 vs random-legal",
+                    "first_policy_id": "entity-test-iter-0001",
+                    "second_policy_id": "random-legal",
+                    "games": 20,
+                    "first_policy_wins": 12,
+                    "second_policy_wins": 8,
+                    "ties": 0,
+                    "capped_games": 1,
+                },
+                {
+                    "label": "entity-test-iter-0001 vs simple-legal",
+                    "first_policy_id": "entity-test-iter-0001",
+                    "second_policy_id": "simple-legal",
+                    "games": 20,
+                    "first_policy_wins": 20,
+                    "second_policy_wins": 0,
+                    "ties": 0,
+                    "capped_games": 0,
+                }
+            ],
+        },
+        "advancement": {
+            "advance_collector": True,
+            "reason": "beat_incumbent",
+            "candidate_policy_id": "entity-test-iter-0001",
+            "incumbent_policy_id": "random-legal",
+            "candidate_win_rate": 0.6,
+            "incumbent_win_rate": 0.4,
+            "games": 20,
+        },
+        "promotion": {"recorded": False},
+        "next_current_policy_spec": f"neural:{checkpoint_path}",
+    }
+    if source is not None:
+        iteration_manifest["source"] = source
+    (iteration_dir / "manifest.json").write_text(json.dumps(iteration_manifest, indent=2), encoding="utf-8")
+    if not top_level:
+        return
+    run_manifest = {
+        "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+        "run_dir": str(run_dir),
+        "invocation_configs": [],
+        "latest_checkpoint_path": str(checkpoint_path),
+        "current_policy_spec": f"neural:{checkpoint_path}",
+        "latest_accepted_checkpoint_path": str(checkpoint_path),
+        "iterations": [iteration_manifest],
+    }
+    if source is not None:
+        run_manifest["source"] = source
+    (run_dir / "manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
+
+
+def neural_report_source_metadata(
+    *,
+    branch: str = "main",
+    head: str = "abc123",
+    dirty: bool = False,
+) -> dict:
+    return {
+        "available": True,
+        "repo_root": "/repo",
+        "branch": branch,
+        "head": head,
+        "dirty": dirty,
+    }
 
 
 def patched_neural_selfplay_dependencies(
