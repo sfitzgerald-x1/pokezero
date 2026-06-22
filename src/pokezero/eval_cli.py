@@ -3032,15 +3032,19 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     derived_audit_requirement_passed = (
         run_report.get("available") is True and run_report.get("audit_passed") is True
     )
-    exit_status = 0 if status == "passed" and (
-        not args.require_derived_audit or derived_audit_requirement_passed
-    ) else 2
+    if status != "passed":
+        exit_status = 2
+    elif not args.require_derived_audit or derived_audit_requirement_passed:
+        exit_status = 0
+    else:
+        exit_status = 2 if run_report.get("available") is True else 1
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["derived_run_report"] = run_report
-        payload["derived_audit_required"] = args.require_derived_audit
-        payload["derived_audit_requirement_passed"] = derived_audit_requirement_passed
+        if args.require_derived_audit:
+            payload["derived_audit_required"] = True
+            payload["derived_audit_requirement_passed"] = derived_audit_requirement_passed
         print(json.dumps(payload, indent=2, sort_keys=True))
         return exit_status
 
