@@ -3249,6 +3249,43 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 2)
         self.assertIn("status: RUNNING", stdout.getvalue())
 
+    def test_eval_cli_cpu_long_run_report_reads_real_launch_exception_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            summary_path = temp_path / "long-run-summary.json"
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=FileNotFoundError("missing python")),
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                run_exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--evaluation-games",
+                        "200",
+                    ]
+                )
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                report_exit_code = eval_cli_main(["cpu-long-run-report", str(summary_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(run_exit_code, 1)
+        self.assertEqual(report_exit_code, 2)
+        self.assertIn("status: FAIL", output)
+        self.assertIn("failed_reason: step_exception", output)
+        self.assertIn("failed_step_error: FileNotFoundError: missing python", output)
+
     def test_eval_cli_cpu_long_run_report_rejects_wrong_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
@@ -3259,6 +3296,17 @@ if __name__ == "__main__":
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Unsupported cpu long-run summary schema", stderr.getvalue())
+
+    def test_eval_cli_cpu_long_run_report_rejects_malformed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            summary_path.write_text("{not-json", encoding="utf-8")
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Expecting property name enclosed in double quotes", stderr.getvalue())
 
     def test_eval_cli_cpu_pilot_report_includes_pilot_smoke_preflight_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
