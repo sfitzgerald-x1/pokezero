@@ -3028,6 +3028,175 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 1)
         self.assertIn("require-promoted-opponent-pool-size cannot exceed max-historical-opponents", stderr.getvalue())
 
+    def test_eval_cli_cpu_long_run_run_executes_ready_plan_and_writes_passed_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            long_run_dir = temp_path / "long-run"
+            summary_path = long_run_dir / "cpu-long-run-run-summary.json"
+            completed = subprocess.CompletedProcess(args=["unused"], returncode=0)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", return_value=completed) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--run-dir",
+                        str(long_run_dir),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--iterations",
+                        "3",
+                        "--games-per-iteration",
+                        "12",
+                        "--evaluation-games",
+                        "200",
+                        "--require-calibration-run-count",
+                        "2",
+                        "--require-calibration-benchmark-iterations",
+                        "4",
+                        "--require-calibration-min-benchmark-games",
+                        "20",
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once()
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["./.venv/bin/python", "-m", "pokezero.selfplay_cli", "iterate"])
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
+        self.assertEqual(summary["schema_version"], "pokezero.cpu_long_run_summary.v1")
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(summary["recipe"]["long_run_ready"])
+        self.assertEqual(summary["recipe"]["long_run_ready_reasons"], [])
+        self.assertEqual(summary["steps"][0]["argv"], argv)
+        self.assertEqual(summary["steps"][0]["status"], "passed")
+        self.assertIsNone(summary["failed_step"])
+        self.assertIsNone(summary["failed_reason"])
+        self.assertEqual(summary["long_run_ready_reasons"], [])
+
+    def test_eval_cli_cpu_long_run_run_writes_failed_summary_without_launch_when_plan_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root = temp_path / "pilots"
+            summary = cpu_pilot_summary(status="failed")
+            write_json(pilot_root / "cpu-pilot-suite-summary.json", summary)
+            summary_path = temp_path / "long-run-summary.json"
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run") as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        "random-legal",
+                    ]
+                )
+            failed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 2)
+        run.assert_not_called()
+        self.assertIn("CPU long run is not ready", stderr.getvalue())
+        self.assertEqual(failed_summary["schema_version"], "pokezero.cpu_long_run_summary.v1")
+        self.assertEqual(failed_summary["status"], "failed")
+        self.assertEqual(failed_summary["failed_reason"], "long_run_not_ready")
+        self.assertEqual(failed_summary["steps"], [])
+        self.assertIn("pilot_suite_status_not_passed", failed_summary["long_run_ready_reasons"])
+        self.assertFalse(failed_summary["recipe"]["long_run_ready"])
+
+    def test_eval_cli_cpu_long_run_run_propagates_selfplay_failure_in_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            summary_path = temp_path / "long-run-summary.json"
+            completed = subprocess.CompletedProcess(args=["unused"], returncode=33)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", return_value=completed),
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--evaluation-games",
+                        "200",
+                    ]
+                )
+            failed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 33)
+        self.assertEqual(failed_summary["status"], "failed")
+        self.assertEqual(failed_summary["failed_step"]["index"], 1)
+        self.assertEqual(failed_summary["failed_step"]["returncode"], 33)
+        self.assertEqual(failed_summary["failed_reason"], "step_failed")
+        self.assertEqual(failed_summary["long_run_ready_reasons"], [])
+        self.assertEqual(failed_summary["steps"][0]["status"], "failed")
+        self.assertEqual(failed_summary["steps"][0]["returncode"], 33)
+
+    def test_eval_cli_cpu_long_run_run_records_subprocess_launch_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            summary_path = temp_path / "long-run-summary.json"
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=FileNotFoundError("missing python")),
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--evaluation-games",
+                        "200",
+                    ]
+                )
+            failed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("missing python", stderr.getvalue())
+        self.assertEqual(failed_summary["status"], "failed")
+        self.assertEqual(failed_summary["failed_reason"], "step_exception")
+        self.assertEqual(failed_summary["failed_step"]["error_type"], "FileNotFoundError")
+        self.assertEqual(failed_summary["steps"][0]["status"], "failed")
+        self.assertEqual(failed_summary["steps"][0]["returncode"], None)
+        self.assertEqual(failed_summary["steps"][0]["error_type"], "FileNotFoundError")
+
     def test_eval_cli_cpu_pilot_report_includes_pilot_smoke_preflight_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "pilots"
@@ -3884,6 +4053,46 @@ def cpu_pilot_summary(*, status: str, failed_step_index: int | None = None) -> d
             }
         ),
     }
+
+
+def write_ready_cpu_long_run_pilot(
+    temp_path: Path,
+    *,
+    min_latest_benchmark_games: int = 20,
+) -> tuple[Path, Path, Path, Path]:
+    pilot_root = temp_path / "pilots"
+    checkpoint_path = temp_path / "bootstrap" / "linear-bootstrap.json"
+    validation_path = temp_path / "bootstrap" / "validation-rollouts.jsonl"
+    audit_config_path = pilot_root / "pilot-audit-config.json"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text("{}", encoding="utf-8")
+    validation_path.write_text("", encoding="utf-8")
+    summary = cpu_pilot_summary(status="passed")
+    summary["recipe"]["audit_config_path"] = str(audit_config_path)
+    summary["recipe"]["calibration_output_path"] = str(pilot_root / "pilot-calibration-compare.json")
+    summary["recipe"]["replay_output_path"] = str(pilot_root / "pilot-audit-replay.json")
+    write_json(pilot_root / "cpu-pilot-suite-summary.json", summary)
+    write_json(
+        pilot_root / "pilot-calibration-compare.json",
+        {
+            "audit_calibration_sufficient": True,
+            "written_audit_config_path": str(audit_config_path),
+        },
+    )
+    write_json(pilot_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+    write_json(
+        audit_config_path,
+        run_audit_config_payload(
+            smoke_test_audit_config(),
+            calibration={
+                "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
+                "run_count": 2,
+                "benchmark_iteration_count": 4,
+                "min_latest_benchmark_games": min_latest_benchmark_games,
+            },
+        ),
+    )
+    return pilot_root, audit_config_path, checkpoint_path, validation_path
 
 
 def write_json(path: Path, payload: dict) -> None:

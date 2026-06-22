@@ -155,6 +155,23 @@ After a pilot suite is ready, generate the guarded long-run command from that sa
 
 The long-run plan is read-only. It fails closed unless the pilot suite passed, the generated audit config is ready under the requested calibration floors, and the requested `--evaluation-games` can satisfy the audit config's benchmark-game floor during post-iteration audit. When ready, it emits a `selfplay_cli iterate` command wired with `--audit-after-iteration --audit-config <generated-config>`, `--auto-promote`, and managed promotion artifact paths under the requested long-run directory. The `--initial-policy` remains explicit because the pilot suite calibrates guardrails; it does not decide which checkpoint should seed a longer experiment.
 
+Use the paired execution wrapper when the validated plan should actually launch and leave behind a wrapper artifact:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-long-run-run runs/cpu-pilots \
+  --run-dir runs/linear-long-run \
+  --initial-policy linear:runs/bootstrap/linear-bootstrap.json \
+  --validation-data runs/bootstrap/validation-rollouts.jsonl \
+  --iterations 20 \
+  --games-per-iteration 100 \
+  --evaluation-games 200 \
+  --require-calibration-run-count 2 \
+  --require-calibration-benchmark-iterations 4 \
+  --require-calibration-min-benchmark-games 50
+```
+
+`cpu-long-run-run` builds the same readiness-checked plan, writes `RUN_DIR/cpu-long-run-run-summary.json` by default, and only invokes the self-play command when the plan is ready. If readiness checks fail, it exits non-zero without launching self-play and still writes a failed summary containing the rejected plan and reasons. If the self-play process itself fails, the wrapper propagates that exit code and records the failed step.
+
 Import normalized replay decisions into standard rollout JSONL:
 
 ```bash
