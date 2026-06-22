@@ -266,10 +266,10 @@ The registry is the checkpoint-pool index for accepted policies: `selfplay_cli i
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 
 ```bash
-python -m pokezero.eval_cli promotions --registry runs/promotions.json --verify
+python -m pokezero.eval_cli promotions --registry runs/promotions.json --verify --verify-loadable
 ```
 
-This check is CPU-only and read-only. It uses the same raw checkpoint paths that policy selection consumes, so a relative path must resolve from the current working directory. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, or a stored checkpoint checksum no longer matches the file on disk. Add `--require-checksum` when every promoted entry is expected to come from a managed artifact copy with checksum metadata.
+This check is CPU-only and read-only. It uses the same raw checkpoint paths and policy specs that policy selection consumes, so a relative path must resolve from the current working directory. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, a promoted policy spec cannot be loaded, the loaded policy id disagrees with registry metadata, or a stored checkpoint checksum no longer matches the file on disk. Add `--require-checksum` when every promoted entry is expected to come from a managed artifact copy with checksum metadata.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 
