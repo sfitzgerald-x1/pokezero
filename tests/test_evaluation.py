@@ -3893,6 +3893,65 @@ if __name__ == "__main__":
         self.assertTrue(config["require_benchmark_opponent_coverage"])
         self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
 
+    def test_eval_cli_cpu_long_run_calibrate_reads_benchmark_games_from_older_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "older"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            report = long_run_derived_report(latest_benchmark_games=40, latest_benchmark_win_rate=0.70)
+            del report["latest_benchmark_games"]
+            summary["derived_run_report"] = report
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["samples"][0]["latest_benchmark_games"], 40)
+        self.assertEqual(payload["suggested_config"]["min_latest_benchmark_games"], 40)
+        self.assertEqual(payload["suggested_config"]["min_latest_benchmark_win_rate"], 0.63)
+
+    def test_eval_cli_cpu_long_run_calibrate_envelope_exposes_thin_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            thin_root = temp_path / "thin"
+            thick_root = temp_path / "thick"
+            thin_summary = cpu_long_run_summary(status="passed")
+            thin_summary["recipe"]["run_dir"] = str(thin_root)
+            thin_summary["derived_run_report"] = long_run_derived_report(
+                latest_benchmark_games=5,
+                latest_benchmark_win_rate=0.55,
+            )
+            thick_summary = cpu_long_run_summary(status="passed")
+            thick_summary["recipe"]["run_dir"] = str(thick_root)
+            thick_summary["derived_run_report"] = long_run_derived_report(
+                latest_benchmark_games=100,
+                latest_benchmark_win_rate=0.85,
+            )
+            write_json(thin_root / "cpu-long-run-run-summary.json", thin_summary)
+            write_json(thick_root / "cpu-long-run-run-summary.json", thick_summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-calibrate",
+                        str(thin_root),
+                        str(thick_root),
+                        "--json",
+                        "--aggregate-mode",
+                        "envelope",
+                        "--require-min-benchmark-games",
+                        "50",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["calibration_sufficient"])
+        self.assertEqual(payload["suggested_config"]["min_latest_benchmark_games"], 5)
+        self.assertIn("calibration_min_benchmark_games 5 is below required 50", payload["calibration_sufficiency_errors"])
+
     def test_eval_cli_cpu_long_run_calibrate_writes_config_after_sufficiency_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "run"
@@ -3943,6 +4002,26 @@ if __name__ == "__main__":
         self.assertEqual(payload["summary_count"], 0)
         self.assertEqual(payload["error_count"], 1)
         self.assertIn("long-run summary is not passed", payload["errors"][0]["error"])
+
+    def test_eval_cli_cpu_long_run_calibrate_rejects_failing_derived_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "failed-report"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            report = long_run_derived_report()
+            report["audit_passed"] = False
+            report["failed_checks"] = ["latest_benchmark_win_rate"]
+            summary["derived_run_report"] = report
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["summary_count"], 0)
+        self.assertEqual(payload["error_count"], 1)
+        self.assertIn("derived run report did not pass", payload["errors"][0]["error"])
 
     def test_eval_cli_cpu_long_run_report_json_includes_rejected_plan_reasons(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

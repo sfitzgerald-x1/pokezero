@@ -568,16 +568,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--aggregate-mode",
         choices=("median", "envelope"),
         default="median",
-        help="How to combine multiple summary-derived calibrations.",
+        help=(
+            "How to combine multiple summary-derived calibrations. "
+            "median resists noisy pilots; envelope keeps every supplied summary passable."
+        ),
     )
     long_run_calibrate.add_argument(
         "--refresh-derived-audit",
         action="store_true",
         help="Ignore persisted derived_run_report snapshots and recompute current derived audit health.",
     )
-    long_run_calibrate.add_argument("--require-run-count", type=int, default=0)
-    long_run_calibrate.add_argument("--require-benchmark-iterations", type=int, default=0)
-    long_run_calibrate.add_argument("--require-min-benchmark-games", type=int, default=0)
+    long_run_calibrate.add_argument(
+        "--require-run-count",
+        type=int,
+        default=0,
+        help="Require at least this many valid wrapper summaries before accepting or writing calibration output.",
+    )
+    long_run_calibrate.add_argument(
+        "--require-benchmark-iterations",
+        type=int,
+        default=0,
+        help=(
+            "Require at least this many benchmarked summary-derived reports. "
+            "Each wrapper summary contributes at most one report."
+        ),
+    )
+    long_run_calibrate.add_argument(
+        "--require-min-benchmark-games",
+        type=int,
+        default=0,
+        help=(
+            "Require the aggregate suggested min_latest_benchmark_games to meet this floor. "
+            "Use --aggregate-mode envelope when every selected summary must meet it individually."
+        ),
+    )
     long_run_calibrate.add_argument(
         "--write-config",
         type=Path,
