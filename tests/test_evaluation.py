@@ -1149,6 +1149,8 @@ class PromotionGateTest(unittest.TestCase):
         calibration_argv = recipe["steps"][2]["argv"]
         self.assertIn("--write-audit-config", calibration_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), calibration_argv)
+        self.assertIn("--calibration-aggregate-mode", calibration_argv)
+        self.assertEqual(calibration_argv[calibration_argv.index("--calibration-aggregate-mode") + 1], "envelope")
         self.assertIn("--calibration-require-run-count", calibration_argv)
         self.assertIn("2", calibration_argv)
         audit_argv = recipe["steps"][3]["argv"]
@@ -1212,6 +1214,7 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(second_pilot_argv[second_pilot_argv.index("--seed-start") + 1], "250")
         calibration_argv = run.call_args_list[2].args[0]
         self.assertEqual(calibration_argv[:4], ["./.venv/bin/python", "-m", "pokezero.eval_cli", "compare"])
+        self.assertEqual(calibration_argv[calibration_argv.index("--calibration-aggregate-mode") + 1], "envelope")
         self.assertIn("--write-audit-config", calibration_argv)
         output = stdout.getvalue()
         self.assertIn("cpu_pilot_run:", output)
@@ -1256,6 +1259,8 @@ def collection_metrics():
 
 
 def benchmark_payload(policy_id):
+    wins = 1 if policy_id.endswith("300") else 4
+    losses = 4 - wins
     return {{
         "format_id": "gen3randombattle",
         "max_decision_rounds": 250,
@@ -1266,12 +1271,12 @@ def benchmark_payload(policy_id):
                 "first_policy_id": policy_id,
                 "second_policy_id": "random-legal",
                 "games": 4,
-                "first_policy_wins": 4,
-                "second_policy_wins": 0,
+                "first_policy_wins": wins,
+                "second_policy_wins": losses,
                 "ties": 0,
                 "capped_games": 0,
-                "first_policy_win_rate": 1.0,
-                "second_policy_win_rate": 0.0,
+                "first_policy_win_rate": wins / 4,
+                "second_policy_win_rate": losses / 4,
             }}
         ],
         "matchups": [],
@@ -1360,6 +1365,8 @@ if __name__ == "__main__":
             )
             summary = json.loads((run_root / "cpu-pilot-suite-summary.json").read_text(encoding="utf-8"))
             audit_config = json.loads((run_root / "pilot-audit-config.json").read_text(encoding="utf-8"))
+            pilot_1_manifest = json.loads((run_root / "pilot-0001" / "selfplay" / "manifest.json").read_text(encoding="utf-8"))
+            pilot_2_manifest = json.loads((run_root / "pilot-0002" / "selfplay" / "manifest.json").read_text(encoding="utf-8"))
             pilot_1_manifest_exists = (run_root / "pilot-0001" / "selfplay" / "manifest.json").exists()
             pilot_2_manifest_exists = (run_root / "pilot-0002" / "selfplay" / "manifest.json").exists()
 
@@ -1369,8 +1376,11 @@ if __name__ == "__main__":
         self.assertEqual(summary["recipe"]["benchmark_iterations_required"], 2)
         self.assertTrue(pilot_1_manifest_exists)
         self.assertTrue(pilot_2_manifest_exists)
+        self.assertEqual(pilot_1_manifest["iterations"][0]["benchmark"]["head_to_heads"][0]["first_policy_win_rate"], 0.25)
+        self.assertEqual(pilot_2_manifest["iterations"][0]["benchmark"]["head_to_heads"][0]["first_policy_win_rate"], 1.0)
         self.assertEqual(audit_config["schema_version"], "pokezero.run_audit_config.v1")
         self.assertEqual(audit_config["calibration"]["run_count"], 2)
+        self.assertLessEqual(audit_config["config"]["min_latest_benchmark_win_rate"], 0.25)
 
     def test_eval_cli_cpu_pilot_run_stops_on_failed_step(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

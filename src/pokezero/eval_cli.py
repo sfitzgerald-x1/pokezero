@@ -2154,6 +2154,8 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "--manifest-glob",
                 str(manifest_glob),
                 "--suggest-audit-calibration",
+                "--calibration-aggregate-mode",
+                "envelope",
                 "--calibration-require-run-count",
                 str(args.pilot_count),
                 "--calibration-require-benchmark-iterations",

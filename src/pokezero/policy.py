@@ -22,6 +22,10 @@ _STATUS_CURE_WEIGHTS = {
     "frz": 2.0,
 }
 _SIDE_HAZARDS = {"spikes", "stealthrock", "toxicspikes"}
+# Showdown can expose Recharge as a forced pseudo-move after Hyper Beam-style moves.
+# Other forced Gen 3 moves seen in requests, including Struggle and lock-in moves,
+# are ordinary dex moves and should keep using normal strict validation.
+_FORCED_PSEUDO_MOVE_IDS = {"recharge"}
 
 
 @dataclass(frozen=True)
@@ -278,6 +282,8 @@ def _unknown_legal_move_names(candidates: Sequence[Mapping[str, Any]], dex: Show
         if candidate.get("kind") != "move":
             continue
         move_name = str(candidate.get("move_id") or candidate.get("move_name") or "")
+        if normalize_id(move_name) in _FORCED_PSEUDO_MOVE_IDS:
+            continue
         if not dex.move_info(move_name):
             missing.append(str(candidate.get("move_name") or candidate.get("move_id") or "unknown"))
     return tuple(missing)
@@ -292,7 +298,12 @@ def _move_score(
     team_status_cure_score: float,
 ) -> _ActionScore:
     action_index = int(candidate["action_index"])
-    move = dex.move_info(str(candidate.get("move_id") or candidate.get("move_name") or ""))
+    raw_move_name = str(candidate.get("move_id") or candidate.get("move_name") or "")
+    raw_move_id = normalize_id(raw_move_name)
+    if raw_move_id in _FORCED_PSEUDO_MOVE_IDS:
+        display_name = str(candidate.get("move_name") or candidate.get("move_id") or "forced move")
+        return _ActionScore(action_index, "move", 1.0, f"{display_name}: forced pseudo-move")
+    move = dex.move_info(raw_move_name)
     if move is None:
         if not allow_unknown_moves:
             raise ValueError(f"scripted-teacher could not resolve move: {candidate.get('move_name') or candidate.get('move_id')}")
