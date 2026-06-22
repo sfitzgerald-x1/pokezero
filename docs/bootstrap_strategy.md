@@ -339,6 +339,8 @@ The compare command still returns non-zero when any manifest cannot be loaded. I
 
 For compare-time calibration, use `--calibration-require-run-count`, `--calibration-require-benchmark-iterations`, and `--calibration-require-min-benchmark-games` to make the comparison fail when too few valid compared runs, benchmark iterations, or benchmark games contributed to the suggested thresholds.
 
+Add `--write-audit-config runs/audit-configs/pilot-comparison.json` when a passing comparison calibration should produce the reusable versioned audit config directly. Like `audit-calibrate --write-config`, compare-time config writing requires `--suggest-audit-calibration` plus at least one calibration sufficiency requirement, and it refuses to write when any compared manifest failed to load or when sufficiency checks fail.
+
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
 ```bash
