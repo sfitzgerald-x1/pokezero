@@ -469,7 +469,11 @@ def _promotions(args: argparse.Namespace) -> int:
         opponent_pool=opponent_pool,
         current_policy_spec=preview_current_policy_spec,
     )
-    lifecycle_summary = _promotion_lifecycle_summary(entry_statuses)
+    lifecycle_summary = _promotion_lifecycle_summary(
+        entry_statuses,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
     opponent_pool_verified = _opponent_pool_verification_passed(
         entry_statuses,
         verification=verification,
@@ -733,13 +737,24 @@ def _opponent_pool_snapshot_entry(status: Mapping[str, object]) -> dict[str, obj
     }
 
 
-def _promotion_lifecycle_summary(entry_statuses: list[dict[str, object]]) -> dict[str, object]:
+def _promotion_lifecycle_summary(
+    entry_statuses: list[dict[str, object]],
+    *,
+    verification,
+    opponent_pool,
+) -> dict[str, object]:
     total_entries = len(entry_statuses)
+    opponent_pool_requested = opponent_pool is not None
+    verification_enabled = verification is not None
     latest_count = sum(1 for status in entry_statuses if "latest" in status["selected_as"])
     selected_opponent_pool_count = sum(1 for status in entry_statuses if "opponent_pool" in status["selected_as"])
     status_counts = _count_status_values(entry_statuses, "opponent_pool_status")
     verification_counts = _count_status_values(entry_statuses, "verification_status")
-    unselectable_count = int(status_counts.get("unselectable", 0))
+    unselectable_count = sum(
+        1
+        for status in entry_statuses
+        if status["selection_checkpoint_policy_spec"] is None
+    )
     excluded_current_policy_count = int(status_counts.get("excluded_current_policy", 0))
     stale_available_count = int(status_counts.get("available_outside_requested_size", 0))
     selection_eligible_count = sum(
@@ -747,16 +762,30 @@ def _promotion_lifecycle_summary(entry_statuses: list[dict[str, object]]) -> dic
         for status in entry_statuses
         if status["selection_checkpoint_policy_spec"] is not None
     )
-    failed_verification_count = int(verification_counts.get("fail", 0))
+    failed_entry_verification_count = int(verification_counts.get("fail", 0))
+    registry_level_failed_verification_count = (
+        0
+        if verification is None
+        else sum(1 for check in verification.checks if check.entry_sequence is None and not check.passed)
+    )
+    selected_opponent_pool_unhealthy_count = sum(
+        1
+        for status in entry_statuses
+        if "opponent_pool" in status["selected_as"] and status["failed_checks"]
+    )
     return {
         "total_entries": total_entries,
+        "opponent_pool_requested": opponent_pool_requested,
+        "verification_enabled": verification_enabled,
         "latest_count": latest_count,
         "selected_opponent_pool_count": selected_opponent_pool_count,
+        "selected_opponent_pool_unhealthy_count": selected_opponent_pool_unhealthy_count,
         "selection_eligible_count": selection_eligible_count,
         "unselectable_count": unselectable_count,
         "excluded_current_policy_count": excluded_current_policy_count,
         "stale_available_count": stale_available_count,
-        "failed_verification_count": failed_verification_count,
+        "failed_verification_count": failed_entry_verification_count,
+        "registry_level_failed_verification_count": registry_level_failed_verification_count,
         "opponent_pool_status_counts": status_counts,
         "verification_status_counts": verification_counts,
     }
@@ -773,13 +802,17 @@ def _count_status_values(entry_statuses: list[dict[str, object]], key: str) -> d
 def _print_promotion_lifecycle_summary(summary: Mapping[str, object]) -> None:
     print("lifecycle_summary:")
     print(f"- total_entries: {summary['total_entries']}")
+    print(f"- opponent_pool_requested: {summary['opponent_pool_requested']}")
+    print(f"- verification_enabled: {summary['verification_enabled']}")
     print(f"- latest_count: {summary['latest_count']}")
     print(f"- selected_opponent_pool_count: {summary['selected_opponent_pool_count']}")
+    print(f"- selected_opponent_pool_unhealthy_count: {summary['selected_opponent_pool_unhealthy_count']}")
     print(f"- selection_eligible_count: {summary['selection_eligible_count']}")
     print(f"- unselectable_count: {summary['unselectable_count']}")
     print(f"- excluded_current_policy_count: {summary['excluded_current_policy_count']}")
     print(f"- stale_available_count: {summary['stale_available_count']}")
     print(f"- failed_verification_count: {summary['failed_verification_count']}")
+    print(f"- registry_level_failed_verification_count: {summary['registry_level_failed_verification_count']}")
     _print_count_mapping("opponent_pool_status_counts", summary["opponent_pool_status_counts"])
     _print_count_mapping("verification_status_counts", summary["verification_status_counts"])
 
