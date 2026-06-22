@@ -2,6 +2,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -14,6 +16,7 @@ from pokezero.opponents import historical_opponent_policy_specs
 from pokezero.promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
     NEURAL_SELFPLAY_SOURCE_TYPE,
+    _promotion_registry_lock,
     load_promotion_registry,
     record_promotion,
     verify_promotion_registry,
@@ -28,6 +31,22 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(registry.entries, ())
         self.assertIsNone(registry.latest)
+
+    def test_promotion_registry_lock_warns_when_fcntl_is_unavailable(self) -> None:
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "fcntl":
+                raise ImportError("fcntl unavailable")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = Path(temp_dir) / "promotions.json"
+
+            with patch("builtins.__import__", side_effect=fake_import):
+                with self.assertWarnsRegex(RuntimeWarning, "requires fcntl"):
+                    with _promotion_registry_lock(registry_path):
+                        pass
 
     def test_record_promotion_writes_gate_passing_checkpoint_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -302,6 +321,51 @@ class PromotionRegistryTest(unittest.TestCase):
             [entry.checkpoint_path for entry in loaded.entries],
             ["run/iteration-0001/linear-policy.json", "run-b/iteration-0001/linear-policy.json"],
         )
+
+    def test_record_promotion_serializes_concurrent_artifact_promotions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_manifest_path = temp_path / "run-a" / "manifest.json"
+            second_manifest_path = temp_path / "run-b" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            artifact_dir = temp_path / "promoted-checkpoints"
+            first_manifest = selfplay_manifest()
+            second_manifest = selfplay_manifest()
+            set_manifest_identity(
+                first_manifest,
+                policy_id="linear-concurrent-a",
+                checkpoint_path="run-a/iteration-0001/linear-policy.json",
+            )
+            set_manifest_identity(
+                second_manifest,
+                policy_id="linear-concurrent-b",
+                checkpoint_path="run-b/iteration-0001/linear-policy.json",
+            )
+            write_manifest(first_manifest_path, first_manifest)
+            write_manifest(second_manifest_path, second_manifest)
+            write_checkpoint_for_manifest(temp_path, first_manifest)
+            write_checkpoint_for_manifest(temp_path, second_manifest)
+
+            processes = [
+                start_promotion_subprocess(first_manifest_path, registry_path, artifact_dir),
+                start_promotion_subprocess(second_manifest_path, registry_path, artifact_dir),
+            ]
+            results = [process.communicate(timeout=30) for process in processes]
+            return_codes = [process.returncode for process in processes]
+            loaded = load_promotion_registry(registry_path)
+            artifact_paths = [Path(entry.checkpoint_path or "") for entry in loaded.entries]
+            artifact_exists = [path.exists() for path in artifact_paths]
+            artifact_parents = [path.parent for path in artifact_paths]
+
+            self.assertEqual(return_codes, [0, 0], results)
+            self.assertEqual([entry.sequence for entry in loaded.entries], [1, 2])
+            self.assertEqual(
+                sorted(entry.policy_id for entry in loaded.entries),
+                ["linear-concurrent-a", "linear-concurrent-b"],
+            )
+            self.assertEqual(len({entry.checkpoint_path for entry in loaded.entries}), 2)
+            self.assertEqual(artifact_exists, [True, True])
+            self.assertEqual(artifact_parents, [artifact_dir, artifact_dir])
 
     def test_eval_cli_gate_defaults_incumbent_from_registry_latest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1187,6 +1251,47 @@ def passing_gate_config() -> PromotionGateConfig:
         min_benchmark_win_rate=0.60,
         min_benchmark_games=20,
         max_collection_capped_rate=0.20,
+    )
+
+
+def start_promotion_subprocess(manifest_path: Path, registry_path: Path, artifact_dir: Path) -> subprocess.Popen:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_path = repo_root / "src"
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        str(src_path) if not existing_pythonpath else f"{src_path}{os.pathsep}{existing_pythonpath}"
+    )
+    code = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "from pokezero.evaluation import PromotionGateConfig\n"
+        "from pokezero.promotion import record_promotion\n"
+        "record_promotion(\n"
+        "    Path(sys.argv[1]),\n"
+        "    registry_path=Path(sys.argv[2]),\n"
+        "    artifact_dir=Path(sys.argv[3]),\n"
+        "    config=PromotionGateConfig(\n"
+        "        min_benchmark_win_rate=0.60,\n"
+        "        min_benchmark_games=20,\n"
+        "        max_collection_capped_rate=0.20,\n"
+        "    ),\n"
+        ")\n"
+    )
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(manifest_path),
+            str(registry_path),
+            str(artifact_dir),
+        ],
+        cwd=repo_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
 
