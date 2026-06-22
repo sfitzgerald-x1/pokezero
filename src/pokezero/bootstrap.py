@@ -219,6 +219,55 @@ def run_teacher_bootstrap(
     return result
 
 
+def benchmark_teacher_policy(
+    *,
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    teacher_policy_spec: str = "scripted-teacher",
+    baseline_policy_specs: Iterable[str] | None = None,
+    games: int = DEFAULT_BENCHMARK_GAMES,
+    seed_start: int = 1,
+) -> BenchmarkReport:
+    if games <= 0:
+        raise ValueError("games must be positive.")
+    baselines = (
+        DEFAULT_BASELINE_OPPONENT_POLICY_SPECS
+        if baseline_policy_specs is None
+        else tuple(dict.fromkeys(baseline_policy_specs))
+    )
+    if not baselines:
+        raise ValueError("at least one baseline policy spec is required.")
+    teacher_policy_id = policy_from_spec(teacher_policy_spec).policy_id
+    matchups: list[BenchmarkMatchup] = []
+    for baseline_spec in baselines:
+        baseline_policy_id = policy_from_spec(baseline_spec).policy_id
+        if baseline_policy_id == teacher_policy_id:
+            continue
+        matchups.extend(
+            (
+                BenchmarkMatchup(
+                    f"{teacher_policy_id} vs {baseline_policy_id}",
+                    policy_from_spec(teacher_policy_spec),
+                    policy_from_spec(baseline_spec),
+                ),
+                BenchmarkMatchup(
+                    f"{baseline_policy_id} vs {teacher_policy_id}",
+                    policy_from_spec(baseline_spec),
+                    policy_from_spec(teacher_policy_spec),
+                ),
+            )
+        )
+    if not matchups:
+        raise ValueError("teacher benchmark requires at least one baseline distinct from the teacher.")
+    return benchmark_rollouts(
+        games=games,
+        env_factory=env_factory,
+        rollout_config=rollout_config,
+        seed_start=seed_start,
+        matchups=tuple(matchups),
+    )
+
+
 def _default_opponent_policy_specs(teacher_policy_spec: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((teacher_policy_spec, *DEFAULT_BASELINE_OPPONENT_POLICY_SPECS)))
 

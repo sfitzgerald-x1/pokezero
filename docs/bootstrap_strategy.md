@@ -96,6 +96,16 @@ python -m pokezero.bootstrap_cli teacher \
 
 This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, baseline benchmark results, and `manifest.json`.
 
+Quickly benchmark the scripted teacher itself against fixed baselines before running a full bootstrap:
+
+```bash
+python -m pokezero.bootstrap_cli teacher-benchmark \
+  --games 50 \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+Use this as a cheap quality check after changing scripted-teacher heuristics. It does not train a checkpoint or write a manifest.
+
 Default teacher bootstrap collection includes three opponent families:
 
 - teacher mirror games, which reduce immediate covariate shift between bootstrap data and clone-vs-clone deployment

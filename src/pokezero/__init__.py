@@ -28,6 +28,7 @@ from .bootstrap import (
     DEFAULT_PREFLIGHT_SEED_START,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
     TeacherBootstrapResult,
+    benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
 from .collection import (
@@ -351,6 +352,7 @@ __all__ = [
     "rollout_record_from_normalized_replay",
     "rollout_record_to_dict",
     "audit_run",
+    "benchmark_teacher_policy",
     "enforce_run_audit",
     "run_neural_selfplay_iterations",
     "run_selfplay_iterations",

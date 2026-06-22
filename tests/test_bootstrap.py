@@ -11,10 +11,11 @@ from pokezero.bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
+    benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
 from pokezero.bootstrap_cli import main as bootstrap_cli_main
-from pokezero.collection import CollectionMetrics, read_rollout_records
+from pokezero.collection import BenchmarkMatchupResult, BenchmarkReport, CollectionMetrics, read_rollout_records
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
@@ -210,6 +211,28 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertIn("linear-bootstrap-test vs simple-legal", labels)
         self.assertNotIn("linear-bootstrap-test vs scripted-teacher", labels)
 
+    def test_benchmark_teacher_policy_runs_teacher_against_baseline_in_both_seats(self) -> None:
+        report = benchmark_teacher_policy(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            teacher_policy_spec="simple-legal",
+            baseline_policy_specs=("random-legal",),
+            games=1,
+            seed_start=10,
+        )
+
+        self.assertEqual(report.total_games, 2)
+        self.assertEqual(
+            [matchup.label for matchup in report.matchups],
+            ["simple-legal vs random-legal", "random-legal vs simple-legal"],
+        )
+        self.assertEqual(len(report.head_to_head_results), 1)
+        head_to_head = report.head_to_head_results[0]
+        self.assertEqual(head_to_head.first_policy_id, "simple-legal")
+        self.assertEqual(head_to_head.second_policy_id, "random-legal")
+        self.assertEqual(head_to_head.first_policy_wins, 1)
+        self.assertEqual(head_to_head.second_policy_wins, 1)
+
     def test_run_teacher_bootstrap_refuses_existing_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -375,3 +398,63 @@ class TeacherBootstrapTest(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertIsNone(kwargs["opponent_policy_specs"])
         self.assertEqual(kwargs["benchmark_games"], DEFAULT_BENCHMARK_GAMES)
+
+    def test_bootstrap_cli_teacher_benchmark_wires_arguments_and_json(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=2,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher vs random-legal",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+
+        with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_report) as benchmark:
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = bootstrap_cli_main(
+                    [
+                        "teacher-benchmark",
+                        "--games",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--max-decision-rounds",
+                        "12",
+                        "--seed-start",
+                        "10",
+                        "--teacher-policy",
+                        "scripted-teacher?allow_fallback=true",
+                        "--baseline-policy",
+                        "random-legal",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = benchmark.call_args.kwargs
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["seed_start"], 10)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 12)
+        expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
+        self.assertIn(expected_showdown_root, kwargs["teacher_policy_spec"])
+        self.assertEqual(len(kwargs["baseline_policy_specs"]), 1)
+        self.assertEqual(kwargs["baseline_policy_specs"][0], "random-legal")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["total_games"], 2)
+        self.assertEqual(payload["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
