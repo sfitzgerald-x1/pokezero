@@ -1224,24 +1224,12 @@ def _profile_audit_payload(
 ) -> dict[str, object]:
     runs = []
     for path in paths:
-        try:
-            result = audit_run(path, config=config)
-        except Exception as exc:
-            runs.append(
-                {
-                    "manifest_path": str(path),
-                    "passed": False,
-                    "failed_checks": [],
-                    "error": str(exc),
-                }
-            )
-            continue
+        result = audit_run(path, config=config)
         runs.append(
             {
                 "manifest_path": str(result.manifest_path),
                 "passed": result.passed,
                 "failed_checks": [check.name for check in result.checks if not check.passed],
-                "error": None,
             }
         )
     return {
@@ -1252,6 +1240,7 @@ def _profile_audit_payload(
 
 
 def _print_profile_audit(payload: dict[str, object]) -> None:
+    print("")
     print("profile_audit:")
     print(f"profile: {payload['profile']}")
     print(f"status: {'PASS' if payload['passed'] else 'FAIL'}")
@@ -1261,8 +1250,6 @@ def _print_profile_audit(payload: dict[str, object]) -> None:
         print(f"- {run_status} {run['manifest_path']}")
         if run["failed_checks"]:
             print(f"  failed_checks: {', '.join(run['failed_checks'])}")
-        if run["error"]:
-            print(f"  error: {run['error']}")
 
 
 def _print_run_comparison(result) -> None:
