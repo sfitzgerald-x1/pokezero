@@ -2300,10 +2300,14 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         require_calibration_min_benchmark_games=args.require_calibration_min_benchmark_games,
     )
     passed = all(bool(check["passed"]) for check in checks)
+    config_dict = run_audit_config_to_dict(config_payload["config_object"])
     report = {
         "audit_config_path": str(args.audit_config),
         "schema_version": config_payload["schema_version"],
-        "config": run_audit_config_to_dict(config_payload["config_object"]),
+        "config": config_dict,
+        "minimum_evaluation_games": _minimum_selfplay_post_iteration_evaluation_games(config_dict),
+        "post_iteration_flags": list(_post_iteration_audit_config_cli_flags(config_dict)),
+        "post_iteration_command_flags": list(_post_iteration_selfplay_command_flags(config_dict)),
         "source": config_payload["source"],
         "calibration": config_payload["calibration"],
         "preflight_requested": bool(preflight_runs),
@@ -2544,6 +2548,13 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
     if isinstance(config, Mapping):
         for key, value in config.items():
             print(f"- {key}: {_format_summary_value(value)}")
+    print("post_iteration_flags:")
+    post_iteration_flags = tuple(str(flag) for flag in report.get("post_iteration_flags", ()))
+    print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
+    print(f"minimum_evaluation_games: {_format_summary_value(report.get('minimum_evaluation_games'))}")
+    print("post_iteration_command_flags:")
+    command_flags = tuple(str(flag) for flag in report.get("post_iteration_command_flags", ()))
+    print(" ".join(command_flags) if command_flags else "-")
     preflight_passed = report.get("preflight_passed")
     if preflight_passed is None:
         if report.get("preflight_required"):
@@ -4194,6 +4205,22 @@ def _post_iteration_audit_config_cli_flags(config: Mapping[str, object]) -> tupl
         if config.get("require_latest_promotion")
         else "--audit-allow-missing-latest-promotion"
     )
+    return tuple(flags)
+
+
+def _minimum_selfplay_post_iteration_evaluation_games(config: Mapping[str, object]) -> int:
+    if not config.get("require_benchmark"):
+        return 0
+    min_latest_benchmark_games = int(config.get("min_latest_benchmark_games") or 0)
+    return max(1, math.ceil(min_latest_benchmark_games / MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS))
+
+
+def _post_iteration_selfplay_command_flags(config: Mapping[str, object]) -> tuple[str, ...]:
+    flags: list[str] = []
+    minimum_evaluation_games = _minimum_selfplay_post_iteration_evaluation_games(config)
+    if minimum_evaluation_games > 0:
+        flags.extend(("--evaluation-games", str(minimum_evaluation_games)))
+    flags.extend(_post_iteration_audit_config_cli_flags(config))
     return tuple(flags)
 
 
