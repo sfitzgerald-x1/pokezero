@@ -1607,6 +1607,30 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["paths"], [str(second_path), str(first_path)])
         self.assertEqual(payload["aggregate_mode"], "median")
 
+    def test_eval_cli_audit_calibrate_single_manifest_glob_uses_single_run_calibration(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "pilot-a" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        "--manifest-glob",
+                        str(temp_path / "pilot-*" / "manifest.json"),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("run_count", payload)
+        self.assertEqual(payload["manifest_path"], str(manifest_path))
+
     def test_eval_cli_audit_calibrate_rejects_missing_paths_and_empty_globs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1626,6 +1650,46 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("provide at least one path or --manifest-glob", missing_paths_stderr.getvalue())
         self.assertEqual(empty_glob_exit, 1)
         self.assertIn("--manifest-glob matched no paths", empty_glob_stderr.getvalue())
+
+    def test_eval_cli_audit_calibrate_ignores_empty_glob_when_other_paths_match(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "pilot-a" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["manifest_path"], str(manifest_path))
+
+    def test_eval_cli_audit_calibrate_preserves_positional_duplicates(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-calibrate", str(manifest_path), str(manifest_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["run_count"], 2)
+        self.assertEqual(payload["paths"], [str(manifest_path), str(manifest_path)])
 
     def test_eval_cli_audit_calibrate_prints_text_flags(self) -> None:
         manifest = selfplay_manifest(
@@ -2200,6 +2264,30 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual([entry["manifest_path"] for entry in payload["entries"]], [str(first_path), str(second_path)])
         self.assertEqual(payload["errors"], [])
+
+    def test_eval_cli_compare_ignores_empty_glob_when_other_paths_match(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "pilot-a" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([entry["manifest_path"] for entry in payload["entries"]], [str(manifest_path)])
 
     def test_eval_cli_compare_rejects_missing_paths_and_empty_globs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

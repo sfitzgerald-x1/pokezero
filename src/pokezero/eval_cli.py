@@ -1742,22 +1742,25 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 def _expanded_manifest_paths(paths: Iterable[Path], manifest_globs: Iterable[str] | None) -> tuple[Path, ...]:
     expanded: list[Path] = list(paths)
+    seen_for_discovery = {str(path.expanduser().resolve(strict=False)) for path in expanded}
+    unmatched_patterns: list[str] = []
     for pattern in manifest_globs or ():
-        matches = tuple(Path(match) for match in sorted(glob.glob(pattern, recursive=True)))
+        expanded_pattern = str(Path(pattern).expanduser())
+        matches = tuple(Path(match) for match in sorted(glob.glob(expanded_pattern, recursive=True)))
         if not matches:
-            raise ValueError(f"--manifest-glob matched no paths: {pattern}")
-        expanded.extend(matches)
-    if not expanded:
-        raise ValueError("provide at least one path or --manifest-glob.")
-    deduped: list[Path] = []
-    seen: set[str] = set()
-    for path in expanded:
-        key = str(path.expanduser().resolve(strict=False))
-        if key in seen:
+            unmatched_patterns.append(pattern)
             continue
-        seen.add(key)
-        deduped.append(path)
-    return tuple(deduped)
+        for match in matches:
+            key = str(match.expanduser().resolve(strict=False))
+            if key in seen_for_discovery:
+                continue
+            seen_for_discovery.add(key)
+            expanded.append(match)
+    if not expanded:
+        if unmatched_patterns:
+            raise ValueError("--manifest-glob matched no paths: " + ", ".join(unmatched_patterns))
+        raise ValueError("provide at least one path or --manifest-glob.")
+    return tuple(expanded)
 
 
 def _audit_calibration_config_payload(result) -> dict[str, object]:
