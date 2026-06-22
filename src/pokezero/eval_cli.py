@@ -1741,9 +1741,11 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 
 def _expanded_manifest_paths(paths: Iterable[Path], manifest_globs: Iterable[str] | None) -> tuple[Path, ...]:
-    expanded: list[Path] = list(paths)
-    seen_for_discovery = {str(path.expanduser().resolve(strict=False)) for path in expanded}
+    expanded: list[Path] = []
+    seen: set[str] = set()
     unmatched_patterns: list[str] = []
+    for path in paths:
+        _append_discovered_manifest_path(expanded, seen, path)
     for pattern in manifest_globs or ():
         expanded_pattern = str(Path(pattern).expanduser())
         matches = tuple(Path(match) for match in sorted(glob.glob(expanded_pattern, recursive=True)))
@@ -1751,16 +1753,32 @@ def _expanded_manifest_paths(paths: Iterable[Path], manifest_globs: Iterable[str
             unmatched_patterns.append(pattern)
             continue
         for match in matches:
-            key = str(match.expanduser().resolve(strict=False))
-            if key in seen_for_discovery:
-                continue
-            seen_for_discovery.add(key)
-            expanded.append(match)
+            _append_discovered_manifest_path(expanded, seen, match)
     if not expanded:
         if unmatched_patterns:
             raise ValueError("--manifest-glob matched no paths: " + ", ".join(unmatched_patterns))
         raise ValueError("provide at least one path or --manifest-glob.")
+    if unmatched_patterns:
+        print(
+            "warning: --manifest-glob matched no paths: " + ", ".join(unmatched_patterns),
+            file=sys.stderr,
+        )
     return tuple(expanded)
+
+
+def _append_discovered_manifest_path(expanded: list[Path], seen: set[str], path: Path) -> None:
+    key = _manifest_identity_key(path)
+    if key in seen:
+        return
+    seen.add(key)
+    expanded.append(path)
+
+
+def _manifest_identity_key(path: Path) -> str:
+    expanded = path.expanduser()
+    if expanded.exists() and expanded.is_dir():
+        expanded = expanded / "manifest.json"
+    return str(expanded.resolve(strict=False))
 
 
 def _audit_calibration_config_payload(result) -> dict[str, object]:
