@@ -116,11 +116,15 @@ class RunAuditIterationSummary:
     policy_id: str | None
     checkpoint_path: str | None
     collection_games: int
+    collection_games_per_hour: float | None
     collection_capped_rate: float | None
+    collection_peak_rss_mb: float | None
     average_decision_rounds: float | None
     benchmark_win_rate: float | None
     benchmark_games: int
+    benchmark_games_per_hour: float | None
     benchmark_capped_rate: float | None
+    benchmark_peak_rss_mb: float | None
     benchmark_average_decision_rounds: float | None
     benchmark_opponents: tuple[RunAuditBenchmarkOpponent, ...]
     promotion_recorded: bool | None
@@ -133,11 +137,15 @@ class RunAuditIterationSummary:
             "policy_id": self.policy_id,
             "checkpoint_path": self.checkpoint_path,
             "collection_games": self.collection_games,
+            "collection_games_per_hour": self.collection_games_per_hour,
             "collection_capped_rate": self.collection_capped_rate,
+            "collection_peak_rss_mb": self.collection_peak_rss_mb,
             "average_decision_rounds": self.average_decision_rounds,
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_games": self.benchmark_games,
+            "benchmark_games_per_hour": self.benchmark_games_per_hour,
             "benchmark_capped_rate": self.benchmark_capped_rate,
+            "benchmark_peak_rss_mb": self.benchmark_peak_rss_mb,
             "benchmark_average_decision_rounds": self.benchmark_average_decision_rounds,
             "benchmark_opponents": [opponent.to_dict() for opponent in self.benchmark_opponents],
             "promotion_recorded": self.promotion_recorded,
@@ -221,8 +229,13 @@ class RunComparisonEntry:
     best_benchmark_win_rate: float | None
     best_benchmark_games: int
     latest_benchmark_games: int
+    latest_collection_games_per_hour: float | None
+    latest_benchmark_games_per_hour: float | None
     latest_collection_capped_rate: float | None
     latest_benchmark_capped_rate: float | None
+    latest_collection_peak_rss_mb: float | None
+    latest_benchmark_peak_rss_mb: float | None
+    latest_peak_rss_mb: float | None
     latest_average_decision_rounds: float | None
     latest_benchmark_average_decision_rounds: float | None
     latest_promotion_recorded: bool | None
@@ -242,8 +255,13 @@ class RunComparisonEntry:
             "best_benchmark_win_rate": self.best_benchmark_win_rate,
             "best_benchmark_games": self.best_benchmark_games,
             "latest_benchmark_games": self.latest_benchmark_games,
+            "latest_collection_games_per_hour": self.latest_collection_games_per_hour,
+            "latest_benchmark_games_per_hour": self.latest_benchmark_games_per_hour,
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_collection_peak_rss_mb": self.latest_collection_peak_rss_mb,
+            "latest_benchmark_peak_rss_mb": self.latest_benchmark_peak_rss_mb,
+            "latest_peak_rss_mb": self.latest_peak_rss_mb,
             "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
             "latest_promotion_recorded": self.latest_promotion_recorded,
@@ -566,6 +584,12 @@ def calibrate_run_audit(
 def _comparison_entry(path: Path) -> RunComparisonEntry:
     audit = audit_run(path, config=_permissive_audit_config())
     latest = audit.iterations[-1]
+    peak_rss_mb = _max_optional(
+        (
+            latest.collection_peak_rss_mb,
+            latest.benchmark_peak_rss_mb,
+        )
+    )
     return RunComparisonEntry(
         label=_comparison_label(audit.manifest_path),
         manifest_path=audit.manifest_path,
@@ -578,8 +602,13 @@ def _comparison_entry(path: Path) -> RunComparisonEntry:
         best_benchmark_win_rate=audit.best_benchmark_win_rate,
         best_benchmark_games=_best_benchmark_games(audit.iterations),
         latest_benchmark_games=latest.benchmark_games,
+        latest_collection_games_per_hour=latest.collection_games_per_hour,
+        latest_benchmark_games_per_hour=latest.benchmark_games_per_hour,
         latest_collection_capped_rate=audit.latest_collection_capped_rate,
         latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
+        latest_collection_peak_rss_mb=latest.collection_peak_rss_mb,
+        latest_benchmark_peak_rss_mb=latest.benchmark_peak_rss_mb,
+        latest_peak_rss_mb=peak_rss_mb,
         latest_average_decision_rounds=audit.latest_average_decision_rounds,
         latest_benchmark_average_decision_rounds=audit.latest_benchmark_average_decision_rounds,
         latest_promotion_recorded=latest.promotion_recorded,
@@ -652,11 +681,19 @@ def _iteration_summary(
         policy_id=policy_id,
         checkpoint_path=_optional_str(iteration.get("checkpoint_path")),
         collection_games=collection_games,
+        collection_games_per_hour=_games_per_hour(collection_metrics),
         collection_capped_rate=_capped_rate(collection_metrics),
+        collection_peak_rss_mb=_optional_float(collection_metrics.get("peak_rss_mb")),
         average_decision_rounds=_optional_float(collection_metrics.get("average_decision_rounds")),
         benchmark_win_rate=benchmark_summary.win_rate if benchmark_summary.games else None,
         benchmark_games=benchmark_summary.games,
+        benchmark_games_per_hour=_games_per_hour(benchmark),
         benchmark_capped_rate=benchmark_summary.capped_rate if benchmark_summary.games else None,
+        benchmark_peak_rss_mb=(
+            None
+            if benchmark is None
+            else _optional_float(benchmark.get("peak_rss_mb"))
+        ),
         benchmark_average_decision_rounds=_benchmark_average_decision_rounds(benchmark),
         benchmark_opponents=tuple(
             RunAuditBenchmarkOpponent(
@@ -1024,6 +1061,22 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _games_per_hour(metrics: Mapping[str, Any] | None) -> float | None:
+    if metrics is None:
+        return None
+    games_per_second = _optional_float(metrics.get("games_per_second"))
+    if games_per_second is not None:
+        return games_per_second * 3600.0
+    raw_games = metrics.get("games", metrics.get("total_games"))
+    raw_elapsed = metrics.get("elapsed_seconds")
+    if raw_games is None or raw_elapsed is None:
+        return None
+    elapsed_seconds = float(raw_elapsed)
+    if elapsed_seconds <= 0.0:
+        return 0.0
+    return (float(raw_games) / elapsed_seconds) * 3600.0
 
 
 def _permissive_audit_config() -> RunAuditConfig:

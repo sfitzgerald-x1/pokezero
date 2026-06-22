@@ -601,6 +601,10 @@ class RunAuditTest(unittest.TestCase):
                 selfplay_iteration(iteration=2, wins=40, losses=10, capped_games=1, promotion_recorded=True),
             )
         )
+        linear_manifest["iterations"][1]["collection_metrics"]["games_per_second"] = 2.5
+        linear_manifest["iterations"][1]["collection_metrics"]["peak_rss_mb"] = 512.25
+        linear_manifest["iterations"][1]["benchmark"]["games_per_second"] = 1.25
+        linear_manifest["iterations"][1]["benchmark"]["peak_rss_mb"] = 640.5
         neural_manifest = neural_selfplay_manifest(
             iterations=(
                 neural_iteration(iteration=1, wins=30, losses=20, capped_games=0),
@@ -628,6 +632,11 @@ class RunAuditTest(unittest.TestCase):
             result.best_historical_benchmark_entry.label if result.best_historical_benchmark_entry else None,
             "linear-run",
         )
+        self.assertEqual(result.entries[0].latest_collection_games_per_hour, 9000.0)
+        self.assertEqual(result.entries[0].latest_benchmark_games_per_hour, 4500.0)
+        self.assertEqual(result.entries[0].latest_collection_peak_rss_mb, 512.25)
+        self.assertEqual(result.entries[0].latest_benchmark_peak_rss_mb, 640.5)
+        self.assertEqual(result.entries[0].latest_peak_rss_mb, 640.5)
         self.assertTrue(result.entries[0].latest_promotion_recorded)
         self.assertTrue(result.entries[1].latest_advancement_recorded)
 
@@ -938,6 +947,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual([entry["label"] for entry in payload["entries"]], ["linear-run", "neural-run"])
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
+        self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
 
     def test_eval_cli_compare_returns_nonzero_but_prints_json_when_a_manifest_fails(self) -> None:
         healthy_manifest = selfplay_manifest(
@@ -980,6 +990,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("min_benchmark_games_for_best: 50", stdout.getvalue())
         self.assertIn("linear-run", stdout.getvalue())
         self.assertIn("bench_wr", stdout.getvalue())
+        self.assertIn("coll_gph", stdout.getvalue())
+        self.assertIn("bench_gph", stdout.getvalue())
+        self.assertIn("rss_mb", stdout.getvalue())
 
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
