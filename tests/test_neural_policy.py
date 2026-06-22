@@ -284,6 +284,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "8",
                     "--policy-id",
                     "entity-cli",
+                    "--promotion-registry",
+                    "promotions.json",
+                    "--auto-promote",
+                    "--promotion-artifact-dir",
+                    "promoted-checkpoints",
+                    "--promotion-label-prefix",
+                    "candidate",
+                    "--promotion-notes",
+                    "smoke notes",
+                    "--allow-duplicate-promotion",
+                    "--min-benchmark-win-rate",
+                    "0.0",
+                    "--min-benchmark-games",
+                    "0",
                     "--json",
                 ]
             )
@@ -302,6 +316,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].batch_size, 8)
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
+        self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
+        self.assertEqual(kwargs["auto_promotion_config"].registry_path, Path("promotions.json"))
+        self.assertEqual(kwargs["auto_promotion_config"].artifact_dir, Path("promoted-checkpoints"))
+        self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")
+        self.assertEqual(kwargs["auto_promotion_config"].notes, "smoke notes")
+        self.assertTrue(kwargs["auto_promotion_config"].allow_duplicate)
+        self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_win_rate, 0.0)
+        self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_games, 0)
 
     def test_neural_cli_help_lists_benchmark_command(self) -> None:
         stdout = io.StringIO()

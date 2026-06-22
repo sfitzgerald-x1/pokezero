@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from .collection import (
     BenchmarkMatchup,
@@ -35,8 +35,22 @@ from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
 
+if TYPE_CHECKING:
+    from .evaluation import PromotionGateConfig
+    from .promotion import PromotionRecordResult, PromotionRegistryEntry
+
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
+
+
+@dataclass(frozen=True)
+class NeuralSelfPlayPromotionConfig:
+    registry_path: Path
+    gate_config: "PromotionGateConfig"
+    artifact_dir: Path | None = None
+    label_prefix: str | None = "neural-selfplay"
+    notes: str | None = None
+    allow_duplicate: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +93,8 @@ class NeuralSelfPlayIterationResult:
     training: TransformerTrainingResult
     benchmark: BenchmarkReport | None = None
     advancement: NeuralAdvancementDecision | None = None
+    promotion: "PromotionRecordResult | None" = None
+    accepted_policy_spec: str | None = None
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -101,8 +117,9 @@ class NeuralSelfPlayIterationResult:
             "training": _training_result_to_dict(self.training),
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
             "advancement": self.advancement.to_dict() if self.advancement is not None else None,
+            "promotion": self.promotion.to_dict() if self.promotion is not None else None,
             "next_current_policy_spec": (
-                self.checkpoint_policy_spec
+                self.accepted_policy_spec or self.checkpoint_policy_spec
                 if self.advancement is not None and self.advancement.advance_collector
                 else self.current_policy_spec
             ),
@@ -188,6 +205,8 @@ def run_neural_selfplay_iterations(
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     worker_count: int = 1,
+    promotion_registry_path: Path | None = None,
+    auto_promotion_config: NeuralSelfPlayPromotionConfig | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -208,6 +227,10 @@ def run_neural_selfplay_iterations(
         raise ValueError("at least one fixed opponent policy spec is required.")
     if model_config.window_size != training_config.window_size:
         raise ValueError("model_config window_size must match training_config window_size.")
+    promotion_pool_registry_path = promotion_registry_path or (
+        auto_promotion_config.registry_path if auto_promotion_config is not None else None
+    )
+    promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
 
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,7 +240,7 @@ def run_neural_selfplay_iterations(
         current_policy_spec = str(last_iteration.get("next_current_policy_spec") or last_iteration["checkpoint_policy_spec"])
         current_model = _initial_neural_model_from_policy_spec(current_policy_spec, device=training_config.device)
         checkpoint_history = [
-            str(iteration["checkpoint_policy_spec"])
+            str(iteration.get("next_current_policy_spec") or iteration["checkpoint_policy_spec"])
             for iteration in prior_iteration_manifests
             if _advancement_from_manifest(iteration).get("advance_collector")
         ]
@@ -247,7 +270,7 @@ def run_neural_selfplay_iterations(
         iteration_seed_start = next_seed_start + (offset * games_per_iteration)
         opponent_policy_specs = _opponent_pool(
             fixed_policy_specs=fixed_opponents,
-            checkpoint_history=checkpoint_history,
+            checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
         )
@@ -277,9 +300,13 @@ def run_neural_selfplay_iterations(
         save_transformer_checkpoint(checkpoint_path, model, result=training)
         benchmark = None
         if evaluation_games:
+            benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
+                fallback_policy_spec=current_policy_spec,
+                promotion_config=auto_promotion_config,
+            )
             benchmark = _benchmark_checkpoint(
                 checkpoint_path=checkpoint_path,
-                incumbent_policy_spec=current_policy_spec,
+                incumbent_policy_spec=benchmark_incumbent_policy_spec,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 games=evaluation_games,
@@ -289,7 +316,14 @@ def run_neural_selfplay_iterations(
         advancement = _advancement_decision(
             benchmark=benchmark,
             candidate_policy_id=training.model_config.policy_id,
-            incumbent_policy_spec=current_policy_spec,
+            incumbent_policy_spec=(
+                _benchmark_incumbent_policy_spec(
+                    fallback_policy_spec=current_policy_spec,
+                    promotion_config=auto_promotion_config,
+                )
+                if auto_promotion_config is not None
+                else current_policy_spec
+            ),
         )
 
         result = NeuralSelfPlayIterationResult(
@@ -310,6 +344,45 @@ def run_neural_selfplay_iterations(
         )
         _write_json(iteration_manifest_path, result.to_manifest_dict())
         results.append(result)
+        run_manifest_path = run_dir / "manifest.json"
+        _write_json(
+            run_manifest_path,
+            NeuralSelfPlayRunResult(
+                run_dir=run_dir,
+                iterations=tuple(results),
+                prior_iteration_manifests=tuple(prior_iteration_manifests),
+            ).to_dict(),
+        )
+        if auto_promotion_config is not None:
+            promotion = _record_auto_promotion(
+                manifest_path=run_manifest_path,
+                promotion_config=auto_promotion_config,
+                iteration=iteration,
+            )
+            accepted_policy_spec = _promotion_policy_spec(promotion.entry) if promotion.recorded else None
+            advancement = _promotion_advancement_decision(
+                promotion=promotion,
+                candidate_policy_id=training.model_config.policy_id,
+                incumbent_policy_spec=_benchmark_incumbent_policy_spec(
+                    fallback_policy_spec=current_policy_spec,
+                    promotion_config=auto_promotion_config,
+                ),
+            )
+            result = replace(
+                result,
+                promotion=promotion,
+                advancement=advancement,
+                accepted_policy_spec=accepted_policy_spec,
+            )
+            results[-1] = result
+            _write_json(iteration_manifest_path, result.to_manifest_dict())
+            if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
+                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
+        if advancement.advance_collector:
+            next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
+            checkpoint_history.append(str(next_policy_spec))
+            current_policy_spec = str(next_policy_spec)
+            current_model = model
         _write_json(
             run_dir / "manifest.json",
             NeuralSelfPlayRunResult(
@@ -318,10 +391,6 @@ def run_neural_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
             ).to_dict(),
         )
-        if advancement.advance_collector:
-            checkpoint_history.append(result.checkpoint_policy_spec)
-            current_policy_spec = result.checkpoint_policy_spec
-            current_model = model
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,
@@ -366,6 +435,100 @@ def _benchmark_checkpoint(
             BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), model_policy),
             *incumbent_matchups,
         ),
+    )
+
+
+def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[str, ...]:
+    if promotion_registry_path is None:
+        return ()
+    from .promotion import load_promotion_registry
+
+    return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+
+
+def _benchmark_incumbent_policy_spec(
+    *,
+    fallback_policy_spec: str,
+    promotion_config: NeuralSelfPlayPromotionConfig | None,
+) -> str:
+    if promotion_config is None:
+        return fallback_policy_spec
+    entry = _promotion_incumbent_entry(promotion_config)
+    if entry is None or entry.checkpoint_policy_spec is None:
+        return fallback_policy_spec
+    return entry.checkpoint_policy_spec
+
+
+def _record_auto_promotion(
+    *,
+    manifest_path: Path,
+    promotion_config: NeuralSelfPlayPromotionConfig,
+    iteration: int,
+) -> "PromotionRecordResult":
+    from .promotion import record_promotion
+
+    gate_config = promotion_config.gate_config
+    if gate_config.incumbent_policy_id is None:
+        latest = _promotion_incumbent_entry(promotion_config)
+        if latest is not None and latest.policy_id:
+            gate_config = replace(gate_config, incumbent_policy_id=latest.policy_id)
+    label = (
+        f"{promotion_config.label_prefix}-{iteration:04d}"
+        if promotion_config.label_prefix
+        else None
+    )
+    return record_promotion(
+        manifest_path,
+        registry_path=promotion_config.registry_path,
+        config=gate_config,
+        label=label,
+        notes=promotion_config.notes,
+        artifact_dir=promotion_config.artifact_dir,
+        allow_duplicate=promotion_config.allow_duplicate,
+    )
+
+
+def _promotion_incumbent_entry(
+    promotion_config: NeuralSelfPlayPromotionConfig,
+) -> "PromotionRegistryEntry | None":
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
+    incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
+    if incumbent_policy_id is None:
+        return registry.latest
+    for entry in reversed(registry.entries):
+        if entry.policy_id == incumbent_policy_id:
+            return entry
+    return None
+
+
+def _promotion_policy_spec(entry: "PromotionRegistryEntry | None") -> str | None:
+    if entry is None:
+        return None
+    return entry.checkpoint_policy_spec
+
+
+def _promotion_advancement_decision(
+    *,
+    promotion: "PromotionRecordResult",
+    candidate_policy_id: str,
+    incumbent_policy_spec: str,
+) -> NeuralAdvancementDecision:
+    gate_result = promotion.gate_result
+    return NeuralAdvancementDecision(
+        advance_collector=promotion.recorded,
+        reason="promotion_recorded" if promotion.recorded else "promotion_gate_failed",
+        candidate_policy_id=candidate_policy_id,
+        incumbent_policy_id=gate_result.incumbent_policy_id,
+        incumbent_policy_spec=incumbent_policy_spec,
+        candidate_win_rate=gate_result.incumbent_win_rate,
+        incumbent_win_rate=(
+            1.0 - gate_result.incumbent_win_rate
+            if gate_result.incumbent_win_rate is not None
+            else None
+        ),
+        games=gate_result.incumbent_games,
     )
 
 

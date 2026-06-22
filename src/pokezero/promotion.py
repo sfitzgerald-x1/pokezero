@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from .evaluation import PromotionGateConfig, PromotionGateResult, evaluate_promotion_gate
 
 PROMOTION_REGISTRY_SCHEMA_VERSION = "pokezero.promotion_registry.v1"
+NEURAL_SELFPLAY_SOURCE_TYPE = "pokezero.neural_selfplay_run.v1"
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,13 @@ class PromotionRegistryEntry:
     gate_result: Mapping[str, Any]
     source_checkpoint_path: str | None = None
     checkpoint_sha256: str | None = None
+
+    @property
+    def checkpoint_policy_spec(self) -> str | None:
+        if not self.checkpoint_path:
+            return None
+        prefix = "neural:" if self.source_type == NEURAL_SELFPLAY_SOURCE_TYPE else "linear:"
+        return f"{prefix}{self.checkpoint_path}"
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -70,9 +78,9 @@ class PromotionRegistry:
 
     def checkpoint_policy_specs(self) -> tuple[str, ...]:
         return tuple(
-            f"linear:{entry.checkpoint_path}"
+            entry.checkpoint_policy_spec
             for entry in self.entries
-            if entry.checkpoint_path
+            if entry.checkpoint_policy_spec is not None
         )
 
 
