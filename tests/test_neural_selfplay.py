@@ -376,16 +376,28 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 )
 
             registry = load_promotion_registry(registry_path)
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
             first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
             second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
             first_selection_spec = registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])
 
+        expected_pool_config = {
+            "fixed_opponent_policy_specs": ["random-legal"],
+            "max_historical_opponents": 2,
+            "promotion_registry_path": str(registry_path),
+            "promotion_pool_registry_path": str(registry_path),
+            "required_promoted_opponent_pool_size": None,
+        }
         self.assertEqual(len(registry.entries), 2)
         self.assertEqual(registry.entries[0].source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
         self.assertEqual(registry.entries[0].label, "neural-candidate-0001")
         self.assertTrue(registry.entries[0].checkpoint_path)
         self.assertEqual(Path(registry.entries[0].checkpoint_path or "").parent, artifact_dir)
         self.assertEqual(registry.entries[0].checkpoint_policy_spec, f"neural:{registry.entries[0].checkpoint_path}")
+        self.assertEqual(run_manifest["run_config"]["opponent_pool"], expected_pool_config)
+        self.assertEqual(run_manifest["run_config"]["auto_promotion"]["artifact_dir"], str(artifact_dir))
+        self.assertEqual(run_manifest["run_config"]["auto_promotion"]["label_prefix"], "neural-candidate")
+        self.assertEqual(first_manifest["opponent_pool_config"], expected_pool_config)
         self.assertEqual(first_manifest["promotion"]["recorded"], True)
         self.assertEqual(first_manifest["advancement"]["reason"], "promotion_recorded")
         self.assertEqual(first_manifest["next_current_policy_spec"], first_selection_spec)

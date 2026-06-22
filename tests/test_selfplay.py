@@ -580,11 +580,22 @@ class SelfPlayTest(unittest.TestCase):
                 promotion_registry_path=registry_path,
                 required_promoted_opponent_pool_size=1,
             )
+            run_manifest = json.loads((temp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
+            iteration_manifest = json.loads((temp_path / "run" / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
 
         promoted_spec = f"linear:{promoted_checkpoint_path.resolve(strict=False)}"
+        expected_pool_config = {
+            "fixed_opponent_policy_specs": ["random-legal"],
+            "max_historical_opponents": 1,
+            "promotion_registry_path": str(registry_path),
+            "promotion_pool_registry_path": str(registry_path),
+            "required_promoted_opponent_pool_size": 1,
+        }
         self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertNotIn(result.iterations[0].checkpoint_policy_spec, result.iterations[1].opponent_policy_specs)
+        self.assertEqual(run_manifest["run_config"]["opponent_pool"], expected_pool_config)
+        self.assertEqual(iteration_manifest["opponent_pool_config"], expected_pool_config)
 
     def test_run_selfplay_iterations_can_require_promoted_opponent_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

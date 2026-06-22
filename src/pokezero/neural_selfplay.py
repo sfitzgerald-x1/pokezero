@@ -8,7 +8,7 @@ policy, train a neural checkpoint, benchmark it, and write auditable manifests.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
@@ -33,6 +33,7 @@ from .neural_policy import (
 )
 from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
 
@@ -97,6 +98,7 @@ class NeuralSelfPlayIterationResult:
     advancement: NeuralAdvancementDecision | None = None
     promotion: "PromotionRecordResult | None" = None
     accepted_policy_spec: str | None = None
+    opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -112,6 +114,7 @@ class NeuralSelfPlayIterationResult:
             "checkpoint_policy_spec": self.checkpoint_policy_spec,
             "current_policy_spec": self.current_policy_spec,
             "opponent_policy_specs": list(self.opponent_policy_specs),
+            "opponent_pool_config": dict(self.opponent_pool_config),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "seed_start": self.seed_start,
             "worker_count": self.worker_count,
@@ -133,6 +136,7 @@ class NeuralSelfPlayRunResult:
     run_dir: Path
     iterations: tuple[NeuralSelfPlayIterationResult, ...]
     prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
+    run_config: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
@@ -171,6 +175,7 @@ class NeuralSelfPlayRunResult:
         return {
             "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
+            "run_config": dict(self.run_config),
             "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
             "current_policy_spec": self.current_policy_spec,
@@ -270,6 +275,31 @@ def run_neural_selfplay_iterations(
         max_historical_opponents=max_historical_opponents,
         required_size=required_promoted_opponent_pool_size,
     )
+    opponent_pool_manifest_config = opponent_pool_config_dict(
+        fixed_opponent_policy_specs=fixed_opponents,
+        max_historical_opponents=max_historical_opponents,
+        promotion_registry_path=promotion_registry_path,
+        promotion_pool_registry_path=promotion_pool_registry_path,
+        required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,
+    )
+    run_manifest_config = {
+        "iterations_requested": iterations,
+        "games_per_iteration": games_per_iteration,
+        "seed_start": seed_start,
+        "initial_policy_spec": initial_policy_spec,
+        "evaluation_games": evaluation_games,
+        "evaluation_seed_start": evaluation_seed_start,
+        "worker_count": worker_count,
+        "opponent_pool": opponent_pool_manifest_config,
+        "auto_promotion": auto_promotion_config_dict(
+            enabled=auto_promotion_config is not None,
+            registry_path=auto_promotion_config.registry_path if auto_promotion_config is not None else None,
+            artifact_dir=auto_promotion_config.artifact_dir if auto_promotion_config is not None else None,
+            label_prefix=auto_promotion_config.label_prefix if auto_promotion_config is not None else None,
+            notes=auto_promotion_config.notes if auto_promotion_config is not None else None,
+            allow_duplicate=auto_promotion_config.allow_duplicate if auto_promotion_config is not None else False,
+        ),
+    }
     results: list[NeuralSelfPlayIterationResult] = []
 
     for offset in range(iterations):
@@ -358,6 +388,7 @@ def run_neural_selfplay_iterations(
             training=training,
             benchmark=benchmark,
             advancement=advancement,
+            opponent_pool_config=opponent_pool_manifest_config,
         )
         _write_json(iteration_manifest_path, result.to_manifest_dict())
         results.append(result)
@@ -368,6 +399,7 @@ def run_neural_selfplay_iterations(
                 run_dir=run_dir,
                 iterations=tuple(results),
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
+                run_config=run_manifest_config,
             ).to_dict(),
         )
         if auto_promotion_config is not None:
@@ -410,6 +442,7 @@ def run_neural_selfplay_iterations(
                 run_dir=run_dir,
                 iterations=tuple(results),
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
+                run_config=run_manifest_config,
             ).to_dict(),
         )
         _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
@@ -418,6 +451,7 @@ def run_neural_selfplay_iterations(
         run_dir=run_dir,
         iterations=tuple(results),
         prior_iteration_manifests=tuple(prior_iteration_manifests),
+        run_config=run_manifest_config,
     )
 
 
