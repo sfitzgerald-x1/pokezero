@@ -303,10 +303,21 @@ def _move_score(
     hp_fraction = _metadata_hp_fraction(metadata.get("self_active"), default=1.0)
     move_id = normalize_id(move.id or move.name)
     if move_id == "rapidspin":
-        return _rapid_spin_score(action_index, move, metadata, dex, opponent_types)
+        return _rapid_spin_score(action_index, move, metadata, dex, self_types, opponent_types, hp_fraction)
     if move.gen3_category == "Status" or move.base_power <= 0:
         return _status_move_score(action_index, move, metadata, hp_fraction, team_status_cure_score=team_status_cure_score)
 
+    return _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
+
+
+def _damaging_move_score(
+    action_index: int,
+    move,
+    dex: ShowdownDex,
+    self_types: tuple[str, ...],
+    opponent_types: tuple[str, ...],
+    hp_fraction: float,
+) -> _ActionScore:
     effectiveness = dex.effectiveness(move.type, opponent_types)
     if effectiveness == 0.0:
         return _ActionScore(action_index, "move", 0.0, f"{move.name} has no effect")
@@ -366,13 +377,21 @@ def _rapid_spin_score(
     move,
     metadata: Mapping[str, Any],
     dex: ShowdownDex,
+    self_types: tuple[str, ...],
     opponent_types: tuple[str, ...],
+    hp_fraction: float,
 ) -> _ActionScore:
     hazard_count = _side_hazard_count(metadata.get("self_side_conditions"))
     if dex.effectiveness(move.type, opponent_types) == 0.0:
         return _ActionScore(action_index, "move", 4.0, f"{move.name}: blocked by Ghost")
     if hazard_count <= 0:
-        return _ActionScore(action_index, "move", 8.0, f"{move.name}: no side hazards")
+        damage_score = _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
+        return _ActionScore(
+            action_index,
+            "move",
+            damage_score.score,
+            f"{move.name}: no side hazards; {damage_score.reason}",
+        )
     return _ActionScore(action_index, "move", min(76.0, 58.0 + (10.0 * hazard_count)), f"{move.name}: clears hazards={hazard_count}")
 
 

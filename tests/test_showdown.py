@@ -157,6 +157,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             *fixture_lines("p2_seat_replay.txt")[:5],
             "|-sidestart|p1: HumanFriend|Spikes",
             "|-sidestart|p2: PokeZeroBot|Spikes",
+            "|-sidestart|p2: PokeZeroBot|move: Stealth Rock",
             "|-sideend|p1: HumanFriend|Spikes",
             *fixture_lines("p2_seat_replay.txt")[5:],
         ]
@@ -165,9 +166,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
         observation = observation_from_player_state(state)
 
-        self.assertEqual(state.self_side_conditions, ("spikes",))
+        self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
         self.assertEqual(state.opponent_side_conditions, ())
-        self.assertEqual(observation.metadata["self_side_conditions"], ["spikes"])
+        self.assertEqual(observation.metadata["self_side_conditions"], ["spikes", "stealthrock"])
         self.assertEqual(observation.metadata["opponent_side_conditions"], [])
 
     def test_observation_encodes_player_relative_content(self) -> None:

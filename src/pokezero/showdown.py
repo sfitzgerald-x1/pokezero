@@ -404,13 +404,20 @@ def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, set
     slot = _slot_from_ident(parts[2])
     if slot not in side_conditions:
         return
-    condition = _normalize_identifier(parts[3])
+    condition = _side_condition_identifier(parts[3])
     if not condition:
         return
     if event_type == "-sidestart":
         side_conditions[slot].add(condition)
     else:
         side_conditions[slot].discard(condition)
+
+
+def _side_condition_identifier(raw_condition: str) -> str:
+    condition = raw_condition.strip()
+    if condition.lower().startswith("move:"):
+        condition = condition.split(":", 1)[1].strip()
+    return _normalize_identifier(condition)
 
 
 def _public_event_from_line(line: str) -> ShowdownPublicEvent:

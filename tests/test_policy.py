@@ -281,6 +281,28 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 0)
 
+    def test_scripted_teacher_uses_rapid_spin_chip_without_hazards(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                "self_side_conditions": [],
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "self_team": [],
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "healbell", "move_name": "Heal Bell"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "rapidspin", "move_name": "Rapid Spin"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIn("no side hazards", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 20.0)
+
     def test_scripted_teacher_avoids_rapid_spin_when_current_opponent_blocks_it(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
