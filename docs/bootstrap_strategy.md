@@ -587,7 +587,7 @@ python -m pokezero.eval_cli promotions \
   --verify-loadable
 ```
 
-The archive integrity report is read-only. It summarizes only entries already marked as retention-archived, reusing the same registry verification checks for checkpoint existence, checksum, loadability, and policy-id consistency. Add `--require-archive-integrity` when the command should fail if any archived entry or registry-level verification check fails. This is useful when running with `--verify-opponent-pool-only`, where stale broken archives are otherwise annotated but do not block opponent-pool preflights.
+The archive integrity report is read-only. It summarizes only entries already marked as retention-archived, reusing the same registry verification checks for checkpoint existence, checksum, loadability, and policy-id consistency. Add `--require-archive-integrity` with `--verify --verify-loadable` when the command should fail if any archived entry or registry-level verification check fails. This is useful when running with `--verify-opponent-pool-only`, where stale broken archives are otherwise annotated but do not block opponent-pool preflights.
 
 Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected. Snapshots include `generated_at`, so compare `policy_specs` and selected entries rather than whole-file equality when checking whether the selected pool changed.
 

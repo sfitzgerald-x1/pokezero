@@ -1589,7 +1589,9 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertTrue(integrity["verify_loadable_enabled"])
         self.assertTrue(integrity["archive_integrity_passed"])
         self.assertEqual(integrity["summary"]["archived_entry_count"], 1)
+        self.assertEqual(integrity["summary"]["archived_verified_count"], 1)
         self.assertEqual(integrity["summary"]["archived_healthy_count"], 1)
+        self.assertEqual(integrity["summary"]["archived_incomplete_count"], 0)
         self.assertEqual(integrity["summary"]["archived_failed_count"], 0)
         self.assertEqual(integrity["summary"]["checkpoint_exists_counts"], {"pass": 1})
         self.assertEqual(integrity["summary"]["checksum_counts"], {"pass": 1})
@@ -1654,6 +1656,124 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(integrity["summary"]["archived_failed_count"], 1)
         self.assertEqual(integrity["summary"]["checkpoint_exists_counts"], {"fail": 1})
         self.assertIn("checkpoint_exists", integrity["entries"][0]["failed_checks"])
+
+    def test_eval_cli_promotions_archive_integrity_marks_partial_verification_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            archive_dir = temp_path / "archive"
+            archive_args = [
+                "promotions",
+                "--registry",
+                str(registry_path),
+                "--opponent-pool-size",
+                "2",
+                "--retention-plan",
+                "--apply-retention-plan",
+                "--retention-apply-confirm",
+                "archive",
+                "--retention-archive-dir",
+                str(archive_dir),
+                "--verify",
+                "--verify-loadable",
+                "--verify-opponent-pool-only",
+                "--json",
+            ]
+
+            with patch("sys.stdout", new_callable=io.StringIO):
+                archive_exit = eval_cli_main(archive_args)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--archive-integrity",
+                        "--verify",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(archive_exit, 0)
+        self.assertEqual(exit_code, 0)
+        integrity = payload["archive_integrity"]
+        self.assertFalse(integrity["verify_loadable_enabled"])
+        self.assertFalse(integrity["archive_integrity_passed"])
+        self.assertEqual(integrity["summary"]["archived_verified_count"], 0)
+        self.assertEqual(integrity["summary"]["archived_incomplete_count"], 1)
+        self.assertEqual(integrity["summary"]["archived_failed_count"], 0)
+        self.assertEqual(integrity["summary"]["loadable_counts"], {"not_checked": 1})
+
+    def test_eval_cli_promotions_archive_integrity_text_prints_archived_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            archive_dir = temp_path / "archive"
+            archive_args = [
+                "promotions",
+                "--registry",
+                str(registry_path),
+                "--opponent-pool-size",
+                "2",
+                "--retention-plan",
+                "--apply-retention-plan",
+                "--retention-apply-confirm",
+                "archive",
+                "--retention-archive-dir",
+                str(archive_dir),
+                "--verify",
+                "--verify-loadable",
+                "--verify-opponent-pool-only",
+                "--json",
+            ]
+
+            with patch("sys.stdout", new_callable=io.StringIO):
+                archive_exit = eval_cli_main(archive_args)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--archive-integrity",
+                        "--verify",
+                        "--verify-loadable",
+                    ]
+                )
+            output = stdout.getvalue()
+
+        self.assertEqual(archive_exit, 0)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("archive_integrity:", output)
+        self.assertIn("- archive_integrity: PASS", output)
+        self.assertIn("- archived_entry_count: 1", output)
+        self.assertIn("- archived_verified_count: 1", output)
+        self.assertIn("archive_integrity_entries:", output)
+        self.assertIn("verification=pass exists=pass checksum=pass loadable=pass", output)
+        self.assertIn("archived_from=", output)
+
+    def test_eval_cli_promotions_require_archive_integrity_requires_loadable_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=1)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--archive-integrity",
+                        "--require-archive-integrity",
+                        "--verify",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--require-archive-integrity requires --verify --verify-loadable", stderr.getvalue())
 
     def test_eval_cli_promotions_apply_retention_plan_skips_failed_verification_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

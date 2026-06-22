@@ -183,8 +183,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--require-archive-integrity",
         action="store_true",
         help=(
-            "With --archive-integrity --verify, return non-zero unless all archived entries and "
-            "registry-level checks pass."
+            "With --archive-integrity --verify --verify-loadable, return non-zero unless all "
+            "archived entries and registry-level checks pass."
         ),
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
@@ -1012,8 +1012,8 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--retention-archive-dir requires --apply-retention-plan.")
     if args.require_archive_integrity and not args.archive_integrity:
         raise ValueError("--require-archive-integrity requires --archive-integrity.")
-    if args.require_archive_integrity and not args.verify:
-        raise ValueError("--require-archive-integrity requires --verify.")
+    if args.require_archive_integrity and not (args.verify and args.verify_loadable):
+        raise ValueError("--require-archive-integrity requires --verify --verify-loadable.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
     if (
@@ -1801,11 +1801,17 @@ def _promotion_archive_integrity_payload(
         if verification is None
         else all(check.passed for check in verification.checks if check.entry_sequence is None)
     )
-    failed_archived_count = sum(1 for status in archived_statuses if status["failed_checks"])
+    verified_archived_count = sum(1 for status in archived_statuses if status["verification_status"] == "pass")
+    failed_archived_count = sum(1 for status in archived_statuses if status["verification_status"] == "fail")
+    incomplete_archived_count = len(archived_statuses) - verified_archived_count - failed_archived_count
     archive_integrity_passed = (
         None
         if verification is None
-        else registry_level_verification_passed is True and failed_archived_count == 0
+        else (
+            registry_level_verification_passed is True
+            and failed_archived_count == 0
+            and incomplete_archived_count == 0
+        )
     )
     return {
         "schema_version": PROMOTION_ARCHIVE_INTEGRITY_SCHEMA_VERSION,
@@ -1820,8 +1826,10 @@ def _promotion_archive_integrity_payload(
         "summary": {
             "total_entries": len(entry_statuses),
             "archived_entry_count": len(archived_statuses),
+            "archived_verified_count": verified_archived_count,
             "archived_failed_count": failed_archived_count,
-            "archived_healthy_count": len(archived_statuses) - failed_archived_count,
+            "archived_incomplete_count": incomplete_archived_count,
+            "archived_healthy_count": verified_archived_count,
             "verification_status_counts": _count_status_values(archived_statuses, "verification_status"),
             "checkpoint_exists_counts": _count_status_values(archived_statuses, "checkpoint_exists"),
             "checksum_counts": _count_status_values(archived_statuses, "checksum"),
@@ -1868,7 +1876,9 @@ def _print_promotion_archive_integrity(archive_integrity: Mapping[str, object]) 
     )
     print(f"- archive_integrity: {_verification_bool_label(archive_integrity['archive_integrity_passed'])}")
     print(f"- archived_entry_count: {summary.get('archived_entry_count', 0)}")
+    print(f"- archived_verified_count: {summary.get('archived_verified_count', 0)}")
     print(f"- archived_healthy_count: {summary.get('archived_healthy_count', 0)}")
+    print(f"- archived_incomplete_count: {summary.get('archived_incomplete_count', 0)}")
     print(f"- archived_failed_count: {summary.get('archived_failed_count', 0)}")
     print("archive_integrity_entries:")
     entries = archive_integrity["entries"] if isinstance(archive_integrity["entries"], list) else []
