@@ -575,7 +575,7 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
-    return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+    return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
 
 
 def _default_benchmark_reference_policy_specs(
@@ -612,10 +612,13 @@ def _benchmark_incumbent_policy_spec(
 ) -> str:
     if promotion_config is None:
         return fallback_policy_spec
-    entry = _promotion_incumbent_entry(promotion_config)
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
+    entry = _promotion_incumbent_entry_from_registry(registry, promotion_config)
     if entry is None or not entry.checkpoint_path:
         return fallback_policy_spec
-    return f"linear:{entry.checkpoint_path}"
+    return registry.selection_checkpoint_policy_spec_for_entry(entry) or fallback_policy_spec
 
 
 def _record_auto_promotion(
@@ -651,6 +654,10 @@ def _promotion_incumbent_entry(promotion_config: SelfPlayPromotionConfig):
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
+    return _promotion_incumbent_entry_from_registry(registry, promotion_config)
+
+
+def _promotion_incumbent_entry_from_registry(registry, promotion_config: SelfPlayPromotionConfig):
     incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
     if incumbent_policy_id is None:
         return registry.latest

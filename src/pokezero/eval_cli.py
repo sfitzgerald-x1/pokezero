@@ -213,7 +213,7 @@ def _promotions(args: argparse.Namespace) -> int:
     registry = load_promotion_registry(args.registry)
     preview_current_policy_spec = args.current_policy_spec
     if preview_current_policy_spec is None and args.opponent_pool_size is not None and registry.latest is not None:
-        preview_current_policy_spec = registry.latest.checkpoint_policy_spec
+        preview_current_policy_spec = registry.latest_selection_checkpoint_policy_spec()
     opponent_pool = (
         registry.opponent_pool_policy_specs(
             max_historical_opponents=args.opponent_pool_size,
@@ -298,6 +298,7 @@ def _promotion_entry_statuses(
     for entry in registry.entries:
         checks = tuple(checks_by_sequence.get(entry.sequence, ()))
         selected_as = []
+        selection_checkpoint_policy_spec = registry.selection_checkpoint_policy_spec_for_entry(entry)
         if entry.sequence == latest_sequence:
             selected_as.append("latest")
         if entry.sequence in opponent_pool_sequences:
@@ -333,6 +334,7 @@ def _promotion_entry_statuses(
                 "label": entry.label,
                 "checkpoint_path": entry.checkpoint_path,
                 "checkpoint_policy_spec": entry.checkpoint_policy_spec,
+                "selection_checkpoint_policy_spec": selection_checkpoint_policy_spec,
                 "source_checkpoint_path": entry.source_checkpoint_path,
                 "source_type": entry.source_type,
                 "source_iteration": entry.source_iteration,
@@ -369,7 +371,7 @@ def _opponent_pool_entry_sequences(registry, opponent_pool) -> set[int]:
     for entry in reversed(registry.entries):
         if wanted_index >= len(wanted_specs):
             break
-        if entry.checkpoint_policy_spec == wanted_specs[wanted_index]:
+        if registry.selection_checkpoint_policy_spec_for_entry(entry) == wanted_specs[wanted_index]:
             selected_sequences.add(entry.sequence)
             wanted_index += 1
     return selected_sequences

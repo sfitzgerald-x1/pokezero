@@ -366,7 +366,11 @@ def run_neural_selfplay_iterations(
                 promotion_config=auto_promotion_config,
                 iteration=iteration,
             )
-            accepted_policy_spec = _promotion_policy_spec(promotion.entry) if promotion.recorded else None
+            accepted_policy_spec = (
+                promotion.registry.selection_checkpoint_policy_spec_for_entry(promotion.entry)
+                if promotion.recorded and promotion.entry is not None
+                else None
+            )
             advancement = _promotion_advancement_decision(
                 promotion=promotion,
                 candidate_policy_id=training.model_config.policy_id,
@@ -384,7 +388,7 @@ def run_neural_selfplay_iterations(
             results[-1] = result
             _write_json(iteration_manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
+                promoted_checkpoint_specs = list(promotion.registry.selection_checkpoint_policy_specs())
         if advancement.advance_collector:
             next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
             checkpoint_history.append(str(next_policy_spec))
@@ -467,7 +471,7 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
-    return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+    return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
 
 
 def _benchmark_incumbent_policy_spec(
@@ -477,10 +481,13 @@ def _benchmark_incumbent_policy_spec(
 ) -> str:
     if promotion_config is None:
         return fallback_policy_spec
-    entry = _promotion_incumbent_entry(promotion_config)
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
+    entry = _promotion_incumbent_entry_from_registry(registry, promotion_config)
     if entry is None or entry.checkpoint_policy_spec is None:
         return fallback_policy_spec
-    return entry.checkpoint_policy_spec
+    return registry.selection_checkpoint_policy_spec_for_entry(entry) or fallback_policy_spec
 
 
 def _record_auto_promotion(
@@ -518,6 +525,13 @@ def _promotion_incumbent_entry(
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
+    return _promotion_incumbent_entry_from_registry(registry, promotion_config)
+
+
+def _promotion_incumbent_entry_from_registry(
+    registry,
+    promotion_config: NeuralSelfPlayPromotionConfig,
+) -> "PromotionRegistryEntry | None":
     incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
     if incumbent_policy_id is None:
         return registry.latest
@@ -525,12 +539,6 @@ def _promotion_incumbent_entry(
         if entry.policy_id == incumbent_policy_id:
             return entry
     return None
-
-
-def _promotion_policy_spec(entry: "PromotionRegistryEntry | None") -> str | None:
-    if entry is None:
-        return None
-    return entry.checkpoint_policy_spec
 
 
 def _promotion_advancement_decision(
