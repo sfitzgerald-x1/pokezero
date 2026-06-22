@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timezone
 import glob
 import json
+import math
 from pathlib import Path
 import shutil
 import shlex
@@ -537,6 +538,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     long_run_compare.add_argument("--json", action="store_true", help="Print the comparison payload as JSON.")
     long_run_compare.set_defaults(func=_cpu_long_run_compare)
+
+    long_run_calibrate = subparsers.add_parser(
+        "cpu-long-run-calibrate",
+        help="Suggest audit thresholds from CPU long-run wrapper summaries.",
+    )
+    long_run_calibrate.add_argument(
+        "paths",
+        type=Path,
+        nargs="*",
+        help="Long-run run directories or cpu-long-run-run-summary.json paths.",
+    )
+    long_run_calibrate.add_argument(
+        "--summary-glob",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern for long-run directories or cpu-long-run-run-summary.json files. "
+            "May be repeated and is expanded in sorted order."
+        ),
+    )
+    long_run_calibrate.add_argument(
+        "--margin",
+        type=float,
+        default=DEFAULT_AUDIT_CALIBRATION_MARGIN,
+        help="Relative threshold headroom applied to observed long-run metrics.",
+    )
+    long_run_calibrate.add_argument(
+        "--aggregate-mode",
+        choices=("median", "envelope"),
+        default="median",
+        help="How to combine multiple summary-derived calibrations.",
+    )
+    long_run_calibrate.add_argument(
+        "--refresh-derived-audit",
+        action="store_true",
+        help="Ignore persisted derived_run_report snapshots and recompute current derived audit health.",
+    )
+    long_run_calibrate.add_argument("--require-run-count", type=int, default=0)
+    long_run_calibrate.add_argument("--require-benchmark-iterations", type=int, default=0)
+    long_run_calibrate.add_argument("--require-min-benchmark-games", type=int, default=0)
+    long_run_calibrate.add_argument(
+        "--write-config",
+        type=Path,
+        default=None,
+        help=(
+            "With sufficiency requirements, write the suggested audit config to this versioned JSON path."
+        ),
+    )
+    long_run_calibrate.add_argument("--json", action="store_true", help="Print the calibration payload as JSON.")
+    long_run_calibrate.set_defaults(func=_cpu_long_run_calibrate)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
@@ -2274,6 +2325,13 @@ def _optional_int_from_mapping(value: object, key: str) -> int | None:
     return observed if isinstance(observed, int) and not isinstance(observed, bool) else None
 
 
+def _optional_float_from_mapping(value: object, key: str) -> float | None:
+    if not isinstance(value, Mapping):
+        return None
+    observed = value.get(key)
+    return float(observed) if isinstance(observed, (int, float)) and not isinstance(observed, bool) else None
+
+
 def _print_audit_config_report(report: Mapping[str, object]) -> None:
     print("audit_config_report:")
     print(f"passed: {'PASS' if report['passed'] else 'FAIL'}")
@@ -3201,6 +3259,78 @@ def _cpu_long_run_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cpu_long_run_calibrate(args: argparse.Namespace) -> int:
+    if args.margin < 0.0:
+        raise ValueError("margin must be non-negative.")
+    paths = _expanded_cpu_long_run_summary_paths(args.paths, args.summary_glob)
+    samples: list[dict[str, object]] = []
+    errors: list[dict[str, object]] = []
+    for path in paths:
+        try:
+            summary_path, summary = _load_cpu_long_run_summary(path)
+            samples.append(
+                _cpu_long_run_calibration_sample(
+                    summary_path,
+                    summary,
+                    refresh_derived_audit=args.refresh_derived_audit,
+                    margin=args.margin,
+                )
+            )
+        except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            errors.append({"path": str(path), "error": str(exc)})
+
+    result = (
+        _cpu_long_run_calibration_result(
+            samples,
+            margin=args.margin,
+            aggregate_mode=args.aggregate_mode,
+            refresh_derived_audit=args.refresh_derived_audit,
+        )
+        if samples
+        else _empty_cpu_long_run_calibration_result(
+            margin=args.margin,
+            aggregate_mode=args.aggregate_mode,
+            refresh_derived_audit=args.refresh_derived_audit,
+        )
+    )
+    sufficiency_errors = _cpu_long_run_calibration_sufficiency_errors(
+        result,
+        require_run_count=args.require_run_count,
+        require_benchmark_iterations=args.require_benchmark_iterations,
+        require_min_benchmark_games=args.require_min_benchmark_games,
+    )
+    wrote_config_path = None
+    if args.write_config is not None:
+        if not _cpu_long_run_calibration_sufficiency_requested(args):
+            raise ValueError(
+                "--write-config requires at least one calibration sufficiency requirement "
+                "(--require-run-count, --require-benchmark-iterations, or --require-min-benchmark-games)."
+            )
+        if errors:
+            raise ValueError("--write-config requires every selected long-run summary to load and calibrate.")
+        if sufficiency_errors:
+            raise ValueError("--write-config requires calibration sufficiency checks to pass.")
+        _write_json_payload(args.write_config, _cpu_long_run_calibration_config_payload(result))
+        wrote_config_path = args.write_config
+
+    payload = dict(result)
+    payload["error_count"] = len(errors)
+    payload["errors"] = errors
+    if _cpu_long_run_calibration_sufficiency_requested(args):
+        payload["calibration_sufficient"] = not sufficiency_errors
+        payload["calibration_sufficiency_errors"] = list(sufficiency_errors)
+    if wrote_config_path is not None:
+        payload["written_config_path"] = str(wrote_config_path)
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_cpu_long_run_calibration(payload)
+    if errors:
+        return 1
+    return 2 if sufficiency_errors else 0
+
+
 def _expanded_cpu_long_run_summary_paths(paths: Iterable[Path], summary_globs: Iterable[str] | None) -> tuple[Path, ...]:
     expanded: list[Path] = []
     seen: set[str] = set()
@@ -3291,6 +3421,499 @@ def _cpu_long_run_summary_derived_run_report(
     if not refresh and isinstance(persisted_report, Mapping):
         return persisted_report, "persisted"
     return _cpu_long_run_derived_run_report(summary), "computed"
+
+
+def _cpu_long_run_calibration_sample(
+    summary_path: Path,
+    summary: Mapping[str, object],
+    *,
+    refresh_derived_audit: bool,
+    margin: float,
+) -> dict[str, object]:
+    status = str(summary.get("status", "unknown"))
+    if status != "passed":
+        raise ValueError(f"long-run summary is not passed: status={status}")
+    report, report_source = _cpu_long_run_summary_derived_run_report(summary, refresh=refresh_derived_audit)
+    if report.get("available") is not True:
+        raise ValueError(f"derived run report unavailable: {_format_summary_value(report.get('error'))}")
+    if report.get("audit_passed") is not True:
+        failed_checks = ", ".join(str(check) for check in report.get("failed_checks", ())) or "-"
+        raise ValueError(f"derived run report did not pass: failed_checks={failed_checks}")
+
+    latest_benchmark_games = _cpu_long_run_report_latest_benchmark_games(report)
+    latest_benchmark_win_rate = _optional_float_from_mapping(report, "latest_benchmark_win_rate")
+    require_benchmark = latest_benchmark_games > 0 and latest_benchmark_win_rate is not None
+    missing_opponents = report.get("missing_latest_benchmark_opponents")
+    require_benchmark_opponents = require_benchmark and isinstance(missing_opponents, list) and not missing_opponents
+    notes: list[str] = []
+    if not require_benchmark:
+        notes.append("No benchmark game count was available; suggested config allows missing benchmarks.")
+    if require_benchmark and not require_benchmark_opponents:
+        notes.append("Benchmark opponent coverage was unavailable or incomplete; suggested config allows missing benchmark opponents.")
+
+    sample = {
+        "summary_path": str(summary_path),
+        "label": _cpu_long_run_compare_label(summary_path, _cpu_long_run_summary_run_dir(summary)),
+        "status": status,
+        "derived_run_report_source": report_source,
+        "source_type": str(report.get("source_type") or "unknown"),
+        "latest_iteration": report.get("latest_iteration"),
+        "benchmark_iteration_count": 1 if require_benchmark else 0,
+        "require_benchmark": require_benchmark,
+        "require_benchmark_opponent_coverage": require_benchmark_opponents,
+        "latest_benchmark_games": latest_benchmark_games,
+        "latest_benchmark_win_rate": latest_benchmark_win_rate,
+        "best_benchmark_win_rate": _optional_float_from_mapping(report, "best_benchmark_win_rate"),
+        "latest_collection_capped_rate": _optional_float_from_mapping(report, "latest_collection_capped_rate"),
+        "latest_benchmark_capped_rate": _optional_float_from_mapping(report, "latest_benchmark_capped_rate"),
+        "latest_average_decision_rounds": _optional_float_from_mapping(report, "latest_average_decision_rounds"),
+        "latest_benchmark_average_decision_rounds": _optional_float_from_mapping(
+            report,
+            "latest_benchmark_average_decision_rounds",
+        ),
+        "latest_process_peak_rss_mb": _optional_float_from_mapping(report, "latest_process_peak_rss_mb"),
+        "consecutive_promotion_failures": _optional_int_from_mapping(report, "consecutive_promotion_failures") or 0,
+        "missing_latest_benchmark_opponents": list(missing_opponents) if isinstance(missing_opponents, list) else [],
+        "notes": notes,
+    }
+    sample["suggested_config"] = _cpu_long_run_sample_suggested_config(sample, margin=margin)
+    return sample
+
+
+def _cpu_long_run_summary_run_dir(summary: Mapping[str, object]) -> object:
+    recipe = summary.get("recipe")
+    if isinstance(recipe, Mapping):
+        return recipe.get("run_dir")
+    return None
+
+
+def _cpu_long_run_report_latest_benchmark_games(report: Mapping[str, object]) -> int:
+    direct = _optional_int_from_mapping(report, "latest_benchmark_games")
+    if direct is not None:
+        return direct
+    checks = report.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, Mapping) or check.get("name") != "latest_benchmark_games":
+                continue
+            observed = check.get("observed")
+            if isinstance(observed, int):
+                return observed
+            if isinstance(observed, float):
+                return int(observed)
+    return 0
+
+
+def _cpu_long_run_sample_suggested_config(
+    sample: Mapping[str, object],
+    *,
+    margin: float,
+) -> dict[str, float | int | bool | None]:
+    defaults = RunAuditConfig()
+    require_benchmark = bool(sample.get("require_benchmark"))
+    return {
+        "min_latest_benchmark_win_rate": (
+            _floor_observed_threshold(_optional_float_from_mapping(sample, "latest_benchmark_win_rate"), margin=margin)
+            if require_benchmark
+            else 0.0
+        ),
+        "min_latest_benchmark_games": int(sample.get("latest_benchmark_games") or 0) if require_benchmark else 0,
+        "max_latest_collection_capped_rate": _ceiling_observed_rate_threshold(
+            _optional_float_from_mapping(sample, "latest_collection_capped_rate"),
+            margin=margin,
+            minimum=defaults.max_latest_collection_capped_rate,
+        ) or 1.0,
+        "max_latest_benchmark_capped_rate": (
+            _ceiling_observed_rate_threshold(
+                _optional_float_from_mapping(sample, "latest_benchmark_capped_rate"),
+                margin=margin,
+                minimum=defaults.max_latest_benchmark_capped_rate,
+            ) or 1.0
+            if require_benchmark
+            else 1.0
+        ),
+        "max_latest_average_decision_rounds": _ceiling_observed_float_threshold(
+            _optional_float_from_mapping(sample, "latest_average_decision_rounds"),
+            margin=margin,
+        ),
+        "max_latest_benchmark_average_decision_rounds": (
+            _ceiling_observed_float_threshold(
+                _optional_float_from_mapping(sample, "latest_benchmark_average_decision_rounds"),
+                margin=margin,
+            )
+            if require_benchmark
+            else None
+        ),
+        "max_latest_process_peak_rss_mb": _ceiling_observed_float_threshold(
+            _optional_float_from_mapping(sample, "latest_process_peak_rss_mb"),
+            margin=margin,
+        ),
+        "max_benchmark_win_rate_drop": defaults.max_benchmark_win_rate_drop if require_benchmark else 1.0,
+        "max_consecutive_promotion_failures": max(
+            defaults.max_consecutive_promotion_failures,
+            int(sample.get("consecutive_promotion_failures") or 0),
+        ),
+        "require_benchmark": require_benchmark,
+        "require_latest_promotion": False,
+        "require_benchmark_opponent_coverage": bool(sample.get("require_benchmark_opponent_coverage")),
+    }
+
+
+def _cpu_long_run_calibration_result(
+    samples: list[dict[str, object]],
+    *,
+    margin: float,
+    aggregate_mode: str,
+    refresh_derived_audit: bool,
+) -> dict[str, object]:
+    source_types = tuple(dict.fromkeys(str(sample.get("source_type") or "unknown") for sample in samples))
+    notes = [
+        "Calibrated from CPU long-run wrapper summaries; thresholds use one derived run report per summary."
+    ]
+    if not all(sample.get("require_benchmark") for sample in samples):
+        notes.append("At least one summary-derived report lacks benchmark games; aggregate allows missing benchmarks.")
+    if not all(sample.get("require_benchmark_opponent_coverage") for sample in samples):
+        notes.append("At least one summary-derived report lacks fixed-baseline opponent coverage evidence.")
+    for sample in samples:
+        notes.extend(str(note) for note in sample.get("notes", ()) if note)
+
+    suggested_config = _cpu_long_run_aggregate_suggested_config(samples, aggregate_mode=aggregate_mode)
+    return {
+        "schema_version": "pokezero.cpu_long_run_calibration.v1",
+        "source_type": source_types[0] if len(source_types) == 1 else "mixed",
+        "aggregate_mode": aggregate_mode,
+        "summary_count": len(samples),
+        "run_count": len(samples),
+        "benchmark_iteration_count": sum(int(sample.get("benchmark_iteration_count") or 0) for sample in samples),
+        "margin": margin,
+        "refresh_derived_audit": refresh_derived_audit,
+        "summary_paths": [str(sample.get("summary_path")) for sample in samples],
+        "samples": samples,
+        "suggested_config": suggested_config,
+        "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
+        "min_latest_benchmark_games": suggested_config["min_latest_benchmark_games"],
+        "require_benchmark": suggested_config["require_benchmark"],
+        "require_benchmark_opponent_coverage": suggested_config["require_benchmark_opponent_coverage"],
+        "notes": list(dict.fromkeys(notes)),
+    }
+
+
+def _empty_cpu_long_run_calibration_result(
+    *,
+    margin: float,
+    aggregate_mode: str,
+    refresh_derived_audit: bool,
+) -> dict[str, object]:
+    suggested_config = _audit_config_dict(RunAuditConfig(require_benchmark=False, require_benchmark_opponent_coverage=False))
+    return {
+        "schema_version": "pokezero.cpu_long_run_calibration.v1",
+        "source_type": "unknown",
+        "aggregate_mode": aggregate_mode,
+        "summary_count": 0,
+        "run_count": 0,
+        "benchmark_iteration_count": 0,
+        "margin": margin,
+        "refresh_derived_audit": refresh_derived_audit,
+        "summary_paths": [],
+        "samples": [],
+        "suggested_config": suggested_config,
+        "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
+        "min_latest_benchmark_games": 0,
+        "require_benchmark": False,
+        "require_benchmark_opponent_coverage": False,
+        "notes": ["No valid long-run summaries were available for calibration."],
+    }
+
+
+def _cpu_long_run_aggregate_suggested_config(
+    samples: list[dict[str, object]],
+    *,
+    aggregate_mode: str,
+) -> dict[str, float | int | bool | None]:
+    require_benchmark = all(bool(sample.get("require_benchmark")) for sample in samples)
+    require_opponents = all(bool(sample.get("require_benchmark_opponent_coverage")) for sample in samples)
+    configs = tuple(sample["suggested_config"] for sample in samples if isinstance(sample.get("suggested_config"), Mapping))
+    return {
+        "min_latest_benchmark_win_rate": (
+            _aggregate_floor_threshold(
+                (config.get("min_latest_benchmark_win_rate") for config in configs),
+                aggregate_mode=aggregate_mode,
+            )
+            if require_benchmark
+            else 0.0
+        ),
+        "min_latest_benchmark_games": (
+            _aggregate_min_count(
+                (config.get("min_latest_benchmark_games") for config in configs),
+                aggregate_mode=aggregate_mode,
+            )
+            if require_benchmark
+            else 0
+        ),
+        "max_latest_collection_capped_rate": _aggregate_ceiling_threshold(
+            (config.get("max_latest_collection_capped_rate") for config in configs),
+            aggregate_mode=aggregate_mode,
+        ) or 1.0,
+        "max_latest_benchmark_capped_rate": (
+            _aggregate_ceiling_threshold(
+                (config.get("max_latest_benchmark_capped_rate") for config in configs),
+                aggregate_mode=aggregate_mode,
+            ) or 1.0
+            if require_benchmark
+            else 1.0
+        ),
+        "max_latest_average_decision_rounds": _aggregate_ceiling_threshold(
+            (config.get("max_latest_average_decision_rounds") for config in configs),
+            aggregate_mode=aggregate_mode,
+        ),
+        "max_latest_benchmark_average_decision_rounds": (
+            _aggregate_ceiling_threshold(
+                (config.get("max_latest_benchmark_average_decision_rounds") for config in configs),
+                aggregate_mode=aggregate_mode,
+            )
+            if require_benchmark
+            else None
+        ),
+        "max_latest_process_peak_rss_mb": _aggregate_ceiling_threshold(
+            (config.get("max_latest_process_peak_rss_mb") for config in configs),
+            aggregate_mode=aggregate_mode,
+        ),
+        "max_benchmark_win_rate_drop": (
+            _aggregate_ceiling_threshold(
+                (config.get("max_benchmark_win_rate_drop") for config in configs),
+                aggregate_mode=aggregate_mode,
+            ) or 1.0
+            if require_benchmark
+            else 1.0
+        ),
+        "max_consecutive_promotion_failures": _aggregate_max_count(
+            (config.get("max_consecutive_promotion_failures") for config in configs),
+            aggregate_mode=aggregate_mode,
+        ),
+        "require_benchmark": require_benchmark,
+        "require_latest_promotion": False,
+        "require_benchmark_opponent_coverage": require_opponents,
+    }
+
+
+def _cpu_long_run_calibration_sufficiency_requested(args: argparse.Namespace) -> bool:
+    return (
+        args.require_run_count > 0
+        or args.require_benchmark_iterations > 0
+        or args.require_min_benchmark_games > 0
+    )
+
+
+def _cpu_long_run_calibration_sufficiency_errors(
+    result: Mapping[str, object],
+    *,
+    require_run_count: int,
+    require_benchmark_iterations: int,
+    require_min_benchmark_games: int,
+) -> tuple[str, ...]:
+    if require_run_count < 0:
+        raise ValueError("require_run_count must be non-negative.")
+    if require_benchmark_iterations < 0:
+        raise ValueError("require_benchmark_iterations must be non-negative.")
+    if require_min_benchmark_games < 0:
+        raise ValueError("require_min_benchmark_games must be non-negative.")
+    observed_run_count = int(result.get("run_count") or 0)
+    observed_benchmark_iterations = int(result.get("benchmark_iteration_count") or 0)
+    observed_min_benchmark_games = int(result.get("min_latest_benchmark_games") or 0)
+    errors: list[str] = []
+    if observed_run_count < require_run_count:
+        errors.append(f"calibration_run_count {observed_run_count} is below required {require_run_count}")
+    if observed_benchmark_iterations < require_benchmark_iterations:
+        errors.append(
+            "calibration_benchmark_iterations "
+            f"{observed_benchmark_iterations} is below required {require_benchmark_iterations}"
+        )
+    if require_benchmark_iterations > 0 and not result.get("require_benchmark"):
+        errors.append("calibration includes at least one summary without benchmark games")
+    if observed_min_benchmark_games < require_min_benchmark_games:
+        errors.append(
+            "calibration_min_benchmark_games "
+            f"{observed_min_benchmark_games} is below required {require_min_benchmark_games}"
+        )
+    return tuple(errors)
+
+
+def _cpu_long_run_calibration_config_payload(result: Mapping[str, object]) -> dict[str, object]:
+    suggested_config = result.get("suggested_config")
+    if not isinstance(suggested_config, Mapping):
+        raise ValueError("long-run calibration result has no suggested config.")
+    config = run_audit_config_from_dict(suggested_config)
+    return run_audit_config_payload(
+        config,
+        source=collect_source_metadata(),
+        calibration={
+            "source": "cpu_long_run_summaries",
+            "margin": result.get("margin"),
+            "source_type": result.get("source_type"),
+            "run_count": result.get("run_count"),
+            "summary_count": result.get("summary_count"),
+            "benchmark_iteration_count": result.get("benchmark_iteration_count"),
+            "min_latest_benchmark_games": result.get("min_latest_benchmark_games"),
+            "aggregate_mode": result.get("aggregate_mode"),
+            "paths": list(result.get("summary_paths", ())),
+            "notes": list(result.get("notes", ())),
+        },
+    )
+
+
+def _print_cpu_long_run_calibration(payload: Mapping[str, object]) -> None:
+    print("cpu_long_run_calibration:")
+    print(f"source: {payload.get('source_type')}")
+    print(f"summaries: {payload.get('summary_count')}")
+    print(f"benchmark_reports: {payload.get('benchmark_iteration_count')}")
+    print(f"aggregate_mode: {payload.get('aggregate_mode')}")
+    print(f"margin: {_format_optional_float(payload.get('margin'))}")
+    print(f"refresh_derived_audit: {_format_optional_bool(payload.get('refresh_derived_audit'))}")
+    print("suggested_config:")
+    suggested_config = payload.get("suggested_config")
+    if isinstance(suggested_config, Mapping):
+        for key, value in suggested_config.items():
+            print(f"- {key}: {_format_config_value(value)}")
+    print("suggested_audit_flags:")
+    flags = tuple(str(flag) for flag in payload.get("suggested_audit_flags", ()))
+    print(" ".join(flags) if flags else "-")
+    if "calibration_sufficient" in payload:
+        errors = tuple(str(error) for error in payload.get("calibration_sufficiency_errors", ()))
+        _print_calibration_sufficiency(errors)
+    if payload.get("written_config_path") is not None:
+        print(f"written_config: {payload.get('written_config_path')}")
+    errors = tuple(error for error in payload.get("errors", ()) if isinstance(error, Mapping))
+    if errors:
+        print("errors:")
+        for error in errors:
+            print(f"- {error.get('path')}: {error.get('error')}")
+    notes = tuple(str(note) for note in payload.get("notes", ()) if note)
+    if notes:
+        print("notes:")
+        for note in notes:
+            print(f"- {note}")
+
+
+def _format_config_value(value: object) -> str:
+    if isinstance(value, float):
+        return _format_optional_float(value)
+    if value is None:
+        return "-"
+    return str(value)
+
+
+def _audit_config_dict(config: RunAuditConfig) -> dict[str, float | int | bool | None]:
+    return run_audit_config_to_dict(config)
+
+
+def _audit_config_cli_flags(config: Mapping[str, object]) -> tuple[str, ...]:
+    require_benchmark = bool(config.get("require_benchmark"))
+    benchmark_only_fields = {
+        "min_latest_benchmark_win_rate",
+        "min_latest_benchmark_games",
+        "max_latest_benchmark_capped_rate",
+        "max_latest_benchmark_average_decision_rounds",
+        "max_benchmark_win_rate_drop",
+    }
+    flags: list[str] = []
+    for field_name, flag_name in (
+        ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
+        ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
+        ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
+        ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
+        ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
+        ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+        ("max_latest_process_peak_rss_mb", "--max-latest-process-peak-rss-mb"),
+        ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
+        ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
+    ):
+        if not require_benchmark and field_name in benchmark_only_fields:
+            continue
+        value = config.get(field_name)
+        if value is not None:
+            flags.extend((flag_name, str(value)))
+    if not require_benchmark:
+        flags.append("--allow-missing-benchmark")
+    if not config.get("require_benchmark_opponent_coverage"):
+        flags.append("--allow-missing-benchmark-opponents")
+    return tuple(flags)
+
+
+def _floor_observed_threshold(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(max(0.0, value * (1.0 - margin)))
+
+
+def _ceiling_observed_rate_threshold(
+    value: float | None,
+    *,
+    margin: float,
+    minimum: float = 0.0,
+) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(min(1.0, max(minimum, value * (1.0 + margin))))
+
+
+def _ceiling_observed_float_threshold(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(value * (1.0 + margin))
+
+
+def _aggregate_floor_threshold(values: Iterable[object], *, aggregate_mode: str) -> float | None:
+    return _aggregate_min_threshold(values) if aggregate_mode == "envelope" else _aggregate_median_threshold(values)
+
+
+def _aggregate_ceiling_threshold(values: Iterable[object], *, aggregate_mode: str) -> float | None:
+    return _aggregate_max_threshold(values) if aggregate_mode == "envelope" else _aggregate_median_threshold(values)
+
+
+def _aggregate_min_count(values: Iterable[object], *, aggregate_mode: str) -> int:
+    present = tuple(sorted(int(value) for value in values if value is not None))
+    if not present:
+        return 0
+    if aggregate_mode == "envelope":
+        return min(present)
+    return math.floor(_median_value(present))
+
+
+def _aggregate_max_count(values: Iterable[object], *, aggregate_mode: str) -> int:
+    present = tuple(sorted(int(value) for value in values if value is not None))
+    if not present:
+        return 0
+    if aggregate_mode == "envelope":
+        return max(present)
+    return math.ceil(_median_value(present))
+
+
+def _aggregate_min_threshold(values: Iterable[object]) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return min(present) if present else None
+
+
+def _aggregate_max_threshold(values: Iterable[object]) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return max(present) if present else None
+
+
+def _aggregate_median_threshold(values: Iterable[object]) -> float | None:
+    present = tuple(sorted(float(value) for value in values if value is not None))
+    return _round_threshold(_median_value(present)) if present else None
+
+
+def _median_value(values: tuple[float, ...] | tuple[int, ...]) -> float:
+    if not values:
+        raise ValueError("cannot calculate median of empty values.")
+    middle = len(values) // 2
+    if len(values) % 2:
+        return float(values[middle])
+    return (float(values[middle - 1]) + float(values[middle])) / 2.0
+
+
+def _round_threshold(value: float) -> float:
+    return round(value, 6)
 
 
 def _cpu_long_run_compare_label(summary_path: Path, run_dir: object) -> str:
@@ -3410,6 +4033,7 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
             "audit_passed": audit_result.passed,
             "failed_checks": failed_checks,
             "latest_benchmark_win_rate": audit_result.latest_benchmark_win_rate,
+            "latest_benchmark_games": audit_result.iterations[-1].benchmark_games if audit_result.iterations else 0,
             "best_benchmark_win_rate": audit_result.best_benchmark_win_rate,
             "latest_collection_capped_rate": audit_result.latest_collection_capped_rate,
             "latest_benchmark_capped_rate": audit_result.latest_benchmark_capped_rate,

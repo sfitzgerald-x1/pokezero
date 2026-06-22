@@ -3835,6 +3835,115 @@ if __name__ == "__main__":
         self.assertEqual(payload["error_count"], 1)
         self.assertIn("cpu long-run summary not found", payload["errors"][0]["error"])
 
+    def test_eval_cli_cpu_long_run_calibrate_json_uses_persisted_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_root = temp_path / "first"
+            second_root = temp_path / "second"
+            first_summary = cpu_long_run_summary(status="passed")
+            first_summary["recipe"]["run_dir"] = str(first_root)
+            first_summary["derived_run_report"] = long_run_derived_report(
+                latest_iteration=1,
+                latest_benchmark_games=20,
+                latest_benchmark_win_rate=0.80,
+                latest_collection_capped_rate=0.05,
+                latest_benchmark_capped_rate=0.0,
+                latest_average_decision_rounds=50.0,
+                latest_benchmark_average_decision_rounds=60.0,
+                latest_process_peak_rss_mb=100.0,
+                consecutive_promotion_failures=1,
+            )
+            second_summary = cpu_long_run_summary(status="passed")
+            second_summary["recipe"]["run_dir"] = str(second_root)
+            second_summary["derived_run_report"] = long_run_derived_report(
+                latest_iteration=1,
+                latest_benchmark_games=30,
+                latest_benchmark_win_rate=0.60,
+                latest_collection_capped_rate=0.20,
+                latest_benchmark_capped_rate=0.10,
+                latest_average_decision_rounds=70.0,
+                latest_benchmark_average_decision_rounds=80.0,
+                latest_process_peak_rss_mb=300.0,
+                consecutive_promotion_failures=2,
+            )
+            write_json(first_root / "cpu-long-run-run-summary.json", first_summary)
+            write_json(second_root / "cpu-long-run-run-summary.json", second_summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-calibrate", str(first_root), str(second_root), "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        config = payload["suggested_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["summary_count"], 2)
+        self.assertEqual(payload["benchmark_iteration_count"], 2)
+        self.assertEqual(payload["source_type"], "linear_selfplay")
+        self.assertFalse(payload["refresh_derived_audit"])
+        self.assertEqual(config["min_latest_benchmark_win_rate"], 0.63)
+        self.assertEqual(config["min_latest_benchmark_games"], 25)
+        self.assertEqual(config["max_latest_collection_capped_rate"], 0.16)
+        self.assertEqual(config["max_latest_benchmark_capped_rate"], 0.105)
+        self.assertEqual(config["max_latest_average_decision_rounds"], 66.0)
+        self.assertEqual(config["max_latest_benchmark_average_decision_rounds"], 77.0)
+        self.assertEqual(config["max_latest_process_peak_rss_mb"], 220.0)
+        self.assertEqual(config["max_consecutive_promotion_failures"], 2)
+        self.assertTrue(config["require_benchmark"])
+        self.assertTrue(config["require_benchmark_opponent_coverage"])
+        self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
+
+    def test_eval_cli_cpu_long_run_calibrate_writes_config_after_sufficiency_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            config_path = Path(temp_dir) / "audit-config.json"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["derived_run_report"] = long_run_derived_report(latest_benchmark_games=20)
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-calibrate",
+                        str(run_root),
+                        "--json",
+                        "--require-run-count",
+                        "1",
+                        "--require-benchmark-iterations",
+                        "1",
+                        "--require-min-benchmark-games",
+                        "20",
+                        "--write-config",
+                        str(config_path),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["calibration_sufficient"])
+        self.assertEqual(payload["written_config_path"], str(config_path))
+        self.assertEqual(config_payload["schema_version"], "pokezero.run_audit_config.v1")
+        self.assertEqual(config_payload["calibration"]["source"], "cpu_long_run_summaries")
+        self.assertEqual(config_payload["calibration"]["summary_count"], 1)
+        self.assertEqual(config_payload["calibration"]["min_latest_benchmark_games"], 20)
+
+    def test_eval_cli_cpu_long_run_calibrate_reports_unusable_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "failed"
+            failed_summary = cpu_long_run_summary(status="failed", failed_reason="step_failed")
+            write_json(run_root / "cpu-long-run-run-summary.json", failed_summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["summary_count"], 0)
+        self.assertEqual(payload["error_count"], 1)
+        self.assertIn("long-run summary is not passed", payload["errors"][0]["error"])
+
     def test_eval_cli_cpu_long_run_report_json_includes_rejected_plan_reasons(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
@@ -4895,6 +5004,49 @@ def cpu_long_run_summary(
         "failed_step": failed_step,
         "failed_reason": failed_reason,
         "long_run_ready_reasons": list(ready_reasons or ()),
+    }
+
+
+def long_run_derived_report(
+    *,
+    latest_iteration: int = 1,
+    latest_benchmark_games: int = 20,
+    latest_benchmark_win_rate: float = 0.65,
+    latest_collection_capped_rate: float = 0.0,
+    latest_benchmark_capped_rate: float = 0.0,
+    latest_average_decision_rounds: float = 70.0,
+    latest_benchmark_average_decision_rounds: float = 76.5,
+    latest_process_peak_rss_mb: float = 184.5,
+    consecutive_promotion_failures: int = 0,
+) -> dict:
+    return {
+        "available": True,
+        "manifest_available": True,
+        "error": None,
+        "schema_version": "pokezero.selfplay_run.v1",
+        "source_type": "linear_selfplay",
+        "latest_iteration": latest_iteration,
+        "audit_passed": True,
+        "failed_checks": [],
+        "latest_benchmark_win_rate": latest_benchmark_win_rate,
+        "latest_benchmark_games": latest_benchmark_games,
+        "best_benchmark_win_rate": latest_benchmark_win_rate,
+        "latest_collection_capped_rate": latest_collection_capped_rate,
+        "latest_benchmark_capped_rate": latest_benchmark_capped_rate,
+        "latest_average_decision_rounds": latest_average_decision_rounds,
+        "latest_benchmark_average_decision_rounds": latest_benchmark_average_decision_rounds,
+        "latest_process_peak_rss_mb": latest_process_peak_rss_mb,
+        "missing_latest_benchmark_opponents": [],
+        "consecutive_promotion_failures": consecutive_promotion_failures,
+        "checks": [
+            {
+                "name": "latest_benchmark_games",
+                "passed": True,
+                "observed": latest_benchmark_games,
+                "threshold": 0,
+                "message": "latest benchmark has enough games",
+            }
+        ],
     }
 
 
