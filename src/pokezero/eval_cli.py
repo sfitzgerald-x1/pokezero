@@ -972,6 +972,7 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
         "failed_step": None,
     }
     _write_json_payload(summary_path, summary)
+    summary_update_failed = False
     print("cpu_smoke_run:")
     print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
     print("note: smoke-profile thresholds validate command flow, not policy strength.")
@@ -993,7 +994,11 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
             "returncode": None,
         }
         step_summaries.append(step_summary)
-        _write_json_payload(summary_path, summary)
+        summary_update_failed = _write_cpu_smoke_summary_update(
+            summary_path,
+            summary,
+            previous_failure=summary_update_failed,
+        )
         completed = subprocess.run(step["argv"])
         step_summary["ended_at"] = _utc_timestamp()
         step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
@@ -1008,18 +1013,26 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
             }
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-            _write_json_payload(summary_path, summary)
+            summary_update_failed = _write_cpu_smoke_summary_update(
+                summary_path,
+                summary,
+                previous_failure=summary_update_failed,
+            )
             print(
                 f"error: cpu smoke step {index} failed with exit code {completed.returncode}: {step['name']}",
                 file=sys.stderr,
             )
             return int(completed.returncode)
         step_summary["status"] = "passed"
-        _write_json_payload(summary_path, summary)
+        summary_update_failed = _write_cpu_smoke_summary_update(
+            summary_path,
+            summary,
+            previous_failure=summary_update_failed,
+        )
     summary["status"] = "passed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-    _write_json_payload(summary_path, summary)
+    _write_cpu_smoke_summary_update(summary_path, summary, previous_failure=summary_update_failed)
     print("cpu_smoke_run: PASS")
     return 0
 
@@ -1188,8 +1201,24 @@ def _write_json_payload(path: Path, payload: dict[str, object]) -> None:
     temporary_path.replace(path)
 
 
+def _write_cpu_smoke_summary_update(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    previous_failure: bool,
+) -> bool:
+    if previous_failure:
+        return True
+    try:
+        _write_json_payload(path, payload)
+    except OSError as exc:
+        print(f"warning: failed to update cpu smoke summary {path}: {exc}", file=sys.stderr)
+        return True
+    return False
+
+
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _compare(args: argparse.Namespace) -> int:
