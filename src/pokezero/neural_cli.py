@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 
+from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
@@ -19,6 +20,7 @@ from .neural_policy import (
 )
 from .neural_selfplay import NeuralSelfPlayPromotionConfig, run_neural_selfplay_iterations
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
@@ -141,6 +143,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     iterate.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
+    add_post_iteration_audit_arguments(iterate)
     iterate.add_argument("--json", action="store_true", help="Print the run manifest as JSON.")
     iterate.set_defaults(func=_iterate)
 
@@ -152,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except RunAuditFailure as exc:
+        _print_run_audit_failure(exc)
+        return 3
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -279,6 +285,16 @@ def _iterate(args: argparse.Namespace) -> int:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.evaluation_games <= 0 and not args.allow_missing_benchmark:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
+    post_iteration_audit_config = post_iteration_audit_config_from_args(args)
+    if (
+        post_iteration_audit_config is not None
+        and post_iteration_audit_config.require_benchmark
+        and args.evaluation_games <= 0
+    ):
+        raise ValueError(
+            "--audit-after-iteration requires --evaluation-games > 0 unless "
+            "--audit-allow-missing-benchmark is set."
+        )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -332,6 +348,7 @@ def _iterate(args: argparse.Namespace) -> int:
         worker_count=args.workers,
         promotion_registry_path=args.promotion_registry,
         auto_promotion_config=auto_promotion_config,
+        post_iteration_audit_config=post_iteration_audit_config,
         resume=args.resume,
     )
     if args.json:
@@ -339,6 +356,12 @@ def _iterate(args: argparse.Namespace) -> int:
     else:
         _print_iterate_summary(result)
     return 0
+
+
+def _print_run_audit_failure(exc: RunAuditFailure) -> None:
+    failed = [check.name for check in exc.result.checks if not check.passed]
+    print(f"audit_failed: {exc.result.manifest_path}", file=sys.stderr)
+    print(f"failed_checks: {', '.join(failed) if failed else 'unknown'}", file=sys.stderr)
 
 
 def _auto_promotion_config_from_args(args: argparse.Namespace) -> NeuralSelfPlayPromotionConfig | None:

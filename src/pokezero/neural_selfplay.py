@@ -38,6 +38,7 @@ from .selfplay import collect_selfplay_rollouts
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
     from .promotion import PromotionRecordResult, PromotionRegistryEntry
+    from .run_audit import RunAuditConfig, RunAuditResult
 
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
@@ -207,6 +208,7 @@ def run_neural_selfplay_iterations(
     worker_count: int = 1,
     promotion_registry_path: Path | None = None,
     auto_promotion_config: NeuralSelfPlayPromotionConfig | None = None,
+    post_iteration_audit_config: "RunAuditConfig | None" = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -395,12 +397,24 @@ def run_neural_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
             ).to_dict(),
         )
+        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,
         iterations=tuple(results),
         prior_iteration_manifests=tuple(prior_iteration_manifests),
     )
+
+
+def _enforce_post_iteration_audit(
+    manifest_path: Path,
+    config: "RunAuditConfig | None",
+) -> "RunAuditResult | None":
+    if config is None:
+        return None
+    from .run_audit import enforce_run_audit
+
+    return enforce_run_audit(manifest_path, config=config)
 
 
 def _benchmark_checkpoint(

@@ -185,6 +185,16 @@ class RunAuditResult:
         }
 
 
+class RunAuditFailure(RuntimeError):
+    def __init__(self, result: RunAuditResult) -> None:
+        self.result = result
+        failed = tuple(check.name for check in result.checks if not check.passed)
+        failed_summary = ", ".join(failed) if failed else "unknown"
+        super().__init__(
+            f"run audit failed for {result.manifest_path}: {failed_summary}"
+        )
+
+
 def audit_run(
     path: Path,
     *,
@@ -230,6 +240,17 @@ def audit_run(
         consecutive_promotion_failures=consecutive_promotion_failures,
         checks=checks,
     )
+
+
+def enforce_run_audit(
+    path: Path,
+    *,
+    config: RunAuditConfig = RunAuditConfig(),
+) -> RunAuditResult:
+    result = audit_run(path, config=config)
+    if not result.passed:
+        raise RunAuditFailure(result)
+    return result
 
 
 def _source_type(schema_version: str) -> str:
