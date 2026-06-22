@@ -577,6 +577,18 @@ python -m pokezero.eval_cli promotions \
 
 The apply command only moves entries already marked `cleanup_candidate`, only for managed promoted artifact copies, and leaves source run checkpoints untouched. Confirmed archive requires the same promotions preflight to pass before any file is moved. It archives the stale artifact and rewrites that promotion entry's checkpoint path to the archive location so registry verification and historical auditability continue to work. Already archived entries are retained on later retention-plan runs instead of being re-archived. It is not a permanent deletion policy; remove or compact archive directories separately only after deciding those checkpoints are no longer needed.
 
+After recoverable archiving, audit archived entries explicitly before making any manual compaction decision:
+
+```bash
+python -m pokezero.eval_cli promotions \
+  --registry runs/promotions.json \
+  --archive-integrity \
+  --verify \
+  --verify-loadable
+```
+
+The archive integrity report is read-only. It summarizes only entries already marked as retention-archived, reusing the same registry verification checks for checkpoint existence, checksum, loadability, and policy-id consistency. Add `--require-archive-integrity` with `--verify --verify-loadable` when the command should fail if any archived entry or registry-level verification check fails. This is useful when running with `--verify-opponent-pool-only`, where stale broken archives are otherwise annotated but do not block opponent-pool preflights.
+
 Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected. Snapshots include `generated_at`, so compare `policy_specs` and selected entries rather than whole-file equality when checking whether the selected pool changed.
 
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
