@@ -2794,8 +2794,7 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_exception"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-            if finalize_summary is not None:
-                finalize_summary(summary)
+            _apply_summary_finalizer(summary, finalize_summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2825,8 +2824,7 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_failed"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-            if finalize_summary is not None:
-                finalize_summary(summary)
+            _apply_summary_finalizer(summary, finalize_summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2850,8 +2848,7 @@ def _run_recipe_with_summary(
     summary["status"] = "passed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
-    if finalize_summary is not None:
-        finalize_summary(summary)
+    _apply_summary_finalizer(summary, finalize_summary)
     _write_run_summary_update(
         summary_path,
         summary,
@@ -2860,6 +2857,21 @@ def _run_recipe_with_summary(
     )
     print(f"{command_name}: PASS")
     return 0
+
+
+def _apply_summary_finalizer(
+    summary: dict[str, object],
+    finalize_summary: Callable[[dict[str, object]], None] | None,
+) -> None:
+    if finalize_summary is None:
+        return
+    try:
+        finalize_summary(summary)
+    except BaseException as exc:
+        summary["finalize_summary_error"] = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
 
 
 def _cpu_pilot_report(args: argparse.Namespace) -> int:
@@ -3356,6 +3368,7 @@ def _write_cpu_long_run_not_ready_summary(summary_path: Path, payload: Mapping[s
         "failed_reason": "long_run_not_ready",
         "long_run_ready_reasons": list(payload.get("long_run_ready_reasons") or ()),
     }
+    _finalize_cpu_long_run_summary(summary)
     _write_json_payload(summary_path, summary)
 
 
