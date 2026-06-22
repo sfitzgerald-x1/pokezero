@@ -393,7 +393,7 @@ By default, the preview assumes the latest promoted checkpoint is the current co
 
 When an opponent pool is previewed, each entry also includes an `opponent_pool_status` such as `selected`, `unselectable`, `excluded_current_policy`, or `available_outside_requested_size`. Use these statuses to diagnose why a required pool is undersized before starting a long run.
 
-Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected.
+Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected. Snapshots include `generated_at`, so compare `policy_specs` and selected entries rather than whole-file equality when checking whether the selected pool changed.
 
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 

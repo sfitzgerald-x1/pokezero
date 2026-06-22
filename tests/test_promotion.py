@@ -746,9 +746,15 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(snapshot["verification_exit_scope"], "opponent_pool_plus_current")
         self.assertTrue(snapshot["preflight_verified"])
         self.assertTrue(snapshot["selected_opponent_pool_verified"])
+        self.assertEqual(snapshot["preflight_verified"], payload["opponent_pool_preflight_verified"])
+        self.assertEqual(snapshot["current_policy_verified"], payload["opponent_pool_current_policy_verified"])
+        self.assertEqual(snapshot["registry_level_verified"], payload["opponent_pool_registry_level_verified"])
         self.assertEqual(snapshot["policy_specs"], payload["opponent_pool_policy_specs"])
         self.assertEqual([entry["sequence"] for entry in snapshot["selected_entries"]], [1, 2])
-        self.assertTrue(all(entry["opponent_pool_status"] == "selected" for entry in snapshot["selected_entries"]))
+        self.assertTrue(all(entry["verification_status"] == "partial" for entry in snapshot["selected_entries"]))
+        self.assertTrue(all(entry["checkpoint_exists"] == "pass" for entry in snapshot["selected_entries"]))
+        self.assertTrue(all(entry["failed_checks"] == [] for entry in snapshot["selected_entries"]))
+        self.assertTrue(all("opponent_pool_status" not in entry for entry in snapshot["selected_entries"]))
 
     def test_eval_cli_promotions_writes_snapshot_when_required_pool_size_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -779,6 +785,43 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertFalse(snapshot["requirement_passed"])
         self.assertEqual(snapshot["selected_size"], 1)
         self.assertEqual(snapshot["required_size"], 2)
+
+    def test_eval_cli_promotions_writes_snapshot_when_verification_preflight_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            snapshot_path = temp_path / "pool-snapshot.json"
+            (temp_path / "checkpoint-2.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--write-opponent-pool",
+                        str(snapshot_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["opponent_pool_preflight_verified"])
+        self.assertFalse(snapshot["preflight_verified"])
+        self.assertTrue(snapshot["requirement_passed"])
+        self.assertEqual(snapshot["verification_exit_scope"], "opponent_pool_plus_current")
+        failed_selected_entry = next(entry for entry in snapshot["selected_entries"] if entry["sequence"] == 2)
+        self.assertEqual(failed_selected_entry["verification_status"], "fail")
+        self.assertEqual(failed_selected_entry["checkpoint_exists"], "fail")
+        self.assertIn("checkpoint_exists", failed_selected_entry["failed_checks"])
 
     def test_eval_cli_promotions_selected_opponent_pool_verification_fails_for_broken_selected_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1090,7 +1133,9 @@ class PromotionRegistryTest(unittest.TestCase):
 
     def test_eval_cli_promotions_text_prints_opponent_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=2)
+            snapshot_path = temp_path / "pool-snapshot.json"
             registry = load_promotion_registry(registry_path)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -1101,14 +1146,18 @@ class PromotionRegistryTest(unittest.TestCase):
                         str(registry_path),
                         "--opponent-pool-size",
                         "1",
+                        "--write-opponent-pool",
+                        str(snapshot_path),
                     ]
                 )
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("opponent_pool_policy_specs:", output)
         self.assertIn("opponent_pool_selected_size: 1", output)
         self.assertIn("opponent_pool_available_size: 1", output)
+        self.assertIn(f"opponent_pool_snapshot: {snapshot_path}", output)
         self.assertIn(registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0]) or "", output)
         self.assertNotIn(f"- {registry.selection_checkpoint_policy_spec_for_entry(registry.entries[-1])}", output)
         self.assertIn("status=not_verified", output)
@@ -1117,6 +1166,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("pool=selected", output)
         self.assertIn("pool=excluded_current_policy", output)
         self.assertIn("pass --verify", output)
+        self.assertEqual(snapshot["policy_specs"], [registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])])
 
     def test_eval_cli_promotions_text_omits_pool_status_without_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

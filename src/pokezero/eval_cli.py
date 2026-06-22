@@ -10,7 +10,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .evaluation import (
     DEFAULT_MIN_BENCHMARK_GAMES,
@@ -668,11 +668,6 @@ def _opponent_pool_snapshot_payload(
     opponent_pool_registry_level_verified: bool | None,
     opponent_pool_preflight_verified: bool | None,
 ) -> dict[str, object]:
-    selected_statuses = [
-        status
-        for status in entry_statuses
-        if "opponent_pool" in status["selected_as"]
-    ]
     return {
         "schema_version": OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -697,7 +692,31 @@ def _opponent_pool_snapshot_payload(
         "registry_level_verified": opponent_pool_registry_level_verified,
         "preflight_verified": opponent_pool_preflight_verified,
         "policy_specs": list(opponent_pool),
-        "selected_entries": selected_statuses,
+        "selected_entries": [
+            _opponent_pool_snapshot_entry(status)
+            for status in entry_statuses
+            if "opponent_pool" in status["selected_as"]
+        ],
+    }
+
+
+def _opponent_pool_snapshot_entry(status: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "sequence": status["sequence"],
+        "policy_id": status["policy_id"],
+        "label": status["label"],
+        "selection_checkpoint_policy_spec": status["selection_checkpoint_policy_spec"],
+        "checkpoint_path": status["checkpoint_path"],
+        "source_checkpoint_path": status["source_checkpoint_path"],
+        "source_type": status["source_type"],
+        "source_iteration": status["source_iteration"],
+        "promoted_at": status["promoted_at"],
+        "verification_status": status["verification_status"],
+        "checkpoint_exists": status["checkpoint_exists"],
+        "checksum": status["checksum"],
+        "loadable": status["loadable"],
+        "policy_id_matches": status["policy_id_matches"],
+        "failed_checks": list(status["failed_checks"]),
     }
 
 
