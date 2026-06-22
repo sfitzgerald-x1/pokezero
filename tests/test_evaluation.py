@@ -713,6 +713,57 @@ class PromotionGateTest(unittest.TestCase):
             }.issubset(check_names)
         )
 
+    def test_eval_cli_audit_config_report_round_trips_calibrated_benchmark_game_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, selfplay_manifest())
+
+            with patch("sys.stdout", new_callable=io.StringIO):
+                calibrate_exit = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--write-config",
+                        str(config_path),
+                        "--require-min-benchmark-games",
+                        "20",
+                    ]
+                )
+            with patch("sys.stdout", new_callable=io.StringIO) as passing_stdout:
+                passing_exit = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--json",
+                        "--require-calibration-min-benchmark-games",
+                        "20",
+                    ]
+                )
+            with patch("sys.stdout", new_callable=io.StringIO) as failing_stdout:
+                failing_exit = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--json",
+                        "--require-calibration-min-benchmark-games",
+                        "21",
+                    ]
+                )
+            passing_payload = json.loads(passing_stdout.getvalue())
+            failing_payload = json.loads(failing_stdout.getvalue())
+
+        self.assertEqual(calibrate_exit, 0)
+        self.assertEqual(passing_exit, 0)
+        self.assertTrue(passing_payload["passed"])
+        self.assertEqual(passing_payload["calibration"]["min_latest_benchmark_games"], 20)
+        self.assertEqual(failing_exit, 2)
+        self.assertFalse(failing_payload["passed"])
+        failing_checks = {check["name"]: check for check in failing_payload["checks"]}
+        self.assertEqual(failing_checks["calibration_min_benchmark_games"]["observed"], 20)
+        self.assertEqual(failing_checks["calibration_min_benchmark_games"]["threshold"], 21)
+
     def test_eval_cli_audit_config_report_fails_weak_calibration_sufficiency(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "audit-config.json"

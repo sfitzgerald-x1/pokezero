@@ -2271,6 +2271,7 @@ def _audit_calibration_config_payload(result) -> dict[str, object]:
             "run_count": getattr(result, "run_count", 1),
             "iteration_count": result.iteration_count,
             "benchmark_iteration_count": result.benchmark_iteration_count,
+            "min_latest_benchmark_games": result.min_latest_benchmark_games,
             "aggregate_mode": getattr(result, "aggregate_mode", None),
             "paths": [str(path) for path in calibration_paths],
             "notes": list(getattr(result, "notes", ())),
