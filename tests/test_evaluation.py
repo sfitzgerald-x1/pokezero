@@ -3912,6 +3912,56 @@ if __name__ == "__main__":
         self.assertEqual(payload["suggested_config"]["min_latest_benchmark_games"], 40)
         self.assertEqual(payload["suggested_config"]["min_latest_benchmark_win_rate"], 0.63)
 
+    def test_eval_cli_cpu_long_run_calibrate_refresh_uses_live_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "refresh"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "profile"
+            summary["recipe"]["runtime_audit_profile"] = "smoke"
+            summary["recipe"]["runtime_audit_config_path"] = None
+            summary["derived_run_report"] = long_run_derived_report(
+                latest_iteration=99,
+                latest_benchmark_games=999,
+                latest_benchmark_win_rate=0.01,
+            )
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-calibrate", str(run_root), "--json", "--refresh-derived-audit"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["refresh_derived_audit"])
+        self.assertEqual(payload["samples"][0]["derived_run_report_source"], "computed")
+        self.assertEqual(payload["samples"][0]["latest_iteration"], 1)
+        self.assertEqual(payload["samples"][0]["latest_benchmark_games"], 20)
+        self.assertEqual(payload["samples"][0]["latest_benchmark_win_rate"], 0.65)
+
+    def test_eval_cli_cpu_long_run_calibrate_refresh_fails_closed_when_manifest_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "archived"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["derived_run_report"] = long_run_derived_report()
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-calibrate", str(run_root), "--json", "--refresh-derived-audit"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(payload["refresh_derived_audit"])
+        self.assertEqual(payload["summary_count"], 0)
+        self.assertEqual(payload["error_count"], 1)
+        self.assertIn("derived run report unavailable", payload["errors"][0]["error"])
+        self.assertIn("manifest_not_found", payload["errors"][0]["error"])
+
     def test_eval_cli_cpu_long_run_calibrate_envelope_exposes_thin_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
