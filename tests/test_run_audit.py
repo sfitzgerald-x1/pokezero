@@ -339,6 +339,36 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.max_consecutive_promotion_failures, 2)
         self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
 
+    def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
+        pilot = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=2, rows=(("random-legal", 15, 5, 0),), promotion_recorded=True),
+            )
+        )
+        comparable = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=2, rows=(("random-legal", 15, 5, 0),), promotion_recorded=True),
+                selfplay_iteration(iteration=3, rows=(("random-legal", 14, 6, 1),), promotion_recorded=False),
+            )
+        )
+        comparable["iterations"][2]["collection_metrics"]["capped_games"] = 1
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pilot_path = Path(temp_dir) / "pilot.json"
+            comparable_path = Path(temp_dir) / "comparable.json"
+            write_manifest(pilot_path, pilot)
+            write_manifest(comparable_path, comparable)
+
+            calibration = calibrate_run_audit(pilot_path, margin=0.10)
+            audit = audit_run(comparable_path, config=RunAuditConfig(**calibration.suggested_config()))
+
+        self.assertEqual(calibration.max_latest_collection_capped_rate, 0.10)
+        self.assertEqual(calibration.max_latest_benchmark_capped_rate, 0.10)
+        self.assertEqual(calibration.max_benchmark_win_rate_drop, 0.05)
+        self.assertEqual(calibration.max_consecutive_promotion_failures, 1)
+        self.assertTrue(audit.passed)
+
     def test_calibrate_run_audit_allows_missing_benchmark_when_history_has_none(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -356,6 +386,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.min_latest_benchmark_games, 0)
         self.assertIsNone(result.min_latest_benchmark_win_rate)
         self.assertIn("--allow-missing-benchmark", result.suggested_cli_flags())
+        self.assertNotIn("--min-latest-benchmark-games", result.suggested_cli_flags())
         self.assertIn("No benchmark iterations", result.notes[0])
 
     def test_calibrate_run_audit_rejects_negative_margin(self) -> None:
@@ -366,6 +397,35 @@ class RunAuditTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "margin must be non-negative"):
                 calibrate_run_audit(manifest_path, margin=-0.1)
+
+    def test_calibrate_run_audit_accepts_zero_margin(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=2),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path, margin=0.0)
+
+        self.assertEqual(result.margin, 0.0)
+        self.assertEqual(result.min_latest_benchmark_win_rate, 0.65)
+        self.assertEqual(result.max_latest_benchmark_capped_rate, 0.10)
+
+    def test_calibrate_run_audit_supports_neural_selfplay_manifest(self) -> None:
+        manifest = neural_selfplay_manifest(
+            iterations=(
+                neural_iteration(iteration=1, wins=13, losses=7, capped_games=0),
+                neural_iteration(iteration=2, wins=14, losses=6, capped_games=0),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path)
+
+        self.assertEqual(result.source_type, "neural_selfplay")
+        self.assertEqual(result.benchmark_iteration_count, 2)
+        self.assertEqual(result.min_latest_benchmark_win_rate, 0.585)
 
     def test_eval_cli_audit_prints_json_and_returns_nonzero_on_failure(self) -> None:
         manifest = selfplay_manifest(

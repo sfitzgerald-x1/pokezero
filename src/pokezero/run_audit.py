@@ -25,6 +25,7 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
+_THRESHOLD_EPSILON = 1e-12
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,8 @@ class RunAuditCalibrationResult:
         ):
             value = getattr(self, field_name)
             if value is not None:
+                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                    continue
                 flags.extend((flag_name, str(value)))
         if not self.require_benchmark:
             flags.append("--allow-missing-benchmark")
@@ -355,6 +358,16 @@ def calibrate_run_audit(
     observed_drop = _max_observed_same_opponent_drop(result.iterations)
     if benchmark_iterations and observed_drop is None:
         notes.append("No same-opponent regression history was present; using the default benchmark drop threshold.")
+    min_benchmark_games = (
+        min(iteration.benchmark_games for iteration in benchmark_iterations)
+        if benchmark_iterations
+        else 0
+    )
+    if benchmark_iterations and min_benchmark_games < DEFAULT_MIN_BENCHMARK_GAMES:
+        notes.append(
+            "Observed benchmark game counts are below the default audit minimum; "
+            "calibration keeps the observed minimum so the pilot remains reproducible."
+        )
 
     return RunAuditCalibrationResult(
         manifest_path=result.manifest_path,
@@ -368,18 +381,16 @@ def calibrate_run_audit(
             _min_optional(iteration.benchmark_win_rate for iteration in benchmark_iterations),
             margin=margin,
         ),
-        min_latest_benchmark_games=(
-            min(iteration.benchmark_games for iteration in benchmark_iterations)
-            if benchmark_iterations
-            else 0
-        ),
+        min_latest_benchmark_games=min_benchmark_games,
         max_latest_collection_capped_rate=_ceiling_observed_rate(
             _max_optional(iteration.collection_capped_rate for iteration in result.iterations),
             margin=margin,
+            minimum=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
         ),
         max_latest_benchmark_capped_rate=_ceiling_observed_rate(
             _max_optional(iteration.benchmark_capped_rate for iteration in benchmark_iterations),
             margin=margin,
+            minimum=DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
         ),
         max_latest_average_decision_rounds=_ceiling_observed_float(
             _max_optional(iteration.average_decision_rounds for iteration in result.iterations),
@@ -393,12 +404,19 @@ def calibrate_run_audit(
             (
                 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
                 if observed_drop is None
-                else _ceiling_observed_rate(observed_drop, margin=margin)
+                else _ceiling_observed_rate(
+                    observed_drop,
+                    margin=margin,
+                    minimum=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
+                )
             )
             if benchmark_iterations
             else None
         ),
-        max_consecutive_promotion_failures=_max_consecutive_promotion_failures(result.iterations),
+        max_consecutive_promotion_failures=max(
+            DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+            _max_consecutive_promotion_failures(result.iterations),
+        ),
         notes=tuple(notes),
     )
 
@@ -624,7 +642,7 @@ def _benchmark_regression_check(
     max_drop = max(regression.drop for regression in regressions)
     return RunAuditCheck(
         name="benchmark_win_rate_drop_by_opponent",
-        passed=max_drop <= config.max_benchmark_win_rate_drop,
+        passed=_threshold_lte(max_drop, config.max_benchmark_win_rate_drop),
         observed=max_drop,
         threshold=config.max_benchmark_win_rate_drop,
         message="latest same-opponent benchmark win rates have not regressed too far from previous best",
@@ -771,10 +789,15 @@ def _floor_observed_rate(value: float | None, *, margin: float) -> float | None:
     return _round_threshold(max(0.0, value * (1.0 - margin)))
 
 
-def _ceiling_observed_rate(value: float | None, *, margin: float) -> float | None:
+def _ceiling_observed_rate(
+    value: float | None,
+    *,
+    margin: float,
+    minimum: float = 0.0,
+) -> float | None:
     if value is None:
         return None
-    return _round_threshold(min(1.0, value * (1.0 + margin)))
+    return _round_threshold(min(1.0, max(minimum, value * (1.0 + margin))))
 
 
 def _ceiling_observed_float(value: float | None, *, margin: float) -> float | None:
@@ -785,6 +808,10 @@ def _ceiling_observed_float(value: float | None, *, margin: float) -> float | No
 
 def _round_threshold(value: float) -> float:
     return round(value, 6)
+
+
+def _threshold_lte(observed: float, threshold: float) -> bool:
+    return observed <= threshold + _THRESHOLD_EPSILON
 
 
 def _max_observed_same_opponent_drop(iterations: tuple[RunAuditIterationSummary, ...]) -> float | None:

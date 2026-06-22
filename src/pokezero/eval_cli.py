@@ -326,7 +326,13 @@ def _print_audit_calibration(result) -> None:
     print(f"margin: {result.margin:.3f}")
     print("suggested_config:")
     for key, value in result.suggested_config().items():
-        print(f"- {key}: {_format_optional_float(value) if isinstance(value, float) else value}")
+        if isinstance(value, float):
+            rendered = _format_optional_float(value)
+        elif value is None:
+            rendered = "-"
+        else:
+            rendered = str(value)
+        print(f"- {key}: {rendered}")
     print("suggested_audit_flags:")
     flags = result.suggested_cli_flags()
     print(" ".join(flags) if flags else "-")
