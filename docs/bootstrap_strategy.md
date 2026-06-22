@@ -219,6 +219,8 @@ Inspect the run:
 python -m pokezero.selfplay_cli report --run-dir runs/bootstrap-selfplay
 ```
 
+The text report includes benchmark health, fit metrics, capped-game counts, process RSS when recorded, and the invocation/opponent-pool metadata used to launch or resume the run. Use `--json` when the full manifest is needed for deeper audit.
+
 Audit a run for regression-health checks that are cheap to run on CPU:
 
 ```bash
