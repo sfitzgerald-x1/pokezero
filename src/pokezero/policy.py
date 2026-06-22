@@ -360,7 +360,7 @@ def _status_move_score(
     move_id = normalize_id(move.id or move.name)
     opponent_status = _metadata_status(metadata.get("opponent_active"))
     if move_id in {"spikes"}:
-        return _ActionScore(action_index, "move", 62.0, f"{move.name}: hazard pressure")
+        return _spikes_score(action_index, move, metadata)
     if move.status and opponent_status == "none":
         return _ActionScore(action_index, "move", 55.0, f"{move.name}: status pressure")
     if move.heal:
@@ -404,6 +404,18 @@ def _rapid_spin_score(
             f"{move.name}: no side hazards; {damage_score.reason}",
         )
     return _ActionScore(action_index, "move", min(76.0, 58.0 + (10.0 * hazard_count)), f"{move.name}: clears hazards={hazard_count}")
+
+
+def _spikes_score(action_index: int, move, metadata: Mapping[str, Any]) -> _ActionScore:
+    known_layers = _side_condition_count(
+        "spikes",
+        metadata.get("opponent_side_conditions"),
+        metadata.get("opponent_side_condition_counts"),
+    )
+    if known_layers >= 3:
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: opponent Spikes already maxed")
+    score = 62.0 - (8.0 * known_layers)
+    return _ActionScore(action_index, "move", score, f"{move.name}: hazard pressure layers={known_layers}/3")
 
 
 def _switch_score(
@@ -494,6 +506,17 @@ def _side_hazard_count(raw_conditions: Any) -> int:
     if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
         return 0
     return sum(1 for condition in raw_conditions if normalize_id(str(condition)) in _SIDE_HAZARDS)
+
+
+def _side_condition_count(condition: str, raw_conditions: Any, raw_counts: Any) -> int:
+    normalized = normalize_id(condition)
+    if isinstance(raw_counts, Mapping):
+        value = raw_counts.get(normalized)
+        if isinstance(value, (int, float)):
+            return max(0, int(value))
+    if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
+        return 0
+    return sum(1 for raw_condition in raw_conditions if normalize_id(str(raw_condition)) == normalized)
 
 
 def _has_status(raw_pokemon: Any) -> bool:
