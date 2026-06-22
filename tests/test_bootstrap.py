@@ -16,7 +16,7 @@ from pokezero.bootstrap import (
 from pokezero.bootstrap_cli import main as bootstrap_cli_main
 from pokezero.collection import CollectionMetrics, read_rollout_records
 from pokezero.env import StepResult, TerminalState
-from pokezero.linear_policy import LinearTrainingConfig
+from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.rollout import RolloutConfig
 
@@ -114,7 +114,9 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(manifest["teacher_decision_summary"]["fallback_decisions"], 0)
         self.assertIsNotNone(manifest["training"]["validation_metrics"])
         self.assertGreater(manifest["training"]["validation_metrics"]["examples"], 0)
+        self.assertEqual(manifest["training"]["model"]["feature_fingerprint"], linear_feature_fingerprint())
         self.assertEqual(checkpoint_payload["policy_id"], "linear-bootstrap-test")
+        self.assertEqual(checkpoint_payload["feature_fingerprint"], linear_feature_fingerprint())
         self.assertEqual(
             [record.policy_ids for record in full_train_records],
             [

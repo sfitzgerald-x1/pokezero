@@ -76,6 +76,7 @@ from .evaluation import (
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
 from .linear_policy import (
+    LINEAR_FEATURE_FINGERPRINT_VERSION,
     LINEAR_FEATURE_SCHEMA_VERSION,
     LINEAR_POLICY_SCHEMA_VERSION,
     LinearEpochMetrics,
@@ -87,6 +88,7 @@ from .linear_policy import (
     LinearTrainingResult,
     evaluate_linear_policy,
     features_from_example,
+    linear_feature_fingerprint,
     load_linear_model,
     save_linear_model,
     train_linear_policy,
@@ -215,6 +217,7 @@ __all__ = [
     "LocalShowdownConfig",
     "LocalShowdownEnv",
     "LocalShowdownError",
+    "LINEAR_FEATURE_FINGERPRINT_VERSION",
     "LINEAR_FEATURE_SCHEMA_VERSION",
     "LINEAR_POLICY_SCHEMA_VERSION",
     "LinearEpochMetrics",
@@ -283,6 +286,7 @@ __all__ = [
     "features_from_example",
     "is_move_action",
     "is_switch_action",
+    "linear_feature_fingerprint",
     "load_linear_model",
     "load_neural_selfplay_run_manifest",
     "load_promotion_registry",

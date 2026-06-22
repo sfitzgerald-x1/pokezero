@@ -250,6 +250,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["training"]["model"]["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
         self.assertEqual(iteration_manifest["training"]["model"]["action_schema_version"], "pokezero.action_space.v0")
         self.assertEqual(iteration_manifest["training"]["model"]["feature_schema_version"], LINEAR_FEATURE_SCHEMA_VERSION)
+        self.assertRegex(iteration_manifest["training"]["model"]["feature_fingerprint"], r"^[0-9a-f]{64}$")
         self.assertEqual(len(iteration_manifest["training_rollout_paths"]), 1)
         self.assertTrue(iteration_manifest["training_rollout_path"].endswith("training-rollouts.jsonl"))
         self.assertEqual(iteration_manifest["worker_count"], 1)
