@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.evaluation import PromotionGateConfig
+from pokezero.linear_policy import LinearPolicyModel, save_linear_model
 from pokezero.promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
     NEURAL_SELFPLAY_SOURCE_TYPE,
@@ -382,6 +383,58 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(result.entry_count, 1)
         self.assertEqual(result.checked_checkpoint_count, 1)
 
+    def test_verify_promotion_registry_can_require_loadable_policy_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "run" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            manifest = selfplay_manifest()
+            write_manifest(manifest_path, manifest)
+            write_valid_linear_checkpoint_for_manifest(temp_path, manifest)
+            record_promotion(
+                manifest_path,
+                registry_path=registry_path,
+                artifact_dir=temp_path / "artifact-store",
+                config=passing_gate_config(),
+            )
+
+            result = verify_promotion_registry(registry_path, verify_loadable=True)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.verified_loadable_count, 1)
+        check_names = {check.name for check in result.checks}
+        self.assertIn("checkpoint_policy_loadable", check_names)
+        self.assertIn("checkpoint_policy_id", check_names)
+
+    def test_verify_promotion_registry_fails_unloadable_policy_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "linear-policy.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_manifest(registry_path, promotion_registry_payload(checkpoint_path=str(checkpoint_path)))
+
+            result = verify_promotion_registry(registry_path, verify_loadable=True)
+
+        self.assertFalse(result.passed)
+        self.assertIn("checkpoint_policy_loadable", failed_verification_check_names(result))
+
+    def test_verify_promotion_registry_fails_policy_id_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "linear-policy.json"
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(feature_count=16, window_size=1, policy_id="different-policy"),
+            )
+            registry_path = temp_path / "promotions.json"
+            write_manifest(registry_path, promotion_registry_payload(checkpoint_path=str(checkpoint_path)))
+
+            result = verify_promotion_registry(registry_path, verify_loadable=True)
+
+        self.assertFalse(result.passed)
+        self.assertIn("checkpoint_policy_id", failed_verification_check_names(result))
+
     def test_verify_promotion_registry_fails_missing_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -511,6 +564,56 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("checkpoint_sha256_present", failed_verification_check_names_from_payload(payload["verification"]))
 
+    def test_eval_cli_promotions_verify_can_require_loadable_policy_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "run" / "manifest.json"
+            registry_path = temp_path / "promotions.json"
+            manifest = selfplay_manifest()
+            write_manifest(manifest_path, manifest)
+            write_valid_linear_checkpoint_for_manifest(temp_path, manifest)
+            record_promotion(
+                manifest_path,
+                registry_path=registry_path,
+                artifact_dir=temp_path / "artifact-store",
+                config=passing_gate_config(),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--verify",
+                        "--verify-loadable",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["verification"]["verified_loadable_count"], 1)
+        check_names = {check["name"] for check in payload["verification"]["checks"]}
+        self.assertIn("checkpoint_policy_loadable", check_names)
+
+    def test_eval_cli_promotions_verify_loadable_requires_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = Path(temp_dir) / "promotions.json"
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--verify-loadable",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--verify-loadable requires --verify", stderr.getvalue())
+
 
 def selfplay_manifest() -> dict:
     return {
@@ -584,6 +687,17 @@ def write_checkpoint_for_manifest(temp_path: Path, manifest: dict, *, policy_id:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_policy_id = policy_id or manifest["iterations"][0]["training"]["model"]["policy_id"]
     checkpoint_path.write_text(json.dumps({"policy_id": checkpoint_policy_id}, indent=2), encoding="utf-8")
+    return checkpoint_path
+
+
+def write_valid_linear_checkpoint_for_manifest(temp_path: Path, manifest: dict, *, policy_id: str | None = None) -> Path:
+    checkpoint_path = temp_path / str(manifest["latest_checkpoint_path"])
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_policy_id = policy_id or manifest["iterations"][0]["training"]["model"]["policy_id"]
+    save_linear_model(
+        checkpoint_path,
+        LinearPolicyModel.initialized(feature_count=16, window_size=1, policy_id=checkpoint_policy_id),
+    )
     return checkpoint_path
 
 
