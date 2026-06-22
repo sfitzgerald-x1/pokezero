@@ -237,6 +237,31 @@ class RunAuditTest(unittest.TestCase):
         self.assertIsNone(check.observed)
         self.assertIn("invalid_required_promoted_opponent_pool_size", check.message)
 
+    def test_audit_fails_negative_promoted_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            invocation_configs=(
+                invocation_config(required_pool_size=-1, promoted_checkpoint_count=2),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertIsNone(check.observed)
+        self.assertIn("invalid_required_promoted_opponent_pool_size", check.message)
+
     def test_audit_fails_invalid_promoted_pool_cap_without_double_counting_cap(self) -> None:
         config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
         config["opponent_pool"]["max_historical_opponents"] = "many"
@@ -275,6 +300,58 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("missing_or_invalid_max_historical_opponents", check.message)
         self.assertNotIn("max_historical=0", check.message)
         self.assertNotIn("launch_selectable=0", check.message)
+
+    def test_audit_attributes_promoted_pool_requirement_to_covered_invocation_iterations(self) -> None:
+        first_config = invocation_config(required_pool_size=1, promoted_checkpoint_count=1)
+        first_config["first_iteration"] = 1
+        first_config["iterations_requested"] = 1
+        second_config = invocation_config(required_pool_size=2, promoted_checkpoint_count=1)
+        second_config["first_iteration"] = 2
+        second_config["iterations_requested"] = 1
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(first_config, second_config),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("invocation_2:launch_selectable=1,required=2", check.message)
+        self.assertIn("invocation_2:iteration_2:selected=1,required=2", check.message)
+        self.assertNotIn("invocation_1:iteration_2", check.message)
 
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
         manifest = selfplay_manifest(

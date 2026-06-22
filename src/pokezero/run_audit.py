@@ -915,7 +915,10 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
         if required_size is None:
             failures.append(f"invocation_{invocation_index}:invalid_required_promoted_opponent_pool_size")
             continue
-        if required_size <= 0:
+        if required_size < 0:
+            failures.append(f"invocation_{invocation_index}:invalid_required_promoted_opponent_pool_size")
+            continue
+        if required_size == 0:
             continue
         pool_registry_path = _optional_str(opponent_pool.get("promotion_pool_registry_path"))
         if not pool_registry_path:
