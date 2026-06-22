@@ -4914,6 +4914,7 @@ def _cpu_pilot_scenario_preflight_requested_but_not_passed(pilot: Mapping[str, o
     return (
         isinstance(preflight, Mapping)
         and preflight.get("requested") is True
+        and preflight.get("available") is True
         and preflight.get("passed") is not True
     )
 
@@ -5361,6 +5362,7 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
         "replay_output_path": str(replay_output_path),
         "benchmark_iterations_required": benchmark_iterations_required,
         "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
+        "teacher_scenario_preflight_requested": args.teacher_scenario_preflight,
         "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
         "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
         "required_teacher_branches": list(args.require_teacher_branch or ()),
@@ -5415,6 +5417,8 @@ def _cpu_pilot_smoke_run_argv(args: argparse.Namespace, *, pilot_root: Path, see
         str(pilot_root / "smoke-audit-config.json"),
     ]
     argv.extend(_teacher_branch_gate_args(args))
+    if args.teacher_scenario_preflight:
+        argv.append("--teacher-scenario-preflight")
     if args.showdown_root is not None:
         argv.extend(["--showdown-root", str(args.showdown_root)])
     return argv

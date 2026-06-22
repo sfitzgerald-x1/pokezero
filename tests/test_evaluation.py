@@ -1870,6 +1870,79 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(report["path"], str(relocated_preflight_path))
         self.assertEqual(report["teacher_branch_counts"], {"status_pressure": 4})
 
+    def test_eval_cli_cpu_smoke_report_fails_failed_teacher_scenario_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            preflight_path = run_root / "teacher-scenario-preflight.json"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+            summary = cpu_smoke_summary(status="passed")
+            summary["recipe"].update(
+                {
+                    "teacher_scenario_preflight_requested": True,
+                    "teacher_scenario_preflight_output_path": str(preflight_path),
+                }
+            )
+            write_json(
+                preflight_path,
+                {
+                    "schema_version": "pokezero.teacher_scenario_preflight.v1",
+                    "passed": False,
+                    "scenario_count": 2,
+                    "passed_count": 1,
+                    "failed_count": 1,
+                    "teacher_branch_counts": {"fallback": 1},
+                    "scenarios": [
+                        {
+                            "id": "setup-healthy-active",
+                            "passed": False,
+                            "failed_fields": ["teacher_branch"],
+                            "error": None,
+                        }
+                    ],
+                },
+            )
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["teacher_scenario_preflight_report"]
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(report["requested"])
+        self.assertTrue(report["available"])
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["scenario_count"], 2)
+        self.assertEqual(report["failed_count"], 1)
+        self.assertEqual(report["teacher_branch_counts"], {"fallback": 1})
+        self.assertEqual(report["failed_scenarios"][0]["id"], "setup-healthy-active")
+
+    def test_eval_cli_cpu_smoke_report_marks_missing_teacher_scenario_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            preflight_path = run_root / "teacher-scenario-preflight.json"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+            summary = cpu_smoke_summary(status="passed")
+            summary["recipe"].update(
+                {
+                    "teacher_scenario_preflight_requested": True,
+                    "teacher_scenario_preflight_output_path": str(preflight_path),
+                }
+            )
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["teacher_scenario_preflight_report"]
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(report["requested"])
+        self.assertFalse(report["available"])
+        self.assertIsNone(report["passed"])
+        self.assertEqual(report["path"], str(preflight_path))
+        self.assertEqual(report["error"], "teacher scenario preflight artifact not found")
+
     def test_eval_cli_cpu_smoke_report_rejects_wrong_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
@@ -1990,6 +2063,38 @@ class PromotionGateTest(unittest.TestCase):
             self.assertIn("status_pressure", argv)
             self.assertIn("--min-teacher-branch-count", argv)
             self.assertIn("status_pressure=1", argv)
+
+    def test_eval_cli_cpu_pilot_plan_propagates_teacher_scenario_preflight_to_smoke_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-plan",
+                        "--run-root",
+                        str(run_root),
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--pilot-count",
+                        "2",
+                        "--teacher-scenario-preflight",
+                        "--json",
+                    ]
+                )
+            recipe = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(recipe["teacher_scenario_preflight_requested"])
+        first_pilot_argv = recipe["steps"][0]["argv"]
+        second_pilot_argv = recipe["steps"][1]["argv"]
+        for argv in (first_pilot_argv, second_pilot_argv):
+            self.assertIn("--teacher-scenario-preflight", argv)
 
     def test_eval_cli_cpu_pilot_run_executes_recipe_steps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
