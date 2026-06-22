@@ -476,6 +476,61 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("incumbent_win_rate: 0.900", stdout.getvalue())
         self.assertIn("incumbent_win_rate_lower_bound:", stdout.getvalue())
 
+    def test_eval_cli_profiles_json_lists_named_profiles(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(["profiles", "--json"])
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            {profile["name"] for profile in payload["profiles"]},
+            {"default", "long-run", "smoke"},
+        )
+        long_run = next(profile for profile in payload["profiles"] if profile["name"] == "long-run")
+        self.assertEqual(long_run["gate"]["min_benchmark_games"], 100)
+
+    def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["benchmark"] = None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["gate", str(manifest_path), "--profile", "smoke", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["passed"])
+
+    def test_eval_cli_gate_long_run_profile_can_be_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, selfplay_manifest())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as strict_stdout:
+                strict_exit = eval_cli_main(["gate", str(manifest_path), "--profile", "long-run", "--json"])
+            strict_payload = json.loads(strict_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as override_stdout:
+                override_exit = eval_cli_main(
+                    [
+                        "gate",
+                        str(manifest_path),
+                        "--profile",
+                        "long-run",
+                        "--min-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            override_payload = json.loads(override_stdout.getvalue())
+
+        self.assertEqual(strict_exit, 2)
+        self.assertIn("benchmark_games:random-legal", failed_check_names_from_payload(strict_payload))
+        self.assertEqual(override_exit, 0)
+        self.assertTrue(override_payload["passed"])
+
 
 def selfplay_manifest() -> dict:
     return {

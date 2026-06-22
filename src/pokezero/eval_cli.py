@@ -8,23 +8,12 @@ from pathlib import Path
 import sys
 
 from .evaluation import (
-    DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
-    DEFAULT_MAX_COLLECTION_CAPPED_RATE,
-    DEFAULT_MAX_INCUMBENT_CAPPED_RATE,
-    DEFAULT_MAX_TEACHER_DEGRADATION_RATE,
-    DEFAULT_MIN_INCUMBENT_GAMES,
-    DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
-    DEFAULT_MIN_BENCHMARK_GAMES,
-    DEFAULT_MIN_BENCHMARK_WIN_RATE,
-    DEFAULT_MIN_INCUMBENT_WIN_RATE,
-    DEFAULT_INCUMBENT_CONFIDENCE_Z,
     PromotionGateConfig,
     evaluate_promotion_gate,
 )
+from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
-    DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
-    DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
     RunAuditConfig,
     audit_run,
 )
@@ -33,10 +22,12 @@ from .run_audit import (
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pokezero.eval_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    profile_choices = tuple(sorted(EVALUATION_PROFILES))
 
     gate = subparsers.add_parser("gate", help="Evaluate whether a manifest clears promotion thresholds.")
     gate.add_argument("path", type=Path, help="Experiment run directory or manifest.json path.")
     gate.add_argument("--registry", type=Path, default=None, help="Optional promotion registry used as the default incumbent source.")
+    gate.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for gate checks.")
     _add_gate_arguments(gate)
     gate.add_argument("--json", action="store_true", help="Print the gate result as JSON.")
     gate.set_defaults(func=_gate)
@@ -53,6 +44,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional directory that receives a stable copy of the promoted checkpoint.",
     )
     promote.add_argument("--allow-duplicate", action="store_true", help="Allow recording a checkpoint already present in the registry.")
+    promote.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for gate checks.")
     _add_gate_arguments(promote)
     promote.add_argument("--json", action="store_true", help="Print the promotion result as JSON.")
     promote.set_defaults(func=_promote)
@@ -65,20 +57,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
 
+    profiles = subparsers.add_parser("profiles", help="Print named gate/audit threshold profiles.")
+    profiles.add_argument("--json", action="store_true", help="Print profiles as formatted JSON.")
+    profiles.set_defaults(func=_profiles)
+
     audit = subparsers.add_parser("audit", help="Audit a self-play run manifest for regression health.")
     audit.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
-    audit.add_argument("--min-latest-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
-    audit.add_argument("--min-latest-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
-    audit.add_argument("--max-latest-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
-    audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
-    audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP)
+    audit.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for audit checks.")
+    audit.add_argument("--min-latest-benchmark-win-rate", type=float, default=None)
+    audit.add_argument("--min-latest-benchmark-games", type=int, default=None)
+    audit.add_argument("--max-latest-collection-capped-rate", type=float, default=None)
+    audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=None)
+    audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=None)
     audit.add_argument(
         "--max-consecutive-promotion-failures",
         type=int,
-        default=DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+        default=None,
     )
-    audit.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because the latest benchmark is missing.")
-    audit.add_argument("--require-latest-promotion", action="store_true", help="Fail unless the latest iteration recorded a promotion.")
+    audit.add_argument("--allow-missing-benchmark", action="store_true", default=None, help="Do not fail solely because the latest benchmark is missing.")
+    audit.add_argument("--require-latest-promotion", action="store_true", default=None, help="Fail unless the latest iteration recorded a promotion.")
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
     return parser
@@ -172,16 +169,7 @@ def _promotions(args: argparse.Namespace) -> int:
 def _audit(args: argparse.Namespace) -> int:
     result = audit_run(
         args.path,
-        config=RunAuditConfig(
-            min_latest_benchmark_win_rate=args.min_latest_benchmark_win_rate,
-            min_latest_benchmark_games=args.min_latest_benchmark_games,
-            max_latest_collection_capped_rate=args.max_latest_collection_capped_rate,
-            max_latest_benchmark_capped_rate=args.max_latest_benchmark_capped_rate,
-            max_benchmark_win_rate_drop=args.max_benchmark_win_rate_drop,
-            max_consecutive_promotion_failures=args.max_consecutive_promotion_failures,
-            require_benchmark=not args.allow_missing_benchmark,
-            require_latest_promotion=args.require_latest_promotion,
-        ),
+        config=_audit_config_from_args(args),
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
@@ -190,25 +178,40 @@ def _audit(args: argparse.Namespace) -> int:
     return 0 if result.passed else 2
 
 
+def _profiles(args: argparse.Namespace) -> int:
+    profiles = tuple(EVALUATION_PROFILES[name] for name in sorted(EVALUATION_PROFILES))
+    if args.json:
+        print(json.dumps({"profiles": [profile.to_dict() for profile in profiles]}, indent=2, sort_keys=True))
+        return 0
+    print("profiles:")
+    for profile in profiles:
+        print(f"- {profile.name}: {profile.description}")
+        print(f"  gate_min_benchmark_win_rate: {profile.gate_config.min_benchmark_win_rate:.3f}")
+        print(f"  gate_min_benchmark_games: {profile.gate_config.min_benchmark_games}")
+        print(f"  audit_min_latest_benchmark_win_rate: {profile.audit_config.min_latest_benchmark_win_rate:.3f}")
+        print(f"  audit_min_latest_benchmark_games: {profile.audit_config.min_latest_benchmark_games}")
+    return 0
+
+
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
-    parser.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
-    parser.add_argument("--min-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
-    parser.add_argument("--min-incumbent-games", type=int, default=DEFAULT_MIN_INCUMBENT_GAMES)
-    parser.add_argument("--max-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
-    parser.add_argument("--max-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
-    parser.add_argument("--max-incumbent-capped-rate", type=float, default=DEFAULT_MAX_INCUMBENT_CAPPED_RATE)
-    parser.add_argument("--max-teacher-degradation-rate", type=float, default=DEFAULT_MAX_TEACHER_DEGRADATION_RATE)
+    parser.add_argument("--min-benchmark-win-rate", type=float, default=None)
+    parser.add_argument("--min-incumbent-win-rate", type=float, default=None)
+    parser.add_argument("--min-benchmark-games", type=int, default=None)
+    parser.add_argument("--min-incumbent-games", type=int, default=None)
+    parser.add_argument("--max-collection-capped-rate", type=float, default=None)
+    parser.add_argument("--max-benchmark-capped-rate", type=float, default=None)
+    parser.add_argument("--max-incumbent-capped-rate", type=float, default=None)
+    parser.add_argument("--max-teacher-degradation-rate", type=float, default=None)
     parser.add_argument(
         "--min-incumbent-win-rate-lower-bound",
         type=float,
-        default=DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
+        default=None,
         help="Minimum Wilson lower confidence bound for candidate win rate against the incumbent.",
     )
     parser.add_argument(
         "--incumbent-confidence-z",
         type=float,
-        default=DEFAULT_INCUMBENT_CONFIDENCE_Z,
+        default=None,
         help="Z-score used for the incumbent Wilson lower-bound check. Default is one-sided 95%%.",
     )
     parser.add_argument(
@@ -229,30 +232,70 @@ def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Require direct benchmark evidence against this incumbent policy id and gate the candidate win rate against it.",
     )
-    parser.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because benchmark evidence is missing.")
+    parser.add_argument("--allow-missing-benchmark", action="store_true", default=None, help="Do not fail solely because benchmark evidence is missing.")
 
 
 def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
+    profile_config = evaluation_profile(getattr(args, "profile", None)).gate_config
     incumbent_policy_id = args.incumbent_policy
     registry_path = getattr(args, "registry", None)
     if incumbent_policy_id is None and registry_path is not None:
         latest = load_promotion_registry(registry_path).latest
         incumbent_policy_id = latest.policy_id if latest is not None else None
     return PromotionGateConfig(
-        min_benchmark_win_rate=args.min_benchmark_win_rate,
-        min_incumbent_win_rate=args.min_incumbent_win_rate,
-        min_benchmark_games=args.min_benchmark_games,
-        min_incumbent_games=args.min_incumbent_games,
-        max_collection_capped_rate=args.max_collection_capped_rate,
-        max_benchmark_capped_rate=args.max_benchmark_capped_rate,
-        max_incumbent_capped_rate=args.max_incumbent_capped_rate,
-        max_teacher_degradation_rate=args.max_teacher_degradation_rate,
-        min_incumbent_win_rate_lower_bound=args.min_incumbent_win_rate_lower_bound,
-        incumbent_confidence_z=args.incumbent_confidence_z,
-        require_benchmark=not args.allow_missing_benchmark,
+        min_benchmark_win_rate=_arg_or_default(args.min_benchmark_win_rate, profile_config.min_benchmark_win_rate),
+        min_incumbent_win_rate=_arg_or_default(args.min_incumbent_win_rate, profile_config.min_incumbent_win_rate),
+        min_benchmark_games=_arg_or_default(args.min_benchmark_games, profile_config.min_benchmark_games),
+        min_incumbent_games=_arg_or_default(args.min_incumbent_games, profile_config.min_incumbent_games),
+        max_collection_capped_rate=_arg_or_default(args.max_collection_capped_rate, profile_config.max_collection_capped_rate),
+        max_benchmark_capped_rate=_arg_or_default(args.max_benchmark_capped_rate, profile_config.max_benchmark_capped_rate),
+        max_incumbent_capped_rate=_arg_or_default(args.max_incumbent_capped_rate, profile_config.max_incumbent_capped_rate),
+        max_teacher_degradation_rate=_arg_or_default(args.max_teacher_degradation_rate, profile_config.max_teacher_degradation_rate),
+        min_incumbent_win_rate_lower_bound=_arg_or_default(
+            args.min_incumbent_win_rate_lower_bound,
+            profile_config.min_incumbent_win_rate_lower_bound,
+        ),
+        incumbent_confidence_z=_arg_or_default(args.incumbent_confidence_z, profile_config.incumbent_confidence_z),
+        require_benchmark=profile_config.require_benchmark if args.allow_missing_benchmark is None else False,
         required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
         opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
         incumbent_policy_id=incumbent_policy_id,
+    )
+
+
+def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
+    profile_config = evaluation_profile(args.profile).audit_config
+    return RunAuditConfig(
+        min_latest_benchmark_win_rate=_arg_or_default(
+            args.min_latest_benchmark_win_rate,
+            profile_config.min_latest_benchmark_win_rate,
+        ),
+        min_latest_benchmark_games=_arg_or_default(
+            args.min_latest_benchmark_games,
+            profile_config.min_latest_benchmark_games,
+        ),
+        max_latest_collection_capped_rate=_arg_or_default(
+            args.max_latest_collection_capped_rate,
+            profile_config.max_latest_collection_capped_rate,
+        ),
+        max_latest_benchmark_capped_rate=_arg_or_default(
+            args.max_latest_benchmark_capped_rate,
+            profile_config.max_latest_benchmark_capped_rate,
+        ),
+        max_benchmark_win_rate_drop=_arg_or_default(
+            args.max_benchmark_win_rate_drop,
+            profile_config.max_benchmark_win_rate_drop,
+        ),
+        max_consecutive_promotion_failures=_arg_or_default(
+            args.max_consecutive_promotion_failures,
+            profile_config.max_consecutive_promotion_failures,
+        ),
+        require_benchmark=profile_config.require_benchmark if args.allow_missing_benchmark is None else False,
+        require_latest_promotion=(
+            profile_config.require_latest_promotion
+            if args.require_latest_promotion is None
+            else True
+        ),
     )
 
 
@@ -353,6 +396,10 @@ def _parse_opponent_win_rates(values: tuple[str, ...]) -> dict[str, float]:
             raise ValueError("--opponent-win-rate RATE must be numeric.") from exc
         parsed[opponent] = threshold
     return parsed
+
+
+def _arg_or_default(value, default):
+    return default if value is None else value
 
 
 if __name__ == "__main__":

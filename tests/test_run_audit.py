@@ -227,6 +227,52 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("status: PASS", stdout.getvalue())
         self.assertIn("latest_benchmark_win_rate: 0.650", stdout.getvalue())
 
+    def test_eval_cli_audit_smoke_profile_allows_missing_benchmark(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, benchmark=False),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit", str(manifest_path), "--profile", "smoke", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["passed"])
+
+    def test_eval_cli_audit_long_run_profile_can_be_overridden(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as strict_stdout:
+                strict_exit = eval_cli_main(["audit", str(manifest_path), "--profile", "long-run", "--json"])
+            strict_payload = json.loads(strict_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as override_stdout:
+                override_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--profile",
+                        "long-run",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            override_payload = json.loads(override_stdout.getvalue())
+
+        self.assertEqual(strict_exit, 2)
+        self.assertIn("latest_benchmark_games", failed_check_names_from_payload(strict_payload))
+        self.assertEqual(override_exit, 0)
+        self.assertTrue(override_payload["passed"])
+
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
     return {

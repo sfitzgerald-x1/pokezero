@@ -209,6 +209,15 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
 
 The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy.
 
+Named evaluation profiles can be used instead of repeating every threshold flag:
+
+```bash
+python -m pokezero.eval_cli profiles
+python -m pokezero.eval_cli audit runs/bootstrap-selfplay --profile long-run
+```
+
+Profiles provide defaults only. Explicit threshold flags still override the profile value, so use `--profile smoke` for plumbing checks, `--profile default` for current guardrails, and `--profile long-run` for stricter CPU run checks that require more benchmark games.
+
 Gate a candidate before promotion:
 
 ```bash
@@ -220,6 +229,12 @@ python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
 ```
 
 The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs.
+
+The same gate can use a named profile:
+
+```bash
+python -m pokezero.eval_cli gate runs/bootstrap-selfplay --profile long-run
+```
 
 Use opponent filters when a specific comparison matters more than broad baseline health:
 
