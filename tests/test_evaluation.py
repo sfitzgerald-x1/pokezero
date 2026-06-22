@@ -577,6 +577,63 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("--audit-config", payload["steps"][-1]["argv"])
         self.assertIn("runs/smoke/smoke-audit-config.json", payload["steps"][-1]["argv"])
 
+    def test_eval_cli_cpu_smoke_plan_can_insert_teacher_branch_preflight(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--run-root",
+                    "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--seed-start",
+                    "7",
+                    "--teacher-branch-preflight-games",
+                    "3",
+                    "--require-teacher-branch",
+                    "status_pressure",
+                    "--min-teacher-branch-count",
+                    "status_pressure=1",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["teacher_branch_preflight_requested"])
+        self.assertEqual(payload["teacher_branch_preflight_games"], 3)
+        self.assertEqual(payload["required_teacher_branches"], ["status_pressure"])
+        self.assertEqual(payload["min_teacher_branch_counts"], ["status_pressure=1"])
+        self.assertEqual([step["name"] for step in payload["steps"]][:2], [
+            "benchmark scripted teacher branch coverage",
+            "bootstrap teacher checkpoint",
+        ])
+        self.assertEqual(len(payload["steps"]), 7)
+        preflight_argv = payload["steps"][0]["argv"]
+        self.assertEqual(
+            preflight_argv[:4],
+            ["./.venv/bin/python", "-m", "pokezero.bootstrap_cli", "teacher-benchmark"],
+        )
+        self.assertEqual(preflight_argv[preflight_argv.index("--games") + 1], "3")
+        self.assertEqual(preflight_argv[preflight_argv.index("--seed-start") + 1], "3000007")
+        self.assertIn("--require-teacher-branch", preflight_argv)
+        self.assertIn("status_pressure", preflight_argv)
+        self.assertIn("--min-teacher-branch-count", preflight_argv)
+        self.assertIn("status_pressure=1", preflight_argv)
+
+        parsers = {
+            "pokezero.bootstrap_cli": build_bootstrap_arg_parser(),
+            "pokezero.selfplay_cli": build_selfplay_arg_parser(),
+            "pokezero.eval_cli": build_eval_arg_parser(),
+        }
+        for step in payload["steps"]:
+            argv = step["argv"]
+            parser = parsers[argv[2]]
+            with self.subTest(step=step["name"]):
+                parser.parse_args(argv[3:])
+
     def test_eval_cli_cpu_smoke_plan_accepts_custom_audit_config_path(self) -> None:
         with patch("sys.stdout", new_callable=io.StringIO) as stdout:
             exit_code = eval_cli_main(
@@ -729,6 +786,21 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("workers must be positive", stderr.getvalue())
 
+    def test_eval_cli_cpu_smoke_plan_rejects_non_positive_teacher_branch_preflight_games(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--teacher-branch-preflight-games",
+                    "0",
+                    "--require-teacher-branch",
+                    "status_pressure",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("teacher-branch-preflight-games must be positive", stderr.getvalue())
+
     def test_eval_cli_cpu_smoke_run_executes_recipe_steps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             showdown_root = Path(temp_dir) / "showdown"
@@ -793,6 +865,52 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("started_at", summary)
         self.assertIn("ended_at", summary)
         self.assertIsInstance(summary["duration_seconds"], float)
+
+    def test_eval_cli_cpu_smoke_run_executes_teacher_branch_preflight_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            showdown_root = Path(temp_dir) / "showdown"
+            showdown_root.mkdir()
+            run_root = Path(temp_dir) / "runs" / "smoke"
+            with (
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(7)],
+                ) as run,
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--require-teacher-branch",
+                        "status_pressure",
+                        "--min-teacher-branch-count",
+                        "status_pressure=1",
+                    ]
+                )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_count, 7)
+        self.assertEqual(
+            run.call_args_list[0].args[0][:4],
+            ["./.venv/bin/python", "-m", "pokezero.bootstrap_cli", "teacher-benchmark"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0][:4],
+            ["./.venv/bin/python", "-m", "pokezero.bootstrap_cli", "teacher"],
+        )
+        self.assertTrue(summary["recipe"]["teacher_branch_preflight_requested"])
+        self.assertEqual(summary["recipe"]["required_teacher_branches"], ["status_pressure"])
+        self.assertEqual(summary["recipe"]["min_teacher_branch_counts"], ["status_pressure=1"])
+        self.assertEqual(len(summary["steps"]), 7)
+        self.assertEqual(summary["steps"][0]["name"], "benchmark scripted teacher branch coverage")
+        self.assertIn("running_step: 1/7 benchmark scripted teacher branch coverage", stdout.getvalue())
 
     def test_eval_cli_cpu_smoke_plan_can_offset_recipe_seeds(self) -> None:
         with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -1160,6 +1278,51 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(recipe["steps"][3]["output_json_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertIn("--audit-config", audit_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), audit_argv)
+
+    def test_eval_cli_cpu_pilot_plan_propagates_teacher_branch_preflight_to_smoke_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-plan",
+                        "--run-root",
+                        str(run_root),
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--pilot-count",
+                        "2",
+                        "--teacher-branch-preflight-games",
+                        "3",
+                        "--require-teacher-branch",
+                        "status_pressure",
+                        "--min-teacher-branch-count",
+                        "status_pressure=1",
+                        "--json",
+                    ]
+                )
+            recipe = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(recipe["teacher_branch_preflight_requested"])
+        self.assertEqual(recipe["teacher_branch_preflight_games"], 3)
+        self.assertEqual(recipe["required_teacher_branches"], ["status_pressure"])
+        self.assertEqual(recipe["min_teacher_branch_counts"], ["status_pressure=1"])
+        first_pilot_argv = recipe["steps"][0]["argv"]
+        second_pilot_argv = recipe["steps"][1]["argv"]
+        for argv in (first_pilot_argv, second_pilot_argv):
+            self.assertIn("--teacher-branch-preflight-games", argv)
+            self.assertEqual(argv[argv.index("--teacher-branch-preflight-games") + 1], "3")
+            self.assertIn("--require-teacher-branch", argv)
+            self.assertIn("status_pressure", argv)
+            self.assertIn("--min-teacher-branch-count", argv)
+            self.assertIn("status_pressure=1", argv)
 
     def test_eval_cli_cpu_pilot_run_executes_recipe_steps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
