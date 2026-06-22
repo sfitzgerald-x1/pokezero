@@ -2840,6 +2840,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
     audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "smoke-audit-config.json"
+    teacher_branch_preflight_output_path = run_root / "teacher-branch-preflight.json"
     python_binary = args.python_binary
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
     showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
@@ -2867,6 +2868,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                         "--max-decision-rounds",
                         str(args.max_decision_rounds),
                         *_teacher_branch_gate_args(args),
+                        "--json",
                     ],
                 ),
             )
@@ -3025,6 +3027,9 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "audit_config_path": str(audit_config_path),
         "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
         "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
+        "teacher_branch_preflight_output_path": (
+            str(teacher_branch_preflight_output_path) if _teacher_branch_preflight_requested(args) else None
+        ),
         "required_teacher_branches": list(args.require_teacher_branch or ()),
         "min_teacher_branch_counts": list(args.min_teacher_branch_count or ()),
         "steps": [
@@ -3032,6 +3037,11 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "name": name,
                 "argv": argv,
                 "command": _shell_join(argv),
+                **(
+                    {"output_json_path": str(teacher_branch_preflight_output_path)}
+                    if name == "benchmark scripted teacher branch coverage"
+                    else {}
+                ),
             }
             for name, argv in steps
         ],
