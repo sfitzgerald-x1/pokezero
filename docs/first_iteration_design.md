@@ -20,7 +20,7 @@ Implemented:
 - Linear checkpoint save/load with version-tag checks plus a content-derived fingerprint over the current linear feature extractor source.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
-- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, auto-promotion, run reporting, and side-by-side run comparison.
+- Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests with opponent-pool launch metadata, resumable runs, parallel collection workers, auto-promotion, run reporting, and side-by-side run comparison.
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
 - Named smoke/default/long-run evaluation profiles shared by gate and audit CLIs.
 - Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, optional policy loadability, and stored artifact checksums.

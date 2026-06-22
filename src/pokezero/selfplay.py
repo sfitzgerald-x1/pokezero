@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 from time import perf_counter
@@ -35,6 +35,7 @@ from .linear_policy import (
 )
 from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .trajectory import BattleTrajectory
 
@@ -74,6 +75,8 @@ class SelfPlayIterationResult:
     training: LinearTrainingResult
     benchmark: BenchmarkReport | None = None
     promotion: "PromotionRecordResult | None" = None
+    opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
+    invocation_config: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -89,6 +92,8 @@ class SelfPlayIterationResult:
             "checkpoint_policy_spec": self.checkpoint_policy_spec,
             "current_policy_spec": self.current_policy_spec,
             "opponent_policy_specs": list(self.opponent_policy_specs),
+            "opponent_pool_config": dict(self.opponent_pool_config),
+            "invocation_config": dict(self.invocation_config),
             "benchmark_reference_policy_specs": list(self.benchmark_reference_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "validation_rollout_paths": [str(path) for path in self.validation_rollout_paths],
@@ -106,6 +111,8 @@ class SelfPlayRunResult:
     run_dir: Path
     iterations: tuple[SelfPlayIterationResult, ...]
     prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
+    invocation_config: Mapping[str, Any] = field(default_factory=dict)
+    prior_invocation_configs: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
@@ -119,9 +126,13 @@ class SelfPlayRunResult:
     def to_dict(self) -> dict[str, Any]:
         iteration_manifests = [dict(iteration) for iteration in self.prior_iteration_manifests]
         iteration_manifests.extend(iteration.to_manifest_dict() for iteration in self.iterations)
+        invocation_configs = [dict(config) for config in self.prior_invocation_configs]
+        if self.invocation_config:
+            invocation_configs.append(dict(self.invocation_config))
         return {
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
+            "invocation_configs": invocation_configs,
             "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
         }
@@ -202,6 +213,7 @@ def run_selfplay_iterations(
     first_iteration = 1
     next_seed_start = seed_start
     prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
+    prior_invocation_configs = _load_prior_invocation_configs(run_dir) if prior_iteration_manifests else ()
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
         current_policy_spec = str(last_iteration["checkpoint_policy_spec"])
@@ -252,6 +264,36 @@ def run_selfplay_iterations(
         max_historical_opponents=max_historical_opponents,
         required_size=required_promoted_opponent_pool_size,
     )
+    opponent_pool_manifest_config = opponent_pool_config_dict(
+        fixed_opponent_policy_specs=fixed_opponents,
+        max_historical_opponents=max_historical_opponents,
+        promotion_registry_path=promotion_registry_path,
+        promotion_pool_registry_path=promotion_pool_registry_path,
+        required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,
+    )
+    invocation_config = {
+        "resume": bool(prior_iteration_manifests),
+        "first_iteration": first_iteration,
+        "iterations_requested": iterations,
+        "games_per_iteration": games_per_iteration,
+        "seed_start_argument": seed_start,
+        "first_iteration_seed_start": next_seed_start,
+        "initial_policy_spec": initial_policy_spec,
+        "evaluation_games": evaluation_games,
+        "evaluation_seed_start": evaluation_seed_start,
+        "worker_count": worker_count,
+        "validation_rollout_paths": [str(path) for path in validation_paths],
+        "benchmark_reference_policy_specs": list(benchmark_references),
+        "opponent_pool": opponent_pool_manifest_config,
+        "auto_promotion": auto_promotion_config_dict(
+            enabled=auto_promotion_config is not None,
+            registry_path=auto_promotion_config.registry_path if auto_promotion_config is not None else None,
+            artifact_dir=auto_promotion_config.artifact_dir if auto_promotion_config is not None else None,
+            label_prefix=auto_promotion_config.label_prefix if auto_promotion_config is not None else None,
+            notes=auto_promotion_config.notes if auto_promotion_config is not None else None,
+            allow_duplicate=auto_promotion_config.allow_duplicate if auto_promotion_config is not None else False,
+        ),
+    }
     results: list[SelfPlayIterationResult] = []
 
     for offset in range(iterations):
@@ -325,6 +367,8 @@ def run_selfplay_iterations(
             metrics=metrics,
             training=training,
             benchmark=benchmark,
+            opponent_pool_config=opponent_pool_manifest_config,
+            invocation_config=invocation_config,
         )
         _write_json(manifest_path, result.to_manifest_dict())
         results.append(result)
@@ -337,6 +381,8 @@ def run_selfplay_iterations(
                 run_dir=run_dir,
                 iterations=tuple(results),
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
+                invocation_config=invocation_config,
+                prior_invocation_configs=prior_invocation_configs,
             ).to_dict(),
         )
         if auto_promotion_config is not None:
@@ -359,6 +405,8 @@ def run_selfplay_iterations(
                 run_dir=run_dir,
                 iterations=tuple(results),
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
+                invocation_config=invocation_config,
+                prior_invocation_configs=prior_invocation_configs,
             ).to_dict(),
         )
         _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
@@ -367,6 +415,8 @@ def run_selfplay_iterations(
         run_dir=run_dir,
         iterations=tuple(results),
         prior_iteration_manifests=tuple(prior_iteration_manifests),
+        invocation_config=invocation_config,
+        prior_invocation_configs=prior_invocation_configs,
     )
     _write_json(run_dir / "manifest.json", run_result.to_dict())
     return run_result
@@ -753,6 +803,26 @@ def _load_iteration_manifests(run_dir: Path) -> tuple[Mapping[str, Any], ...]:
             raise ValueError(f"Unsupported self-play iteration schema: {manifest.get('schema_version')!r}.")
         manifests.append(manifest)
     return tuple(manifests)
+
+
+def _load_prior_invocation_configs(run_dir: Path) -> tuple[Mapping[str, Any], ...]:
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+        configs = manifest.get("invocation_configs")
+        if configs is not None:
+            return tuple(_mapping(config) for config in _sequence(configs))
+        legacy_config = manifest.get("run_config")
+        if legacy_config is not None:
+            return (_mapping(legacy_config),)
+    configs_by_fingerprint: dict[str, Mapping[str, Any]] = {}
+    for iteration in _load_iteration_manifests(run_dir):
+        config = iteration.get("invocation_config")
+        if config is None:
+            continue
+        mapped = _mapping(config)
+        configs_by_fingerprint.setdefault(json.dumps(mapped, sort_keys=True), mapped)
+    return tuple(configs_by_fingerprint.values())
 
 
 def _validate_training_config_matches_model(
