@@ -403,6 +403,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero unless the derived audit_config_ready verdict is true.",
     )
+    pilot_report.add_argument(
+        "--require-smoke-ready",
+        action="store_true",
+        help="Return non-zero unless all discovered nested smoke pilots have readable passing summaries and requested preflights.",
+    )
     pilot_report.set_defaults(func=_cpu_pilot_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -2508,7 +2513,13 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         if isinstance(recipe, Mapping)
         else None
     )
-    exit_code = _cpu_pilot_report_exit_code(status, artifact_report, require_ready=args.require_ready)
+    exit_code = _cpu_pilot_report_exit_code(
+        status,
+        artifact_report,
+        smoke_report,
+        require_ready=args.require_ready,
+        require_smoke_ready=args.require_smoke_ready,
+    )
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
@@ -2574,12 +2585,16 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
 def _cpu_pilot_report_exit_code(
     status: str,
     artifact_report: Mapping[str, object] | None,
+    smoke_report: Mapping[str, object] | None,
     *,
     require_ready: bool,
+    require_smoke_ready: bool,
 ) -> int:
     if status != "passed":
         return 2
     if require_ready and (artifact_report is None or artifact_report.get("audit_config_ready") is not True):
+        return 2
+    if require_smoke_ready and (smoke_report is None or smoke_report.get("smoke_report_ready") is not True):
         return 2
     return 0
 
@@ -2683,7 +2698,32 @@ def _cpu_pilot_smoke_report(
         "teacher_branch_preflight_non_passed_count": preflight_requested_count - preflight_passed_count,
         "teacher_branch_counts": dict(sorted(teacher_branch_counts.items())),
         "pilots": pilots,
+        "smoke_report_ready": not _cpu_pilot_smoke_not_ready_reasons(pilots),
+        "smoke_report_ready_reasons": _cpu_pilot_smoke_not_ready_reasons(pilots),
     }
+
+
+def _cpu_pilot_smoke_not_ready_reasons(pilots: list[Mapping[str, object]]) -> list[str]:
+    reasons: list[str] = []
+    if not pilots:
+        reasons.append("pilot_smoke_steps_missing")
+        return reasons
+    if any(pilot.get("summary_available") is not True for pilot in pilots):
+        reasons.append("pilot_smoke_summary_missing")
+    if any(pilot.get("status") not in ("passed", None) for pilot in pilots):
+        reasons.append("pilot_smoke_summary_not_passed")
+    if any(_cpu_pilot_preflight_requested_but_not_passed(pilot) for pilot in pilots):
+        reasons.append("teacher_branch_preflight_not_passed")
+    return reasons
+
+
+def _cpu_pilot_preflight_requested_but_not_passed(pilot: Mapping[str, object]) -> bool:
+    preflight = pilot.get("teacher_branch_preflight")
+    return (
+        isinstance(preflight, Mapping)
+        and preflight.get("requested") is True
+        and preflight.get("passed") is not True
+    )
 
 
 def _cpu_pilot_smoke_steps(summary: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -2780,6 +2820,12 @@ def _resolve_cpu_pilot_smoke_summary_path(
 
 
 def _print_cpu_pilot_smoke_report(report: Mapping[str, object]) -> None:
+    print(f"pilot_smoke_ready: {_format_optional_bool(report.get('smoke_report_ready'))}")
+    reasons = report.get("smoke_report_ready_reasons")
+    if isinstance(reasons, list) and reasons:
+        print("pilot_smoke_ready_reasons:")
+        for reason in reasons:
+            print(f"- {reason}")
     print(
         "pilot_smoke_summaries: "
         f"{_format_summary_value(report.get('summary_available_count'))}/"

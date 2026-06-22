@@ -2169,6 +2169,7 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 0)
         self.assertEqual(json_exit_code, 0)
         self.assertIn("pilot_smoke_summaries: 2/2 available passed=2", text_output)
+        self.assertIn("pilot_smoke_ready: yes", text_output)
         self.assertIn("pilot_teacher_branch_preflight: requested=2 passed=2", text_output)
         self.assertIn("pilot_teacher_branch_counts:", text_output)
         self.assertIn("- damaging_move: 9", text_output)
@@ -2176,6 +2177,8 @@ if __name__ == "__main__":
         self.assertIn("preflight=PASS", text_output)
 
         smoke_report = payload["pilot_smoke_report"]
+        self.assertTrue(smoke_report["smoke_report_ready"])
+        self.assertEqual(smoke_report["smoke_report_ready_reasons"], [])
         self.assertEqual(smoke_report["summary_available_count"], 2)
         self.assertEqual(smoke_report["summary_passed_count"], 2)
         self.assertEqual(smoke_report["teacher_branch_preflight_requested_count"], 2)
@@ -2257,10 +2260,16 @@ if __name__ == "__main__":
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 json_exit_code = eval_cli_main(["cpu-pilot-report", str(run_root), "--json"])
             payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO):
+                required_exit_code = eval_cli_main(["cpu-pilot-report", str(run_root), "--require-smoke-ready"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(json_exit_code, 0)
+        self.assertEqual(required_exit_code, 2)
         self.assertIn("pilot_smoke_summaries: 2/3 available passed=2", text_output)
+        self.assertIn("pilot_smoke_ready: no", text_output)
+        self.assertIn("- pilot_smoke_summary_missing", text_output)
+        self.assertIn("- teacher_branch_preflight_not_passed", text_output)
         self.assertIn("pilot_teacher_branch_preflight: requested=2 passed=0", text_output)
         self.assertIn("preflight=FAIL", text_output)
         self.assertIn("preflight=MISSING", text_output)
@@ -2269,6 +2278,11 @@ if __name__ == "__main__":
         self.assertNotIn("pilot_teacher_branch_counts:", text_output)
 
         smoke_report = payload["pilot_smoke_report"]
+        self.assertFalse(smoke_report["smoke_report_ready"])
+        self.assertEqual(
+            smoke_report["smoke_report_ready_reasons"],
+            ["pilot_smoke_summary_missing", "teacher_branch_preflight_not_passed"],
+        )
         self.assertEqual(smoke_report["summary_available_count"], 2)
         self.assertEqual(smoke_report["summary_missing_count"], 1)
         self.assertEqual(smoke_report["summary_non_passed_count"], 1)
@@ -2412,11 +2426,17 @@ if __name__ == "__main__":
                 default_exit_code = eval_cli_main(["cpu-pilot-report", str(summary_path), "--json"])
             with patch("sys.stdout", new_callable=io.StringIO):
                 required_exit_code = eval_cli_main(["cpu-pilot-report", str(summary_path), "--json", "--require-ready"])
+            with patch("sys.stdout", new_callable=io.StringIO):
+                smoke_required_exit_code = eval_cli_main(
+                    ["cpu-pilot-report", str(summary_path), "--json", "--require-smoke-ready"]
+                )
             payload = json.loads(stdout.getvalue())
 
         self.assertEqual(default_exit_code, 0)
         self.assertEqual(required_exit_code, 2)
+        self.assertEqual(smoke_required_exit_code, 2)
         self.assertIsNone(payload["pilot_artifact_report"])
+        self.assertIsNone(payload["pilot_smoke_report"])
 
     def test_eval_cli_cpu_pilot_report_failed_summary_returns_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
