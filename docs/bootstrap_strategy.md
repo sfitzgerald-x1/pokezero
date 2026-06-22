@@ -264,6 +264,16 @@ The registry is append-only by default and embeds the full gate result for each 
 
 The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint. With `--auto-promote`, that pool is refreshed after each passing iteration during the run.
 
+Preview the historical opponent pool that self-play would draw from before starting a long run:
+
+```bash
+python -m pokezero.eval_cli promotions \
+  --registry runs/promotions.json \
+  --opponent-pool-size 3
+```
+
+Add `--current-policy-spec linear:/path/to/current.json` to exclude the current collector checkpoint from the preview, matching the self-play opponent-pool filter.
+
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 
 ```bash

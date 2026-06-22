@@ -123,6 +123,28 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(registry.checkpoint_policy_specs(), (f"neural:{checkpoint_path}",))
         self.assertEqual(registry.latest.checkpoint_policy_spec if registry.latest else None, f"neural:{checkpoint_path}")
 
+    def test_registry_opponent_pool_preview_matches_selfplay_selection_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=4)
+
+            registry = load_promotion_registry(registry_path)
+            latest_spec = registry.entries[-1].checkpoint_policy_spec
+
+        self.assertEqual(
+            registry.opponent_pool_policy_specs(max_historical_opponents=2),
+            tuple(entry.checkpoint_policy_spec for entry in registry.entries[-2:]),
+        )
+        self.assertEqual(
+            registry.opponent_pool_policy_specs(
+                max_historical_opponents=2,
+                current_policy_spec=latest_spec,
+            ),
+            tuple(entry.checkpoint_policy_spec for entry in registry.entries[-3:-1]),
+        )
+        self.assertEqual(registry.opponent_pool_policy_specs(max_historical_opponents=0), ())
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            registry.opponent_pool_policy_specs(max_historical_opponents=-1)
+
     def test_verify_promotion_registry_can_require_loadable_neural_policy_specs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -368,6 +390,71 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(promote_payload["entry"]["label"], "candidate-a")
         self.assertEqual(list_exit, 0)
         self.assertEqual(list_payload["entries"][0]["policy_id"], "linear-selfplay-test-iter-0001")
+
+    def test_eval_cli_promotions_json_includes_opponent_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=3)
+            registry = load_promotion_registry(registry_path)
+            latest_spec = registry.entries[-1].checkpoint_policy_spec
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--current-policy-spec",
+                        latest_spec or "",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["opponent_pool_policy_specs"],
+            [entry.checkpoint_policy_spec for entry in registry.entries[:2]],
+        )
+
+    def test_eval_cli_promotions_text_prints_opponent_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+            registry = load_promotion_registry(registry_path)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "1",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("opponent_pool_policy_specs:", stdout.getvalue())
+        self.assertIn(registry.entries[-1].checkpoint_policy_spec or "", stdout.getvalue())
+
+    def test_eval_cli_promotions_rejects_current_policy_without_pool_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=1)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--current-policy-spec",
+                        "linear:checkpoint.json",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--current-policy-spec requires --opponent-pool-size", stderr.getvalue())
 
     def test_eval_cli_promote_can_copy_checkpoint_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -726,6 +813,39 @@ def add_benchmark_head_to_head(
             "second_policy_win_rate": second_policy_wins / games,
         }
     )
+
+
+def write_registry_with_entries(temp_path: Path, *, count: int) -> Path:
+    registry_path = temp_path / "promotions.json"
+    entries = []
+    for sequence in range(1, count + 1):
+        checkpoint_path = temp_path / f"checkpoint-{sequence}.json"
+        checkpoint_path.write_text("{}", encoding="utf-8")
+        entries.append(
+            {
+                "sequence": sequence,
+                "policy_id": f"linear-selfplay-test-iter-{sequence:04d}",
+                "checkpoint_path": str(checkpoint_path),
+                "manifest_path": f"runs/selfplay-{sequence}/manifest.json",
+                "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
+                "source_iteration": sequence,
+                "promoted_at": "2026-06-02T00:00:00Z",
+                "label": None,
+                "notes": None,
+                "gate_result": {"passed": True},
+            }
+        )
+    write_manifest(
+        registry_path,
+        {
+            "schema_version": PROMOTION_REGISTRY_SCHEMA_VERSION,
+            "registry_path": str(registry_path),
+            "latest_policy_id": entries[-1]["policy_id"] if entries else None,
+            "latest_checkpoint_path": entries[-1]["checkpoint_path"] if entries else None,
+            "entries": entries,
+        },
+    )
+    return registry_path
 
 
 def write_checkpoint_for_manifest(temp_path: Path, manifest: dict, *, policy_id: str | None = None) -> Path:

@@ -83,6 +83,23 @@ class PromotionRegistry:
             if entry.checkpoint_policy_spec is not None
         )
 
+    def opponent_pool_policy_specs(
+        self,
+        *,
+        max_historical_opponents: int,
+        current_policy_spec: str | None = None,
+    ) -> tuple[str, ...]:
+        if max_historical_opponents < 0:
+            raise ValueError("max_historical_opponents must be non-negative.")
+        if max_historical_opponents == 0:
+            return ()
+        specs = tuple(
+            spec
+            for spec in self.checkpoint_policy_specs()
+            if current_policy_spec is None or spec != current_policy_spec
+        )
+        return specs[-max_historical_opponents:]
+
 
 @dataclass(frozen=True)
 class PromotionRecordResult:
