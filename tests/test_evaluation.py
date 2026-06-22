@@ -3917,6 +3917,7 @@ if __name__ == "__main__":
             healthy_summary["recipe"]["runtime_audit_source"] = "profile"
             healthy_summary["recipe"]["runtime_audit_profile"] = "smoke"
             healthy_summary["recipe"]["runtime_audit_config_path"] = None
+            healthy_summary["recipe"]["evaluation_games"] = 33
             write_json(healthy_root / "cpu-long-run-run-summary.json", healthy_summary)
             failed_summary = cpu_long_run_summary(
                 status="failed",
@@ -3943,9 +3944,49 @@ if __name__ == "__main__":
         self.assertTrue(payload["entries"][0]["passing"])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.65)
         self.assertEqual(payload["entries"][0]["runtime_audit_source"], "profile")
+        self.assertEqual(payload["entries"][0]["runtime_audit_resolved_source"], "profile")
+        self.assertTrue(payload["entries"][0]["runtime_audit_available"])
+        self.assertEqual(payload["entries"][0]["runtime_audit_recorded_evaluation_games"], 33)
+        self.assertEqual(
+            payload["entries"][0]["runtime_audit_command_flags"],
+            ["--evaluation-games", "33", "--audit-after-iteration", "--audit-profile", "smoke"],
+        )
+        self.assertEqual(payload["entries"][0]["runtime_audit"]["audit_profile"], "smoke")
         self.assertFalse(payload["entries"][1]["passing"])
         self.assertEqual(payload["entries"][1]["status"], "failed")
+        self.assertFalse(payload["entries"][1]["runtime_audit_available"])
         self.assertEqual(payload["entries"][1]["derived_error"], "manifest_not_found")
+
+    def test_eval_cli_cpu_long_run_compare_json_includes_config_backed_runtime_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "run"
+            audit_config_path = temp_path / "pilot-audit-config.json"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            write_json(audit_config_path, run_audit_config_payload(smoke_test_audit_config()))
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "pilot-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["evaluation_games"] = 21
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-compare", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(entry["runtime_audit_available"])
+        self.assertEqual(entry["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(entry["runtime_audit_resolved_source"], "pilot-audit-config")
+        self.assertEqual(entry["runtime_audit_config_path"], str(audit_config_path))
+        self.assertEqual(entry["runtime_audit_recorded_evaluation_games"], 21)
+        self.assertEqual(
+            entry["runtime_audit_command_flags"],
+            ["--evaluation-games", "21", "--audit-after-iteration", "--audit-config", str(audit_config_path)],
+        )
+        self.assertNotIn("config", entry["runtime_audit"])
 
     def test_eval_cli_cpu_long_run_compare_prefers_persisted_derived_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4097,6 +4138,7 @@ if __name__ == "__main__":
             summary["recipe"]["runtime_audit_source"] = "profile"
             summary["recipe"]["runtime_audit_profile"] = "smoke"
             summary["recipe"]["runtime_audit_config_path"] = None
+            summary["recipe"]["evaluation_games"] = 12
             write_json(run_root / "cpu-long-run-run-summary.json", summary)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -4110,7 +4152,32 @@ if __name__ == "__main__":
         self.assertIn("summaries: 1", output)
         self.assertIn("non_passing: 0", output)
         self.assertIn("refresh_derived_audit: no", output)
+        self.assertIn("runtime_audits:", output)
+        self.assertIn("recorded_eval=12", output)
+        self.assertIn("--evaluation-games 12 --audit-after-iteration --audit-profile smoke", output)
         self.assertIn(str(run_root), output)
+
+    def test_eval_cli_cpu_long_run_compare_text_prints_unavailable_runtime_audit_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "run-0001"
+            missing_config_path = temp_path / "missing-audit-config.json"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "pilot-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(missing_config_path)
+            summary["recipe"]["evaluation_games"] = 8
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-compare", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("runtime_audits:", output)
+        self.assertIn("available=no", output)
+        self.assertIn(f"config={missing_config_path}", output)
+        self.assertIn("--evaluation-games 8 --audit-after-iteration --audit-config", output)
 
     def test_eval_cli_cpu_long_run_compare_reports_load_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
