@@ -344,6 +344,8 @@ The registry is append-only by default and embeds the full gate result for each 
 
 The registry is the checkpoint-pool index for accepted policies: `selfplay_cli iterate --promotion-registry runs/promotions.json` uses promoted checkpoints as historical opponents instead of every raw prior iteration checkpoint. With `--auto-promote`, that pool is refreshed after each passing iteration during the run.
 
+Add `--require-promoted-opponent-pool-size N` to `selfplay_cli iterate` or `neural_cli iterate` when launching a long run from a promotion registry. The run fails before rollout collection unless at least `N` promoted historical opponents are selectable after current-policy exclusion and `--max-historical-opponents` capping.
+
 Preview the historical opponent pool that self-play would draw from before starting a long run:
 
 ```bash
