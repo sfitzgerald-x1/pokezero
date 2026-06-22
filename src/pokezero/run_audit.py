@@ -39,6 +39,7 @@ class RunAuditConfig:
     max_latest_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
     max_latest_average_decision_rounds: float | None = None
     max_latest_benchmark_average_decision_rounds: float | None = None
+    max_latest_process_peak_rss_mb: float | None = None
     max_benchmark_win_rate_drop: float = DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
     max_consecutive_promotion_failures: int = DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES
     require_benchmark: bool = True
@@ -57,6 +58,8 @@ class RunAuditConfig:
             and self.max_latest_benchmark_average_decision_rounds < 0.0
         ):
             raise ValueError("max_latest_benchmark_average_decision_rounds must be non-negative.")
+        if self.max_latest_process_peak_rss_mb is not None and self.max_latest_process_peak_rss_mb < 0.0:
+            raise ValueError("max_latest_process_peak_rss_mb must be non-negative.")
         for field_name in (
             "min_latest_benchmark_win_rate",
             "max_latest_collection_capped_rate",
@@ -184,6 +187,7 @@ class RunAuditResult:
     latest_average_decision_rounds: float | None
     latest_benchmark_capped_rate: float | None
     latest_benchmark_average_decision_rounds: float | None
+    latest_process_peak_rss_mb: float | None
     missing_latest_benchmark_opponents: tuple[str, ...]
     benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
@@ -210,6 +214,7 @@ class RunAuditResult:
             "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
             "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "latest_process_peak_rss_mb": self.latest_process_peak_rss_mb,
             "missing_latest_benchmark_opponents": list(self.missing_latest_benchmark_opponents),
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
@@ -360,6 +365,7 @@ class RunAuditCalibrationResult:
     max_latest_benchmark_capped_rate: float | None
     max_latest_average_decision_rounds: float | None
     max_latest_benchmark_average_decision_rounds: float | None
+    max_latest_process_peak_rss_mb: float | None
     max_benchmark_win_rate_drop: float | None
     max_consecutive_promotion_failures: int
     require_benchmark_opponent_coverage: bool
@@ -402,6 +408,7 @@ class MultiRunAuditCalibrationResult:
     max_latest_benchmark_capped_rate: float | None
     max_latest_average_decision_rounds: float | None
     max_latest_benchmark_average_decision_rounds: float | None
+    max_latest_process_peak_rss_mb: float | None
     max_benchmark_win_rate_drop: float | None
     max_consecutive_promotion_failures: int
     require_benchmark_opponent_coverage: bool
@@ -470,6 +477,7 @@ def audit_run(
         *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
         *_latest_benchmark_average_decision_rounds_checks(latest, config),
+        *_latest_process_peak_rss_checks(latest, config),
         _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
@@ -486,6 +494,7 @@ def audit_run(
         latest_average_decision_rounds=latest.average_decision_rounds,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
         latest_benchmark_average_decision_rounds=latest.benchmark_average_decision_rounds,
+        latest_process_peak_rss_mb=_latest_process_peak_rss_mb(latest),
         missing_latest_benchmark_opponents=missing_latest_benchmark_opponents,
         benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
@@ -604,6 +613,10 @@ def calibrate_run_audit(
             _max_optional(iteration.benchmark_average_decision_rounds for iteration in benchmark_iterations),
             margin=margin,
         ),
+        max_latest_process_peak_rss_mb=_ceiling_observed_float(
+            _max_optional(_latest_process_peak_rss_mb(iteration) for iteration in result.iterations),
+            margin=margin,
+        ),
         max_benchmark_win_rate_drop=(
             (
                 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
@@ -687,6 +700,10 @@ def calibrate_run_audits(
             (calibration.max_latest_benchmark_average_decision_rounds for calibration in calibrations),
             aggregate_mode=aggregate_mode,
         ),
+        max_latest_process_peak_rss_mb=_aggregate_ceiling(
+            (calibration.max_latest_process_peak_rss_mb for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
+        ),
         max_benchmark_win_rate_drop=_aggregate_ceiling(
             (calibration.max_benchmark_win_rate_drop for calibration in calibrations),
             aggregate_mode=aggregate_mode,
@@ -711,12 +728,7 @@ def _comparison_entry(
     strict_audit = audit_run(path, config=audit_config) if audit_config is not None else None
     audit = strict_audit if strict_audit is not None else audit_run(path, config=_permissive_audit_config())
     latest = audit.iterations[-1]
-    process_peak_rss_mb = _max_optional(
-        (
-            latest.collection_peak_rss_mb,
-            latest.benchmark_peak_rss_mb,
-        )
-    )
+    process_peak_rss_mb = _latest_process_peak_rss_mb(latest)
     return RunComparisonEntry(
         label=_comparison_label(audit.manifest_path),
         manifest_path=audit.manifest_path,
@@ -985,6 +997,39 @@ def _latest_benchmark_average_decision_rounds_checks(
     )
 
 
+def _latest_process_peak_rss_checks(
+    latest: RunAuditIterationSummary,
+    config: RunAuditConfig,
+) -> tuple[RunAuditCheck, ...]:
+    if config.max_latest_process_peak_rss_mb is None:
+        return ()
+    observed = _latest_process_peak_rss_mb(latest)
+    if observed is None:
+        message = "latest process peak RSS is unavailable"
+    elif observed <= config.max_latest_process_peak_rss_mb:
+        message = "latest process peak RSS is within limit"
+    else:
+        message = "latest process peak RSS exceeds limit"
+    return (
+        RunAuditCheck(
+            name="latest_process_peak_rss_mb",
+            passed=observed is not None and observed <= config.max_latest_process_peak_rss_mb,
+            observed=observed,
+            threshold=config.max_latest_process_peak_rss_mb,
+            message=message,
+        ),
+    )
+
+
+def _latest_process_peak_rss_mb(latest: RunAuditIterationSummary) -> float | None:
+    return _max_optional(
+        (
+            latest.collection_peak_rss_mb,
+            latest.benchmark_peak_rss_mb,
+        )
+    )
+
+
 def _benchmark_regression_check(
     iterations: tuple[RunAuditIterationSummary, ...],
     regressions: tuple[RunAuditOpponentRegression, ...],
@@ -1248,6 +1293,7 @@ def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]
         "max_latest_benchmark_average_decision_rounds": (
             result.max_latest_benchmark_average_decision_rounds if require_benchmark else None
         ),
+        "max_latest_process_peak_rss_mb": result.max_latest_process_peak_rss_mb,
         "max_benchmark_win_rate_drop": (
             result.max_benchmark_win_rate_drop
             if require_benchmark and result.max_benchmark_win_rate_drop is not None
@@ -1277,6 +1323,7 @@ def _suggested_audit_cli_flags(result: Any) -> tuple[str, ...]:
         ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
         ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
         ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+        ("max_latest_process_peak_rss_mb", "--max-latest-process-peak-rss-mb"),
         ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
         ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
     ):

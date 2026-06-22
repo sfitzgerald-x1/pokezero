@@ -229,11 +229,12 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
   --max-latest-benchmark-capped-rate 0.10 \
   --max-latest-average-decision-rounds 200 \
   --max-latest-benchmark-average-decision-rounds 200 \
+  --max-latest-process-peak-rss-mb 8192 \
   --max-benchmark-win-rate-drop 0.05 \
   --max-consecutive-promotion-failures 1
 ```
 
-The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, optional collection and benchmark average decision-round upper bounds, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy. The average decision-round checks catch slow or stall-heavy runs; they do not by themselves detect degenerate-short games.
+The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, optional collection and benchmark average decision-round upper bounds, optional process peak RSS ceilings, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy. The average decision-round checks catch slow or stall-heavy runs; they do not by themselves detect degenerate-short games. The process RSS value is a platform high-water mark over the current run process, not phase-isolated memory attribution.
 
 By default, the audit also requires the latest benchmark to retain fixed baseline opponents, currently `random-legal` and `simple-legal`, once they have appeared in prior benchmark evidence. This prevents a run from looking healthy after silently dropping fixed baselines, while still allowing incumbent or historical checkpoint opponents to rotate. Use `--allow-missing-benchmark-opponents` only when intentionally changing the benchmark set.
 
@@ -244,7 +245,7 @@ python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --margin 0
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --aggregate-mode envelope
 ```
 
-Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, or `--audit-require-latest-promotion`.
+Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, `--audit-max-latest-process-peak-rss-mb 8192`, or `--audit-require-latest-promotion`.
 
 Compare cold-start, teacher-bootstrap, and neural iteration runs side by side:
 
