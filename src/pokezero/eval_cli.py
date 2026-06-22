@@ -525,6 +525,34 @@ def _add_cpu_smoke_arguments(
     parser.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
     parser.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
     parser.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
+    parser.add_argument(
+        "--teacher-branch-preflight-games",
+        type=int,
+        default=2,
+        help=(
+            "Teacher benchmark games used when --require-teacher-branch or "
+            "--min-teacher-branch-count is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--require-teacher-branch",
+        action="append",
+        default=None,
+        help=(
+            "Insert a teacher-benchmark preflight and require this scripted-teacher branch "
+            "to appear at least once. May be repeated."
+        ),
+    )
+    parser.add_argument(
+        "--min-teacher-branch-count",
+        action="append",
+        default=None,
+        metavar="BRANCH=COUNT",
+        help=(
+            "Insert a teacher-benchmark preflight and require this scripted-teacher branch "
+            "to appear at least COUNT times. May be repeated."
+        ),
+    )
     parser.add_argument("--selfplay-iterations", type=int, default=2, help="Self-play iterations.")
     parser.add_argument("--selfplay-games", type=int, default=4, help="Self-play collection games per iteration.")
     parser.add_argument("--evaluation-games", type=int, default=2, help="Self-play benchmark games per matchup.")
@@ -2643,6 +2671,10 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
         "replay_output_path": str(replay_output_path),
         "benchmark_iterations_required": benchmark_iterations_required,
         "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
+        "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
+        "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
+        "required_teacher_branches": list(args.require_teacher_branch or ()),
+        "min_teacher_branch_counts": list(args.min_teacher_branch_count or ()),
         "steps": [
             {
                 "name": step["name"],
@@ -2673,6 +2705,8 @@ def _cpu_pilot_smoke_run_argv(args: argparse.Namespace, *, pilot_root: Path, see
         str(args.validation_games),
         "--bootstrap-benchmark-games",
         str(args.bootstrap_benchmark_games),
+        "--teacher-branch-preflight-games",
+        str(args.teacher_branch_preflight_games),
         "--selfplay-iterations",
         str(args.selfplay_iterations),
         "--selfplay-games",
@@ -2690,6 +2724,7 @@ def _cpu_pilot_smoke_run_argv(args: argparse.Namespace, *, pilot_root: Path, see
         "--audit-config-path",
         str(pilot_root / "smoke-audit-config.json"),
     ]
+    argv.extend(_teacher_branch_gate_args(args))
     if args.showdown_root is not None:
         argv.extend(["--showdown-root", str(args.showdown_root)])
     return argv
@@ -2764,8 +2799,23 @@ def _validate_cpu_smoke_args(args: argparse.Namespace, *, validate_showdown_root
             raise ValueError(f"{field_name.replace('_', '-')} must be positive.")
     if args.max_decision_rounds <= 0:
         raise ValueError("max-decision-rounds must be positive.")
+    if _teacher_branch_preflight_requested(args) and args.teacher_branch_preflight_games <= 0:
+        raise ValueError("teacher-branch-preflight-games must be positive when teacher branch gates are requested.")
     if validate_showdown_root and args.showdown_root is not None and not args.showdown_root.exists():
         raise ValueError(f"showdown-root does not exist: {args.showdown_root}")
+
+
+def _teacher_branch_preflight_requested(args: argparse.Namespace) -> bool:
+    return bool(args.require_teacher_branch or args.min_teacher_branch_count)
+
+
+def _teacher_branch_gate_args(args: argparse.Namespace) -> list[str]:
+    argv: list[str] = []
+    for branch in args.require_teacher_branch or ():
+        argv.extend(["--require-teacher-branch", str(branch)])
+    for branch_count in args.min_teacher_branch_count or ():
+        argv.extend(["--min-teacher-branch-count", str(branch_count)])
+    return argv
 
 
 def _validate_cpu_pilot_args(args: argparse.Namespace, *, validate_showdown_root: bool = False) -> None:
@@ -2790,6 +2840,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
     audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "smoke-audit-config.json"
+    teacher_branch_preflight_output_path = run_root / "teacher-branch-preflight.json"
     python_binary = args.python_binary
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
     showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
@@ -2800,6 +2851,30 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     selfplay_seed_start = seed_start + (4 * CPU_SMOKE_SEED_BAND_SPACING)
     evaluation_seed_start = seed_start + (5 * CPU_SMOKE_SEED_BAND_SPACING)
     steps = (
+        *(
+            (
+                (
+                    "benchmark scripted teacher branch coverage",
+                    [
+                        python_binary,
+                        "-m",
+                        "pokezero.bootstrap_cli",
+                        "teacher-benchmark",
+                        "--games",
+                        str(args.teacher_branch_preflight_games),
+                        *showdown_root_args,
+                        "--seed-start",
+                        str(preflight_seed_start),
+                        "--max-decision-rounds",
+                        str(args.max_decision_rounds),
+                        *_teacher_branch_gate_args(args),
+                        "--json",
+                    ],
+                ),
+            )
+            if _teacher_branch_preflight_requested(args)
+            else ()
+        ),
         (
             "bootstrap teacher checkpoint",
             [
@@ -2950,11 +3025,23 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "showdown_root": showdown_root,
         "seed_start": seed_start,
         "audit_config_path": str(audit_config_path),
+        "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
+        "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
+        "teacher_branch_preflight_output_path": (
+            str(teacher_branch_preflight_output_path) if _teacher_branch_preflight_requested(args) else None
+        ),
+        "required_teacher_branches": list(args.require_teacher_branch or ()),
+        "min_teacher_branch_counts": list(args.min_teacher_branch_count or ()),
         "steps": [
             {
                 "name": name,
                 "argv": argv,
                 "command": _shell_join(argv),
+                **(
+                    {"output_json_path": str(teacher_branch_preflight_output_path)}
+                    if name == "benchmark scripted teacher branch coverage"
+                    else {}
+                ),
             }
             for name, argv in steps
         ],

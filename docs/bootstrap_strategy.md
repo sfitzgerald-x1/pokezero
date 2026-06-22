@@ -100,6 +100,18 @@ Inspect the generated commands without running them:
 
 Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence; the generated smoke audit config proves the config path works but should not be reused as a long-run policy. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
 
+When changing scripted-teacher heuristics, add teacher branch gates to the smoke or pilot wrapper instead of running a separate manual preflight:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-smoke-run \
+  --run-root runs/cpu-smoke \
+  --showdown-root /path/to/pokemon-showdown \
+  --require-teacher-branch status_pressure \
+  --min-teacher-branch-count status_pressure=1
+```
+
+These flags insert a `teacher-benchmark` branch-coverage step before the teacher bootstrap step. `cpu-pilot-run` accepts the same flags and passes them through to each seeded smoke pilot.
+
 Run a slightly broader CPU pilot suite when a single smoke run is not enough evidence to tune audit thresholds:
 
 ```bash
