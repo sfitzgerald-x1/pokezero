@@ -850,6 +850,24 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.source_type, "neural_selfplay")
         self.assertEqual(result.iterations[-1].policy_id, "entity-test-iter-0002")
 
+    def test_audit_result_exposes_manifest_source_metadata(self) -> None:
+        source = source_metadata()
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),),
+            source=source,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(min_latest_benchmark_win_rate=0.50, min_latest_benchmark_games=20),
+            )
+
+        self.assertEqual(result.source_metadata, source)
+        self.assertEqual(result.to_dict()["source_metadata"], source)
+
     def test_calibrate_run_audit_suggests_thresholds_from_observed_history(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -1257,6 +1275,33 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["missing_latest_benchmark_opponents"], ["simple-legal"])
         self.assertIn("latest_benchmark_opponent_coverage", failed_check_names_from_payload(payload))
 
+    def test_eval_cli_audit_json_reports_manifest_source_metadata(self) -> None:
+        source = source_metadata(branch="scott/report-source", head="def456", dirty=True)
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),),
+            source=source,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["source_metadata"], source)
+
     def test_eval_cli_audit_allows_missing_benchmark_opponents_flag(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -1419,8 +1464,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("skipped", rss_check["message"])
 
     def test_eval_cli_audit_prints_text_summary(self) -> None:
+        source = source_metadata(branch="scott/audit-text", head="abc999", dirty=True)
         manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),),
+            source=source,
         )
         manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
         manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
@@ -1446,6 +1493,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_average_decision_rounds: 10.000", stdout.getvalue())
         self.assertIn("latest_benchmark_average_decision_rounds: 12.000", stdout.getvalue())
         self.assertIn("latest_process_peak_rss_mb: 640.5", stdout.getvalue())
+        self.assertIn("source_metadata:", stdout.getvalue())
+        self.assertIn("branch: scott/audit-text", stdout.getvalue())
+        self.assertIn("head: abc999", stdout.getvalue())
+        self.assertIn("dirty: yes", stdout.getvalue())
 
     def test_eval_cli_audit_calibrate_prints_json(self) -> None:
         manifest = selfplay_manifest(
@@ -1783,8 +1834,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("calibration_run_count 1 is below required 2", output)
 
     def test_eval_cli_compare_prints_json(self) -> None:
+        source = source_metadata(branch="scott/linear", head="abc123", dirty=False)
         linear_manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),),
+            source=source,
         )
         neural_manifest = neural_selfplay_manifest(
             iterations=(neural_iteration(iteration=1, wins=35, losses=15, capped_games=0),)
@@ -1807,6 +1860,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
         self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
+        self.assertEqual(payload["entries"][0]["source_metadata"], source)
         self.assertIn("latest_process_peak_rss_mb", payload["entries"][0])
         self.assertIsNone(payload["audit_profile"])
         self.assertFalse(payload["audit_failed"])
@@ -2106,8 +2160,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["errors"][0]["label"], "bad-run")
 
     def test_eval_cli_compare_prints_text_table(self) -> None:
+        source = source_metadata(branch="scott/report-source", head="abcdef123456", dirty=True)
         manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),),
+            source=source,
         )
         manifest["iterations"][0]["collection_metrics"]["games_per_second"] = 12.345
         manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 8192.0
@@ -2128,6 +2184,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("coll_gph", stdout.getvalue())
         self.assertIn("bench_gph", stdout.getvalue())
         self.assertIn("rss_hi_mb", stdout.getvalue())
+        self.assertIn("source_provenance:", stdout.getvalue())
+        self.assertIn("branch=scott/report-source", stdout.getvalue())
+        self.assertIn("head=abcdef123456", stdout.getvalue())
+        self.assertIn("dirty=yes", stdout.getvalue())
         self.assertNotIn("audit_profile:", stdout.getvalue())
         self.assertNotIn(" audit ", stdout.getvalue())
         row = next(line for line in stdout.getvalue().splitlines() if line.startswith("linear-run"))
@@ -2407,6 +2467,7 @@ def selfplay_manifest(
     *,
     iterations: tuple[dict, ...],
     invocation_configs: tuple[dict, ...] = (),
+    source: dict | None = None,
 ) -> dict:
     payload = {
         "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
@@ -2414,9 +2475,26 @@ def selfplay_manifest(
         "latest_checkpoint_path": iterations[-1]["checkpoint_path"],
         "iterations": list(iterations),
     }
+    if source is not None:
+        payload["source"] = source
     if invocation_configs:
         payload["invocation_configs"] = list(invocation_configs)
     return payload
+
+
+def source_metadata(
+    *,
+    branch: str = "main",
+    head: str = "abc123",
+    dirty: bool = False,
+) -> dict:
+    return {
+        "available": True,
+        "repo_root": "/repo",
+        "branch": branch,
+        "head": head,
+        "dirty": dirty,
+    }
 
 
 def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:

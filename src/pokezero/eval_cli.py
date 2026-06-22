@@ -1763,6 +1763,7 @@ def _print_audit_result(result) -> None:
     print(f"status: {status}")
     print(f"source: {result.source_type}")
     print(f"manifest: {result.manifest_path}")
+    _print_source_metadata(result.source_metadata)
     print(f"iterations: {len(result.iterations)}")
     print(f"latest_iteration: {result.latest_iteration if result.latest_iteration is not None else '-'}")
     print(f"latest_benchmark_win_rate: {_format_optional_float(result.latest_benchmark_win_rate)}")
@@ -1950,6 +1951,11 @@ def _print_run_comparison(result) -> None:
         print("errors:")
         for error in result.errors:
             print(f"- {error.label}: {error.error}")
+    if result.entries:
+        print("")
+        print("source_provenance:")
+        for entry in result.entries:
+            print(f"- {entry.label}: {_format_source_metadata(entry.source_metadata)}")
     if result.audit_profile is not None:
         failed_entries = tuple(entry for entry in result.entries if entry.audit_passed is False)
         if failed_entries:
@@ -2034,6 +2040,44 @@ def _format_optional_bool(value: bool | None) -> str:
     if value is None:
         return "-"
     return "yes" if value else "no"
+
+
+def _print_source_metadata(metadata: Mapping[str, object]) -> None:
+    if not metadata:
+        print("source_metadata: -")
+        return
+    print("source_metadata:")
+    print(f"  available: {_format_source_available(metadata.get('available'))}")
+    print(f"  branch: {_format_optional_text(metadata.get('branch'))}")
+    print(f"  head: {_format_optional_text(metadata.get('head'))}")
+    print(f"  dirty: {_format_source_dirty(metadata.get('dirty'))}")
+    print(f"  repo_root: {_format_optional_text(metadata.get('repo_root'))}")
+
+
+def _format_source_metadata(metadata: Mapping[str, object]) -> str:
+    if not metadata:
+        return "-"
+    return (
+        f"available={_format_source_available(metadata.get('available'))} "
+        f"branch={_format_optional_text(metadata.get('branch'))} "
+        f"head={_format_optional_text(metadata.get('head'))} "
+        f"dirty={_format_source_dirty(metadata.get('dirty'))}"
+    )
+
+
+def _format_source_available(value: object) -> str:
+    return _format_optional_bool(value if isinstance(value, bool) else None)
+
+
+def _format_source_dirty(value: object) -> str:
+    return _format_optional_bool(value if isinstance(value, bool) else None)
+
+
+def _format_optional_text(value: object) -> str:
+    if value is None:
+        return "-"
+    text = str(value)
+    return text if text else "-"
 
 
 def _parse_opponent_win_rates(values: tuple[str, ...]) -> dict[str, float]:
