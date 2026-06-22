@@ -72,7 +72,17 @@ Replay import remains valuable after a randbat replay source is identified. A no
 
 ## Supported Command Shape
 
-Print a tiny CPU smoke-run recipe before spending time on larger experiments:
+Run a tiny CPU smoke validation before spending time on larger experiments:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-smoke-run \
+  --run-root runs/cpu-smoke \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+This executes the teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts.
+
+Inspect the generated commands without running them:
 
 ```bash
 ./.venv/bin/python -m pokezero.eval_cli cpu-smoke-plan \
@@ -80,7 +90,7 @@ Print a tiny CPU smoke-run recipe before spending time on larger experiments:
   --showdown-root /path/to/pokemon-showdown
 ```
 
-The printed recipe chains the existing teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile commands with intentionally small counts. It is a plumbing validation aid, not strength evidence. By default the recipe uses the Python interpreter running `cpu-smoke-plan`; pass `--python-binary` when another interpreter or virtualenv should run the printed commands. Use `--json` when another script should consume the recipe.
+Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
 
 Import normalized replay decisions into standard rollout JSONL:
 
