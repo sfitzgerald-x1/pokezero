@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.cli_audit import post_iteration_audit_config_from_args
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.run_audit import (
     RUN_AUDIT_CONFIG_SCHEMA_VERSION,
@@ -18,6 +19,24 @@ from pokezero.run_audit import (
 )
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
+from pokezero.selfplay_cli import build_arg_parser as build_selfplay_arg_parser
+
+
+def post_iteration_config_from_flags(flags: tuple[str, ...]) -> RunAuditConfig | None:
+    parser = build_selfplay_arg_parser()
+    args = parser.parse_args(
+        [
+            "iterate",
+            "--run-dir",
+            "run",
+            "--iterations",
+            "1",
+            "--games-per-iteration",
+            "1",
+            *flags,
+        ]
+    )
+    return post_iteration_audit_config_from_args(args)
 
 
 class RunAuditTest(unittest.TestCase):
@@ -920,6 +939,12 @@ class RunAuditTest(unittest.TestCase):
         self.assertTrue(result.require_benchmark_opponent_coverage)
         self.assertIn("--max-latest-process-peak-rss-mb", result.suggested_cli_flags())
         self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
+        self.assertIn("--audit-after-iteration", result.suggested_post_iteration_cli_flags())
+        self.assertIn("--audit-max-latest-process-peak-rss-mb", result.suggested_post_iteration_cli_flags())
+        self.assertEqual(
+            post_iteration_config_from_flags(result.suggested_post_iteration_cli_flags()),
+            RunAuditConfig(**result.suggested_config()),
+        )
 
     def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
         pilot = selfplay_manifest(
@@ -1011,6 +1036,11 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("--allow-missing-benchmark", calibration.suggested_cli_flags())
         self.assertIn("--allow-missing-benchmark-opponents", calibration.suggested_cli_flags())
         self.assertNotIn("--min-latest-benchmark-win-rate", calibration.suggested_cli_flags())
+        self.assertIn("--audit-allow-missing-benchmark", calibration.suggested_post_iteration_cli_flags())
+        self.assertEqual(
+            post_iteration_config_from_flags(calibration.suggested_post_iteration_cli_flags()),
+            config,
+        )
         self.assertEqual(config.min_latest_benchmark_win_rate, 0.0)
         self.assertEqual(config.max_latest_benchmark_capped_rate, 1.0)
         self.assertIn("allows missing benchmarks", calibration.notes[1])
@@ -1061,6 +1091,11 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("--allow-missing-benchmark", result.suggested_cli_flags())
         self.assertIn("--allow-missing-benchmark-opponents", result.suggested_cli_flags())
         self.assertNotIn("--min-latest-benchmark-games", result.suggested_cli_flags())
+        self.assertIn("--audit-allow-missing-benchmark", result.suggested_post_iteration_cli_flags())
+        self.assertEqual(
+            post_iteration_config_from_flags(result.suggested_post_iteration_cli_flags()),
+            RunAuditConfig(**result.suggested_config()),
+        )
         self.assertIn("No benchmark iterations", result.notes[0])
 
     def test_calibrate_run_audit_rejects_negative_margin(self) -> None:
@@ -1576,6 +1611,8 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["suggested_config"]["max_benchmark_win_rate_drop"], 0.05)
         self.assertIn("No same-opponent regression history", payload["notes"][0])
         self.assertIn("--min-latest-benchmark-win-rate", payload["suggested_cli_flags"])
+        self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_cli_flags"])
+        self.assertIn("--audit-min-latest-benchmark-win-rate", payload["suggested_post_iteration_cli_flags"])
 
     def test_eval_cli_audit_calibrate_can_discover_manifest_globs(self) -> None:
         first = selfplay_manifest(
@@ -1720,7 +1757,10 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
+        self.assertIn("suggested_post_iteration_flags:", stdout.getvalue())
+        self.assertIn("--audit-after-iteration", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
+        self.assertIn("--audit-max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
 
     def test_eval_cli_audit_calibrate_can_write_reusable_audit_config(self) -> None:
         manifest = selfplay_manifest(
@@ -3186,7 +3226,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("audit_calibration_suggestion:", output)
         self.assertIn("suggested_audit_flags:", output)
+        self.assertIn("suggested_post_iteration_flags:", output)
         self.assertIn("--min-latest-benchmark-games", output)
+        self.assertIn("--audit-min-latest-benchmark-games", output)
         self.assertNotIn("calibration_excluded_errors:", output)
 
     def test_eval_cli_compare_text_reports_unavailable_calibration_when_no_runs_are_valid(self) -> None:
