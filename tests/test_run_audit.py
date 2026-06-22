@@ -1213,6 +1213,105 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("manifests:", output)
         self.assertIn("--allow-missing-benchmark", output)
 
+    def test_eval_cli_audit_calibrate_can_require_minimum_evidence(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--require-run-count",
+                        "2",
+                        "--require-benchmark-iterations",
+                        "2",
+                        "--require-min-benchmark-games",
+                        "50",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["calibration_sufficient"])
+        self.assertEqual(
+            payload["calibration_sufficiency_errors"],
+            [
+                "calibration_run_count 1 is below required 2",
+                "calibration_benchmark_iterations 1 is below required 2",
+                "calibration_min_benchmark_games 20 is below required 50",
+            ],
+        )
+        self.assertIn("suggested_config", payload)
+
+    def test_eval_cli_audit_calibrate_fails_when_required_benchmark_evidence_is_missing_per_run(self) -> None:
+        benchmarked = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),
+                selfplay_iteration(iteration=2, wins=14, losses=6, capped_games=0),
+            )
+        )
+        unbenchmarked = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, benchmark=False),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            benchmarked_path = Path(temp_dir) / "benchmarked.json"
+            unbenchmarked_path = Path(temp_dir) / "unbenchmarked.json"
+            write_manifest(benchmarked_path, benchmarked)
+            write_manifest(unbenchmarked_path, unbenchmarked)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(benchmarked_path),
+                        str(unbenchmarked_path),
+                        "--require-run-count",
+                        "2",
+                        "--require-benchmark-iterations",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["calibration_sufficient"])
+        self.assertFalse(payload["suggested_config"]["require_benchmark"])
+        self.assertEqual(
+            payload["calibration_sufficiency_errors"],
+            ["calibration includes at least one run without benchmark iterations"],
+        )
+
+    def test_eval_cli_audit_calibrate_text_prints_sufficiency_status(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--require-run-count",
+                        "2",
+                    ]
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("calibration_sufficiency: FAIL", output)
+        self.assertIn("calibration_sufficiency_errors:", output)
+        self.assertIn("calibration_run_count 1 is below required 2", output)
+
     def test_eval_cli_compare_prints_json(self) -> None:
         linear_manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
@@ -1281,6 +1380,85 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["audit_calibration"]["margin"], 0.20)
         self.assertIn("--min-latest-benchmark-games", payload["audit_calibration"]["suggested_cli_flags"])
         self.assertIsNone(payload["audit_calibration_error"])
+
+    def test_eval_cli_compare_calibration_can_require_minimum_evidence(self) -> None:
+        first_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        second_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=35, losses=15, capped_games=1),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_path = temp_path / "pilot-a" / "manifest.json"
+            second_path = temp_path / "pilot-b" / "manifest.json"
+            write_manifest(first_path, first_manifest)
+            write_manifest(second_path, second_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(first_path),
+                        str(second_path),
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "2",
+                        "--calibration-require-benchmark-iterations",
+                        "2",
+                        "--calibration-require-min-benchmark-games",
+                        "50",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["audit_calibration_sufficient"])
+        self.assertEqual(payload["audit_calibration_sufficiency_errors"], [])
+
+    def test_eval_cli_compare_calibration_requirement_failure_returns_nonzero_with_suggestions(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "pilot-a" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIsNotNone(payload["audit_calibration"])
+        self.assertFalse(payload["audit_calibration_sufficient"])
+        self.assertEqual(
+            payload["audit_calibration_sufficiency_errors"],
+            ["calibration_run_count 1 is below required 2"],
+        )
+
+    def test_eval_cli_compare_rejects_calibration_requirements_without_suggestions(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["compare", str(manifest_path), "--calibration-require-run-count", "2"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("calibration sufficiency requirements require --suggest-audit-calibration", stderr.getvalue())
 
     def test_eval_cli_compare_calibration_excludes_bad_manifest_errors(self) -> None:
         healthy_manifest = selfplay_manifest(

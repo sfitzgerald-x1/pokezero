@@ -165,6 +165,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "envelope keeps every supplied pilot passable."
         ),
     )
+    audit_calibrate.add_argument(
+        "--require-run-count",
+        type=int,
+        default=0,
+        help="Return non-zero unless at least this many pilot runs contributed to the calibration.",
+    )
+    audit_calibrate.add_argument(
+        "--require-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Return non-zero unless at least this many benchmark iterations contributed to the calibration.",
+    )
+    audit_calibrate.add_argument(
+        "--require-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Return non-zero unless calibrated benchmark iterations used at least this many games.",
+    )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
 
@@ -205,6 +223,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "How multiple valid compared runs are combined when suggesting audit calibration. "
             "median resists noisy pilots; envelope keeps every valid pilot passable."
+        ),
+    )
+    compare.add_argument(
+        "--calibration-require-run-count",
+        type=int,
+        default=0,
+        help=(
+            "With --suggest-audit-calibration, return non-zero unless at least this many valid compared "
+            "runs contributed to the calibration."
+        ),
+    )
+    compare.add_argument(
+        "--calibration-require-benchmark-iterations",
+        type=int,
+        default=0,
+        help=(
+            "With --suggest-audit-calibration, return non-zero unless at least this many valid benchmark "
+            "iterations contributed to the calibration."
+        ),
+    )
+    compare.add_argument(
+        "--calibration-require-min-benchmark-games",
+        type=int,
+        default=0,
+        help=(
+            "With --suggest-audit-calibration, return non-zero unless calibrated benchmark iterations "
+            "used at least this many games."
         ),
     )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
@@ -615,16 +660,44 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         if len(args.paths) == 1
         else calibrate_run_audits(args.paths, margin=args.margin, aggregate_mode=args.aggregate_mode)
     )
+    sufficiency_requested = args.require_run_count > 0 or args.require_benchmark_iterations > 0
+    sufficiency_errors = _calibration_sufficiency_errors(
+        result,
+        require_run_count=args.require_run_count,
+        require_benchmark_iterations=args.require_benchmark_iterations,
+        require_min_benchmark_games=args.require_min_benchmark_games,
+    )
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        payload = result.to_dict()
+        if sufficiency_requested:
+            payload["calibration_sufficient"] = not sufficiency_errors
+            payload["calibration_sufficiency_errors"] = list(sufficiency_errors)
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_audit_calibration(result)
-    return 0
+        if sufficiency_requested:
+            _print_calibration_sufficiency(sufficiency_errors)
+    return 2 if sufficiency_errors else 0
 
 
 def _compare(args: argparse.Namespace) -> int:
     if args.fail_on_audit and args.audit_profile is None:
         raise ValueError("--fail-on-audit requires --audit-profile.")
+    if args.calibration_require_run_count < 0:
+        raise ValueError("calibration_require_run_count must be non-negative.")
+    if args.calibration_require_benchmark_iterations < 0:
+        raise ValueError("calibration_require_benchmark_iterations must be non-negative.")
+    if args.calibration_require_min_benchmark_games < 0:
+        raise ValueError("calibration_require_min_benchmark_games must be non-negative.")
+    if (
+        not args.suggest_audit_calibration
+        and (
+            args.calibration_require_run_count > 0
+            or args.calibration_require_benchmark_iterations > 0
+            or args.calibration_require_min_benchmark_games > 0
+        )
+    ):
+        raise ValueError("calibration sufficiency requirements require --suggest-audit-calibration.")
     audit_profile = evaluation_profile(args.audit_profile) if args.audit_profile is not None else None
     result = compare_run_manifests_with_threshold(
         args.paths,
@@ -648,11 +721,29 @@ def _compare(args: argparse.Namespace) -> int:
             )
         else:
             calibration_error = "no valid compared runs were available for audit calibration"
+    calibration_sufficiency_requested = (
+        args.calibration_require_run_count > 0
+        or args.calibration_require_benchmark_iterations > 0
+        or args.calibration_require_min_benchmark_games > 0
+    )
+    calibration_sufficiency_errors = (
+        _calibration_sufficiency_errors(
+            calibration,
+            require_run_count=args.calibration_require_run_count,
+            require_benchmark_iterations=args.calibration_require_benchmark_iterations,
+            require_min_benchmark_games=args.calibration_require_min_benchmark_games,
+        )
+        if args.suggest_audit_calibration
+        else ()
+    )
     if args.json:
         payload = result.to_dict()
         if args.suggest_audit_calibration:
             payload["audit_calibration"] = calibration.to_dict() if calibration is not None else None
             payload["audit_calibration_error"] = calibration_error
+            if calibration_sufficiency_requested:
+                payload["audit_calibration_sufficient"] = not calibration_sufficiency_errors
+                payload["audit_calibration_sufficiency_errors"] = list(calibration_sufficiency_errors)
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
@@ -663,11 +754,13 @@ def _compare(args: argparse.Namespace) -> int:
                 print(f"unavailable: {calibration_error}")
             else:
                 _print_audit_calibration(calibration)
+            if calibration_sufficiency_requested:
+                _print_calibration_sufficiency(calibration_sufficiency_errors)
             if result.errors:
                 print("calibration_excluded_errors:")
                 for error in result.errors:
                     print(f"- {error.label}: {error.error}")
-    return 2 if result.errors or (args.fail_on_audit and result.audit_failed) else 0
+    return 2 if result.errors or (args.fail_on_audit and result.audit_failed) or calibration_sufficiency_errors else 0
 
 
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
@@ -878,6 +971,50 @@ def _print_audit_calibration(result) -> None:
         print("notes:")
         for note in result.notes:
             print(f"- {note}")
+
+
+def _calibration_sufficiency_errors(
+    result,
+    *,
+    require_run_count: int,
+    require_benchmark_iterations: int,
+    require_min_benchmark_games: int,
+) -> tuple[str, ...]:
+    if require_run_count < 0:
+        raise ValueError("require_run_count must be non-negative.")
+    if require_benchmark_iterations < 0:
+        raise ValueError("require_benchmark_iterations must be non-negative.")
+    if require_min_benchmark_games < 0:
+        raise ValueError("require_min_benchmark_games must be non-negative.")
+    observed_run_count = int(getattr(result, "run_count", 1)) if result is not None else 0
+    observed_benchmark_iterations = int(getattr(result, "benchmark_iteration_count", 0)) if result is not None else 0
+    observed_min_benchmark_games = int(getattr(result, "min_latest_benchmark_games", 0)) if result is not None else 0
+    errors: list[str] = []
+    if observed_run_count < require_run_count:
+        errors.append(
+            f"calibration_run_count {observed_run_count} is below required {require_run_count}"
+        )
+    if observed_benchmark_iterations < require_benchmark_iterations:
+        errors.append(
+            "calibration_benchmark_iterations "
+            f"{observed_benchmark_iterations} is below required {require_benchmark_iterations}"
+        )
+    if require_benchmark_iterations > 0 and result is not None and not getattr(result, "require_benchmark", False):
+        errors.append("calibration includes at least one run without benchmark iterations")
+    if observed_min_benchmark_games < require_min_benchmark_games:
+        errors.append(
+            "calibration_min_benchmark_games "
+            f"{observed_min_benchmark_games} is below required {require_min_benchmark_games}"
+        )
+    return tuple(errors)
+
+
+def _print_calibration_sufficiency(errors: tuple[str, ...]) -> None:
+    print(f"calibration_sufficiency: {'FAIL' if errors else 'PASS'}")
+    if errors:
+        print("calibration_sufficiency_errors:")
+        for error in errors:
+            print(f"- {error}")
 
 
 def _print_run_comparison(result) -> None:
