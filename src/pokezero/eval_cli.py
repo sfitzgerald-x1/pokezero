@@ -2503,11 +2503,17 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         if isinstance(recipe, Mapping)
         else None
     )
+    smoke_report = (
+        _cpu_pilot_smoke_report(summary, recipe, summary_path=summary_path)
+        if isinstance(recipe, Mapping)
+        else None
+    )
     exit_code = _cpu_pilot_report_exit_code(status, artifact_report, require_ready=args.require_ready)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["pilot_artifact_report"] = artifact_report
+        payload["pilot_smoke_report"] = smoke_report
         print(json.dumps(payload, indent=2, sort_keys=True))
         return exit_code
     print("cpu_pilot_report:")
@@ -2541,6 +2547,8 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
             print("audit_config_ready_reasons:")
             for reason in reasons:
                 print(f"- {reason}")
+    if isinstance(smoke_report, Mapping):
+        _print_cpu_pilot_smoke_report(smoke_report)
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -2625,6 +2633,197 @@ def _load_pilot_report_json_summary(path_value: object) -> dict[str, object] | N
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _cpu_pilot_smoke_report(
+    summary: Mapping[str, object],
+    recipe: Mapping[str, object],
+    *,
+    summary_path: Path,
+) -> dict[str, object]:
+    pilots: list[dict[str, object]] = []
+    for step in _cpu_pilot_smoke_steps(summary):
+        pilot = _cpu_pilot_smoke_step_report(step, summary_path=summary_path)
+        pilots.append(pilot)
+    available_count = sum(1 for pilot in pilots if pilot.get("summary_available") is True)
+    passed_count = sum(1 for pilot in pilots if pilot.get("status") == "passed")
+    preflight_requested_count = sum(
+        1
+        for pilot in pilots
+        if isinstance(pilot.get("teacher_branch_preflight"), Mapping)
+        and pilot["teacher_branch_preflight"].get("requested") is True
+    )
+    preflight_passed_count = sum(
+        1
+        for pilot in pilots
+        if isinstance(pilot.get("teacher_branch_preflight"), Mapping)
+        and pilot["teacher_branch_preflight"].get("passed") is True
+    )
+    teacher_branch_counts: dict[str, int] = {}
+    for pilot in pilots:
+        preflight = pilot.get("teacher_branch_preflight")
+        if not isinstance(preflight, Mapping):
+            continue
+        counts = preflight.get("teacher_branch_counts")
+        if not isinstance(counts, Mapping):
+            continue
+        for branch, count in counts.items():
+            if isinstance(count, int):
+                key = str(branch)
+                teacher_branch_counts[key] = teacher_branch_counts.get(key, 0) + count
+    return {
+        "pilot_count": recipe.get("pilot_count"),
+        "discovered_pilot_count": len(pilots),
+        "summary_available_count": available_count,
+        "summary_missing_count": len(pilots) - available_count,
+        "summary_passed_count": passed_count,
+        "summary_non_passed_count": len(pilots) - passed_count,
+        "teacher_branch_preflight_requested_count": preflight_requested_count,
+        "teacher_branch_preflight_passed_count": preflight_passed_count,
+        "teacher_branch_preflight_non_passed_count": preflight_requested_count - preflight_passed_count,
+        "teacher_branch_counts": dict(sorted(teacher_branch_counts.items())),
+        "pilots": pilots,
+    }
+
+
+def _cpu_pilot_smoke_steps(summary: Mapping[str, object]) -> list[Mapping[str, object]]:
+    steps = summary.get("steps")
+    if not isinstance(steps, list):
+        return []
+    return [
+        step
+        for step in steps
+        if isinstance(step, Mapping)
+        and str(step.get("name", "")).startswith("run CPU smoke pilot ")
+    ]
+
+
+def _cpu_pilot_smoke_step_report(step: Mapping[str, object], *, summary_path: Path) -> dict[str, object]:
+    pilot_index = _cpu_pilot_step_index(step)
+    recorded_run_root = _cpu_pilot_step_run_root(step)
+    smoke_summary_path = _resolve_cpu_pilot_smoke_summary_path(
+        recorded_run_root,
+        pilot_index=pilot_index,
+        pilot_summary_path=summary_path,
+    )
+    report: dict[str, object] = {
+        "index": pilot_index,
+        "name": step.get("name"),
+        "run_root": None if recorded_run_root is None else str(recorded_run_root),
+        "summary_path": str(smoke_summary_path) if smoke_summary_path is not None else None,
+        "summary_available": False,
+        "status": None,
+        "duration_seconds": None,
+        "error": None,
+        "teacher_branch_preflight": None,
+    }
+    if smoke_summary_path is None:
+        report["error"] = "pilot smoke run root unavailable"
+        return report
+    try:
+        loaded_summary_path, smoke_summary = _load_cpu_smoke_summary(smoke_summary_path)
+    except (OSError, ValueError) as exc:
+        report["error"] = str(exc)
+        return report
+    report["summary_path"] = str(loaded_summary_path)
+    report["summary_available"] = True
+    report["status"] = smoke_summary.get("status")
+    report["duration_seconds"] = smoke_summary.get("duration_seconds")
+    smoke_recipe = smoke_summary.get("recipe")
+    if isinstance(smoke_recipe, Mapping):
+        report["teacher_branch_preflight"] = _cpu_smoke_teacher_branch_preflight_report(
+            smoke_recipe,
+            summary_path=loaded_summary_path,
+        )
+    return report
+
+
+def _cpu_pilot_step_index(step: Mapping[str, object]) -> int | None:
+    name = str(step.get("name", ""))
+    prefix = "run CPU smoke pilot "
+    if name.startswith(prefix):
+        try:
+            return int(name.removeprefix(prefix))
+        except ValueError:
+            pass
+    raw_index = step.get("index")
+    if isinstance(raw_index, int):
+        return raw_index
+    return None
+
+
+def _cpu_pilot_step_run_root(step: Mapping[str, object]) -> Path | None:
+    argv = step.get("argv")
+    if not isinstance(argv, list):
+        return None
+    for index, item in enumerate(argv):
+        if item == "--run-root" and index + 1 < len(argv):
+            return Path(str(argv[index + 1]))
+    return None
+
+
+def _resolve_cpu_pilot_smoke_summary_path(
+    recorded_run_root: Path | None,
+    *,
+    pilot_index: int | None,
+    pilot_summary_path: Path,
+) -> Path | None:
+    if recorded_run_root is not None:
+        recorded_summary_path = recorded_run_root / "cpu-smoke-run-summary.json"
+        if recorded_summary_path.exists():
+            return recorded_summary_path
+    if pilot_index is not None:
+        sibling_summary_path = pilot_summary_path.parent / f"pilot-{pilot_index:04d}" / "cpu-smoke-run-summary.json"
+        if sibling_summary_path.exists():
+            return sibling_summary_path
+    return None if recorded_run_root is None else recorded_run_root / "cpu-smoke-run-summary.json"
+
+
+def _print_cpu_pilot_smoke_report(report: Mapping[str, object]) -> None:
+    print(
+        "pilot_smoke_summaries: "
+        f"{_format_summary_value(report.get('summary_available_count'))}/"
+        f"{_format_summary_value(report.get('discovered_pilot_count'))} available "
+        f"passed={_format_summary_value(report.get('summary_passed_count'))}"
+    )
+    print(
+        "pilot_teacher_branch_preflight: "
+        f"requested={_format_summary_value(report.get('teacher_branch_preflight_requested_count'))} "
+        f"passed={_format_summary_value(report.get('teacher_branch_preflight_passed_count'))}"
+    )
+    counts = report.get("teacher_branch_counts")
+    if isinstance(counts, Mapping) and counts:
+        print("pilot_teacher_branch_counts:")
+        for branch, count in sorted(counts.items(), key=lambda item: str(item[0])):
+            print(f"- {branch}: {count}")
+    pilots = report.get("pilots")
+    if not isinstance(pilots, list) or not pilots:
+        return
+    print("pilot_smoke_runs:")
+    for pilot in pilots:
+        if not isinstance(pilot, Mapping):
+            continue
+        preflight = pilot.get("teacher_branch_preflight")
+        preflight_status = "-"
+        if isinstance(preflight, Mapping):
+            preflight_status = _cpu_smoke_preflight_status_label(preflight)
+        print(
+            f"- {pilot.get('index')}: {_status_label(str(pilot.get('status') or 'missing'))} "
+            f"{pilot.get('name')} preflight={preflight_status} "
+            f"summary={_format_summary_value(pilot.get('summary_path'))}"
+        )
+
+
+def _cpu_smoke_preflight_status_label(report: Mapping[str, object]) -> str:
+    if report.get("requested") is not True:
+        return "not_requested"
+    if report.get("available") is not True:
+        return "MISSING"
+    if report.get("passed") is True:
+        return "PASS"
+    if report.get("passed") is False:
+        return "FAIL"
+    return "UNKNOWN"
 
 
 def _cpu_pilot_artifact_report(summary: Mapping[str, object], recipe: Mapping[str, object]) -> dict[str, object]:
