@@ -495,9 +495,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--require-derived-audit",
         action="store_true",
         help=(
-            "Return non-zero unless the nested self-play manifest is readable and the current derived "
-            "audit health passes."
+            "Return non-zero unless the selected derived audit report is readable and passing. "
+            "Uses the persisted derived_run_report by default when available."
         ),
+    )
+    long_run_report.add_argument(
+        "--refresh-derived-audit",
+        action="store_true",
+        help="Ignore any persisted derived_run_report and recompute current derived audit health from run_dir/manifest.json.",
     )
     long_run_report.set_defaults(func=_cpu_long_run_report)
 
@@ -3075,7 +3080,10 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
 def _cpu_long_run_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_long_run_summary(args.path)
     status = str(summary.get("status", "unknown"))
-    run_report = _cpu_long_run_derived_run_report(summary)
+    run_report, run_report_source = _cpu_long_run_summary_derived_run_report(
+        summary,
+        refresh=args.refresh_derived_audit,
+    )
     derived_audit_requirement_passed = (
         run_report.get("available") is True and run_report.get("audit_passed") is True
     )
@@ -3089,6 +3097,7 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["derived_run_report"] = run_report
+        payload["derived_run_report_source"] = run_report_source
         if args.require_derived_audit:
             payload["derived_audit_required"] = True
             payload["derived_audit_requirement_passed"] = derived_audit_requirement_passed
@@ -3103,6 +3112,7 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
     print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
     print(f"failed_reason: {_format_summary_value(summary.get('failed_reason'))}")
+    print(f"derived_run_report_source: {run_report_source}")
     if args.require_derived_audit:
         print("derived_audit_required: yes")
         print(f"derived_audit_requirement_passed: {_format_optional_bool(derived_audit_requirement_passed)}")
@@ -3226,7 +3236,7 @@ def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe")
     recipe_mapping = recipe if isinstance(recipe, Mapping) else {}
-    report, report_source = _cpu_long_run_compare_derived_run_report(summary)
+    report, report_source = _cpu_long_run_summary_derived_run_report(summary)
     wrapper_passed = status == "passed"
     derived_audit_passed = report.get("available") is True and report.get("audit_passed") is True
     return {
@@ -3255,9 +3265,13 @@ def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object
     }
 
 
-def _cpu_long_run_compare_derived_run_report(summary: Mapping[str, object]) -> tuple[Mapping[str, object], str]:
+def _cpu_long_run_summary_derived_run_report(
+    summary: Mapping[str, object],
+    *,
+    refresh: bool = False,
+) -> tuple[Mapping[str, object], str]:
     persisted_report = summary.get("derived_run_report")
-    if isinstance(persisted_report, Mapping):
+    if not refresh and isinstance(persisted_report, Mapping):
         return persisted_report, "persisted"
     return _cpu_long_run_derived_run_report(summary), "computed"
 
