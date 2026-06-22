@@ -1,6 +1,6 @@
 # Autonomous Task Loop
 
-This document defines how an autonomous engineering loop should continue the CPU-first PokeZero proof of concept. The loop should choose the next task from the project plan, implement it on a feature branch, open a PR with verification evidence, run an adversarial Claude Code review, apply necessary fixes, and then stop for explicit merge approval.
+This document defines how an autonomous engineering loop should continue the CPU-first PokeZero proof of concept. The loop should choose the next task from the project plan, implement it on a feature branch, open a PR with verification evidence, run an adversarial Claude Code review, apply necessary fixes, merge when the goal-mode rules allow it, and continue.
 
 ## Scope
 
@@ -81,9 +81,10 @@ claude --dangerously-skip-permissions --model claude-opus-4-8
    - Ignore findings that conflict with the plan, repo policy, or current CPU-first scope.
    - Push updates to the same PR and update the PR description when verification changes.
 
-9. Stop for merge approval.
-   - Do not merge without explicit user approval.
-   - After an approved merge, check out `main`, pull, then repeat the loop.
+9. Merge or stop according to the active mode.
+   - When working under an explicit long-horizon `/goal`, do not wait for per-PR merge approval after the PR has passed local verification and adversarial review. The purpose of goal mode is to allow longer-horizon work to continue without stopping at every merge boundary.
+   - Outside explicit goal-mode work, stop for user approval before merging.
+   - After merge, check out `main`, pull, then repeat the loop.
 
 ## Claude Review Prompt Template
 
@@ -107,6 +108,8 @@ Return prioritized findings only. Do not modify files and do not merge the PR.
 
 If the Claude CLI is unavailable, unauthenticated, or fails, record that failure in the handoff and continue from local verification evidence.
 
+Claude Code review should have a hard 15-minute timeout. If Claude does not complete within 15 minutes, fails repeatedly, or cannot produce usable review output, pivot to a fresh Codex instance for adversarial review instead of blocking the goal loop.
+
 ## Acceptance Criteria
 
 Every task PR should satisfy these criteria unless the PR explicitly explains why one does not apply:
@@ -125,5 +128,5 @@ Stop and report status instead of continuing automatically when:
 - The next meaningful task requires GPU access.
 - The task depends on missing local prerequisites such as a Showdown checkout, optional PyTorch install, or Claude CLI authentication.
 - The plan docs conflict or no next task is clearly CPU-compatible.
-- Claude finds a blocking issue that cannot be safely fixed in the same PR.
-- The PR is ready to merge but explicit user approval has not been given.
+- Claude or the fallback Codex reviewer finds a blocking issue that cannot be safely fixed in the same PR.
+- The PR is ready to merge outside explicit goal-mode work, but explicit user approval has not been given.
