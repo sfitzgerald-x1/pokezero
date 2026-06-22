@@ -8,6 +8,7 @@ from unittest.mock import patch
 from pokezero.bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.evaluation import PromotionGateConfig, evaluate_promotion_gate
+from pokezero.neural_selfplay import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
@@ -223,6 +224,47 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertTrue(result.passed)
         self.assertEqual(result.incumbent_policy_id, "linear-selfplay-test-iter-0001")
+        self.assertEqual(result.gate_mode, "absolute_floor+incumbent_delta")
+
+    def test_gate_supports_neural_selfplay_manifest(self) -> None:
+        manifest = neural_selfplay_manifest()
+        previous_iteration = json.loads(json.dumps(manifest["iterations"][0]))
+        latest_iteration = json.loads(json.dumps(manifest["iterations"][0]))
+        previous_iteration["iteration"] = 1
+        previous_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0001"
+        latest_iteration["iteration"] = 2
+        latest_iteration["checkpoint_path"] = "run/iteration-0002/transformer-policy.pt"
+        latest_iteration["current_policy_spec"] = previous_iteration["next_current_policy_spec"]
+        latest_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0002"
+        latest_iteration["benchmark"] = benchmark_payload(
+            policy_id="entity-test-iter-0002",
+            rows=(
+                ("random-legal", 13, 7, 0),
+                ("entity-test-iter-0001", 18, 2, 0),
+            ),
+        )
+        manifest["iterations"] = [previous_iteration, latest_iteration]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = evaluate_promotion_gate(
+                manifest_path,
+                config=PromotionGateConfig(
+                    min_benchmark_win_rate=0.60,
+                    min_incumbent_win_rate=0.55,
+                    min_benchmark_games=20,
+                    min_incumbent_games=20,
+                    max_collection_capped_rate=0.20,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(result.candidate_policy_id, "entity-test-iter-0002")
+        self.assertEqual(result.checkpoint_path, "run/iteration-0002/transformer-policy.pt")
+        self.assertEqual(result.source_iteration, 2)
+        self.assertEqual(result.incumbent_policy_id, "entity-test-iter-0001")
         self.assertEqual(result.gate_mode, "absolute_floor+incumbent_delta")
 
     def test_gate_rejects_statistically_thin_incumbent_point_estimate(self) -> None:
@@ -449,6 +491,34 @@ def selfplay_manifest() -> dict:
                 "training": {"model": {"policy_id": "linear-selfplay-test-iter-0001"}},
                 "benchmark": benchmark_payload(
                     policy_id="linear-selfplay-test-iter-0001",
+                    wins=13,
+                    losses=7,
+                    capped_games=1,
+                ),
+            }
+        ],
+    }
+
+
+def neural_selfplay_manifest() -> dict:
+    return {
+        "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+        "run_dir": "run",
+        "latest_checkpoint_path": "run/iteration-0001/transformer-policy.pt",
+        "current_policy_spec": "neural:run/iteration-0001/transformer-policy.pt",
+        "latest_accepted_checkpoint_path": "run/iteration-0001/transformer-policy.pt",
+        "iterations": [
+            {
+                "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+                "iteration": 1,
+                "checkpoint_path": "run/iteration-0001/transformer-policy.pt",
+                "checkpoint_policy_spec": "neural:run/iteration-0001/transformer-policy.pt",
+                "current_policy_spec": "random-legal",
+                "next_current_policy_spec": "neural:run/iteration-0001/transformer-policy.pt",
+                "collection_metrics": collection_metrics(games=10, capped_games=1),
+                "training": {"model_config": {"policy_id": "entity-test-iter-0001"}},
+                "benchmark": benchmark_payload(
+                    policy_id="entity-test-iter-0001",
                     wins=13,
                     losses=7,
                     capped_games=1,

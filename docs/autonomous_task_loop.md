@@ -16,11 +16,11 @@ At the start of each task, read those docs and identify the smallest unfinished 
 
 ## Current Task Priority
 
-Based on the current plan, the next CPU-compatible work should focus on closing the neural-iteration orchestration gap without requiring GPU training:
+Based on the current plan, the next CPU-compatible work should focus on making long-running CPU experiments easier to trust and compare:
 
-- Integrate neural iteration outputs with the existing promotion registry and gate path.
 - Strengthen long-run benchmark thresholds and regression detection.
 - Improve managed checkpoint lifecycle tooling where it affects promoted-policy selection.
+- Add lightweight CPU experiment checks that make promotion decisions auditable without GPU training.
 
 GPU-dependent PPO work, large-scale training, and distributed orchestration remain later milestones.
 

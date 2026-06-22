@@ -17,10 +17,11 @@ from .neural_policy import (
     torch_available,
     train_transformer_policy,
 )
-from .neural_selfplay import run_neural_selfplay_iterations
+from .neural_selfplay import NeuralSelfPlayPromotionConfig, run_neural_selfplay_iterations
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
+from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -87,6 +88,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
+    iterate.add_argument(
+        "--promotion-registry",
+        type=Path,
+        default=None,
+        help="Optional promotion registry. When set, historical opponents come from promoted checkpoints instead of raw accepted neural checkpoints.",
+    )
+    iterate.add_argument(
+        "--auto-promote",
+        action="store_true",
+        help="After each iteration, evaluate the promotion gate and record passing checkpoints in --promotion-registry.",
+    )
+    iterate.add_argument(
+        "--promotion-artifact-dir",
+        type=Path,
+        default=None,
+        help="Optional artifact directory for auto-promoted neural checkpoint copies.",
+    )
+    iterate.add_argument(
+        "--promotion-label-prefix",
+        default="neural-selfplay",
+        help="Label prefix for auto-promotion entries. Use an empty string to omit labels.",
+    )
+    iterate.add_argument("--promotion-notes", default=None, help="Optional notes stored on each auto-promotion entry.")
+    iterate.add_argument(
+        "--allow-duplicate-promotion",
+        action="store_true",
+        help="Allow auto-promotion to record a checkpoint already present in the registry.",
+    )
+    _add_gate_arguments(iterate)
     iterate.add_argument(
         "--evaluation-games",
         type=int,
@@ -245,6 +275,10 @@ def _benchmark(args: argparse.Namespace) -> int:
 
 
 def _iterate(args: argparse.Namespace) -> int:
+    if args.auto_promote and args.promotion_registry is None:
+        raise ValueError("--auto-promote requires --promotion-registry.")
+    if args.auto_promote and args.evaluation_games <= 0 and not args.allow_missing_benchmark:
+        raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -280,6 +314,7 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, args.showdown_root)
         for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
     )
+    auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,
         iterations=args.iterations,
@@ -295,6 +330,8 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
         worker_count=args.workers,
+        promotion_registry_path=args.promotion_registry,
+        auto_promotion_config=auto_promotion_config,
         resume=args.resume,
     )
     if args.json:
@@ -302,6 +339,22 @@ def _iterate(args: argparse.Namespace) -> int:
     else:
         _print_iterate_summary(result)
     return 0
+
+
+def _auto_promotion_config_from_args(args: argparse.Namespace) -> NeuralSelfPlayPromotionConfig | None:
+    if not args.auto_promote:
+        return None
+    gate_args = argparse.Namespace(**vars(args))
+    gate_args.registry = None
+    label_prefix = args.promotion_label_prefix if args.promotion_label_prefix else None
+    return NeuralSelfPlayPromotionConfig(
+        registry_path=args.promotion_registry,
+        gate_config=_gate_config_from_args(gate_args),
+        artifact_dir=args.promotion_artifact_dir,
+        label_prefix=label_prefix,
+        notes=args.promotion_notes,
+        allow_duplicate=args.allow_duplicate_promotion,
+    )
 
 
 def _print_iterate_summary(result) -> None:
@@ -312,13 +365,20 @@ def _print_iterate_summary(result) -> None:
             f"iteration={iteration.iteration} games={iteration.metrics.games} "
             f"checkpoint={iteration.checkpoint_path} "
             f"loss={final_epoch.loss:.6f} "
-            f"policy_accuracy={final_epoch.policy_accuracy:.4f}"
+            f"policy_accuracy={final_epoch.policy_accuracy:.4f} "
+            f"promotion={_promotion_status(getattr(iteration, 'promotion', None))}"
         )
         if iteration.benchmark is not None:
             print(f"benchmark_total_games={iteration.benchmark.total_games}")
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
     print(f"manifest: {result.run_dir / 'manifest.json'}")
+
+
+def _promotion_status(promotion) -> str:
+    if promotion is None:
+        return "-"
+    return "recorded" if promotion.recorded else "failed"
 
 
 def _policy_from_checkpoint(

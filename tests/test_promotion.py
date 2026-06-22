@@ -10,6 +10,7 @@ from pokezero.eval_cli import main as eval_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
+    NEURAL_SELFPLAY_SOURCE_TYPE,
     load_promotion_registry,
     record_promotion,
 )
@@ -83,6 +84,41 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(loaded.latest.checkpoint_path if loaded.latest else None, str(managed_checkpoint_path))
         self.assertEqual(loaded.checkpoint_policy_specs(), (f"linear:{managed_checkpoint_path}",))
         self.assertEqual(source_checkpoint_text, managed_checkpoint_text)
+
+    def test_registry_policy_specs_preserve_neural_checkpoint_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "promotions.json"
+            checkpoint_path = temp_path / "transformer-policy.pt"
+            checkpoint_path.write_text("checkpoint", encoding="utf-8")
+            write_manifest(
+                registry_path,
+                {
+                    "schema_version": PROMOTION_REGISTRY_SCHEMA_VERSION,
+                    "registry_path": str(registry_path),
+                    "latest_policy_id": "entity-test-iter-0001",
+                    "latest_checkpoint_path": str(checkpoint_path),
+                    "entries": [
+                        {
+                            "sequence": 1,
+                            "policy_id": "entity-test-iter-0001",
+                            "checkpoint_path": str(checkpoint_path),
+                            "manifest_path": "runs/neural/manifest.json",
+                            "source_type": NEURAL_SELFPLAY_SOURCE_TYPE,
+                            "source_iteration": 1,
+                            "promoted_at": "2026-06-02T00:00:00Z",
+                            "label": None,
+                            "notes": None,
+                            "gate_result": {"passed": True},
+                        }
+                    ],
+                },
+            )
+
+            registry = load_promotion_registry(registry_path)
+
+        self.assertEqual(registry.checkpoint_policy_specs(), (f"neural:{checkpoint_path}",))
+        self.assertEqual(registry.latest.checkpoint_policy_spec if registry.latest else None, f"neural:{checkpoint_path}")
 
     def test_record_promotion_prefers_manifest_relative_checkpoint_over_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

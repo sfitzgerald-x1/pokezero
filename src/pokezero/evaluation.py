@@ -14,6 +14,7 @@ from .bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
+NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
 DEFAULT_MIN_BENCHMARK_WIN_RATE = 0.55
 DEFAULT_MIN_INCUMBENT_WIN_RATE = 0.55
 DEFAULT_MIN_BENCHMARK_GAMES = 50
@@ -176,6 +177,8 @@ def evaluate_promotion_gate(
         candidate = _candidate_from_selfplay_manifest(manifest, manifest_path=manifest_path)
     elif source_type == TEACHER_BOOTSTRAP_SCHEMA_VERSION:
         candidate = _candidate_from_bootstrap_manifest(manifest)
+    elif source_type == NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
+        candidate = _candidate_from_neural_selfplay_manifest(manifest, manifest_path=manifest_path)
     else:
         raise ValueError(f"Unsupported experiment manifest schema: {source_type!r}.")
 
@@ -445,6 +448,31 @@ def _candidate_from_bootstrap_manifest(manifest: Mapping[str, Any]) -> _Candidat
     )
 
 
+def _candidate_from_neural_selfplay_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+) -> _CandidateManifest:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        raise ValueError("neural self-play run manifest contains no iterations.")
+    latest = iterations[-1]
+    training = _mapping(latest.get("training", {}))
+    model_config = _mapping(training.get("model_config", {}))
+    return _CandidateManifest(
+        policy_id=_optional_str(model_config.get("policy_id")),
+        checkpoint_path=_optional_str(latest.get("checkpoint_path")),
+        iteration=int(latest.get("iteration", 0)),
+        collection_capped_rate=_capped_rate(_mapping(latest.get("collection_metrics", {}))),
+        benchmark=_optional_mapping(latest.get("benchmark")),
+        teacher_degradation_rate=None,
+        derived_incumbent_policy_id=_derived_neural_selfplay_incumbent_policy_id(
+            iterations,
+            manifest_path=manifest_path,
+        ),
+    )
+
+
 def _derived_selfplay_incumbent_policy_id(
     iterations: tuple[Mapping[str, Any], ...],
     *,
@@ -458,6 +486,65 @@ def _derived_selfplay_incumbent_policy_id(
             return previous_policy_id
     latest = iterations[-1]
     return _policy_id_from_policy_spec(latest.get("current_policy_spec"), manifest_path=manifest_path)
+
+
+def _derived_neural_selfplay_incumbent_policy_id(
+    iterations: tuple[Mapping[str, Any], ...],
+    *,
+    manifest_path: Path,
+) -> str | None:
+    latest = iterations[-1]
+    current_policy_id = _neural_current_policy_id(
+        iterations,
+        latest.get("current_policy_spec"),
+        manifest_path=manifest_path,
+    )
+    if current_policy_id:
+        return current_policy_id
+    if _is_fixed_no_incumbent_policy_spec(latest.get("current_policy_spec")):
+        return None
+    if len(iterations) >= 2:
+        previous_training = _mapping(iterations[-2].get("training", {}))
+        previous_model_config = _mapping(previous_training.get("model_config", {}))
+        previous_policy_id = _optional_str(previous_model_config.get("policy_id"))
+        if previous_policy_id:
+            return previous_policy_id
+    return _policy_id_from_policy_spec(latest.get("current_policy_spec"), manifest_path=manifest_path)
+
+
+def _neural_current_policy_id(
+    iterations: tuple[Mapping[str, Any], ...],
+    value: Any,
+    *,
+    manifest_path: Path,
+) -> str | None:
+    direct = _policy_id_from_policy_spec(value, manifest_path=manifest_path)
+    if direct is not None:
+        return direct
+    if value is None:
+        return None
+    current = str(value).strip()
+    if not current.lower().startswith("neural:"):
+        return None
+    for iteration in reversed(iterations[:-1]):
+        candidates = (
+            iteration.get("next_current_policy_spec"),
+            iteration.get("checkpoint_policy_spec"),
+        )
+        if current not in {str(candidate) for candidate in candidates if candidate is not None}:
+            continue
+        training = _mapping(iteration.get("training", {}))
+        model_config = _mapping(training.get("model_config", {}))
+        policy_id = _optional_str(model_config.get("policy_id"))
+        if policy_id:
+            return policy_id
+    return None
+
+
+def _is_fixed_no_incumbent_policy_spec(value: Any) -> bool:
+    if value is None:
+        return False
+    return str(value).partition("?")[0].strip().lower() in {"random-legal", "simple-legal"}
 
 
 def _policy_id_from_policy_spec(value: Any, *, manifest_path: Path) -> str | None:

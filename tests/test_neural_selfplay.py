@@ -18,9 +18,12 @@ from pokezero.neural_policy import (
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.neural_selfplay import (
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+    NeuralSelfPlayPromotionConfig,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
+from pokezero.evaluation import PromotionGateConfig
+from pokezero.promotion import load_promotion_registry
 from pokezero.rollout import RolloutConfig
 
 
@@ -226,6 +229,99 @@ class NeuralSelfPlayTest(unittest.TestCase):
         ])
         self.assertEqual(trained_initial_models[-1], "entity-test-iter-0001")
 
+    def test_run_neural_selfplay_iterations_auto_promotes_managed_checkpoint(self) -> None:
+        collected = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
+            artifact_dir = temp_path / "promoted-checkpoints"
+
+            with patched_neural_selfplay_dependencies(collected=collected):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    max_historical_opponents=2,
+                    evaluation_games=1,
+                    promotion_registry_path=registry_path,
+                    auto_promotion_config=NeuralSelfPlayPromotionConfig(
+                        registry_path=registry_path,
+                        artifact_dir=artifact_dir,
+                        gate_config=passing_promotion_gate_config(),
+                        label_prefix="neural-candidate",
+                    ),
+                )
+
+            registry = load_promotion_registry(registry_path)
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(registry.entries), 2)
+        self.assertEqual(registry.entries[0].source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(registry.entries[0].label, "neural-candidate-0001")
+        self.assertTrue(registry.entries[0].checkpoint_path)
+        self.assertEqual(Path(registry.entries[0].checkpoint_path or "").parent, artifact_dir)
+        self.assertEqual(registry.entries[0].checkpoint_policy_spec, f"neural:{registry.entries[0].checkpoint_path}")
+        self.assertEqual(first_manifest["promotion"]["recorded"], True)
+        self.assertEqual(first_manifest["advancement"]["reason"], "promotion_recorded")
+        self.assertEqual(first_manifest["next_current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
+        self.assertEqual(second_manifest["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
+        self.assertEqual(collected[1]["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
+
+    def test_run_neural_selfplay_iterations_can_promote_after_initial_gate_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
+
+            with patched_neural_selfplay_dependencies(candidate_beats_incumbent=(False, True)):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    promotion_registry_path=registry_path,
+                    auto_promotion_config=NeuralSelfPlayPromotionConfig(
+                        registry_path=registry_path,
+                        gate_config=PromotionGateConfig(
+                            min_benchmark_win_rate=0.5,
+                            min_benchmark_games=0,
+                            max_collection_capped_rate=1.0,
+                            max_benchmark_capped_rate=1.0,
+                        ),
+                    ),
+                )
+
+            registry = load_promotion_registry(registry_path)
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(result.iterations[0].promotion.recorded if result.iterations[0].promotion else True)
+        self.assertTrue(result.iterations[1].promotion.recorded if result.iterations[1].promotion else False)
+        self.assertEqual(len(registry.entries), 1)
+        self.assertEqual(first_manifest["advancement"]["reason"], "promotion_gate_failed")
+        self.assertEqual(first_manifest["next_current_policy_spec"], "random-legal")
+        self.assertEqual(second_manifest["promotion"]["recorded"], True)
+        self.assertIsNone(second_manifest["promotion"]["gate_result"]["incumbent_policy_id"])
+        self.assertNotIn(
+            "incumbent_benchmark_opponent:entity-test-iter-0001",
+            {
+                check["name"]
+                for check in second_manifest["promotion"]["gate_result"]["checks"]
+            },
+        )
+
     def test_torch_smoke_runs_train_save_load_benchmark_chain(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
@@ -273,7 +369,7 @@ def patched_neural_selfplay_dependencies(
     trained_paths: list | None = None,
     trained_initial_models: list | None = None,
     captured_benchmarks: list | None = None,
-    candidate_beats_incumbent: bool = True,
+    candidate_beats_incumbent: bool | tuple[bool, ...] = True,
 ):
     collected = collected if collected is not None else []
     trained_paths = trained_paths if trained_paths is not None else []
@@ -332,14 +428,17 @@ def patched_neural_selfplay_dependencies(
             self.policy_id = policy_id
 
     def fake_load_transformer_policy(path, *args, **kwargs):
-        iteration = Path(path).parent.name.rsplit("-", maxsplit=1)[-1]
-        return FakePolicy(f"entity-test-iter-{iteration}")
+        return FakePolicy(_policy_id_from_fake_checkpoint_path(Path(path)))
 
     def fake_load_transformer_checkpoint(path, *args, **kwargs):
-        iteration = Path(path).parent.name.rsplit("-", maxsplit=1)[-1]
-        return FakeModel(f"entity-test-iter-{iteration}"), None
+        return FakeModel(_policy_id_from_fake_checkpoint_path(Path(path))), None
 
     def fake_benchmark_rollouts(**kwargs):
+        call_index = len(captured_benchmarks)
+        if isinstance(candidate_beats_incumbent, tuple):
+            candidate_wins = candidate_beats_incumbent[min(call_index, len(candidate_beats_incumbent) - 1)]
+        else:
+            candidate_wins = candidate_beats_incumbent
         captured_benchmarks.append(kwargs)
         matchup_results = []
         games = kwargs["games"]
@@ -353,7 +452,7 @@ def patched_neural_selfplay_dependencies(
                     int(str(matchup.p2_policy.policy_id).rsplit("-", maxsplit=1)[-1]),
                 )
                 p2_is_candidate = not p1_is_candidate
-            p1_wins = games if (p1_is_candidate == candidate_beats_incumbent) else 0
+            p1_wins = games if (p1_is_candidate == candidate_wins) else 0
             p2_wins = games - p1_wins
             matchup_results.append(
                 BenchmarkMatchupResult(
@@ -389,6 +488,29 @@ def patched_neural_selfplay_dependencies(
         load_transformer_checkpoint=fake_load_transformer_checkpoint,
         load_transformer_policy=fake_load_transformer_policy,
         benchmark_rollouts=fake_benchmark_rollouts,
+    )
+
+
+def _policy_id_from_fake_checkpoint_path(path: Path) -> str:
+    if path.parent.name.startswith("iteration-"):
+        iteration = path.parent.name.rsplit("-", maxsplit=1)[-1]
+        return f"entity-test-iter-{iteration}"
+    marker = "entity-test-iter-"
+    if marker in path.stem:
+        return f"{marker}{path.stem.rsplit(marker, maxsplit=1)[-1]}"
+    return "entity-test"
+
+
+def passing_promotion_gate_config() -> PromotionGateConfig:
+    return PromotionGateConfig(
+        min_benchmark_win_rate=0.0,
+        min_incumbent_win_rate=0.0,
+        min_benchmark_games=0,
+        min_incumbent_games=0,
+        max_collection_capped_rate=1.0,
+        max_benchmark_capped_rate=1.0,
+        max_incumbent_capped_rate=1.0,
+        min_incumbent_win_rate_lower_bound=0.0,
     )
 
 
