@@ -221,6 +221,53 @@ class RunAuditTest(unittest.TestCase):
         coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
         self.assertTrue(coverage_check.passed)
 
+    def test_audit_allows_slow_rotating_incumbent_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-incumbent-a", 12, 8, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-incumbent-a", 13, 7, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=3,
+                    rows=(
+                        ("random-legal", 19, 1, 0),
+                        ("simple-legal", 15, 5, 0),
+                        ("linear-incumbent-b", 12, 8, 0),
+                    ),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=60,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ())
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+
     def test_audit_fails_when_latest_benchmark_disappears_after_prior_evidence(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -454,6 +501,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.max_latest_benchmark_average_decision_rounds, 44.0)
         self.assertEqual(result.max_benchmark_win_rate_drop, 0.11)
         self.assertEqual(result.max_consecutive_promotion_failures, 2)
+        self.assertTrue(result.require_benchmark_opponent_coverage)
         self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
 
     def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
@@ -500,9 +548,11 @@ class RunAuditTest(unittest.TestCase):
             result = calibrate_run_audit(manifest_path)
 
         self.assertFalse(result.require_benchmark)
+        self.assertFalse(result.require_benchmark_opponent_coverage)
         self.assertEqual(result.min_latest_benchmark_games, 0)
         self.assertIsNone(result.min_latest_benchmark_win_rate)
         self.assertIn("--allow-missing-benchmark", result.suggested_cli_flags())
+        self.assertIn("--allow-missing-benchmark-opponents", result.suggested_cli_flags())
         self.assertNotIn("--min-latest-benchmark-games", result.suggested_cli_flags())
         self.assertIn("No benchmark iterations", result.notes[0])
 

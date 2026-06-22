@@ -101,7 +101,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument(
         "--allow-missing-benchmark-opponents",
         action="store_true",
-        help="Do not fail when the latest benchmark omits opponents that appeared in every prior benchmark.",
+        help="Do not fail when the latest benchmark omits fixed baseline opponents seen in prior benchmark evidence.",
     )
     audit.add_argument("--require-latest-promotion", action="store_true", help="Fail unless the latest iteration recorded a promotion.")
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")

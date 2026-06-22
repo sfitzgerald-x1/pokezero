@@ -37,7 +37,7 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help=(
             "With --audit-after-iteration, do not fail when the latest benchmark omits "
-            "opponents that appeared in every prior benchmark."
+            "fixed baseline opponents seen in prior benchmark evidence."
         ),
     )
     parser.add_argument(

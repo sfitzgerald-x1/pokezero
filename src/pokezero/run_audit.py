@@ -25,6 +25,7 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
+DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 _THRESHOLD_EPSILON = 1e-12
 
 
@@ -415,7 +416,7 @@ def audit_run(
         *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
         *_latest_benchmark_average_decision_rounds_checks(latest, config),
-        _benchmark_opponent_coverage_check(missing_latest_benchmark_opponents, config),
+        _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
         _latest_promotion_check(latest, config),
@@ -855,31 +856,40 @@ def _benchmark_regression_check(
 
 
 def _benchmark_opponent_coverage_check(
+    latest: RunAuditIterationSummary,
     missing_opponents: tuple[str, ...],
     config: RunAuditConfig,
 ) -> RunAuditCheck:
+    if latest.benchmark_games <= 0:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=not config.require_benchmark,
+            observed=None,
+            threshold="required" if config.require_benchmark else "optional",
+            message="latest benchmark evidence is unavailable for opponent coverage",
+        )
     if not config.require_benchmark_opponent_coverage:
         return RunAuditCheck(
             name="latest_benchmark_opponent_coverage",
             passed=True,
             observed="optional",
-            threshold="all_stable_prior_opponents",
-            message="latest stable benchmark opponent coverage is optional for this audit",
+            threshold="required_baseline_opponents",
+            message="latest fixed-baseline benchmark opponent coverage is optional for this audit",
         )
     if missing_opponents:
         return RunAuditCheck(
             name="latest_benchmark_opponent_coverage",
             passed=False,
             observed=", ".join(missing_opponents),
-            threshold="all_stable_prior_opponents",
-            message="latest benchmark is missing opponents that appeared in every prior benchmark",
+            threshold="required_baseline_opponents",
+            message="latest benchmark is missing fixed baseline opponents that appeared in prior benchmark evidence",
         )
     return RunAuditCheck(
         name="latest_benchmark_opponent_coverage",
         passed=True,
         observed=None,
-        threshold="all_stable_prior_opponents",
-        message="latest benchmark includes all stable prior benchmark opponents",
+        threshold="required_baseline_opponents",
+        message="latest benchmark includes required fixed baseline opponents",
     )
 
 
@@ -961,22 +971,20 @@ def _missing_latest_benchmark_opponents(
 ) -> tuple[str, ...]:
     if len(iterations) < 2:
         return ()
-    prior_benchmark_opponent_sets = tuple(
-        {
-            opponent.opponent_policy_id
-            for opponent in iteration.benchmark_opponents
-        }
+    if iterations[-1].benchmark_games <= 0:
+        return ()
+    prior_opponents = {
+        opponent.opponent_policy_id
         for iteration in iterations[:-1]
         if iteration.benchmark_games > 0
-    )
-    if not prior_benchmark_opponent_sets:
-        return ()
-    stable_prior_opponents = set.intersection(*prior_benchmark_opponent_sets)
+        for opponent in iteration.benchmark_opponents
+    }
+    required_prior_opponents = set(DEFAULT_REQUIRED_BENCHMARK_OPPONENTS) & prior_opponents
     latest_opponents = {
         opponent.opponent_policy_id
         for opponent in iterations[-1].benchmark_opponents
     }
-    return tuple(sorted(stable_prior_opponents - latest_opponents))
+    return tuple(sorted(required_prior_opponents - latest_opponents))
 
 
 def _benchmark_average_decision_rounds(benchmark: Mapping[str, Any] | None) -> float | None:
