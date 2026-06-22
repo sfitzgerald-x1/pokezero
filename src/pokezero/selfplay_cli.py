@@ -28,6 +28,9 @@ from .selfplay import (
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
+MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pokezero.selfplay_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +176,7 @@ def _iterate(args: argparse.Namespace) -> int:
     validate_post_iteration_audit_evaluation_games(
         post_iteration_audit_config,
         evaluation_games=args.evaluation_games,
+        minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
     )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
