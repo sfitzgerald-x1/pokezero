@@ -22,6 +22,9 @@ _STATUS_CURE_WEIGHTS = {
     "frz": 2.0,
 }
 _SIDE_HAZARDS = {"spikes", "stealthrock", "toxicspikes"}
+# Showdown can expose Recharge as a forced pseudo-move after Hyper Beam-style moves.
+# Other forced Gen 3 moves seen in requests, including Struggle and lock-in moves,
+# are ordinary dex moves and should keep using normal strict validation.
 _FORCED_PSEUDO_MOVE_IDS = {"recharge"}
 
 
