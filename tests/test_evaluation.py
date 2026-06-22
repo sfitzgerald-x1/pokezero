@@ -3304,6 +3304,86 @@ if __name__ == "__main__":
         self.assertIn("failed_reason: -", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS run guarded CPU self-play long run returncode=0", output)
+        self.assertIn("derived_run_report:", output)
+        self.assertIn("manifest_available: no", output)
+        self.assertIn("error: manifest_not_found", output)
+
+    def test_eval_cli_cpu_long_run_report_includes_nested_run_audit_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["profile"] = "smoke"
+            summary["recipe"]["runtime_audit_source"] = "profile"
+            summary["recipe"]["runtime_audit_profile"] = "smoke"
+            summary["recipe"]["runtime_audit_config_path"] = None
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["derived_run_report"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["available"])
+        self.assertTrue(report["manifest_available"])
+        self.assertEqual(report["manifest_path"], str(run_root / "manifest.json"))
+        self.assertEqual(report["audit_source"], "profile")
+        self.assertEqual(report["audit_profile"], "smoke")
+        self.assertIsNone(report["audit_config_path"])
+        self.assertTrue(report["audit_passed"])
+        self.assertEqual(report["latest_iteration"], 1)
+        self.assertEqual(report["latest_benchmark_win_rate"], 0.65)
+        self.assertEqual(report["latest_collection_capped_rate"], 0.1)
+        self.assertEqual(report["failed_checks"], [])
+
+    def test_eval_cli_cpu_long_run_report_recomputes_pilot_config_audit_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            audit_config_path = temp_path / "pilot-audit-config.json"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            write_json(
+                audit_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_win_rate=0.90,
+                        min_latest_benchmark_games=1,
+                        max_latest_collection_capped_rate=1.0,
+                        max_latest_benchmark_capped_rate=1.0,
+                        max_benchmark_win_rate_drop=1.0,
+                        max_consecutive_promotion_failures=1,
+                        require_benchmark=True,
+                        require_latest_promotion=False,
+                        require_benchmark_opponent_coverage=False,
+                    ),
+                ),
+            )
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["profile"] = "long-run"
+            summary["recipe"]["audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["runtime_audit_source"] = "pilot-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["runtime_audit_profile"] = None
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["derived_run_report"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["available"])
+        self.assertEqual(report["audit_source"], "pilot-audit-config")
+        self.assertEqual(report["audit_config_path"], str(audit_config_path))
+        self.assertIsNone(report["audit_profile"])
+        self.assertFalse(report["audit_passed"])
+        self.assertIn("latest_benchmark_win_rate", report["failed_checks"])
 
     def test_eval_cli_cpu_long_run_report_json_includes_rejected_plan_reasons(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

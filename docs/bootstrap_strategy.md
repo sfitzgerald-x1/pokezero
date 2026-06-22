@@ -180,7 +180,7 @@ Inspect the long-run wrapper summary without reading raw JSON:
 ./.venv/bin/python -m pokezero.eval_cli cpu-long-run-report runs/linear-long-run
 ```
 
-The report accepts either the run directory or the summary JSON path. It exits `0` only for a recorded passed wrapper run, exits `2` for valid failed, running, or unknown wrapper summaries, and exits `1` when the summary cannot be read or has an unsupported schema. Use `--json` when automation needs the full summary payload plus the resolved summary path.
+The report accepts either the run directory or the summary JSON path. It exits `0` only for a recorded passed wrapper run, exits `2` for valid failed, running, or unknown wrapper summaries, and exits `1` when the summary cannot be read or has an unsupported schema. It also resolves the nested self-play `manifest.json` from the recorded `run_dir` and recomputes current audit health from the recorded runtime audit source, surfacing latest benchmark/capped-rate/decision-round health and failed audit checks when the manifest is available. Derived run health is informational and can change if a referenced audit config file or named profile changes after the run; the command exit code still reflects the wrapper summary status. Use `--json` when automation needs the full summary payload, resolved summary path, and derived run report.
 
 Import normalized replay decisions into standard rollout JSONL:
 
