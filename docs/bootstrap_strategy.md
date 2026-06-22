@@ -80,7 +80,7 @@ Run a tiny CPU smoke validation before spending time on larger experiments:
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This executes the teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts. The wrapper writes `RUN_ROOT/cpu-smoke-run-summary.json` with the executed recipe, git source metadata for the PokeZero package source that ran when available, per-step exit codes, timestamps, and final pass/fail status. Teacher bootstrap, linear self-play, and neural self-play manifests also record that package source snapshot directly. Pass `--summary-path` to write the wrapper artifact somewhere else. A dirty source marker is a reproducibility warning; it does not include the uncommitted patch contents.
+This executes the teacher bootstrap, linear self-play, report, smoke audit, audit-calibration/profile, and calibrated audit-config replay steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts. The wrapper writes `RUN_ROOT/cpu-smoke-run-summary.json` with the executed recipe, git source metadata for the PokeZero package source that ran when available, per-step exit codes, timestamps, and final pass/fail status. It also writes `RUN_ROOT/smoke-audit-config.json` by default, then immediately runs `audit --audit-config` against the smoke run so the reusable audit-config path is exercised. Pass `--summary-path` to write the wrapper artifact somewhere else, and pass `--audit-config-path` to place the generated smoke audit config elsewhere. Teacher bootstrap, linear self-play, and neural self-play manifests also record the package source snapshot directly. A dirty source marker is a reproducibility warning; it does not include the uncommitted patch contents.
 
 Inspect that wrapper summary later:
 
@@ -98,7 +98,7 @@ Inspect the generated commands without running them:
   --showdown-root /path/to/pokemon-showdown
 ```
 
-Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
+Both commands use intentionally small counts. They are plumbing validation aids, not strength evidence; the generated smoke audit config proves the config path works but should not be reused as a long-run policy. By default the smoke recipe uses the Python interpreter running the CLI; pass `--python-binary` when another interpreter or virtualenv should run the commands. Use `cpu-smoke-plan --json` when another script should consume the recipe.
 
 Import normalized replay decisions into standard rollout JSONL:
 

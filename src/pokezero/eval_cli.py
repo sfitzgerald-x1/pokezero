@@ -395,6 +395,15 @@ def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--feature-count", type=int, default=4096, help="Small linear feature count for the smoke run.")
     parser.add_argument("--window-size", type=int, default=4, help="Temporal window size for bootstrap and self-play.")
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap used by the smoke recipe.")
+    parser.add_argument(
+        "--audit-config-path",
+        type=Path,
+        default=None,
+        help=(
+            "Where the smoke recipe writes its calibrated audit config. "
+            "Defaults to RUN_ROOT/smoke-audit-config.json."
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1611,6 +1620,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     selfplay_dir = run_root / "selfplay"
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
+    audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "smoke-audit-config.json"
     python_binary = args.python_binary
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
     showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
@@ -1707,7 +1717,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
             ],
         ),
         (
-            "calibrate and compare smoke profile",
+            "calibrate smoke audit config",
             [
                 python_binary,
                 "-m",
@@ -1717,6 +1727,26 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "--compare-profile",
                 "smoke",
                 "--fail-on-profile",
+                "--require-run-count",
+                "1",
+                "--require-benchmark-iterations",
+                "1",
+                "--require-min-benchmark-games",
+                "1",
+                "--write-config",
+                str(audit_config_path),
+            ],
+        ),
+        (
+            "audit smoke run with calibrated config",
+            [
+                python_binary,
+                "-m",
+                "pokezero.eval_cli",
+                "audit",
+                str(selfplay_dir),
+                "--audit-config",
+                str(audit_config_path),
             ],
         ),
     )
@@ -1727,6 +1757,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "run_root": str(run_root),
         "python_binary": python_binary,
         "showdown_root": showdown_root,
+        "audit_config_path": str(audit_config_path),
         "steps": [
             {
                 "name": name,
