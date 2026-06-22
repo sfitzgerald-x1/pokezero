@@ -4101,6 +4101,10 @@ if __name__ == "__main__":
         self.assertTrue(config["require_benchmark_opponent_coverage"])
         self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_flags"])
         self.assertIn("--audit-min-latest-benchmark-games", payload["suggested_post_iteration_flags"])
+        self.assertEqual(payload["minimum_evaluation_games"], 7)
+        self.assertEqual(payload["suggested_post_iteration_command_flags"][:2], ["--evaluation-games", "7"])
+        self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_command_flags"])
+        self.assertIn("--audit-min-latest-benchmark-games", payload["suggested_post_iteration_command_flags"])
         self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
 
     def test_eval_cli_cpu_long_run_calibrate_text_prints_post_iteration_flags(self) -> None:
@@ -4117,6 +4121,9 @@ if __name__ == "__main__":
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_post_iteration_flags:", output)
+        self.assertIn("minimum_evaluation_games: 5", output)
+        self.assertIn("suggested_post_iteration_command_flags:", output)
+        self.assertIn("--evaluation-games 5 --audit-after-iteration", output)
         self.assertIn("--audit-after-iteration", output)
         self.assertIn("--audit-min-latest-benchmark-games 20", output)
 
