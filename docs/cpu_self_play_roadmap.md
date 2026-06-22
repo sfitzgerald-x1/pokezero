@@ -33,6 +33,7 @@ Implemented:
 - The promotion registry records accepted checkpoints, can copy managed artifacts, verifies registry/checkpoint integrity, feeds promoted opponent pools back into self-play, previews pool selection, and supports recoverable retention archiving.
 - Run audits can check latest benchmark health, capped-game rates, same-opponent regressions, repeated promotion failures, decision-round length, missing benchmark opponents, and best-effort process RSS high-water marks.
 - CPU smoke, pilot, and long-run wrappers can generate plans, execute guarded runs, persist wrapper summaries, calibrate audit configs from pilot evidence, replay those configs, launch readiness-checked long runs, and report or compare run health from summaries.
+- `cpu-readiness-report` can roll up core pilot readiness, long-run derived audit health, and promotion-registry opponent-pool readiness from existing artifacts without launching games.
 - Source provenance is recorded in major run artifacts so dirty or unexpected code snapshots are visible during review.
 - A read-only Gen 3 randbat belief sidecar and compact belief observation features exist, but the detailed sidecar state is not required for the current linear CPU loop.
 
@@ -76,12 +77,16 @@ The remaining work is less about wiring and more about making the loop empirical
 
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
-1. Add or refine reporting that makes pilot and long-run results easier to judge from existing artifacts.
-2. Add missing preflight or audit checks discovered while attempting a real `cpu-pilot-run`.
+1. Run a real `cpu-pilot-run` and inspect it with `cpu-pilot-report` plus `cpu-readiness-report`.
+2. Add missing preflight or audit checks discovered while attempting that real pilot.
 3. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
 4. Run and document a reproducible teacher-bootstrap experiment.
 5. Run and document comparable cold-start and teacher-bootstrap linear self-play experiments.
 6. Tighten long-run audit thresholds based on the pilot and early long-run artifacts.
+
+## Progress Updates
+
+- Added `cpu-readiness-report` so the core pilot, long-run, and promotion readiness artifacts can be evaluated in one read-only command. This closes the immediate reporting gap for existing artifacts; the next task is to run a real local CPU pilot suite and use the report to identify any missing preflight or audit checks.
 
 ## Out Of Scope For This Milestone
 

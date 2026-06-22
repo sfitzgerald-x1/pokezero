@@ -46,6 +46,7 @@ CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_pilot_suite_summary.v1"
 CPU_LONG_RUN_PLAN_SCHEMA_VERSION = "pokezero.cpu_long_run_plan.v1"
 CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_long_run_summary.v1"
+CPU_READINESS_REPORT_SCHEMA_VERSION = "pokezero.cpu_readiness_report.v1"
 CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
@@ -523,6 +524,81 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Ignore any persisted derived_run_report and recompute current derived audit health from run_dir/manifest.json.",
     )
     long_run_report.set_defaults(func=_cpu_long_run_report)
+
+    readiness_report = subparsers.add_parser(
+        "cpu-readiness-report",
+        help="Summarize core CPU pilot, long-run, and promotion artifact readiness without launching games.",
+    )
+    readiness_report.add_argument(
+        "--pilot-summary",
+        type=Path,
+        default=None,
+        help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
+    )
+    readiness_report.add_argument(
+        "--long-run-summary",
+        type=Path,
+        default=None,
+        help="Long-run run directory or cpu-long-run-run-summary.json path.",
+    )
+    readiness_report.add_argument(
+        "--promotion-registry",
+        type=Path,
+        default=None,
+        help="Promotion registry JSON path used to verify the promoted opponent pool.",
+    )
+    readiness_report.add_argument(
+        "--current-policy-spec",
+        default=None,
+        help="Current collector policy spec to exclude from the promoted opponent pool. Defaults to the latest registry entry.",
+    )
+    readiness_report.add_argument(
+        "--opponent-pool-size",
+        type=int,
+        default=3,
+        help="Maximum promoted historical opponents to consider for readiness.",
+    )
+    readiness_report.add_argument(
+        "--require-promoted-opponent-pool-size",
+        type=int,
+        default=1,
+        help="Minimum selectable promoted historical opponents required for readiness.",
+    )
+    readiness_report.add_argument(
+        "--verify-loadable-promotions",
+        action="store_true",
+        help="Also load selected promotion policy specs through the normal policy loader while verifying the registry.",
+    )
+    readiness_report.add_argument(
+        "--require-calibration-run-count",
+        type=int,
+        default=0,
+        help="Require the pilot audit config to record at least this many source runs.",
+    )
+    readiness_report.add_argument(
+        "--require-calibration-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Require the pilot audit config to record at least this many benchmarked iterations.",
+    )
+    readiness_report.add_argument(
+        "--require-calibration-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Require the pilot audit config's calibrated benchmark-game floor to meet this value.",
+    )
+    readiness_report.add_argument(
+        "--refresh-derived-audit",
+        action="store_true",
+        help="For long-run summaries, recompute current derived audit health from run_dir/manifest.json.",
+    )
+    readiness_report.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="Return non-zero unless every core readiness item in the report passes.",
+    )
+    readiness_report.add_argument("--json", action="store_true", help="Print the readiness report as JSON.")
+    readiness_report.set_defaults(func=_cpu_readiness_report)
 
     long_run_compare = subparsers.add_parser(
         "cpu-long-run-compare",
@@ -3549,6 +3625,308 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
     return exit_status
+
+
+def _cpu_readiness_report(args: argparse.Namespace) -> int:
+    _validate_cpu_readiness_report_args(args)
+    payload = _cpu_readiness_report_payload(args)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_cpu_readiness_report(payload)
+    if payload["error_count"]:
+        return 1
+    if args.require_ready and payload["overall_ready"] is not True:
+        return 2
+    return 0
+
+
+def _validate_cpu_readiness_report_args(args: argparse.Namespace) -> None:
+    _validate_non_negative_int(args.opponent_pool_size, "--opponent-pool-size")
+    _validate_non_negative_int(args.require_promoted_opponent_pool_size, "--require-promoted-opponent-pool-size")
+    _validate_non_negative_int(args.require_calibration_run_count, "--require-calibration-run-count")
+    _validate_non_negative_int(
+        args.require_calibration_benchmark_iterations,
+        "--require-calibration-benchmark-iterations",
+    )
+    _validate_non_negative_int(
+        args.require_calibration_min_benchmark_games,
+        "--require-calibration-min-benchmark-games",
+    )
+    if args.require_promoted_opponent_pool_size > args.opponent_pool_size:
+        raise ValueError("--require-promoted-opponent-pool-size cannot exceed --opponent-pool-size.")
+
+
+def _validate_non_negative_int(value: int, name: str) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative.")
+
+
+def _cpu_readiness_report_payload(args: argparse.Namespace) -> dict[str, object]:
+    errors: list[dict[str, object]] = []
+    items = [
+        _cpu_readiness_pilot_item(
+            args.pilot_summary,
+            require_calibration_run_count=args.require_calibration_run_count,
+            require_calibration_benchmark_iterations=args.require_calibration_benchmark_iterations,
+            require_calibration_min_benchmark_games=args.require_calibration_min_benchmark_games,
+            errors=errors,
+        ),
+        _cpu_readiness_long_run_item(
+            args.long_run_summary,
+            refresh_derived_audit=args.refresh_derived_audit,
+            errors=errors,
+        ),
+        _cpu_readiness_promotion_pool_item(
+            args.promotion_registry,
+            current_policy_spec=args.current_policy_spec,
+            opponent_pool_size=args.opponent_pool_size,
+            require_promoted_opponent_pool_size=args.require_promoted_opponent_pool_size,
+            verify_loadable=args.verify_loadable_promotions,
+            errors=errors,
+        ),
+    ]
+    return {
+        "schema_version": CPU_READINESS_REPORT_SCHEMA_VERSION,
+        "generated_at": _utc_timestamp(),
+        "overall_ready": all(item["passed"] is True for item in items),
+        "error_count": len(errors),
+        "items": items,
+        "errors": errors,
+    }
+
+
+def _cpu_readiness_pilot_item(
+    pilot_summary_path: Path | None,
+    *,
+    require_calibration_run_count: int,
+    require_calibration_benchmark_iterations: int,
+    require_calibration_min_benchmark_games: int,
+    errors: list[dict[str, object]],
+) -> dict[str, object]:
+    if pilot_summary_path is None:
+        return _cpu_readiness_item(
+            "pilot_suite_ready",
+            False,
+            reasons=("pilot_summary_not_provided",),
+            evidence={},
+        )
+    try:
+        summary_path, summary = _load_cpu_pilot_summary(pilot_summary_path)
+        recipe = summary.get("recipe")
+        if not isinstance(recipe, Mapping):
+            return _cpu_readiness_item(
+                "pilot_suite_ready",
+                False,
+                reasons=("pilot_recipe_missing",),
+                evidence={"summary_path": str(summary_path), "status": summary.get("status")},
+            )
+        artifact_report = _cpu_pilot_artifact_report(
+            summary,
+            recipe,
+            require_calibration_run_count=require_calibration_run_count,
+            require_calibration_benchmark_iterations=require_calibration_benchmark_iterations,
+            require_calibration_min_benchmark_games=require_calibration_min_benchmark_games,
+        )
+        smoke_report = _cpu_pilot_smoke_report(summary, recipe, summary_path=summary_path)
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        errors.append({"item": "pilot_suite_ready", "path": str(pilot_summary_path), "error": str(exc)})
+        return _cpu_readiness_item(
+            "pilot_suite_ready",
+            False,
+            reasons=("pilot_summary_unreadable",),
+            evidence={"path": str(pilot_summary_path), "error": str(exc)},
+        )
+
+    reasons: list[str] = []
+    if summary.get("status") != "passed":
+        reasons.append("pilot_suite_not_passed")
+    if artifact_report.get("audit_config_ready") is not True:
+        reasons.extend(str(reason) for reason in artifact_report.get("audit_config_ready_reasons", ()))
+    if (
+        artifact_report.get("audit_config_calibration_requirements_requested") is True
+        and artifact_report.get("audit_config_calibration_requirements_passed") is not True
+    ):
+        reasons.append("audit_config_calibration_requirements_not_passed")
+    if smoke_report.get("smoke_report_ready") is not True:
+        reasons.extend(str(reason) for reason in smoke_report.get("smoke_report_ready_reasons", ()))
+    return _cpu_readiness_item(
+        "pilot_suite_ready",
+        not reasons,
+        reasons=tuple(dict.fromkeys(reasons)),
+        evidence={
+            "summary_path": str(summary_path),
+            "status": summary.get("status"),
+            "audit_config_ready": artifact_report.get("audit_config_ready"),
+            "smoke_report_ready": smoke_report.get("smoke_report_ready"),
+            "pilot_count": recipe.get("pilot_count"),
+            "audit_config_path": recipe.get("audit_config_path"),
+        },
+    )
+
+
+def _cpu_readiness_long_run_item(
+    long_run_summary_path: Path | None,
+    *,
+    refresh_derived_audit: bool,
+    errors: list[dict[str, object]],
+) -> dict[str, object]:
+    if long_run_summary_path is None:
+        return _cpu_readiness_item(
+            "long_run_derived_audit_ready",
+            False,
+            reasons=("long_run_summary_not_provided",),
+            evidence={},
+        )
+    try:
+        summary_path, summary = _load_cpu_long_run_summary(long_run_summary_path)
+        report, report_source = _cpu_long_run_summary_derived_run_report(
+            summary,
+            refresh=refresh_derived_audit,
+        )
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        errors.append({"item": "long_run_derived_audit_ready", "path": str(long_run_summary_path), "error": str(exc)})
+        return _cpu_readiness_item(
+            "long_run_derived_audit_ready",
+            False,
+            reasons=("long_run_summary_unreadable",),
+            evidence={"path": str(long_run_summary_path), "error": str(exc)},
+        )
+
+    reasons: list[str] = []
+    if summary.get("status") != "passed":
+        reasons.append("long_run_wrapper_not_passed")
+    if report.get("available") is not True:
+        reasons.append(str(report.get("error") or "derived_run_report_unavailable"))
+    elif report.get("audit_passed") is not True:
+        failed_checks = report.get("failed_checks")
+        if isinstance(failed_checks, list) and failed_checks:
+            reasons.extend(f"derived_audit_failed:{check}" for check in failed_checks)
+        else:
+            reasons.append("derived_audit_not_passed")
+    return _cpu_readiness_item(
+        "long_run_derived_audit_ready",
+        not reasons,
+        reasons=tuple(dict.fromkeys(reasons)),
+        evidence={
+            "summary_path": str(summary_path),
+            "status": summary.get("status"),
+            "derived_run_report_source": report_source,
+            "derived_report_available": report.get("available"),
+            "audit_passed": report.get("audit_passed"),
+            "latest_iteration": report.get("latest_iteration"),
+            "latest_benchmark_win_rate": report.get("latest_benchmark_win_rate"),
+            "latest_benchmark_games": report.get("latest_benchmark_games"),
+        },
+    )
+
+
+def _cpu_readiness_promotion_pool_item(
+    registry_path: Path | None,
+    *,
+    current_policy_spec: str | None,
+    opponent_pool_size: int,
+    require_promoted_opponent_pool_size: int,
+    verify_loadable: bool,
+    errors: list[dict[str, object]],
+) -> dict[str, object]:
+    if registry_path is None:
+        return _cpu_readiness_item(
+            "promoted_opponent_pool_ready",
+            False,
+            reasons=("promotion_registry_not_provided",),
+            evidence={
+                "opponent_pool_size": opponent_pool_size,
+                "required_pool_size": require_promoted_opponent_pool_size,
+            },
+        )
+    try:
+        registry = load_promotion_registry(registry_path)
+        resolved_current_policy = current_policy_spec or registry.latest_selection_checkpoint_policy_spec()
+        selected = registry.opponent_pool_policy_specs(
+            max_historical_opponents=opponent_pool_size,
+            current_policy_spec=resolved_current_policy,
+        )
+        verification = verify_promotion_registry(registry.path, verify_loadable=verify_loadable)
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        errors.append({"item": "promoted_opponent_pool_ready", "path": str(registry_path), "error": str(exc)})
+        return _cpu_readiness_item(
+            "promoted_opponent_pool_ready",
+            False,
+            reasons=("promotion_registry_unreadable",),
+            evidence={"path": str(registry_path), "error": str(exc)},
+        )
+
+    reasons: list[str] = []
+    if len(selected) < require_promoted_opponent_pool_size:
+        reasons.append("promoted_opponent_pool_too_small")
+    if verification.passed is not True:
+        reasons.extend(f"promotion_registry_failed:{check.name}" for check in verification.checks if not check.passed)
+    return _cpu_readiness_item(
+        "promoted_opponent_pool_ready",
+        not reasons,
+        reasons=tuple(dict.fromkeys(reasons)),
+        evidence={
+            "registry_path": str(registry.path),
+            "entry_count": len(registry.entries),
+            "current_policy_spec": resolved_current_policy,
+            "opponent_pool_size": opponent_pool_size,
+            "required_pool_size": require_promoted_opponent_pool_size,
+            "selected_pool_size": len(selected),
+            "selected_policy_specs": list(selected),
+            "verification_passed": verification.passed,
+            "verify_loadable": verify_loadable,
+        },
+    )
+
+
+def _cpu_readiness_item(
+    name: str,
+    passed: bool,
+    *,
+    reasons: Iterable[str],
+    evidence: Mapping[str, object],
+) -> dict[str, object]:
+    reason_list = [str(reason) for reason in reasons if str(reason)]
+    return {
+        "name": name,
+        "passed": passed,
+        "status": "pass" if passed else "fail",
+        "reasons": reason_list,
+        "evidence": dict(evidence),
+    }
+
+
+def _print_cpu_readiness_report(payload: Mapping[str, object]) -> None:
+    print("cpu_readiness_report:")
+    print(f"schema_version: {payload.get('schema_version')}")
+    print(f"overall_ready: {_format_optional_bool(payload.get('overall_ready'))}")
+    items = payload.get("items")
+    print("items:")
+    if not isinstance(items, list) or not items:
+        print("- none")
+    else:
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            print(f"- {item.get('name')}: {_readiness_status_label(item.get('passed'))}")
+            reasons = item.get("reasons")
+            if isinstance(reasons, list) and reasons:
+                print(f"  reasons: {', '.join(str(reason) for reason in reasons)}")
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        print("errors:")
+        for error in errors:
+            if isinstance(error, Mapping):
+                print(f"- {error.get('item')}: {error.get('error')}")
+
+
+def _readiness_status_label(value: object) -> str:
+    if value is True:
+        return "PASS"
+    if value is False:
+        return "FAIL"
+    return "UNKNOWN"
 
 
 def _cpu_long_run_compare(args: argparse.Namespace) -> int:
