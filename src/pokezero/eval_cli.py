@@ -3111,9 +3111,15 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
     if promotion_gate_feasibility_error is not None:
         ready_reasons.append("promotion_gate_not_satisfiable_by_evaluation_games")
     audit_feasibility_error = None
-    if not ready_reasons and audit_config_path is not None:
+    runtime_audit_source = "pilot-audit-config" if args.profile == "long-run" else "profile"
+    runtime_audit_config_path = audit_config_path if runtime_audit_source == "pilot-audit-config" else None
+    runtime_audit_profile = args.profile if runtime_audit_source == "profile" else None
+    if not ready_reasons:
         try:
-            audit_config = load_run_audit_config(audit_config_path)
+            audit_config = _cpu_long_run_runtime_audit_config(
+                args,
+                audit_config_path=audit_config_path,
+            )
         except (OSError, TypeError, ValueError, KeyError) as exc:
             audit_feasibility_error = str(exc)
             ready_reasons.append("audit_config_unavailable_for_audit_feasibility")
@@ -3145,6 +3151,9 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         "run_dir": str(args.run_dir),
         "profile": args.profile,
         "audit_config_path": None if audit_config_path is None else str(audit_config_path),
+        "runtime_audit_source": runtime_audit_source,
+        "runtime_audit_config_path": None if runtime_audit_config_path is None else str(runtime_audit_config_path),
+        "runtime_audit_profile": runtime_audit_profile,
         "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
         "long_run_ready": ready,
@@ -3225,6 +3234,14 @@ def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
             checkpoint_path = body[len(prefix) :].strip()
             return Path(checkpoint_path)
     return None
+
+
+def _cpu_long_run_runtime_audit_config(args: argparse.Namespace, *, audit_config_path: Path | None) -> RunAuditConfig:
+    if args.profile == "long-run":
+        if audit_config_path is None:
+            raise ValueError("pilot audit config path is required for long-run audit feasibility.")
+        return load_run_audit_config(audit_config_path)
+    return evaluation_profile(args.profile).audit_config
 
 
 def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int, *, profile_name: str) -> str | None:
@@ -3333,9 +3350,11 @@ def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: 
         "--profile",
         args.profile,
         "--audit-after-iteration",
-        "--audit-config",
-        str(audit_config_path),
     ]
+    if args.profile == "long-run":
+        argv.extend(["--audit-config", str(audit_config_path)])
+    else:
+        argv.extend(["--audit-profile", args.profile])
     if args.promotion_notes is not None:
         argv.extend(["--promotion-notes", args.promotion_notes])
     if args.require_promoted_opponent_pool_size is not None:
@@ -3353,6 +3372,7 @@ def _print_cpu_long_run_plan(payload: Mapping[str, object]) -> None:
     print(f"profile: {_format_summary_value(payload.get('profile'))}")
     print(f"pilot_summary: {_format_summary_value(payload.get('pilot_summary_path'))}")
     print(f"audit_config_path: {_format_summary_value(payload.get('audit_config_path'))}")
+    print(f"runtime_audit_source: {_format_summary_value(payload.get('runtime_audit_source'))}")
     if payload.get("promotion_gate_feasibility_error"):
         print(f"promotion_gate_feasibility_error: {payload['promotion_gate_feasibility_error']}")
     if payload.get("audit_feasibility_error"):
