@@ -65,7 +65,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "With --verify and --opponent-pool-size, make the command exit status depend on "
-            "the selected opponent pool instead of stale entries outside that preview."
+            "the selected opponent pool and excluded current policy instead of stale entries outside that preview."
         ),
     )
     promotions.add_argument(
@@ -374,6 +374,21 @@ def _promotions(args: argparse.Namespace) -> int:
         verification=verification,
         opponent_pool=opponent_pool,
     )
+    selected_opponent_pool_verified = _selected_opponent_pool_verification_passed(
+        entry_statuses,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
+    opponent_pool_current_policy_verified = _opponent_pool_current_policy_verification_passed(
+        entry_statuses,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
+    opponent_pool_preflight_verified = (
+        None
+        if selected_opponent_pool_verified is None or opponent_pool_current_policy_verified is None
+        else selected_opponent_pool_verified and opponent_pool_current_policy_verified
+    )
     if args.json:
         payload = registry.to_dict()
         payload["entry_statuses"] = entry_statuses
@@ -381,10 +396,13 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
             payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
             payload["opponent_pool_verified"] = opponent_pool_verified
+            payload["selected_opponent_pool_verified"] = selected_opponent_pool_verified
+            payload["opponent_pool_current_policy_verified"] = opponent_pool_current_policy_verified
+            payload["opponent_pool_preflight_verified"] = opponent_pool_preflight_verified
             payload["opponent_pool_verification_exit_scope"] = (
                 None
                 if verification is None
-                else "opponent_pool" if args.verify_opponent_pool_only else "registry"
+                else "opponent_pool_plus_current" if args.verify_opponent_pool_only else "registry"
             )
             payload["opponent_pool_requested_size"] = args.opponent_pool_size
             payload["opponent_pool_selected_size"] = len(opponent_pool)
@@ -403,7 +421,7 @@ def _promotions(args: argparse.Namespace) -> int:
             verification=verification,
             opponent_pool=opponent_pool,
             required_opponent_pool_size=args.require_opponent_pool_size,
-            opponent_pool_verified=opponent_pool_verified,
+            opponent_pool_preflight_verified=opponent_pool_preflight_verified,
             verify_opponent_pool_only=args.verify_opponent_pool_only,
         )
     print(f"registry: {registry.path}")
@@ -444,11 +462,20 @@ def _promotions(args: argparse.Namespace) -> int:
             )
             print(f"opponent_pool_required_size: {args.require_opponent_pool_size}")
             print(f"opponent_pool_requirement: {pool_status}")
-        if opponent_pool_verified is not None:
+        if selected_opponent_pool_verified is not None:
             print(f"opponent_pool_verification: {'PASS' if opponent_pool_verified else 'FAIL'}")
+            print(f"selected_opponent_pool_verification: {'PASS' if selected_opponent_pool_verified else 'FAIL'}")
+            print(
+                "opponent_pool_current_policy_verification: "
+                f"{'PASS' if opponent_pool_current_policy_verified else 'FAIL'}"
+            )
+            print(
+                "opponent_pool_preflight_verification: "
+                f"{'PASS' if opponent_pool_preflight_verified else 'FAIL'}"
+            )
             print(
                 "opponent_pool_verification_exit_scope: "
-                f"{'opponent_pool' if args.verify_opponent_pool_only else 'registry'}"
+                f"{'opponent_pool_plus_current' if args.verify_opponent_pool_only else 'registry'}"
             )
         print("opponent_pool_policy_specs:")
         for spec in opponent_pool:
@@ -461,7 +488,7 @@ def _promotions(args: argparse.Namespace) -> int:
         verification=verification,
         opponent_pool=opponent_pool,
         required_opponent_pool_size=args.require_opponent_pool_size,
-        opponent_pool_verified=opponent_pool_verified,
+        opponent_pool_preflight_verified=opponent_pool_preflight_verified,
         verify_opponent_pool_only=args.verify_opponent_pool_only,
     )
 
@@ -471,11 +498,11 @@ def _promotions_exit_code(
     verification,
     opponent_pool,
     required_opponent_pool_size: int | None,
-    opponent_pool_verified: bool | None,
+    opponent_pool_preflight_verified: bool | None,
     verify_opponent_pool_only: bool,
 ) -> int:
     if verify_opponent_pool_only:
-        if opponent_pool_verified is False:
+        if opponent_pool_preflight_verified is not True:
             return 2
     elif verification is not None and not verification.passed:
         return 2
@@ -500,15 +527,47 @@ def _opponent_pool_verification_passed(
 ) -> bool | None:
     if verification is None or opponent_pool is None:
         return None
-    selected_statuses = tuple(
-        status
-        for status in entry_statuses
-        if "opponent_pool" in status["selected_as"]
+    return verification.passed
+
+
+def _selected_opponent_pool_verification_passed(
+    entry_statuses: list[dict[str, object]],
+    *,
+    verification,
+    opponent_pool,
+) -> bool | None:
+    if verification is None or opponent_pool is None:
+        return None
+    selected_statuses = _entry_status_group(
+        entry_statuses,
+        lambda status: "opponent_pool" in status["selected_as"],
     )
-    return len(selected_statuses) == len(opponent_pool) and all(
+    return bool(selected_statuses) and len(selected_statuses) == len(opponent_pool) and all(
         not status["failed_checks"]
         for status in selected_statuses
     )
+
+
+def _opponent_pool_current_policy_verification_passed(
+    entry_statuses: list[dict[str, object]],
+    *,
+    verification,
+    opponent_pool,
+) -> bool | None:
+    if verification is None or opponent_pool is None:
+        return None
+    current_policy_statuses = _entry_status_group(
+        entry_statuses,
+        lambda status: status["opponent_pool_status"] == "excluded_current_policy",
+    )
+    return all(
+        not status["failed_checks"]
+        for status in current_policy_statuses
+    )
+
+
+def _entry_status_group(entry_statuses: list[dict[str, object]], predicate) -> tuple[dict[str, object], ...]:
+    return tuple(status for status in entry_statuses if predicate(status))
 
 
 def _promotion_entry_statuses(
