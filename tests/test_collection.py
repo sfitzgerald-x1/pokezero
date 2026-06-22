@@ -14,6 +14,7 @@ from pokezero.collection import (
     aggregate_benchmark_head_to_heads,
     benchmark_rollouts,
     collect_rollouts,
+    current_peak_rss_mb,
     default_benchmark_matchups,
     iter_rollout_records,
     policy_factory_from_spec,
@@ -135,6 +136,15 @@ def integration_config() -> LocalShowdownConfig | None:
 
 
 class CollectionTest(unittest.TestCase):
+    def test_current_peak_rss_mb_normalizes_platform_units(self) -> None:
+        usage = type("Usage", (), {"ru_maxrss": 2 * 1024 * 1024})()
+
+        with patch("resource.getrusage", return_value=usage):
+            with patch("pokezero.collection.sys.platform", "darwin"):
+                self.assertEqual(current_peak_rss_mb(), 2.0)
+            with patch("pokezero.collection.sys.platform", "linux"):
+                self.assertEqual(current_peak_rss_mb(), 2048.0)
+
     def test_trajectory_dict_round_trip_preserves_observation_and_terminal(self) -> None:
         original = trajectory()
 
@@ -161,36 +171,42 @@ class CollectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
 
-            metrics = collect_rollouts(
-                output_path=output_path,
-                games=2,
-                env_factory=OneTurnEnv,
-                policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
-                rollout_config=RolloutConfig(max_decision_rounds=5),
-                seed_start=10,
-            )
+            with patch("pokezero.collection.current_peak_rss_mb", return_value=123.5):
+                metrics = collect_rollouts(
+                    output_path=output_path,
+                    games=2,
+                    env_factory=OneTurnEnv,
+                    policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    seed_start=10,
+                )
 
             records = read_rollout_records(output_path)
             streamed_records = list(iter_rollout_records(output_path))
         self.assertEqual(metrics.games, 2)
         self.assertEqual(metrics.p1_wins, 2)
         self.assertEqual(metrics.total_decision_rounds, 2)
+        self.assertEqual(metrics.peak_rss_mb, 123.5)
+        self.assertEqual(metrics.to_dict()["peak_rss_mb"], 123.5)
         self.assertEqual([record.seed for record in records], [10, 11])
         self.assertEqual([record.seed for record in streamed_records], [10, 11])
         self.assertEqual([record.battle_id for record in records], ["rollout-10", "rollout-11"])
 
     def test_benchmark_rollouts_runs_default_matchups_without_writing_trajectories(self) -> None:
-        report = benchmark_rollouts(
-            games=2,
-            env_factory=OneTurnEnv,
-            rollout_config=RolloutConfig(max_decision_rounds=5),
-            seed_start=20,
-        )
+        with patch("pokezero.collection.current_peak_rss_mb", side_effect=(101.0, 102.0, 103.0, 104.0)):
+            report = benchmark_rollouts(
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=20,
+            )
 
         self.assertEqual(report.games_per_matchup, 2)
         self.assertEqual(report.total_games, 8)
         self.assertEqual(report.average_decision_rounds, 1.0)
         self.assertEqual(report.to_dict()["average_decision_rounds"], 1.0)
+        self.assertEqual(report.peak_rss_mb, 104.0)
+        self.assertEqual(report.to_dict()["peak_rss_mb"], 104.0)
         self.assertEqual(
             [result.label for result in report.matchups],
             [matchup.label for matchup in default_benchmark_matchups()],
@@ -441,6 +457,7 @@ class CollectionTest(unittest.TestCase):
             p2_wins=0,
             ties=0,
             capped_games=0,
+            peak_rss_mb=55.5,
         )
         with patch("pokezero.rollout_cli.collect_rollouts", return_value=fake_metrics) as collect:
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -469,6 +486,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 7)
         self.assertEqual(kwargs["policies"]["p1"].policy_id, "simple-legal")
         self.assertIn("games_per_second: 0.500", stdout.getvalue())
+        self.assertIn("peak_rss_mb: 55.50", stdout.getvalue())
 
     def test_rollout_cli_collect_loads_linear_policy_spec(self) -> None:
         fake_metrics = CollectionMetrics(
@@ -532,6 +550,7 @@ class CollectionTest(unittest.TestCase):
                         p2_wins=2,
                         ties=0,
                         capped_games=0,
+                        peak_rss_mb=66.25,
                     ),
                 ),
             ),
@@ -558,6 +577,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(kwargs["seed_start"], 50)
         self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 7)
         self.assertIn("total_games: 3", stdout.getvalue())
+        self.assertIn("peak_rss_mb: 66.25", stdout.getvalue())
         self.assertIn("random-legal vs random-legal", stdout.getvalue())
 
     @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")

@@ -1008,7 +1008,9 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("0.125000", output)
         self.assertIn("0.8750", output)
         self.assertIn("avg_dec", output)
+        self.assertIn("peak_mb", output)
         self.assertIn("2.000", output)
+        self.assertIn("77.500", output)
         self.assertIn(" val ", output)
         self.assertIn("fit metrics measure imitation", output)
         self.assertNotIn("0.250000", output)
@@ -1150,6 +1152,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
             "decisions_per_second": 3.0,
             "average_decision_rounds": 2.0,
             "average_simulator_turns": 1.67,
+            "peak_rss_mb": 77.5,
         },
         "training": {
             "config": {},
