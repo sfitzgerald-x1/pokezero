@@ -400,6 +400,82 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(average_check.threshold, 200.0)
         self.assertIn("within limit", average_check.message)
 
+    def test_audit_fails_latest_process_peak_rss_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_process_peak_rss_mb=600.0,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.latest_process_peak_rss_mb, 640.5)
+        self.assertIn("latest_process_peak_rss_mb", failed_check_names(result))
+        rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
+        self.assertEqual(rss_check.observed, 640.5)
+        self.assertEqual(rss_check.threshold, 600.0)
+        self.assertIn("exceed", rss_check.message)
+
+    def test_audit_passes_latest_process_peak_rss_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_process_peak_rss_mb=700.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
+        self.assertEqual(rss_check.observed, 640.5)
+        self.assertEqual(rss_check.threshold, 700.0)
+        self.assertIn("within limit", rss_check.message)
+
+    def test_audit_skips_process_peak_rss_threshold_when_metric_is_unavailable(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_process_peak_rss_mb=700.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertIsNone(result.latest_process_peak_rss_mb)
+        rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
+        self.assertTrue(rss_check.passed)
+        self.assertIsNone(rss_check.observed)
+        self.assertIn("skipped", rss_check.message)
+
     def test_audit_allows_missing_optional_benchmark_with_benchmark_average_threshold(self) -> None:
         manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -482,8 +558,10 @@ class RunAuditTest(unittest.TestCase):
         )
         manifest["iterations"][1]["collection_metrics"]["capped_games"] = 2
         manifest["iterations"][1]["collection_metrics"]["average_decision_rounds"] = 30.0
+        manifest["iterations"][1]["collection_metrics"]["peak_rss_mb"] = 512.0
         manifest["iterations"][2]["collection_metrics"]["average_decision_rounds"] = 20.0
         manifest["iterations"][2]["benchmark"]["average_decision_rounds"] = 40.0
+        manifest["iterations"][2]["benchmark"]["peak_rss_mb"] = 640.0
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "manifest.json"
             write_manifest(manifest_path, manifest)
@@ -499,9 +577,11 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.max_latest_benchmark_capped_rate, 0.11)
         self.assertEqual(result.max_latest_average_decision_rounds, 33.0)
         self.assertEqual(result.max_latest_benchmark_average_decision_rounds, 44.0)
+        self.assertEqual(result.max_latest_process_peak_rss_mb, 704.0)
         self.assertEqual(result.max_benchmark_win_rate_drop, 0.11)
         self.assertEqual(result.max_consecutive_promotion_failures, 2)
         self.assertTrue(result.require_benchmark_opponent_coverage)
+        self.assertIn("--max-latest-process-peak-rss-mb", result.suggested_cli_flags())
         self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
 
     def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
@@ -543,7 +623,10 @@ class RunAuditTest(unittest.TestCase):
         )
         second["iterations"][0]["collection_metrics"]["capped_games"] = 2
         second["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 25.0
+        first["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 256.0
+        second["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.0
         second["iterations"][0]["benchmark"]["average_decision_rounds"] = 30.0
+        second["iterations"][0]["benchmark"]["peak_rss_mb"] = 768.0
         with tempfile.TemporaryDirectory() as temp_dir:
             first_path = Path(temp_dir) / "first.json"
             second_path = Path(temp_dir) / "second.json"
@@ -565,9 +648,11 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(calibration.max_latest_benchmark_capped_rate, 0.105)
         self.assertEqual(calibration.max_latest_average_decision_rounds, 19.25)
         self.assertEqual(calibration.max_latest_benchmark_average_decision_rounds, 23.1)
+        self.assertEqual(calibration.max_latest_process_peak_rss_mb, 563.2)
         self.assertEqual(envelope.aggregate_mode, "envelope")
         self.assertEqual(envelope.min_latest_benchmark_win_rate, 0.54)
         self.assertEqual(envelope.max_latest_collection_capped_rate, 0.22)
+        self.assertEqual(envelope.max_latest_process_peak_rss_mb, 844.8)
         self.assertTrue(first_audit.passed)
         self.assertTrue(second_audit.passed)
         self.assertIn("--min-latest-benchmark-win-rate", calibration.suggested_cli_flags())
@@ -963,10 +1048,72 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(average_check["threshold"], 200.0)
         self.assertIn("exceed", average_check["message"])
 
+    def test_eval_cli_audit_process_peak_rss_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-process-peak-rss-mb",
+                        "600",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["latest_process_peak_rss_mb"], 640.5)
+        self.assertIn("latest_process_peak_rss_mb", failed_check_names_from_payload(payload))
+        rss_check = next(check for check in payload["checks"] if check["name"] == "latest_process_peak_rss_mb")
+        self.assertEqual(rss_check["observed"], 640.5)
+        self.assertEqual(rss_check["threshold"], 600.0)
+
+    def test_eval_cli_audit_process_peak_rss_threshold_flag_skips_missing_metric(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-process-peak-rss-mb",
+                        "600",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(payload["latest_process_peak_rss_mb"])
+        rss_check = next(check for check in payload["checks"] if check["name"] == "latest_process_peak_rss_mb")
+        self.assertTrue(rss_check["passed"])
+        self.assertIsNone(rss_check["observed"])
+        self.assertIn("skipped", rss_check["message"])
+
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
         )
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "manifest.json"
             write_manifest(manifest_path, manifest)
@@ -988,6 +1135,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_win_rate: 0.650", stdout.getvalue())
         self.assertIn("latest_average_decision_rounds: 10.000", stdout.getvalue())
         self.assertIn("latest_benchmark_average_decision_rounds: 12.000", stdout.getvalue())
+        self.assertIn("latest_process_peak_rss_mb: 640.5", stdout.getvalue())
 
     def test_eval_cli_audit_calibrate_prints_json(self) -> None:
         manifest = selfplay_manifest(

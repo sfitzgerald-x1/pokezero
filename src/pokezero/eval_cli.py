@@ -99,6 +99,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=None)
     audit.add_argument("--max-latest-average-decision-rounds", type=float, default=None)
     audit.add_argument("--max-latest-benchmark-average-decision-rounds", type=float, default=None)
+    audit.add_argument("--max-latest-process-peak-rss-mb", type=float, default=None)
     audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=None)
     audit.add_argument(
         "--max-consecutive-promotion-failures",
@@ -578,6 +579,7 @@ def _profiles(args: argparse.Namespace) -> int:
             f"max_latest_avg_dec={_format_optional_float(profile.audit_config.max_latest_average_decision_rounds)} "
             "max_latest_benchmark_avg_dec="
             f"{_format_optional_float(profile.audit_config.max_latest_benchmark_average_decision_rounds)} "
+            f"max_latest_rss_mb={_format_optional_one_decimal(profile.audit_config.max_latest_process_peak_rss_mb)} "
             f"max_win_rate_drop={profile.audit_config.max_benchmark_win_rate_drop:.3f} "
             f"max_promotion_failures={profile.audit_config.max_consecutive_promotion_failures} "
             f"require_benchmark={profile.audit_config.require_benchmark} "
@@ -735,6 +737,10 @@ def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
             args.max_latest_benchmark_average_decision_rounds,
             profile_config.max_latest_benchmark_average_decision_rounds,
         ),
+        max_latest_process_peak_rss_mb=_arg_or_default(
+            args.max_latest_process_peak_rss_mb,
+            profile_config.max_latest_process_peak_rss_mb,
+        ),
         max_benchmark_win_rate_drop=_arg_or_default(
             args.max_benchmark_win_rate_drop,
             profile_config.max_benchmark_win_rate_drop,
@@ -771,6 +777,7 @@ def _print_audit_result(result) -> None:
         "latest_benchmark_average_decision_rounds: "
         f"{_format_optional_float(result.latest_benchmark_average_decision_rounds)}"
     )
+    print(f"latest_process_peak_rss_mb: {_format_optional_one_decimal(result.latest_process_peak_rss_mb)}")
     if result.missing_latest_benchmark_opponents:
         print("missing_latest_benchmark_opponents:")
         for opponent in result.missing_latest_benchmark_opponents:

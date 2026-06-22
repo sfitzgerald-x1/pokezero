@@ -305,6 +305,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "200",
                     "--audit-max-latest-benchmark-average-decision-rounds",
                     "210",
+                    "--audit-max-latest-process-peak-rss-mb",
+                    "2048",
                     "--audit-allow-missing-benchmark",
                     "--audit-allow-missing-benchmark-opponents",
                     "--json",
@@ -336,6 +338,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_average_decision_rounds, 200.0)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_benchmark_average_decision_rounds, 210.0)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_process_peak_rss_mb, 2048.0)
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark_opponent_coverage)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)

@@ -54,6 +54,7 @@ class EvaluationProfile:
                 "max_latest_benchmark_average_decision_rounds": (
                     self.audit_config.max_latest_benchmark_average_decision_rounds
                 ),
+                "max_latest_process_peak_rss_mb": self.audit_config.max_latest_process_peak_rss_mb,
                 "max_benchmark_win_rate_drop": self.audit_config.max_benchmark_win_rate_drop,
                 "max_consecutive_promotion_failures": self.audit_config.max_consecutive_promotion_failures,
                 "require_benchmark": self.audit_config.require_benchmark,
