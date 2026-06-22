@@ -530,6 +530,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero when any loaded summary is failed or its derived audit health is not passing.",
     )
+    long_run_compare.add_argument(
+        "--refresh-derived-audit",
+        action="store_true",
+        help="Ignore persisted derived_run_report snapshots and recompute current derived audit health for each summary.",
+    )
     long_run_compare.add_argument("--json", action="store_true", help="Print the comparison payload as JSON.")
     long_run_compare.set_defaults(func=_cpu_long_run_compare)
 
@@ -3166,7 +3171,13 @@ def _cpu_long_run_compare(args: argparse.Namespace) -> int:
         except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
             errors.append({"path": str(path), "error": str(exc)})
             continue
-        entries.append(_cpu_long_run_compare_entry(summary_path, summary))
+        entries.append(
+            _cpu_long_run_compare_entry(
+                summary_path,
+                summary,
+                refresh_derived_audit=args.refresh_derived_audit,
+            )
+        )
 
     non_passing_count = sum(1 for entry in entries if entry.get("passing") is not True)
     payload = {
@@ -3174,6 +3185,7 @@ def _cpu_long_run_compare(args: argparse.Namespace) -> int:
         "error_count": len(errors),
         "non_passing_count": non_passing_count,
         "fail_on_non_passing": args.fail_on_non_passing,
+        "refresh_derived_audit": args.refresh_derived_audit,
         "entries": entries,
         "errors": errors,
     }
@@ -3232,11 +3244,16 @@ def _cpu_long_run_summary_identity_key(path: Path) -> str:
     return str(expanded.resolve(strict=False))
 
 
-def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object]) -> dict[str, object]:
+def _cpu_long_run_compare_entry(
+    summary_path: Path,
+    summary: Mapping[str, object],
+    *,
+    refresh_derived_audit: bool = False,
+) -> dict[str, object]:
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe")
     recipe_mapping = recipe if isinstance(recipe, Mapping) else {}
-    report, report_source = _cpu_long_run_summary_derived_run_report(summary)
+    report, report_source = _cpu_long_run_summary_derived_run_report(summary, refresh=refresh_derived_audit)
     wrapper_passed = status == "passed"
     derived_audit_passed = report.get("available") is True and report.get("audit_passed") is True
     return {
@@ -3293,6 +3310,7 @@ def _print_cpu_long_run_compare(payload: Mapping[str, object]) -> None:
     print(f"errors: {payload.get('error_count')}")
     print(f"non_passing: {payload.get('non_passing_count')}")
     print(f"fail_on_non_passing: {_format_optional_bool(payload.get('fail_on_non_passing'))}")
+    print(f"refresh_derived_audit: {_format_optional_bool(payload.get('refresh_derived_audit'))}")
     header = (
         f"{'summary':<{summary_width}} {'status':<8} {'pass':>5} {'audit':>5} {'iter':>4} "
         f"{'bench_wr':>8} {'coll_cap':>8} {'bench_cap':>9} {'avg_dec':>8} "

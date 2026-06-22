@@ -3649,6 +3649,7 @@ if __name__ == "__main__":
         self.assertEqual(payload["error_count"], 0)
         self.assertEqual(payload["non_passing_count"], 1)
         self.assertFalse(payload["fail_on_non_passing"])
+        self.assertFalse(payload["refresh_derived_audit"])
         self.assertTrue(payload["entries"][0]["passing"])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.65)
         self.assertEqual(payload["entries"][0]["runtime_audit_source"], "profile")
@@ -3695,6 +3696,81 @@ if __name__ == "__main__":
         self.assertIsNone(payload["entries"][0]["derived_error"])
         self.assertEqual(payload["entries"][0]["latest_iteration"], 2)
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.75)
+
+    def test_eval_cli_cpu_long_run_compare_refresh_ignores_persisted_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stale_root = Path(temp_dir) / "stale"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(stale_root)
+            summary["derived_run_report"] = {
+                "available": True,
+                "manifest_available": True,
+                "error": None,
+                "audit_source": "profile",
+                "audit_profile": "smoke",
+                "audit_config_path": None,
+                "audit_passed": True,
+                "latest_iteration": 2,
+                "latest_benchmark_win_rate": 0.75,
+                "failed_checks": [],
+            }
+            write_json(stale_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-compare",
+                        str(stale_root),
+                        "--json",
+                        "--refresh-derived-audit",
+                        "--fail-on-non-passing",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["refresh_derived_audit"])
+        self.assertEqual(payload["summary_count"], 1)
+        self.assertEqual(payload["non_passing_count"], 1)
+        self.assertFalse(payload["entries"][0]["passing"])
+        self.assertFalse(payload["entries"][0]["derived_audit_passed"])
+        self.assertEqual(payload["entries"][0]["derived_run_report_source"], "computed")
+        self.assertEqual(payload["entries"][0]["derived_error"], "manifest_not_found")
+
+    def test_eval_cli_cpu_long_run_compare_refresh_uses_live_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["profile"] = "smoke"
+            summary["recipe"]["runtime_audit_source"] = "profile"
+            summary["recipe"]["runtime_audit_profile"] = "smoke"
+            summary["recipe"]["runtime_audit_config_path"] = None
+            summary["derived_run_report"] = {
+                "available": True,
+                "error": None,
+                "audit_passed": True,
+                "latest_iteration": 99,
+                "latest_benchmark_win_rate": 0.01,
+                "failed_checks": [],
+            }
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-long-run-compare", str(run_root), "--json", "--refresh-derived-audit"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["refresh_derived_audit"])
+        self.assertEqual(payload["summary_count"], 1)
+        self.assertEqual(payload["non_passing_count"], 0)
+        self.assertTrue(payload["entries"][0]["passing"])
+        self.assertEqual(payload["entries"][0]["derived_run_report_source"], "computed")
+        self.assertEqual(payload["entries"][0]["latest_iteration"], 1)
+        self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.65)
 
     def test_eval_cli_cpu_long_run_compare_can_fail_on_non_passing_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3743,6 +3819,7 @@ if __name__ == "__main__":
         self.assertIn("cpu_long_run_compare:", output)
         self.assertIn("summaries: 1", output)
         self.assertIn("non_passing: 0", output)
+        self.assertIn("refresh_derived_audit: no", output)
         self.assertIn(str(run_root), output)
 
     def test_eval_cli_cpu_long_run_compare_reports_load_errors(self) -> None:
