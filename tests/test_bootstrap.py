@@ -544,6 +544,10 @@ class TeacherBootstrapTest(unittest.TestCase):
                         "scripted-teacher?allow_fallback=true",
                         "--baseline-policy",
                         "random-legal",
+                        "--require-teacher-branch",
+                        "damaging_move",
+                        "--min-teacher-branch-count",
+                        "damaging_move=3",
                         "--json",
                     ]
                 )
@@ -560,7 +564,25 @@ class TeacherBootstrapTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["schema_version"], TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION)
         self.assertTrue(payload["passed"])
-        self.assertEqual(payload["checks"], [])
+        self.assertEqual(
+            payload["checks"],
+            [
+                {
+                    "name": "teacher_branch_present:damaging_move",
+                    "passed": True,
+                    "observed": 4,
+                    "threshold": 1,
+                    "message": "teacher branch damaging_move observed 4 time(s); required>=1",
+                },
+                {
+                    "name": "teacher_branch_count:damaging_move",
+                    "passed": True,
+                    "observed": 4,
+                    "threshold": 3,
+                    "message": "teacher branch damaging_move observed 4 time(s); required>=3",
+                },
+            ],
+        )
         self.assertEqual(payload["benchmark"]["total_games"], 2)
         self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
         self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)
@@ -657,6 +679,89 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "teacher_degraded_decisions",
             },
         )
+
+    def test_bootstrap_cli_teacher_benchmark_can_fail_branch_gates(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=2,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher vs random-legal",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+                "teacher_branch_counts": {"damaging_move": 4},
+                "top_teacher_branches": [{"branch": "damaging_move", "count": 4}],
+                "teacher_reason_unique_count": 1,
+                "top_teacher_reasons": [
+                    {"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}
+                ],
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "teacher-benchmark.json"
+            with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--baseline-policy",
+                            "random-legal",
+                            "--require-teacher-branch",
+                            "spikes_available",
+                            "--min-teacher-branch-count",
+                            "damaging_move=5",
+                            "--out",
+                            str(report_path),
+                            "--json",
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+            report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertEqual(report_payload, payload)
+        failed_checks = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertEqual(
+            failed_checks,
+            {
+                "teacher_branch_present:spikes_available",
+                "teacher_branch_count:damaging_move",
+            },
+        )
+        checks_by_name = {check["name"]: check for check in payload["checks"]}
+        self.assertEqual(checks_by_name["teacher_branch_present:spikes_available"]["observed"], 0)
+        self.assertEqual(checks_by_name["teacher_branch_count:damaging_move"]["observed"], 4)
+        self.assertEqual(checks_by_name["teacher_branch_count:damaging_move"]["threshold"], 5)
 
     def test_bootstrap_cli_teacher_benchmark_text_prints_preflight_status_and_report_path(self) -> None:
         fake_metrics = CollectionMetrics(
@@ -769,6 +874,46 @@ class TeacherBootstrapTest(unittest.TestCase):
 
                 self.assertEqual(exit_code, 1)
                 self.assertIn(f"{flag} must be between 0 and 1", stderr.getvalue())
+
+    def test_bootstrap_cli_teacher_benchmark_rejects_invalid_branch_gates(self) -> None:
+        cases = (
+            (
+                ["--require-teacher-branch", ""],
+                "--require-teacher-branch values must be non-empty",
+            ),
+            (
+                ["--min-teacher-branch-count", "damaging_move"],
+                "--min-teacher-branch-count values must use BRANCH=COUNT",
+            ),
+            (
+                ["--min-teacher-branch-count", "damaging_move=abc"],
+                "--min-teacher-branch-count COUNT must be an integer",
+            ),
+            (
+                ["--min-teacher-branch-count", "damaging_move=0"],
+                "--min-teacher-branch-count COUNT must be a positive integer",
+            ),
+            (
+                ["--min-teacher-branch-count", "damaging_move=-1"],
+                "--min-teacher-branch-count COUNT must be a positive integer",
+            ),
+        )
+        for extra_args, expected_error in cases:
+            with self.subTest(extra_args=extra_args):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            *extra_args,
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected_error, stderr.getvalue())
 
     def test_bootstrap_cli_teacher_benchmark_fails_vacuous_threshold_when_teacher_row_missing(self) -> None:
         fake_metrics = CollectionMetrics(
