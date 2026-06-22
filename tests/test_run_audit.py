@@ -1480,6 +1480,92 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
 
+    def test_eval_cli_audit_calibrate_json_can_compare_named_profile(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--compare-profile",
+                        "long-run",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["profile_audit"]["profile"], "long-run")
+        self.assertFalse(payload["profile_audit"]["passed"])
+        self.assertEqual(len(payload["profile_audit"]["runs"]), 1)
+        self.assertFalse(payload["profile_audit"]["runs"][0]["passed"])
+        self.assertIn("latest_benchmark_games", payload["profile_audit"]["runs"][0]["failed_checks"])
+
+    def test_eval_cli_audit_calibrate_can_fail_on_named_profile(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-calibrate",
+                        str(manifest_path),
+                        "--compare-profile",
+                        "long-run",
+                        "--fail-on-profile",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["profile_audit"]["passed"])
+        self.assertIn("suggested_config", payload)
+
+    def test_eval_cli_audit_calibrate_rejects_fail_on_profile_without_profile(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["audit-calibrate", str(manifest_path), "--fail-on-profile"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--fail-on-profile requires --compare-profile", stderr.getvalue())
+
+    def test_eval_cli_audit_calibrate_text_can_compare_named_profile(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["audit-calibrate", str(manifest_path), "--compare-profile", "long-run"]
+                )
+            output = stdout.getvalue()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("profile_audit:", output)
+        self.assertIn("profile: long-run", output)
+        self.assertIn("status: FAIL", output)
+        self.assertIn("failed_checks: latest_benchmark_games", output)
+
     def test_eval_cli_audit_calibrate_aggregates_multiple_runs_json(self) -> None:
         first = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),)),)

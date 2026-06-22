@@ -191,6 +191,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help="Return non-zero unless calibrated benchmark iterations used at least this many games.",
     )
+    audit_calibrate.add_argument(
+        "--compare-profile",
+        choices=profile_choices,
+        default=None,
+        help="Also audit the calibrated runs against a named profile and report pass/fail status.",
+    )
+    audit_calibrate.add_argument(
+        "--fail-on-profile",
+        action="store_true",
+        help="With --compare-profile, return non-zero when any calibrated run fails that profile.",
+    )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
 
@@ -832,11 +843,17 @@ def _profiles(args: argparse.Namespace) -> int:
 
 
 def _audit_calibrate(args: argparse.Namespace) -> int:
+    if args.fail_on_profile and args.compare_profile is None:
+        raise ValueError("--fail-on-profile requires --compare-profile.")
     result = (
         calibrate_run_audit(args.paths[0], margin=args.margin)
         if len(args.paths) == 1
         else calibrate_run_audits(args.paths, margin=args.margin, aggregate_mode=args.aggregate_mode)
     )
+    profile_audit = None
+    if args.compare_profile is not None:
+        profile = evaluation_profile(args.compare_profile)
+        profile_audit = _profile_audit_payload(args.paths, profile_name=profile.name, config=profile.audit_config)
     sufficiency_requested = args.require_run_count > 0 or args.require_benchmark_iterations > 0
     sufficiency_errors = _calibration_sufficiency_errors(
         result,
@@ -846,15 +863,20 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     )
     if args.json:
         payload = result.to_dict()
+        if profile_audit is not None:
+            payload["profile_audit"] = profile_audit
         if sufficiency_requested:
             payload["calibration_sufficient"] = not sufficiency_errors
             payload["calibration_sufficiency_errors"] = list(sufficiency_errors)
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_audit_calibration(result)
+        if profile_audit is not None:
+            _print_profile_audit(profile_audit)
         if sufficiency_requested:
             _print_calibration_sufficiency(sufficiency_errors)
-    return 2 if sufficiency_errors else 0
+    profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
+    return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
 
 
 def _compare(args: argparse.Namespace) -> int:
@@ -1192,6 +1214,55 @@ def _print_calibration_sufficiency(errors: tuple[str, ...]) -> None:
         print("calibration_sufficiency_errors:")
         for error in errors:
             print(f"- {error}")
+
+
+def _profile_audit_payload(
+    paths: tuple[Path, ...],
+    *,
+    profile_name: str,
+    config: RunAuditConfig,
+) -> dict[str, object]:
+    runs = []
+    for path in paths:
+        try:
+            result = audit_run(path, config=config)
+        except Exception as exc:
+            runs.append(
+                {
+                    "manifest_path": str(path),
+                    "passed": False,
+                    "failed_checks": [],
+                    "error": str(exc),
+                }
+            )
+            continue
+        runs.append(
+            {
+                "manifest_path": str(result.manifest_path),
+                "passed": result.passed,
+                "failed_checks": [check.name for check in result.checks if not check.passed],
+                "error": None,
+            }
+        )
+    return {
+        "profile": profile_name,
+        "passed": all(bool(run["passed"]) for run in runs),
+        "runs": runs,
+    }
+
+
+def _print_profile_audit(payload: dict[str, object]) -> None:
+    print("profile_audit:")
+    print(f"profile: {payload['profile']}")
+    print(f"status: {'PASS' if payload['passed'] else 'FAIL'}")
+    print("runs:")
+    for run in payload["runs"]:
+        run_status = "PASS" if run["passed"] else "FAIL"
+        print(f"- {run_status} {run['manifest_path']}")
+        if run["failed_checks"]:
+            print(f"  failed_checks: {', '.join(run['failed_checks'])}")
+        if run["error"]:
+            print(f"  error: {run['error']}")
 
 
 def _print_run_comparison(result) -> None:
