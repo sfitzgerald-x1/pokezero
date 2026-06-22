@@ -1494,9 +1494,61 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_average_decision_rounds: 12.000", stdout.getvalue())
         self.assertIn("latest_process_peak_rss_mb: 640.5", stdout.getvalue())
         self.assertIn("source_metadata:", stdout.getvalue())
+        self.assertIn("available: yes", stdout.getvalue())
         self.assertIn("branch: scott/audit-text", stdout.getvalue())
         self.assertIn("head: abc999", stdout.getvalue())
         self.assertIn("dirty: yes", stdout.getvalue())
+        self.assertIn("repo_root: /repo", stdout.getvalue())
+
+    def test_eval_cli_audit_text_handles_missing_and_unavailable_source_metadata(self) -> None:
+        missing_source_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        unavailable_source_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),),
+            source={
+                "available": False,
+                "repo_root": None,
+                "branch": None,
+                "head": None,
+                "dirty": None,
+                "error": "RuntimeError: git unavailable",
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_path = Path(temp_dir) / "missing" / "manifest.json"
+            unavailable_path = Path(temp_dir) / "unavailable" / "manifest.json"
+            write_manifest(missing_path, missing_source_manifest)
+            write_manifest(unavailable_path, unavailable_source_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as missing_stdout:
+                missing_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(missing_path),
+                        "--min-latest-benchmark-win-rate",
+                        "0.60",
+                        "--min-latest-benchmark-games",
+                        "20",
+                    ]
+                )
+            with patch("sys.stdout", new_callable=io.StringIO) as unavailable_stdout:
+                unavailable_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(unavailable_path),
+                        "--min-latest-benchmark-win-rate",
+                        "0.60",
+                        "--min-latest-benchmark-games",
+                        "20",
+                    ]
+                )
+
+        self.assertEqual(missing_exit, 0)
+        self.assertIn("source_metadata: -", missing_stdout.getvalue())
+        self.assertEqual(unavailable_exit, 0)
+        self.assertIn("available: no", unavailable_stdout.getvalue())
+        self.assertIn("error: RuntimeError: git unavailable", unavailable_stdout.getvalue())
 
     def test_eval_cli_audit_calibrate_prints_json(self) -> None:
         manifest = selfplay_manifest(
@@ -1861,6 +1913,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
         self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
         self.assertEqual(payload["entries"][0]["source_metadata"], source)
+        self.assertEqual(payload["entries"][1]["source_metadata"], {})
         self.assertIn("latest_process_peak_rss_mb", payload["entries"][0])
         self.assertIsNone(payload["audit_profile"])
         self.assertFalse(payload["audit_failed"])
@@ -2194,6 +2247,39 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("44442", row)
         self.assertIn("11520", row)
         self.assertIn("16384.0", row)
+
+    def test_eval_cli_compare_text_handles_missing_and_unavailable_source_metadata(self) -> None:
+        missing_source_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        unavailable_source_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=35, losses=15, capped_games=0),),
+            source={
+                "available": False,
+                "repo_root": None,
+                "branch": None,
+                "head": None,
+                "dirty": None,
+                "error": "RuntimeError: git unavailable",
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_path = Path(temp_dir) / "missing-source" / "manifest.json"
+            unavailable_path = Path(temp_dir) / "unavailable-source" / "manifest.json"
+            write_manifest(missing_path, missing_source_manifest)
+            write_manifest(unavailable_path, unavailable_source_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(missing_path), str(unavailable_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("source_provenance:", output)
+        self.assertIn("- missing-source: -", output)
+        self.assertIn(
+            "- unavailable-source: available=no branch=- head=- dirty=- error=RuntimeError: git unavailable",
+            output,
+        )
 
     def test_eval_cli_compare_text_can_suggest_audit_calibration(self) -> None:
         manifest = selfplay_manifest(

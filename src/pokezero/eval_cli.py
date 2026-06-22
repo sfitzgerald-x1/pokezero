@@ -2052,6 +2052,8 @@ def _print_source_metadata(metadata: Mapping[str, object]) -> None:
     print(f"  head: {_format_optional_text(metadata.get('head'))}")
     print(f"  dirty: {_format_source_dirty(metadata.get('dirty'))}")
     print(f"  repo_root: {_format_optional_text(metadata.get('repo_root'))}")
+    if metadata.get("error") is not None:
+        print(f"  error: {_format_optional_text(metadata.get('error'))}")
 
 
 def _format_source_metadata(metadata: Mapping[str, object]) -> str:
@@ -2062,6 +2064,7 @@ def _format_source_metadata(metadata: Mapping[str, object]) -> str:
         f"branch={_format_optional_text(metadata.get('branch'))} "
         f"head={_format_optional_text(metadata.get('head'))} "
         f"dirty={_format_source_dirty(metadata.get('dirty'))}"
+        f"{_format_source_error(metadata)}"
     )
 
 
@@ -2078,6 +2081,11 @@ def _format_optional_text(value: object) -> str:
         return "-"
     text = str(value)
     return text if text else "-"
+
+
+def _format_source_error(metadata: Mapping[str, object]) -> str:
+    error = metadata.get("error")
+    return "" if error is None else f" error={_format_optional_text(error)}"
 
 
 def _parse_opponent_win_rates(values: tuple[str, ...]) -> dict[str, float]:
