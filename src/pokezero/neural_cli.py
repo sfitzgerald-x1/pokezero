@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Any, Mapping
 
 from .cli_audit import (
     add_post_iteration_audit_arguments,
@@ -22,7 +23,13 @@ from .neural_policy import (
     torch_available,
     train_transformer_policy,
 )
-from .neural_selfplay import NeuralSelfPlayPromotionConfig, run_neural_selfplay_iterations
+from .neural_selfplay import (
+    NeuralSelfPlayPromotionConfig,
+    _mapping,
+    _sequence,
+    load_neural_selfplay_run_manifest,
+    run_neural_selfplay_iterations,
+)
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
@@ -163,6 +170,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     add_post_iteration_audit_arguments(iterate)
     iterate.add_argument("--json", action="store_true", help="Print the run manifest as JSON.")
     iterate.set_defaults(func=_iterate)
+
+    report = subparsers.add_parser("report", help="Print a summary of a neural self-play run manifest.")
+    report.add_argument("--run-dir", type=Path, required=True, help="Neural self-play run directory containing manifest.json.")
+    report.add_argument("--json", action="store_true", help="Print the raw run manifest as formatted JSON.")
+    report.set_defaults(func=_report)
 
     return parser
 
@@ -412,10 +424,152 @@ def _print_iterate_summary(result) -> None:
     print(f"manifest: {result.run_dir / 'manifest.json'}")
 
 
+def _report(args: argparse.Namespace) -> int:
+    manifest = load_neural_selfplay_run_manifest(args.run_dir)
+    if args.json:
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        return 0
+    _print_manifest_report(manifest)
+    return 0
+
+
+def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    print(f"run_dir: {manifest.get('run_dir')}")
+    print(f"current_policy: {_format_manifest_value(manifest.get('current_policy_spec'))}")
+    print(f"latest_checkpoint: {_format_manifest_value(manifest.get('latest_checkpoint_path'))}")
+    print(f"latest_accepted_checkpoint: {_format_manifest_value(manifest.get('latest_accepted_checkpoint_path'))}")
+    _print_source_metadata(_manifest_source_metadata(manifest))
+    print(f"iterations: {len(iterations)}")
+    if not iterations:
+        return
+    print("note: benchmark win rate is the strength signal; fit metrics measure rollout-label training fit.")
+    print("")
+    header = (
+        f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'advance':>7} {'promo':>8} "
+        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'opp_acc':>8} checkpoint"
+    )
+    print(header)
+    print("-" * len(header))
+    for iteration in iterations:
+        metrics = _mapping(iteration.get("collection_metrics", {}))
+        final_epoch = _final_epoch_metrics(iteration)
+        advancement = _optional_mapping(iteration.get("advancement"))
+        print(
+            f"{int(iteration.get('iteration', 0)):4d} "
+            f"{int(metrics.get('games', 0)):5d} "
+            f"{int(metrics.get('capped_games', 0)):4d} "
+            f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
+            f"{_format_bool(advancement.get('advance_collector')):>7} "
+            f"{_manifest_promotion_status(iteration):>8} "
+            f"{_format_optional_float(final_epoch.get('loss') if final_epoch else None, digits=6):>10} "
+            f"{_format_optional_float(final_epoch.get('policy_accuracy') if final_epoch else None, digits=4):>8} "
+            f"{_format_optional_float(final_epoch.get('value_loss') if final_epoch else None, digits=6):>10} "
+            f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
+            f"{iteration.get('checkpoint_path')}"
+        )
+
+
+def _final_epoch_metrics(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    training = _mapping(iteration.get("training", {}))
+    epochs = tuple(_mapping(epoch) for epoch in _sequence(training.get("epochs", ())))
+    return epochs[-1] if epochs else None
+
+
+def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:
+    benchmark = iteration.get("benchmark")
+    if benchmark is None:
+        return None
+    benchmark_payload = _mapping(benchmark)
+    policy_id = _iteration_policy_id(iteration)
+    if policy_id is None:
+        return None
+    wins = 0
+    games = 0
+    for result in tuple(_mapping(result) for result in _sequence(benchmark_payload.get("head_to_heads", ()))):
+        result_games = int(result.get("games", 0))
+        if result.get("first_policy_id") == policy_id:
+            wins += int(result.get("first_policy_wins", 0))
+            games += result_games
+        elif result.get("second_policy_id") == policy_id:
+            wins += int(result.get("second_policy_wins", 0))
+            games += result_games
+    if games:
+        return wins / games
+    for result in tuple(_mapping(result) for result in _sequence(benchmark_payload.get("matchups", ()))):
+        metrics = _mapping(result.get("metrics", {}))
+        result_games = int(metrics.get("games", 0))
+        if result.get("p1_policy_id") == policy_id:
+            wins += int(metrics.get("p1_wins", 0))
+            games += result_games
+        elif result.get("p2_policy_id") == policy_id:
+            wins += int(metrics.get("p2_wins", 0))
+            games += result_games
+    return (wins / games) if games else None
+
+
+def _iteration_policy_id(iteration: Mapping[str, Any]) -> str | None:
+    training = _mapping(iteration.get("training", {}))
+    model_config = _mapping(training.get("model_config", {}))
+    policy_id = model_config.get("policy_id")
+    return policy_id if isinstance(policy_id, str) and policy_id else None
+
+
+def _manifest_promotion_status(iteration: Mapping[str, Any]) -> str:
+    promotion = iteration.get("promotion")
+    if promotion is None:
+        return "-"
+    promotion_payload = _optional_mapping(promotion)
+    return "yes" if promotion_payload.get("recorded") else "no"
+
+
+def _manifest_source_metadata(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    source = manifest.get("source")
+    return dict(source) if isinstance(source, Mapping) else {}
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _print_source_metadata(metadata: Mapping[str, Any]) -> None:
+    if not metadata:
+        print("source_metadata: -")
+        return
+    print("source_metadata:")
+    print(f"  available: {_format_bool(metadata.get('available'))}")
+    print(f"  branch: {_format_manifest_value(metadata.get('branch'))}")
+    print(f"  head: {_format_manifest_value(metadata.get('head'))}")
+    print(f"  dirty: {_format_bool(metadata.get('dirty'))}")
+    print(f"  repo_root: {_format_manifest_value(metadata.get('repo_root'))}")
+    if metadata.get("error") is not None:
+        print(f"  error: {_format_manifest_value(metadata.get('error'))}")
+
+
 def _promotion_status(promotion) -> str:
     if promotion is None:
         return "-"
     return "recorded" if promotion.recorded else "failed"
+
+
+def _format_bool(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "-"
+
+
+def _format_manifest_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    return str(value)
+
+
+def _format_optional_float(value: object, *, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.{digits}f}"
 
 
 def _policy_from_checkpoint(
