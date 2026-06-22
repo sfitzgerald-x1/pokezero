@@ -568,6 +568,31 @@ class PromotionRegistryTest(unittest.TestCase):
             "outside_requested_pool_size",
         )
 
+    def test_eval_cli_promotions_json_marks_entries_without_selection_checkpoint_as_unselectable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=3)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][0]["checkpoint_path"] = None
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["entry_statuses"][0]["opponent_pool_status"], "unselectable")
+        self.assertEqual(result["entry_statuses"][0]["opponent_pool_skip_reason"], "missing_selection_checkpoint")
+
     def test_eval_cli_promotions_rejects_required_pool_size_above_requested_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=10)
@@ -734,6 +759,16 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("pool=selected", output)
         self.assertIn("pool=excluded_current_policy", output)
         self.assertIn("pass --verify", output)
+
+    def test_eval_cli_promotions_text_omits_pool_status_without_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=1)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["promotions", "--registry", str(registry_path)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("pool=", stdout.getvalue())
 
     def test_eval_cli_promotions_text_reports_failed_required_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
