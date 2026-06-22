@@ -160,8 +160,11 @@ from .run_audit import (
     RunAuditIterationSummary,
     RunAuditOpponentRegression,
     RunAuditResult,
+    RunComparisonEntry,
+    RunComparisonResult,
     audit_run,
     calibrate_run_audit,
+    compare_run_manifests,
     enforce_run_audit,
 )
 from .selfplay import (
@@ -273,6 +276,8 @@ __all__ = [
     "RunAuditOpponentRegression",
     "RunAuditResult",
     "RunAuditCalibrationResult",
+    "RunComparisonEntry",
+    "RunComparisonResult",
     "SELFPLAY_RUN_SCHEMA_VERSION",
     "SelfPlayIterationResult",
     "SelfPlayPromotionConfig",
@@ -300,6 +305,7 @@ __all__ = [
     "TrainingBatch",
     "batch_training_examples",
     "calibrate_run_audit",
+    "compare_run_manifests",
     "canonical_switch_action_map",
     "collect_rollouts",
     "collect_selfplay_rollouts",

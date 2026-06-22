@@ -225,6 +225,17 @@ The audit command reads linear or neural self-play manifests and does not run ne
 
 Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, or `--audit-require-latest-promotion`.
 
+Compare cold-start, teacher-bootstrap, and neural iteration runs side by side:
+
+```bash
+python -m pokezero.eval_cli compare \
+  runs/cold-selfplay \
+  runs/bootstrap-selfplay \
+  runs/neural-selfplay
+```
+
+The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
+
 Gate a candidate before promotion:
 
 ```bash

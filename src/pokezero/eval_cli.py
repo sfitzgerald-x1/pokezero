@@ -29,6 +29,7 @@ from .run_audit import (
     RunAuditConfig,
     audit_run,
     calibrate_run_audit,
+    compare_run_manifests,
 )
 
 
@@ -111,6 +112,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
+
+    compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
+    compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
+    compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
+    compare.set_defaults(func=_compare)
     return parser
 
 
@@ -258,6 +264,15 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _compare(args: argparse.Namespace) -> int:
+    result = compare_run_manifests(args.paths)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_run_comparison(result)
+    return 0
+
+
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
     parser.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
@@ -380,6 +395,37 @@ def _print_audit_calibration(result) -> None:
             print(f"- {note}")
 
 
+def _print_run_comparison(result) -> None:
+    print(f"runs: {len(result.entries)}")
+    latest = result.best_latest_benchmark_entry
+    historical = result.best_historical_benchmark_entry
+    print(f"best_latest_benchmark: {latest.label if latest is not None else '-'}")
+    print(f"best_historical_benchmark: {historical.label if historical is not None else '-'}")
+    print("")
+    header = (
+        f"{'run':<24} {'src':<15} {'iter':>4} {'bench_wr':>8} {'best_wr':>8} {'bench_g':>7} "
+        f"{'coll_cap':>8} {'bench_cap':>9} {'avg_dec':>8} {'bench_dec':>9} {'promo':>6} {'adv':>6} checkpoint"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in result.entries:
+        print(
+            f"{entry.label:<24.24} "
+            f"{entry.source_type:<15.15} "
+            f"{(entry.latest_iteration if entry.latest_iteration is not None else 0):4d} "
+            f"{_format_optional_float(entry.latest_benchmark_win_rate):>8} "
+            f"{_format_optional_float(entry.best_benchmark_win_rate):>8} "
+            f"{entry.latest_benchmark_games:7d} "
+            f"{_format_optional_float(entry.latest_collection_capped_rate):>8} "
+            f"{_format_optional_float(entry.latest_benchmark_capped_rate):>9} "
+            f"{_format_optional_float(entry.latest_average_decision_rounds):>8} "
+            f"{_format_optional_float(entry.latest_benchmark_average_decision_rounds):>9} "
+            f"{_format_optional_bool(entry.latest_promotion_recorded):>6} "
+            f"{_format_optional_bool(entry.latest_advancement_recorded):>6} "
+            f"{entry.latest_checkpoint_path or '-'}"
+        )
+
+
 def _print_registry_verification(result) -> None:
     status = "PASS" if result.passed else "FAIL"
     print(f"verification_status: {status}")
@@ -436,6 +482,12 @@ def _format_optional_float(value: object) -> str:
     if value is None:
         return "-"
     return f"{float(value):.3f}"
+
+
+def _format_optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "yes" if value else "no"
 
 
 def _parse_opponent_win_rates(values: tuple[str, ...]) -> dict[str, float]:

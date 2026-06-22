@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
@@ -205,6 +205,76 @@ class RunAuditResult:
 
 
 @dataclass(frozen=True)
+class RunComparisonEntry:
+    label: str
+    manifest_path: Path
+    source_type: str
+    iteration_count: int
+    latest_iteration: int | None
+    latest_policy_id: str | None
+    latest_checkpoint_path: str | None
+    latest_benchmark_win_rate: float | None
+    best_benchmark_win_rate: float | None
+    latest_benchmark_games: int
+    latest_collection_capped_rate: float | None
+    latest_benchmark_capped_rate: float | None
+    latest_average_decision_rounds: float | None
+    latest_benchmark_average_decision_rounds: float | None
+    latest_promotion_recorded: bool | None
+    latest_advancement_recorded: bool | None
+    latest_advancement_reason: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "manifest_path": str(self.manifest_path),
+            "source_type": self.source_type,
+            "iteration_count": self.iteration_count,
+            "latest_iteration": self.latest_iteration,
+            "latest_policy_id": self.latest_policy_id,
+            "latest_checkpoint_path": self.latest_checkpoint_path,
+            "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
+            "best_benchmark_win_rate": self.best_benchmark_win_rate,
+            "latest_benchmark_games": self.latest_benchmark_games,
+            "latest_collection_capped_rate": self.latest_collection_capped_rate,
+            "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_average_decision_rounds": self.latest_average_decision_rounds,
+            "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "latest_promotion_recorded": self.latest_promotion_recorded,
+            "latest_advancement_recorded": self.latest_advancement_recorded,
+            "latest_advancement_reason": self.latest_advancement_reason,
+        }
+
+
+@dataclass(frozen=True)
+class RunComparisonResult:
+    entries: tuple[RunComparisonEntry, ...]
+
+    @property
+    def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(self.entries, "latest_benchmark_win_rate")
+
+    @property
+    def best_historical_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(self.entries, "best_benchmark_win_rate")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entries": [entry.to_dict() for entry in self.entries],
+            "best_latest_benchmark_label": (
+                self.best_latest_benchmark_entry.label
+                if self.best_latest_benchmark_entry is not None
+                else None
+            ),
+            "best_historical_benchmark_label": (
+                self.best_historical_benchmark_entry.label
+                if self.best_historical_benchmark_entry is not None
+                else None
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class RunAuditCalibrationResult:
     manifest_path: Path
     schema_version: str
@@ -343,6 +413,15 @@ def enforce_run_audit(
     return result
 
 
+def compare_run_manifests(paths: Iterable[Path]) -> RunComparisonResult:
+    selected_paths = tuple(paths)
+    if not selected_paths:
+        raise ValueError("at least one run path is required.")
+    return RunComparisonResult(
+        entries=tuple(_comparison_entry(path) for path in selected_paths),
+    )
+
+
 def calibrate_run_audit(
     path: Path,
     *,
@@ -419,6 +498,47 @@ def calibrate_run_audit(
         ),
         notes=tuple(notes),
     )
+
+
+def _comparison_entry(path: Path) -> RunComparisonEntry:
+    audit = audit_run(path, config=_permissive_audit_config())
+    latest = audit.iterations[-1]
+    return RunComparisonEntry(
+        label=_comparison_label(audit.manifest_path),
+        manifest_path=audit.manifest_path,
+        source_type=audit.source_type,
+        iteration_count=len(audit.iterations),
+        latest_iteration=audit.latest_iteration,
+        latest_policy_id=latest.policy_id,
+        latest_checkpoint_path=latest.checkpoint_path,
+        latest_benchmark_win_rate=audit.latest_benchmark_win_rate,
+        best_benchmark_win_rate=audit.best_benchmark_win_rate,
+        latest_benchmark_games=latest.benchmark_games,
+        latest_collection_capped_rate=audit.latest_collection_capped_rate,
+        latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
+        latest_average_decision_rounds=audit.latest_average_decision_rounds,
+        latest_benchmark_average_decision_rounds=audit.latest_benchmark_average_decision_rounds,
+        latest_promotion_recorded=latest.promotion_recorded,
+        latest_advancement_recorded=latest.advancement_recorded,
+        latest_advancement_reason=latest.advancement_reason,
+    )
+
+
+def _comparison_label(manifest_path: Path) -> str:
+    parent = manifest_path.parent
+    if parent.name:
+        return parent.name
+    return manifest_path.name
+
+
+def _best_entry_by_optional_value(
+    entries: tuple[RunComparisonEntry, ...],
+    field_name: str,
+) -> RunComparisonEntry | None:
+    present = tuple(entry for entry in entries if getattr(entry, field_name) is not None)
+    if not present:
+        return None
+    return max(present, key=lambda entry: float(getattr(entry, field_name)))
 
 
 def _source_type(schema_version: str) -> str:

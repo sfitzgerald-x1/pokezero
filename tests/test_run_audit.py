@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.eval_cli import main as eval_cli_main
-from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit
+from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, compare_run_manifests
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
@@ -427,6 +427,43 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.benchmark_iteration_count, 2)
         self.assertEqual(result.min_latest_benchmark_win_rate, 0.585)
 
+    def test_compare_run_manifests_summarizes_linear_and_neural_runs(self) -> None:
+        linear_manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, wins=12, losses=8, capped_games=0),
+                selfplay_iteration(iteration=2, wins=16, losses=4, capped_games=1, promotion_recorded=True),
+            )
+        )
+        neural_manifest = neural_selfplay_manifest(
+            iterations=(
+                neural_iteration(iteration=1, wins=11, losses=9, capped_games=0),
+                neural_iteration(iteration=2, wins=14, losses=6, capped_games=0),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            linear_path = temp_path / "linear-run" / "manifest.json"
+            neural_path = temp_path / "neural-run" / "manifest.json"
+            write_manifest(linear_path, linear_manifest)
+            write_manifest(neural_path, neural_manifest)
+
+            result = compare_run_manifests((linear_path, neural_path))
+
+        self.assertEqual([entry.label for entry in result.entries], ["linear-run", "neural-run"])
+        self.assertEqual(result.entries[0].source_type, "linear_selfplay")
+        self.assertEqual(result.entries[1].source_type, "neural_selfplay")
+        self.assertEqual(result.entries[0].latest_policy_id, "linear-selfplay-test-iter-0002")
+        self.assertEqual(result.entries[1].latest_policy_id, "entity-test-iter-0002")
+        self.assertAlmostEqual(result.entries[0].latest_benchmark_win_rate or 0.0, 0.8)
+        self.assertAlmostEqual(result.entries[1].latest_benchmark_win_rate or 0.0, 0.7)
+        self.assertEqual(result.best_latest_benchmark_entry.label if result.best_latest_benchmark_entry else None, "linear-run")
+        self.assertEqual(
+            result.best_historical_benchmark_entry.label if result.best_historical_benchmark_entry else None,
+            "linear-run",
+        )
+        self.assertTrue(result.entries[0].latest_promotion_recorded)
+        self.assertTrue(result.entries[1].latest_advancement_recorded)
+
     def test_eval_cli_audit_prints_json_and_returns_nonzero_on_failure(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=8, losses=12, capped_games=0),)
@@ -575,6 +612,45 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
+
+    def test_eval_cli_compare_prints_json(self) -> None:
+        linear_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=15, losses=5, capped_games=0),)
+        )
+        neural_manifest = neural_selfplay_manifest(
+            iterations=(neural_iteration(iteration=1, wins=12, losses=8, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            linear_path = temp_path / "linear-run" / "manifest.json"
+            neural_path = temp_path / "neural-run" / "manifest.json"
+            write_manifest(linear_path, linear_manifest)
+            write_manifest(neural_path, neural_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(linear_path), str(neural_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["best_latest_benchmark_label"], "linear-run")
+        self.assertEqual([entry["label"] for entry in payload["entries"]], ["linear-run", "neural-run"])
+        self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.75)
+
+    def test_eval_cli_compare_prints_text_table(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=15, losses=5, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(manifest_path)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("best_latest_benchmark: linear-run", stdout.getvalue())
+        self.assertIn("linear-run", stdout.getvalue())
+        self.assertIn("bench_wr", stdout.getvalue())
 
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
