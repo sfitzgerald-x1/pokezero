@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from .cli_audit import (
     MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
@@ -2712,6 +2712,7 @@ def _run_recipe_with_summary(
     failure_label: str,
     summary_label: str,
     extra_summary_fields: Mapping[str, object] | None = None,
+    finalize_summary: Callable[[dict[str, object]], None] | None = None,
 ) -> int:
     run_started_monotonic = time.perf_counter()
     step_summaries: list[dict[str, object]] = []
@@ -2793,6 +2794,7 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_exception"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            _apply_summary_finalizer(summary, finalize_summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2822,6 +2824,7 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_failed"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            _apply_summary_finalizer(summary, finalize_summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2845,6 +2848,7 @@ def _run_recipe_with_summary(
     summary["status"] = "passed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+    _apply_summary_finalizer(summary, finalize_summary)
     _write_run_summary_update(
         summary_path,
         summary,
@@ -2853,6 +2857,21 @@ def _run_recipe_with_summary(
     )
     print(f"{command_name}: PASS")
     return 0
+
+
+def _apply_summary_finalizer(
+    summary: dict[str, object],
+    finalize_summary: Callable[[dict[str, object]], None] | None,
+) -> None:
+    if finalize_summary is None:
+        return
+    try:
+        finalize_summary(summary)
+    except BaseException as exc:
+        summary["finalize_summary_error"] = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
 
 
 def _cpu_pilot_report(args: argparse.Namespace) -> int:
@@ -3022,6 +3041,7 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
             "failed_reason": None,
             "long_run_ready_reasons": [],
         },
+        finalize_summary=_finalize_cpu_long_run_summary,
     )
 
 
@@ -3097,6 +3117,10 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
     return exit_status
+
+
+def _finalize_cpu_long_run_summary(summary: dict[str, object]) -> None:
+    summary["derived_run_report"] = _cpu_long_run_derived_run_report(summary)
 
 
 def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str, object]:
@@ -3344,6 +3368,7 @@ def _write_cpu_long_run_not_ready_summary(summary_path: Path, payload: Mapping[s
         "failed_reason": "long_run_not_ready",
         "long_run_ready_reasons": list(payload.get("long_run_ready_reasons") or ()),
     }
+    _finalize_cpu_long_run_summary(summary)
     _write_json_payload(summary_path, summary)
 
 
