@@ -2850,6 +2850,7 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
     _validate_cpu_smoke_args(args, validate_showdown_root=True)
     recipe = _cpu_smoke_recipe(args)
     summary_path = args.summary_path if args.summary_path is not None else args.run_root / "cpu-smoke-run-summary.json"
+    _require_fresh_run_root(args.run_root, summary_path=summary_path, command_name="cpu-smoke-run")
     return _run_recipe_with_summary(
         recipe=recipe,
         summary_path=summary_path,
@@ -3188,6 +3189,7 @@ def _cpu_pilot_run(args: argparse.Namespace) -> int:
     _validate_cpu_pilot_args(args, validate_showdown_root=True)
     recipe = _cpu_pilot_recipe(args)
     summary_path = args.summary_path if args.summary_path is not None else args.run_root / "cpu-pilot-suite-summary.json"
+    _require_fresh_run_root(args.run_root, summary_path=summary_path, command_name="cpu-pilot-run")
     return _run_recipe_with_summary(
         recipe=recipe,
         summary_path=summary_path,
@@ -6189,6 +6191,20 @@ def _validate_cpu_pilot_args(args: argparse.Namespace, *, validate_showdown_root
         )
     if args.calibration_require_min_benchmark_games <= 0:
         raise ValueError("calibration-require-min-benchmark-games must be positive.")
+
+
+def _require_fresh_run_root(run_root: Path, *, summary_path: Path, command_name: str) -> None:
+    if summary_path.exists():
+        raise ValueError(f"{command_name} summary already exists; choose a fresh run-root: {summary_path}")
+    if not run_root.exists():
+        return
+    if not run_root.is_dir():
+        raise ValueError(f"{command_name} run-root exists and is not a directory: {run_root}")
+    try:
+        next(run_root.iterdir())
+    except StopIteration:
+        return
+    raise ValueError(f"{command_name} run-root is not empty; choose a fresh run-root: {run_root}")
 
 
 def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:

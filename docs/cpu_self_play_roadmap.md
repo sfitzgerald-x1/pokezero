@@ -33,6 +33,7 @@ Implemented:
 - The promotion registry records accepted checkpoints, can copy managed artifacts, verifies registry/checkpoint integrity, feeds promoted opponent pools back into self-play, previews pool selection, and supports recoverable retention archiving.
 - Run audits can check latest benchmark health, capped-game rates, same-opponent regressions, repeated promotion failures, decision-round length, missing benchmark opponents, and best-effort process RSS high-water marks.
 - CPU smoke, pilot, and long-run wrappers can generate plans, execute guarded runs, persist wrapper summaries, calibrate audit configs from pilot evidence, replay those configs, launch readiness-checked long runs, and report or compare run health from summaries.
+- CPU smoke and pilot execution wrappers now reject non-fresh run roots before launching nested work, so accidental reruns do not overwrite wrapper summaries or collide later with existing bootstrap/self-play artifacts.
 - `cpu-readiness-report` can roll up core pilot readiness, long-run derived audit health, and promotion-registry opponent-pool readiness from existing artifacts without launching games.
 - Source provenance is recorded in major run artifacts so dirty or unexpected code snapshots are visible during review.
 - A read-only Gen 3 randbat belief sidecar and compact belief observation features exist, but the detailed sidecar state is not required for the current linear CPU loop.
@@ -87,8 +88,9 @@ The next implementation tasks should be chosen in this order unless a real pilot
 
 ## Progress Updates
 
-- Added `cpu-readiness-report` so the core pilot, long-run, and promotion readiness artifacts can be evaluated in one read-only command. This closes the immediate reporting gap for existing artifacts; the next task is to run a real local CPU pilot suite and use the report to identify any missing preflight or audit checks.
+- Added `cpu-readiness-report` so the core pilot, long-run, and promotion readiness artifacts can be evaluated in one read-only command. This closed the immediate reporting gap for existing artifacts and made the first local pilot inspection straightforward.
 - Ran a real local smoke-scale CPU pilot suite at `runs/cpu-pilots-local-20260622-smoke-2` against `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`. The suite passed in 138.6 seconds with two seeded pilots, deterministic teacher scenario preflights passing 13/13 scenarios per pilot, rollout-backed `status_pressure` branch gates passing with 13 aggregate observations, zero capped games in the nested smoke self-play runs, generated audit calibration, and calibrated audit replay. `cpu-pilot-report --require-ready --require-smoke-ready --require-calibration-run-count 2 --require-calibration-benchmark-iterations 4 --require-calibration-min-benchmark-games 1` passed. `cpu-readiness-report --pilot-summary ...` reports the pilot item as PASS while the overall checklist remains not ready because no long-run summary or promotion registry was supplied.
+- The local pilot validation exposed a stale-run-root failure mode when rerunning into an existing ignored artifact directory. The smoke and pilot execution wrappers now fail fast on non-fresh run roots before starting child commands.
 
 ## Out Of Scope For This Milestone
 
