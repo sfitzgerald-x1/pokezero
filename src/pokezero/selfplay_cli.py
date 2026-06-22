@@ -14,6 +14,7 @@ from .cli_audit import (
     validate_post_iteration_audit_evaluation_games,
 )
 from .collection import policy_spec_with_showdown_root
+from .evaluation_profiles import EVALUATION_PROFILES
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .run_audit import RunAuditFailure
@@ -34,6 +35,7 @@ MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m pokezero.selfplay_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    profile_choices = tuple(sorted(EVALUATION_PROFILES))
 
     iterate = subparsers.add_parser("iterate", help="Run linear-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
@@ -108,6 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow auto-promotion to record a checkpoint already present in the registry.",
     )
+    iterate.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for auto-promotion gate checks.")
     _add_gate_arguments(iterate)
     iterate.add_argument("--evaluation-games", type=int, default=0, help="Optional benchmark games per baseline matchup after each iteration.")
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic evaluation seed.")
@@ -170,8 +173,12 @@ def main(argv: list[str] | None = None) -> int:
 def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
-    if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
-        raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
+    auto_promotion_gate_config = _auto_promotion_gate_config_from_args(args) if args.auto_promote else None
+    if args.auto_promote and args.evaluation_games <= 0 and auto_promotion_gate_config.require_benchmark:
+        raise ValueError(
+            "--auto-promote requires --evaluation-games > 0 unless the resolved promotion gate config "
+            "allows missing benchmarks."
+        )
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
     validate_post_iteration_audit_evaluation_games(
         post_iteration_audit_config,
@@ -265,17 +272,21 @@ def _print_run_summary(result) -> None:
 def _auto_promotion_config_from_args(args: argparse.Namespace) -> SelfPlayPromotionConfig | None:
     if not args.auto_promote:
         return None
-    gate_args = argparse.Namespace(**vars(args))
-    gate_args.registry = None
     label_prefix = args.promotion_label_prefix if args.promotion_label_prefix else None
     return SelfPlayPromotionConfig(
         registry_path=args.promotion_registry,
-        gate_config=_gate_config_from_args(gate_args),
+        gate_config=_auto_promotion_gate_config_from_args(args),
         artifact_dir=args.promotion_artifact_dir,
         label_prefix=label_prefix,
         notes=args.promotion_notes,
         allow_duplicate=args.allow_duplicate_promotion,
     )
+
+
+def _auto_promotion_gate_config_from_args(args: argparse.Namespace):
+    gate_args = argparse.Namespace(**vars(args))
+    gate_args.registry = None
+    return _gate_config_from_args(gate_args)
 
 
 def _promotion_status(promotion) -> str:
