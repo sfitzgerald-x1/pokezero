@@ -1708,7 +1708,8 @@ class SelfPlayTest(unittest.TestCase):
     def test_selfplay_cli_report_prints_manifest_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
-            write_report_manifest(run_dir)
+            source = report_source_metadata(branch="scott/report", head="abc123", dirty=True)
+            write_report_manifest(run_dir, source=source)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
@@ -1716,6 +1717,12 @@ class SelfPlayTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
+        self.assertIn("source_metadata:", output)
+        self.assertIn("available: yes", output)
+        self.assertIn("branch: scott/report", output)
+        self.assertIn("head: abc123", output)
+        self.assertIn("dirty: yes", output)
+        self.assertIn("repo_root: /repo", output)
         self.assertIn("invocations: 1", output)
         self.assertIn("invocation=1", output)
         self.assertIn("resume=no", output)
@@ -1760,7 +1767,8 @@ class SelfPlayTest(unittest.TestCase):
     def test_selfplay_cli_report_reconstructs_from_iteration_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
-            write_report_manifest(run_dir, top_level=False)
+            source = report_source_metadata(branch="scott/reconstructed", head="def456", dirty=False)
+            write_report_manifest(run_dir, top_level=False, source=source)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
@@ -1768,9 +1776,40 @@ class SelfPlayTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
+        self.assertIn("branch: scott/reconstructed", output)
+        self.assertIn("head: def456", output)
+        self.assertIn("dirty: no", output)
         self.assertIn("invocations: 1", output)
         self.assertIn("pool_registry=promotions.json", output)
         self.assertIn("linear-policy.json", output)
+
+    def test_selfplay_cli_report_handles_missing_and_unavailable_source_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_run_dir = Path(temp_dir) / "missing"
+            unavailable_run_dir = Path(temp_dir) / "unavailable"
+            write_report_manifest(missing_run_dir)
+            write_report_manifest(
+                unavailable_run_dir,
+                source={
+                    "available": False,
+                    "repo_root": None,
+                    "branch": None,
+                    "head": None,
+                    "dirty": None,
+                    "error": "RuntimeError: git unavailable",
+                },
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as missing_stdout:
+                missing_exit = selfplay_cli_main(["report", "--run-dir", str(missing_run_dir)])
+            with patch("sys.stdout", new_callable=io.StringIO) as unavailable_stdout:
+                unavailable_exit = selfplay_cli_main(["report", "--run-dir", str(unavailable_run_dir)])
+
+        self.assertEqual(missing_exit, 0)
+        self.assertIn("source_metadata: -", missing_stdout.getvalue())
+        self.assertEqual(unavailable_exit, 0)
+        self.assertIn("available: no", unavailable_stdout.getvalue())
+        self.assertIn("error: RuntimeError: git unavailable", unavailable_stdout.getvalue())
 
     def test_selfplay_cli_report_prints_multiple_invocations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1878,7 +1917,7 @@ def passing_promotion_gate_config() -> PromotionGateConfig:
     )
 
 
-def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
+def write_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict | None = None) -> None:
     checkpoint_path = run_dir / "iteration-0001" / "linear-policy.json"
     iteration_dir = run_dir / "iteration-0001"
     iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -1989,22 +2028,36 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
             ],
         },
     }
+    if source is not None:
+        iteration_manifest["source"] = source
     (iteration_dir / "manifest.json").write_text(json.dumps(iteration_manifest, indent=2), encoding="utf-8")
     if not top_level:
         return
-    (run_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
-                "run_dir": str(run_dir),
-                "invocation_configs": [invocation_config],
-                "latest_checkpoint_path": str(checkpoint_path),
-                "iterations": [iteration_manifest],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    run_manifest = {
+        "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+        "run_dir": str(run_dir),
+        "invocation_configs": [invocation_config],
+        "latest_checkpoint_path": str(checkpoint_path),
+        "iterations": [iteration_manifest],
+    }
+    if source is not None:
+        run_manifest["source"] = source
+    (run_dir / "manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
+
+
+def report_source_metadata(
+    *,
+    branch: str = "main",
+    head: str = "abc123",
+    dirty: bool = False,
+) -> dict:
+    return {
+        "available": True,
+        "repo_root": "/repo",
+        "branch": branch,
+        "head": head,
+        "dirty": dirty,
+    }
 
 
 if __name__ == "__main__":
