@@ -82,6 +82,14 @@ Run a tiny CPU smoke validation before spending time on larger experiments:
 
 This executes the teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts. The wrapper writes `RUN_ROOT/cpu-smoke-run-summary.json` with the executed recipe, per-step exit codes, timestamps, and final pass/fail status. Pass `--summary-path` to write that artifact somewhere else.
 
+Inspect that wrapper summary later:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-smoke-report runs/cpu-smoke
+```
+
+The report command accepts either the run root or the summary JSON path. It exits `0` for a recorded passed run, exits `2` for recorded failed, running, or unknown statuses, and exits `1` when the summary cannot be read or has an unsupported schema. Shell automation can use any non-zero exit as a wrapper-level health check failure, or distinguish `1` as "no valid summary was available" versus `2` as "a valid summary recorded a non-passing run."
+
 Inspect the generated commands without running them:
 
 ```bash

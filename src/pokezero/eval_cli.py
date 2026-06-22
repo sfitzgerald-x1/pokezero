@@ -234,6 +234,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     smoke_run.set_defaults(func=_cpu_smoke_run)
 
+    smoke_report = subparsers.add_parser(
+        "cpu-smoke-report",
+        help="Inspect a cpu-smoke-run summary JSON artifact.",
+    )
+    smoke_report.add_argument(
+        "path",
+        type=Path,
+        help="Smoke run root or cpu-smoke-run-summary.json path.",
+    )
+    smoke_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    smoke_report.set_defaults(func=_cpu_smoke_report)
+
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
     compare.add_argument(
@@ -1035,6 +1047,75 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
     _write_cpu_smoke_summary_update(summary_path, summary, previous_failure=summary_update_failed)
     print("cpu_smoke_run: PASS")
     return 0
+
+
+def _cpu_smoke_report(args: argparse.Namespace) -> int:
+    summary_path, summary = _load_cpu_smoke_summary(args.path)
+    status = str(summary.get("status", "unknown"))
+    if args.json:
+        payload = dict(summary)
+        payload["summary_source_path"] = str(summary_path)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if status == "passed" else 2
+    print("cpu_smoke_report:")
+    print(f"summary: {summary_path}")
+    print(f"status: {_status_label(status)}")
+    print(f"started_at: {_format_summary_value(summary.get('started_at'))}")
+    print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
+    print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
+    failed_step = summary.get("failed_step")
+    if isinstance(failed_step, dict):
+        print(
+            "failed_step: "
+            f"{failed_step.get('index')} {failed_step.get('name')} returncode={failed_step.get('returncode')}"
+        )
+    else:
+        print("failed_step: -")
+    steps = summary.get("steps")
+    if isinstance(steps, list):
+        print("steps:")
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            print(
+                f"- {step.get('index')}: {_status_label(str(step.get('status', 'unknown')))} "
+                f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
+                f"duration={_format_summary_value(step.get('duration_seconds'))}"
+            )
+    return 0 if status == "passed" else 2
+
+
+def _load_cpu_smoke_summary(path: Path) -> tuple[Path, dict[str, object]]:
+    summary_path = (
+        path / "cpu-smoke-run-summary.json"
+        if path.is_dir() or (not path.exists() and path.suffix != ".json")
+        else path
+    )
+    if not summary_path.exists():
+        raise FileNotFoundError(f"cpu smoke summary not found: {summary_path}")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"cpu smoke summary must be a JSON object: {summary_path}")
+    if payload.get("schema_version") != CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported cpu smoke summary schema: "
+            f"{payload.get('schema_version')!r}; expected {CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION!r}."
+        )
+    return summary_path, payload
+
+
+def _status_label(status: str) -> str:
+    if status == "passed":
+        return "PASS"
+    if status == "failed":
+        return "FAIL"
+    if status == "running":
+        return "RUNNING"
+    return status.upper() if status else "-"
+
+
+def _format_summary_value(value: object) -> str:
+    return "-" if value is None else str(value)
 
 
 def _validate_cpu_smoke_args(args: argparse.Namespace, *, validate_showdown_root: bool = False) -> None:
