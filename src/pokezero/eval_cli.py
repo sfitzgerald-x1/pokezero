@@ -303,8 +303,12 @@ def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--showdown-root",
-        default="/path/to/pokemon-showdown",
-        help="Built Pokemon Showdown checkout root used by the smoke recipe.",
+        type=Path,
+        default=None,
+        help=(
+            "Built Pokemon Showdown checkout root used by the smoke recipe. "
+            "If omitted, child commands use their normal Showdown-root resolution."
+        ),
     )
     parser.add_argument("--workers", type=int, default=1, help="Worker count used by the smoke recipe.")
     parser.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
@@ -930,7 +934,7 @@ def _cpu_smoke_plan(args: argparse.Namespace) -> int:
     print("cpu_smoke_plan:")
     print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
     print("note: smoke-profile thresholds validate command flow, not policy strength.")
-    print("note: replace placeholder paths, including --showdown-root, before running.")
+    print("note: pass --showdown-root or set the normal Showdown-root environment before running when needed.")
     print("commands:")
     for index, step in enumerate(recipe["steps"], start=1):
         print(f"{index}. {step['name']}")
@@ -939,7 +943,7 @@ def _cpu_smoke_plan(args: argparse.Namespace) -> int:
 
 
 def _cpu_smoke_run(args: argparse.Namespace) -> int:
-    _validate_cpu_smoke_args(args)
+    _validate_cpu_smoke_args(args, validate_showdown_root=True)
     recipe = _cpu_smoke_recipe(args)
     print("cpu_smoke_run:")
     print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
@@ -959,7 +963,7 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _validate_cpu_smoke_args(args: argparse.Namespace) -> None:
+def _validate_cpu_smoke_args(args: argparse.Namespace, *, validate_showdown_root: bool = False) -> None:
     positive_fields = (
         "workers",
         "train_games",
@@ -976,6 +980,8 @@ def _validate_cpu_smoke_args(args: argparse.Namespace) -> None:
             raise ValueError(f"{field_name.replace('_', '-')} must be positive.")
     if args.max_decision_rounds <= 0:
         raise ValueError("max-decision-rounds must be positive.")
+    if validate_showdown_root and args.showdown_root is not None and not args.showdown_root.exists():
+        raise ValueError(f"showdown-root does not exist: {args.showdown_root}")
 
 
 def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
@@ -985,7 +991,8 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
     python_binary = args.python_binary
-    showdown_root = str(args.showdown_root)
+    showdown_root = None if args.showdown_root is None else str(args.showdown_root)
+    showdown_root_args = () if showdown_root is None else ("--showdown-root", showdown_root)
     steps = (
         (
             "bootstrap teacher checkpoint",
@@ -1002,8 +1009,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 str(args.validation_games),
                 "--workers",
                 str(args.workers),
-                "--showdown-root",
-                showdown_root,
+                *showdown_root_args,
                 "--benchmark-games",
                 str(args.bootstrap_benchmark_games),
                 "--preflight-games",
@@ -1047,8 +1053,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "--audit-after-iteration",
                 "--audit-profile",
                 "smoke",
-                "--showdown-root",
-                showdown_root,
+                *showdown_root_args,
                 "--max-decision-rounds",
                 str(args.max_decision_rounds),
                 "--window-size",

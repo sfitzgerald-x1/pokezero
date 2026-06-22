@@ -553,6 +553,25 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("linear:runs/smoke/teacher-bootstrap/linear-bootstrap.json", payload["steps"][1]["argv"])
         self.assertIn("--fail-on-profile", payload["steps"][-1]["argv"])
 
+    def test_eval_cli_cpu_smoke_plan_omits_showdown_root_when_unset(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--run-root",
+                    "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(payload["showdown_root"])
+        self.assertNotIn("--showdown-root", payload["steps"][0]["argv"])
+        self.assertNotIn("/path/to/pokemon-showdown", payload["steps"][0]["command"])
+
     def test_eval_cli_cpu_smoke_plan_commands_parse_with_target_clis(self) -> None:
         with patch("sys.stdout", new_callable=io.StringIO) as stdout:
             exit_code = eval_cli_main(
@@ -590,24 +609,25 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("workers must be positive", stderr.getvalue())
 
     def test_eval_cli_cpu_smoke_run_executes_recipe_steps(self) -> None:
-        with (
-            patch(
-                "pokezero.eval_cli.subprocess.run",
-                side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
-            ) as run,
-            patch("sys.stdout", new_callable=io.StringIO) as stdout,
-        ):
-            exit_code = eval_cli_main(
-                [
-                    "cpu-smoke-run",
-                    "--run-root",
-                    "runs/smoke",
-                    "--python-binary",
-                    "./.venv/bin/python",
-                    "--showdown-root",
-                    "/tmp/showdown",
-                ]
-            )
+        with tempfile.TemporaryDirectory() as showdown_root:
+            with (
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                ) as run,
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        "runs/smoke",
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        showdown_root,
+                    ]
+                )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_count, 5)
@@ -622,12 +642,35 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("cpu_smoke_run: PASS", output)
 
     def test_eval_cli_cpu_smoke_run_stops_on_failed_step(self) -> None:
+        with tempfile.TemporaryDirectory() as showdown_root:
+            with (
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[SimpleNamespace(returncode=0), SimpleNamespace(returncode=7)],
+                ) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        "runs/smoke",
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        showdown_root,
+                    ]
+                )
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("cpu smoke step 2 failed with exit code 7", stderr.getvalue())
+
+    def test_eval_cli_cpu_smoke_run_rejects_missing_explicit_showdown_root(self) -> None:
+        missing_root = "/tmp/pokezero-missing-showdown-root"
         with (
-            patch(
-                "pokezero.eval_cli.subprocess.run",
-                side_effect=[SimpleNamespace(returncode=0), SimpleNamespace(returncode=7)],
-            ) as run,
-            patch("sys.stdout", new_callable=io.StringIO),
+            patch("pokezero.eval_cli.subprocess.run") as run,
             patch("sys.stderr", new_callable=io.StringIO) as stderr,
         ):
             exit_code = eval_cli_main(
@@ -635,16 +678,14 @@ class PromotionGateTest(unittest.TestCase):
                     "cpu-smoke-run",
                     "--run-root",
                     "runs/smoke",
-                    "--python-binary",
-                    "./.venv/bin/python",
                     "--showdown-root",
-                    "/tmp/showdown",
+                    missing_root,
                 ]
             )
 
-        self.assertEqual(exit_code, 7)
-        self.assertEqual(run.call_count, 2)
-        self.assertIn("cpu smoke step 2 failed with exit code 7", stderr.getvalue())
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+        self.assertIn(f"showdown-root does not exist: {missing_root}", stderr.getvalue())
 
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
