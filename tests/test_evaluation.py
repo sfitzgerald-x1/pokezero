@@ -792,6 +792,53 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("ended_at", summary)
         self.assertIsInstance(summary["duration_seconds"], float)
 
+    def test_eval_cli_cpu_smoke_run_executes_real_audit_config_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "smoke"
+            audit_config_path = run_root / "smoke-audit-config.json"
+
+            def fake_run(argv):
+                if argv[2:4] == ["pokezero.selfplay_cli", "iterate"]:
+                    manifest = selfplay_manifest()
+                    manifest["run_dir"] = str(run_root / "selfplay")
+                    write_manifest(run_root / "selfplay" / "manifest.json", manifest)
+                if argv[2:4] == ["pokezero.eval_cli", "audit"]:
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        return SimpleNamespace(returncode=eval_cli_main(argv[3:]))
+                if argv[2:4] == ["pokezero.eval_cli", "audit-calibrate"]:
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        return SimpleNamespace(returncode=eval_cli_main(argv[3:]))
+                return SimpleNamespace(returncode=0)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=fake_run),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--python-binary",
+                        "./.venv/bin/python",
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
+            audit_config = json.loads(audit_config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["steps"][3]["status"], "passed")
+        self.assertEqual(summary["steps"][4]["status"], "passed")
+        self.assertEqual(summary["steps"][5]["status"], "passed")
+        self.assertEqual(audit_config["schema_version"], "pokezero.run_audit_config.v1")
+        self.assertEqual(audit_config["calibration"]["run_count"], 1)
+
     def test_eval_cli_cpu_smoke_run_honors_custom_summary_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
