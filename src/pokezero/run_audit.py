@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -26,6 +27,7 @@ DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
 DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
+AUDIT_CALIBRATION_AGGREGATE_MODES = ("median", "envelope")
 _THRESHOLD_EPSILON = 1e-12
 
 
@@ -364,41 +366,10 @@ class RunAuditCalibrationResult:
     notes: tuple[str, ...] = ()
 
     def suggested_config(self) -> dict[str, float | int | bool | None]:
-        return {
-            "min_latest_benchmark_win_rate": self.min_latest_benchmark_win_rate,
-            "min_latest_benchmark_games": self.min_latest_benchmark_games,
-            "max_latest_collection_capped_rate": self.max_latest_collection_capped_rate,
-            "max_latest_benchmark_capped_rate": self.max_latest_benchmark_capped_rate,
-            "max_latest_average_decision_rounds": self.max_latest_average_decision_rounds,
-            "max_latest_benchmark_average_decision_rounds": self.max_latest_benchmark_average_decision_rounds,
-            "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
-            "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
-            "require_benchmark": self.require_benchmark,
-            "require_benchmark_opponent_coverage": self.require_benchmark_opponent_coverage,
-        }
+        return _suggested_audit_config(self)
 
     def suggested_cli_flags(self) -> tuple[str, ...]:
-        flags: list[str] = []
-        for field_name, flag_name in (
-            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
-            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
-            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
-            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
-            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
-            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
-            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
-            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
-                    continue
-                flags.extend((flag_name, str(value)))
-        if not self.require_benchmark:
-            flags.append("--allow-missing-benchmark")
-        if not self.require_benchmark_opponent_coverage:
-            flags.append("--allow-missing-benchmark-opponents")
-        return tuple(flags)
+        return _suggested_audit_cli_flags(self)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -418,6 +389,7 @@ class RunAuditCalibrationResult:
 class MultiRunAuditCalibrationResult:
     paths: tuple[Path, ...]
     source_type: str
+    aggregate_mode: str
     run_count: int
     iteration_count: int
     benchmark_iteration_count: int
@@ -436,46 +408,16 @@ class MultiRunAuditCalibrationResult:
     notes: tuple[str, ...] = ()
 
     def suggested_config(self) -> dict[str, float | int | bool | None]:
-        return {
-            "min_latest_benchmark_win_rate": self.min_latest_benchmark_win_rate,
-            "min_latest_benchmark_games": self.min_latest_benchmark_games,
-            "max_latest_collection_capped_rate": self.max_latest_collection_capped_rate,
-            "max_latest_benchmark_capped_rate": self.max_latest_benchmark_capped_rate,
-            "max_latest_average_decision_rounds": self.max_latest_average_decision_rounds,
-            "max_latest_benchmark_average_decision_rounds": self.max_latest_benchmark_average_decision_rounds,
-            "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
-            "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
-            "require_benchmark": self.require_benchmark,
-            "require_benchmark_opponent_coverage": self.require_benchmark_opponent_coverage,
-        }
+        return _suggested_audit_config(self)
 
     def suggested_cli_flags(self) -> tuple[str, ...]:
-        flags: list[str] = []
-        for field_name, flag_name in (
-            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
-            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
-            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
-            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
-            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
-            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
-            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
-            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
-                    continue
-                flags.extend((flag_name, str(value)))
-        if not self.require_benchmark:
-            flags.append("--allow-missing-benchmark")
-        if not self.require_benchmark_opponent_coverage:
-            flags.append("--allow-missing-benchmark-opponents")
-        return tuple(flags)
+        return _suggested_audit_cli_flags(self)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "paths": [str(path) for path in self.paths],
             "source_type": self.source_type,
+            "aggregate_mode": self.aggregate_mode,
             "run_count": self.run_count,
             "iteration_count": self.iteration_count,
             "benchmark_iteration_count": self.benchmark_iteration_count,
@@ -688,7 +630,11 @@ def calibrate_run_audits(
     paths: Iterable[Path],
     *,
     margin: float = DEFAULT_AUDIT_CALIBRATION_MARGIN,
+    aggregate_mode: str = "median",
 ) -> MultiRunAuditCalibrationResult:
+    if aggregate_mode not in AUDIT_CALIBRATION_AGGREGATE_MODES:
+        choices = ", ".join(AUDIT_CALIBRATION_AGGREGATE_MODES)
+        raise ValueError(f"unknown aggregate mode {aggregate_mode!r}; choose one of: {choices}")
     selected_paths = tuple(paths)
     if not selected_paths:
         raise ValueError("at least one run path is required.")
@@ -710,33 +656,44 @@ def calibrate_run_audits(
     return MultiRunAuditCalibrationResult(
         paths=tuple(calibration.manifest_path for calibration in calibrations),
         source_type=source_types[0] if len(source_types) == 1 else "mixed",
+        aggregate_mode=aggregate_mode,
         run_count=len(calibrations),
         iteration_count=sum(calibration.iteration_count for calibration in calibrations),
         benchmark_iteration_count=sum(calibration.benchmark_iteration_count for calibration in calibrations),
         margin=margin,
         calibrations=calibrations,
         require_benchmark=all(calibration.require_benchmark for calibration in calibrations),
-        min_latest_benchmark_win_rate=_min_optional(
-            calibration.min_latest_benchmark_win_rate for calibration in calibrations
+        min_latest_benchmark_win_rate=_aggregate_floor(
+            (calibration.min_latest_benchmark_win_rate for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        min_latest_benchmark_games=min(calibration.min_latest_benchmark_games for calibration in calibrations),
-        max_latest_collection_capped_rate=_max_optional(
-            calibration.max_latest_collection_capped_rate for calibration in calibrations
+        min_latest_benchmark_games=_aggregate_minimum_count(
+            (calibration.min_latest_benchmark_games for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        max_latest_benchmark_capped_rate=_max_optional(
-            calibration.max_latest_benchmark_capped_rate for calibration in calibrations
+        max_latest_collection_capped_rate=_aggregate_ceiling(
+            (calibration.max_latest_collection_capped_rate for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        max_latest_average_decision_rounds=_max_optional(
-            calibration.max_latest_average_decision_rounds for calibration in calibrations
+        max_latest_benchmark_capped_rate=_aggregate_ceiling(
+            (calibration.max_latest_benchmark_capped_rate for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        max_latest_benchmark_average_decision_rounds=_max_optional(
-            calibration.max_latest_benchmark_average_decision_rounds for calibration in calibrations
+        max_latest_average_decision_rounds=_aggregate_ceiling(
+            (calibration.max_latest_average_decision_rounds for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        max_benchmark_win_rate_drop=_max_optional(
-            calibration.max_benchmark_win_rate_drop for calibration in calibrations
+        max_latest_benchmark_average_decision_rounds=_aggregate_ceiling(
+            (calibration.max_latest_benchmark_average_decision_rounds for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
-        max_consecutive_promotion_failures=max(
-            calibration.max_consecutive_promotion_failures for calibration in calibrations
+        max_benchmark_win_rate_drop=_aggregate_ceiling(
+            (calibration.max_benchmark_win_rate_drop for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
+        ),
+        max_consecutive_promotion_failures=_aggregate_maximum_count(
+            (calibration.max_consecutive_promotion_failures for calibration in calibrations),
+            aggregate_mode=aggregate_mode,
         ),
         require_benchmark_opponent_coverage=all(
             calibration.require_benchmark_opponent_coverage for calibration in calibrations
@@ -1268,6 +1225,95 @@ def _permissive_audit_config() -> RunAuditConfig:
     )
 
 
+def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]:
+    require_benchmark = bool(result.require_benchmark)
+    return {
+        "min_latest_benchmark_win_rate": (
+            result.min_latest_benchmark_win_rate
+            if require_benchmark and result.min_latest_benchmark_win_rate is not None
+            else 0.0
+        ),
+        "min_latest_benchmark_games": result.min_latest_benchmark_games if require_benchmark else 0,
+        "max_latest_collection_capped_rate": (
+            result.max_latest_collection_capped_rate
+            if result.max_latest_collection_capped_rate is not None
+            else 1.0
+        ),
+        "max_latest_benchmark_capped_rate": (
+            result.max_latest_benchmark_capped_rate
+            if require_benchmark and result.max_latest_benchmark_capped_rate is not None
+            else 1.0
+        ),
+        "max_latest_average_decision_rounds": result.max_latest_average_decision_rounds,
+        "max_latest_benchmark_average_decision_rounds": (
+            result.max_latest_benchmark_average_decision_rounds if require_benchmark else None
+        ),
+        "max_benchmark_win_rate_drop": (
+            result.max_benchmark_win_rate_drop
+            if require_benchmark and result.max_benchmark_win_rate_drop is not None
+            else 1.0
+        ),
+        "max_consecutive_promotion_failures": result.max_consecutive_promotion_failures,
+        "require_benchmark": require_benchmark,
+        "require_benchmark_opponent_coverage": bool(result.require_benchmark_opponent_coverage),
+    }
+
+
+def _suggested_audit_cli_flags(result: Any) -> tuple[str, ...]:
+    config = _suggested_audit_config(result)
+    require_benchmark = bool(config["require_benchmark"])
+    benchmark_only_fields = {
+        "min_latest_benchmark_win_rate",
+        "min_latest_benchmark_games",
+        "max_latest_benchmark_capped_rate",
+        "max_latest_benchmark_average_decision_rounds",
+        "max_benchmark_win_rate_drop",
+    }
+    flags: list[str] = []
+    for field_name, flag_name in (
+        ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
+        ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
+        ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
+        ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
+        ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
+        ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+        ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
+        ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
+    ):
+        if not require_benchmark and field_name in benchmark_only_fields:
+            continue
+        value = config[field_name]
+        if value is not None:
+            flags.extend((flag_name, str(value)))
+    if not require_benchmark:
+        flags.append("--allow-missing-benchmark")
+    if not config["require_benchmark_opponent_coverage"]:
+        flags.append("--allow-missing-benchmark-opponents")
+    return tuple(flags)
+
+
+def _aggregate_floor(values: Any, *, aggregate_mode: str) -> float | None:
+    return _min_optional(values) if aggregate_mode == "envelope" else _median_optional(values)
+
+
+def _aggregate_ceiling(values: Any, *, aggregate_mode: str) -> float | None:
+    return _max_optional(values) if aggregate_mode == "envelope" else _median_optional(values)
+
+
+def _aggregate_minimum_count(values: Any, *, aggregate_mode: str) -> int:
+    present = tuple(sorted(int(value) for value in values))
+    if aggregate_mode == "envelope":
+        return min(present)
+    return math.floor(_median(present))
+
+
+def _aggregate_maximum_count(values: Any, *, aggregate_mode: str) -> int:
+    present = tuple(sorted(int(value) for value in values))
+    if aggregate_mode == "envelope":
+        return max(present)
+    return math.ceil(_median(present))
+
+
 def _min_optional(values: Any) -> float | None:
     present = tuple(float(value) for value in values if value is not None)
     return min(present) if present else None
@@ -1276,6 +1322,20 @@ def _min_optional(values: Any) -> float | None:
 def _max_optional(values: Any) -> float | None:
     present = tuple(float(value) for value in values if value is not None)
     return max(present) if present else None
+
+
+def _median_optional(values: Any) -> float | None:
+    present = tuple(sorted(float(value) for value in values if value is not None))
+    return _round_threshold(_median(present)) if present else None
+
+
+def _median(values: tuple[float, ...] | tuple[int, ...]) -> float:
+    if not values:
+        raise ValueError("cannot calculate median of empty values.")
+    middle = len(values) // 2
+    if len(values) % 2:
+        return float(values[middle])
+    return (float(values[middle - 1]) + float(values[middle])) / 2.0
 
 
 def _floor_observed_rate(value: float | None, *, margin: float) -> float | None:

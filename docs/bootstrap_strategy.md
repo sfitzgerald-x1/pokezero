@@ -237,10 +237,11 @@ The audit command reads linear or neural self-play manifests and does not run ne
 
 By default, the audit also requires the latest benchmark to retain fixed baseline opponents, currently `random-legal` and `simple-legal`, once they have appeared in prior benchmark evidence. This prevents a run from looking healthy after silently dropping fixed baselines, while still allowing incumbent or historical checkpoint opponents to rotate. Use `--allow-missing-benchmark-opponents` only when intentionally changing the benchmark set.
 
-Use `audit-calibrate` on one or more pilot manifests to derive a starter audit config from observed CPU runs before enforcing stricter profiles. With one path, the command reports thresholds for that run. With multiple paths, it aggregates per-run calibrations into a single permissive floor/ceiling set intended to keep every supplied pilot run passable under the requested margin:
+Use `audit-calibrate` on one or more pilot manifests to derive a starter audit config from observed CPU runs before enforcing stricter profiles. With one path, the command reports thresholds for that run. With multiple paths, the default `--aggregate-mode median` combines per-run calibrations with a median-style reducer so one noisy pilot does not silently loosen every threshold. Use `--aggregate-mode envelope` only when the intended output is a permissive floor/ceiling set that keeps every supplied pilot run passable under the requested margin:
 
 ```bash
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --margin 0.10
+python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --aggregate-mode envelope
 ```
 
 Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, or `--audit-require-latest-promotion`.

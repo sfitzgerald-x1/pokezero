@@ -146,6 +146,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_AUDIT_CALIBRATION_MARGIN,
         help="Fractional safety margin applied to observed threshold suggestions.",
     )
+    audit_calibrate.add_argument(
+        "--aggregate-mode",
+        choices=("median", "envelope"),
+        default="median",
+        help=(
+            "How multiple run calibrations are combined. median resists noisy pilots; "
+            "envelope keeps every supplied pilot passable."
+        ),
+    )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
 
@@ -501,7 +510,7 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     result = (
         calibrate_run_audit(args.paths[0], margin=args.margin)
         if len(args.paths) == 1
-        else calibrate_run_audits(args.paths, margin=args.margin)
+        else calibrate_run_audits(args.paths, margin=args.margin, aggregate_mode=args.aggregate_mode)
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
@@ -707,6 +716,7 @@ def _print_audit_calibration(result) -> None:
         print(f"manifest: {result.manifest_path}")
     else:
         print(f"runs: {result.run_count}")
+        print(f"aggregate_mode: {result.aggregate_mode}")
         print("manifests:")
         for path in result.paths:
             print(f"- {path}")
