@@ -3781,6 +3781,8 @@ def _cpu_long_run_calibration_sample(
         failed_checks = ", ".join(str(check) for check in report.get("failed_checks", ())) or "-"
         raise ValueError(f"derived run report did not pass: failed_checks={failed_checks}")
 
+    runtime_audit = dict(_cpu_long_run_runtime_audit_report(summary))
+    runtime_audit.pop("config", None)
     latest_benchmark_games = _cpu_long_run_report_latest_benchmark_games(report)
     latest_benchmark_win_rate = _optional_float_from_mapping(report, "latest_benchmark_win_rate")
     require_benchmark = latest_benchmark_games > 0 and latest_benchmark_win_rate is not None
@@ -3797,6 +3799,13 @@ def _cpu_long_run_calibration_sample(
         "label": _cpu_long_run_compare_label(summary_path, _cpu_long_run_summary_run_dir(summary)),
         "status": status,
         "derived_run_report_source": report_source,
+        "runtime_audit": runtime_audit,
+        "runtime_audit_source": runtime_audit.get("source"),
+        "runtime_audit_available": runtime_audit.get("available"),
+        "runtime_audit_profile": runtime_audit.get("audit_profile"),
+        "runtime_audit_config_path": runtime_audit.get("audit_config_path"),
+        "runtime_audit_recorded_evaluation_games": runtime_audit.get("recorded_evaluation_games"),
+        "runtime_audit_command_flags": list(runtime_audit.get("post_iteration_command_flags") or ()),
         "source_type": str(report.get("source_type") or "unknown"),
         "latest_iteration": report.get("latest_iteration"),
         "benchmark_iteration_count": 1 if require_benchmark else 0,
@@ -4131,6 +4140,20 @@ def _print_cpu_long_run_calibration(payload: Mapping[str, object]) -> None:
     print("suggested_post_iteration_command_flags:")
     command_flags = tuple(str(flag) for flag in payload.get("suggested_post_iteration_command_flags", ()))
     print(" ".join(command_flags) if command_flags else "-")
+    samples = tuple(sample for sample in payload.get("samples", ()) if isinstance(sample, Mapping))
+    if samples:
+        print("runtime_audit_samples:")
+        for sample in samples:
+            flags = tuple(str(flag) for flag in sample.get("runtime_audit_command_flags", ()))
+            print(
+                f"- {sample.get('label')}: "
+                f"available={_format_optional_bool(sample.get('runtime_audit_available'))} "
+                f"source={_format_summary_value(sample.get('runtime_audit_source'))} "
+                f"profile={_format_summary_value(sample.get('runtime_audit_profile'))} "
+                f"config={_format_summary_value(sample.get('runtime_audit_config_path'))} "
+                f"recorded_eval={_format_summary_value(sample.get('runtime_audit_recorded_evaluation_games'))} "
+                f"flags={_shell_join(flags) if flags else '-'}"
+            )
     if "calibration_sufficient" in payload:
         errors = tuple(str(error) for error in payload.get("calibration_sufficiency_errors", ()))
         _print_calibration_sufficiency(errors)
