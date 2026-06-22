@@ -363,6 +363,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
     )
     pilot_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    pilot_report.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="Return non-zero unless the derived audit_config_ready verdict is true.",
+    )
     pilot_report.set_defaults(func=_cpu_pilot_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -2109,12 +2114,13 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         if isinstance(recipe, Mapping)
         else None
     )
+    exit_code = _cpu_pilot_report_exit_code(status, artifact_report, require_ready=args.require_ready)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["pilot_artifact_report"] = artifact_report
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if status == "passed" else 2
+        return exit_code
     print("cpu_pilot_report:")
     print(f"summary: {summary_path}")
     print(f"status: {_status_label(status)}")
@@ -2140,7 +2146,7 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         )
         print(f"replay_audit_failed: {_format_summary_value(replay_artifact.get('audit_failed'))}")
         print(f"replay_failed_check_count: {_format_summary_value(replay_artifact.get('failed_check_count'))}")
-        print(f"audit_config_ready: {_format_optional_bool(bool(artifact_report['audit_config_ready']))}")
+        print(f"audit_config_ready: {_format_optional_bool(artifact_report['audit_config_ready'])}")
         reasons = artifact_report["audit_config_ready_reasons"]
         if isinstance(reasons, list) and reasons:
             print("audit_config_ready_reasons:")
@@ -2165,7 +2171,20 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
                 f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
-    return 0 if status == "passed" else 2
+    return exit_code
+
+
+def _cpu_pilot_report_exit_code(
+    status: str,
+    artifact_report: Mapping[str, object] | None,
+    *,
+    require_ready: bool,
+) -> int:
+    if status != "passed":
+        return 2
+    if require_ready and (artifact_report is None or artifact_report.get("audit_config_ready") is not True):
+        return 2
+    return 0
 
 
 def _step_output_json_path(step: Mapping[str, object]) -> Path | None:
@@ -2229,6 +2248,7 @@ def _cpu_pilot_artifact_report(summary: Mapping[str, object], recipe: Mapping[st
         "available": calibration_summary is not None,
         "sufficient": None,
         "written_audit_config_path": None,
+        "expected_audit_config_path": None if recipe.get("audit_config_path") is None else str(recipe.get("audit_config_path")),
         "audit_config_write_error": None,
     }
     if calibration_summary is not None:
@@ -2276,12 +2296,19 @@ def _cpu_pilot_audit_config_not_ready_reasons(
             reasons.append("calibration_not_sufficient")
         if not calibration.get("written_audit_config_path"):
             reasons.append("calibrated_audit_config_not_written")
+        elif (
+            calibration.get("expected_audit_config_path")
+            and str(calibration.get("written_audit_config_path")) != str(calibration.get("expected_audit_config_path"))
+        ):
+            reasons.append("calibrated_audit_config_path_mismatch")
         if calibration.get("audit_config_write_error"):
             reasons.append("calibrated_audit_config_write_error")
     if replay.get("available") is not True:
         reasons.append("replay_artifact_missing")
     elif replay.get("audit_failed") is not False:
         reasons.append("replay_audit_failed")
+    elif replay.get("failed_check_count") not in (0, None):
+        reasons.append("replay_failed_checks_present")
     return reasons
 
 
