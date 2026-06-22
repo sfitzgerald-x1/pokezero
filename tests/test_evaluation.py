@@ -3385,6 +3385,7 @@ if __name__ == "__main__":
         self.assertIn("status: PASS", output)
         self.assertIn("long_run_ready: yes", output)
         self.assertIn("failed_reason: -", output)
+        self.assertIn("derived_run_report_source: computed", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS run guarded CPU self-play long run returncode=0", output)
         self.assertIn("derived_run_report:", output)
@@ -3510,6 +3511,78 @@ if __name__ == "__main__":
         self.assertNotIn("derived_audit_required", payload)
         self.assertNotIn("derived_audit_requirement_passed", payload)
         self.assertFalse(payload["derived_run_report"]["audit_passed"])
+
+    def test_eval_cli_cpu_long_run_report_prefers_persisted_derived_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["derived_run_report"] = {
+                "available": True,
+                "manifest_available": True,
+                "error": None,
+                "audit_source": "profile",
+                "audit_profile": "smoke",
+                "audit_config_path": None,
+                "audit_passed": True,
+                "latest_iteration": 3,
+                "latest_benchmark_win_rate": 0.8,
+                "best_benchmark_win_rate": 0.8,
+                "latest_collection_capped_rate": 0.0,
+                "latest_benchmark_capped_rate": 0.0,
+                "latest_average_decision_rounds": 35.0,
+                "latest_benchmark_average_decision_rounds": 37.0,
+                "latest_process_peak_rss_mb": 111.0,
+                "failed_checks": [],
+            }
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--json", "--require-derived-audit"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["derived_audit_required"])
+        self.assertTrue(payload["derived_audit_requirement_passed"])
+        self.assertEqual(payload["derived_run_report_source"], "persisted")
+        self.assertEqual(payload["derived_run_report"]["latest_iteration"], 3)
+        self.assertEqual(payload["derived_run_report"]["latest_benchmark_win_rate"], 0.8)
+
+    def test_eval_cli_cpu_long_run_report_refresh_ignores_persisted_derived_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["derived_run_report"] = {
+                "available": True,
+                "error": None,
+                "audit_passed": True,
+                "latest_iteration": 3,
+                "latest_benchmark_win_rate": 0.8,
+                "failed_checks": [],
+            }
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-report",
+                        str(run_root),
+                        "--json",
+                        "--require-derived-audit",
+                        "--refresh-derived-audit",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(payload["derived_audit_required"])
+        self.assertFalse(payload["derived_audit_requirement_passed"])
+        self.assertEqual(payload["derived_run_report_source"], "computed")
+        self.assertFalse(payload["derived_run_report"]["available"])
+        self.assertEqual(payload["derived_run_report"]["error"], "manifest_not_found")
 
     def test_eval_cli_cpu_long_run_report_require_derived_audit_fails_when_manifest_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
