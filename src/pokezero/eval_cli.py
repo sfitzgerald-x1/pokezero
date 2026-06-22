@@ -431,6 +431,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero unless all discovered nested smoke pilots have readable passing summaries and requested preflights.",
     )
+    pilot_report.add_argument(
+        "--require-calibration-run-count",
+        type=int,
+        default=0,
+        help="Return non-zero unless the generated audit config was calibrated from at least this many source runs.",
+    )
+    pilot_report.add_argument(
+        "--require-calibration-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Return non-zero unless the generated audit config was calibrated from at least this many benchmarked iterations.",
+    )
+    pilot_report.add_argument(
+        "--require-calibration-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Return non-zero unless the generated audit config's calibrated benchmark-game floor meets this value.",
+    )
     pilot_report.set_defaults(func=_cpu_pilot_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -2636,11 +2654,18 @@ def _run_recipe_with_summary(
 
 
 def _cpu_pilot_report(args: argparse.Namespace) -> int:
+    _validate_cpu_pilot_report_args(args)
     summary_path, summary = _load_cpu_pilot_summary(args.path)
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe")
     artifact_report = (
-        _cpu_pilot_artifact_report(summary, recipe)
+        _cpu_pilot_artifact_report(
+            summary,
+            recipe,
+            require_calibration_run_count=args.require_calibration_run_count,
+            require_calibration_benchmark_iterations=args.require_calibration_benchmark_iterations,
+            require_calibration_min_benchmark_games=args.require_calibration_min_benchmark_games,
+        )
         if isinstance(recipe, Mapping)
         else None
     )
@@ -2655,6 +2680,7 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         smoke_report,
         require_ready=args.require_ready,
         require_smoke_ready=args.require_smoke_ready,
+        require_calibration_requirements=_calibration_requirements_requested(args),
     )
     if args.json:
         payload = dict(summary)
@@ -2688,6 +2714,22 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         )
         print(f"replay_audit_failed: {_format_summary_value(replay_artifact.get('audit_failed'))}")
         print(f"replay_failed_check_count: {_format_summary_value(replay_artifact.get('failed_check_count'))}")
+        print(
+            "audit_config_calibration_requirements: "
+            f"{_format_optional_bool(artifact_report.get('audit_config_calibration_requirements_passed'))}"
+        )
+        failed_calibration_checks = [
+            check
+            for check in artifact_report.get("audit_config_calibration_requirement_checks", [])
+            if isinstance(check, Mapping) and check.get("passed") is not True
+        ]
+        if failed_calibration_checks:
+            print("audit_config_calibration_requirement_failures:")
+            for check in failed_calibration_checks:
+                print(
+                    f"- {check.get('name')}: observed={_format_summary_value(check.get('observed'))} "
+                    f"threshold={_format_summary_value(check.get('threshold'))}"
+                )
         print(f"audit_config_ready: {_format_optional_bool(artifact_report['audit_config_ready'])}")
         reasons = artifact_report["audit_config_ready_reasons"]
         if isinstance(reasons, list) and reasons:
@@ -2725,14 +2767,35 @@ def _cpu_pilot_report_exit_code(
     *,
     require_ready: bool,
     require_smoke_ready: bool,
+    require_calibration_requirements: bool,
 ) -> int:
     if status != "passed":
+        return 2
+    if (
+        require_calibration_requirements
+        and (
+            artifact_report is None
+            or artifact_report.get("audit_config_calibration_requirements_passed") is not True
+        )
+    ):
         return 2
     if require_ready and (artifact_report is None or artifact_report.get("audit_config_ready") is not True):
         return 2
     if require_smoke_ready and (smoke_report is None or smoke_report.get("smoke_report_ready") is not True):
         return 2
     return 0
+
+
+def _validate_cpu_pilot_report_args(args: argparse.Namespace) -> None:
+    _validate_audit_config_report_args(args)
+
+
+def _calibration_requirements_requested(args: argparse.Namespace) -> bool:
+    return (
+        args.require_calibration_run_count > 0
+        or args.require_calibration_benchmark_iterations > 0
+        or args.require_calibration_min_benchmark_games > 0
+    )
 
 
 def _step_output_json_path(step: Mapping[str, object]) -> Path | None:
@@ -3046,11 +3109,24 @@ def _cpu_smoke_preflight_status_label(report: Mapping[str, object]) -> str:
     return "UNKNOWN"
 
 
-def _cpu_pilot_artifact_report(summary: Mapping[str, object], recipe: Mapping[str, object]) -> dict[str, object]:
+def _cpu_pilot_artifact_report(
+    summary: Mapping[str, object],
+    recipe: Mapping[str, object],
+    *,
+    require_calibration_run_count: int,
+    require_calibration_benchmark_iterations: int,
+    require_calibration_min_benchmark_games: int,
+) -> dict[str, object]:
     calibration_path = recipe.get("calibration_output_path")
     replay_path = recipe.get("replay_output_path")
     calibration_summary = _load_pilot_report_json_summary(calibration_path)
     replay_summary = _load_pilot_report_json_summary(replay_path)
+    audit_config = _cpu_pilot_audit_config_calibration_report(
+        recipe.get("audit_config_path"),
+        require_calibration_run_count=require_calibration_run_count,
+        require_calibration_benchmark_iterations=require_calibration_benchmark_iterations,
+        require_calibration_min_benchmark_games=require_calibration_min_benchmark_games,
+    )
     calibration = {
         "path": None if calibration_path is None else str(calibration_path),
         "available": calibration_summary is not None,
@@ -3080,19 +3156,70 @@ def _cpu_pilot_artifact_report(summary: Mapping[str, object], recipe: Mapping[st
                 "failed_check_count": _comparison_failed_check_count(replay_summary),
             }
         )
-    reasons = _cpu_pilot_audit_config_not_ready_reasons(summary, calibration, replay)
+    reasons = _cpu_pilot_audit_config_not_ready_reasons(summary, calibration, replay, audit_config)
     return {
         "calibration": calibration,
         "replay": replay,
+        "audit_config": audit_config,
+        "audit_config_calibration_requirements_requested": audit_config["calibration_requirements_requested"],
+        "audit_config_calibration_requirements_passed": audit_config["calibration_requirements_passed"],
+        "audit_config_calibration_requirement_checks": audit_config["calibration_requirement_checks"],
         "audit_config_ready": not reasons,
         "audit_config_ready_reasons": reasons,
     }
+
+
+def _cpu_pilot_audit_config_calibration_report(
+    audit_config_path: object,
+    *,
+    require_calibration_run_count: int,
+    require_calibration_benchmark_iterations: int,
+    require_calibration_min_benchmark_games: int,
+) -> dict[str, object]:
+    requirements = {
+        "run_count": require_calibration_run_count,
+        "benchmark_iterations": require_calibration_benchmark_iterations,
+        "min_benchmark_games": require_calibration_min_benchmark_games,
+    }
+    requested = any(value > 0 for value in requirements.values())
+    report: dict[str, object] = {
+        "path": None if audit_config_path is None else str(audit_config_path),
+        "available": False,
+        "read_error": None,
+        "calibration_requirements": requirements,
+        "calibration_requirements_requested": requested,
+        "calibration_requirement_checks": [],
+        "calibration_requirements_passed": None,
+    }
+    if not requested:
+        return report
+    if audit_config_path is None:
+        report["read_error"] = "audit config path unavailable"
+        report["calibration_requirements_passed"] = False
+        return report
+    try:
+        payload = _load_audit_config_report_payload(Path(str(audit_config_path)))
+    except (OSError, ValueError, KeyError) as exc:
+        report["read_error"] = str(exc)
+        report["calibration_requirements_passed"] = False
+        return report
+    checks = _audit_config_calibration_requirement_checks(
+        payload.get("calibration"),
+        require_run_count=require_calibration_run_count,
+        require_benchmark_iterations=require_calibration_benchmark_iterations,
+        require_min_benchmark_games=require_calibration_min_benchmark_games,
+    )
+    report["available"] = True
+    report["calibration_requirement_checks"] = checks
+    report["calibration_requirements_passed"] = all(bool(check["passed"]) for check in checks)
+    return report
 
 
 def _cpu_pilot_audit_config_not_ready_reasons(
     summary: Mapping[str, object],
     calibration: Mapping[str, object],
     replay: Mapping[str, object],
+    audit_config: Mapping[str, object],
 ) -> list[str]:
     reasons: list[str] = []
     if summary.get("status") != "passed":
@@ -3117,6 +3244,11 @@ def _cpu_pilot_audit_config_not_ready_reasons(
         reasons.append("replay_audit_failed")
     elif replay.get("failed_check_count") not in (0, None):
         reasons.append("replay_failed_checks_present")
+    if audit_config.get("calibration_requirements_requested") is True:
+        if audit_config.get("available") is not True:
+            reasons.append("audit_config_unavailable_for_calibration_requirements")
+        elif audit_config.get("calibration_requirements_passed") is not True:
+            reasons.append("audit_config_calibration_requirements_not_met")
     return reasons
 
 
