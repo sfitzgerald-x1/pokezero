@@ -29,6 +29,7 @@ DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
 DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 AUDIT_CALIBRATION_AGGREGATE_MODES = ("median", "envelope")
+RUN_AUDIT_CONFIG_SCHEMA_VERSION = "pokezero.run_audit_config.v1"
 _THRESHOLD_EPSILON = 1e-12
 
 
@@ -449,6 +450,74 @@ class RunAuditFailure(RuntimeError):
         super().__init__(
             f"run audit failed for {result.manifest_path}: {failed_summary}"
         )
+
+
+def run_audit_config_to_dict(config: RunAuditConfig) -> dict[str, float | int | bool | None]:
+    return {
+        "min_latest_benchmark_win_rate": config.min_latest_benchmark_win_rate,
+        "min_latest_benchmark_games": config.min_latest_benchmark_games,
+        "max_latest_collection_capped_rate": config.max_latest_collection_capped_rate,
+        "max_latest_benchmark_capped_rate": config.max_latest_benchmark_capped_rate,
+        "max_latest_average_decision_rounds": config.max_latest_average_decision_rounds,
+        "max_latest_benchmark_average_decision_rounds": config.max_latest_benchmark_average_decision_rounds,
+        "max_latest_process_peak_rss_mb": config.max_latest_process_peak_rss_mb,
+        "max_benchmark_win_rate_drop": config.max_benchmark_win_rate_drop,
+        "max_consecutive_promotion_failures": config.max_consecutive_promotion_failures,
+        "require_benchmark": config.require_benchmark,
+        "require_latest_promotion": config.require_latest_promotion,
+        "require_benchmark_opponent_coverage": config.require_benchmark_opponent_coverage,
+    }
+
+
+def run_audit_config_from_dict(payload: Mapping[str, Any]) -> RunAuditConfig:
+    return RunAuditConfig(
+        min_latest_benchmark_win_rate=float(payload["min_latest_benchmark_win_rate"]),
+        min_latest_benchmark_games=int(payload["min_latest_benchmark_games"]),
+        max_latest_collection_capped_rate=float(payload["max_latest_collection_capped_rate"]),
+        max_latest_benchmark_capped_rate=float(payload["max_latest_benchmark_capped_rate"]),
+        max_latest_average_decision_rounds=_optional_float(payload.get("max_latest_average_decision_rounds")),
+        max_latest_benchmark_average_decision_rounds=_optional_float(
+            payload.get("max_latest_benchmark_average_decision_rounds")
+        ),
+        max_latest_process_peak_rss_mb=_optional_float(payload.get("max_latest_process_peak_rss_mb")),
+        max_benchmark_win_rate_drop=float(payload["max_benchmark_win_rate_drop"]),
+        max_consecutive_promotion_failures=int(payload["max_consecutive_promotion_failures"]),
+        require_benchmark=_required_bool(payload, "require_benchmark"),
+        require_latest_promotion=_required_bool(payload, "require_latest_promotion"),
+        require_benchmark_opponent_coverage=_required_bool(payload, "require_benchmark_opponent_coverage"),
+    )
+
+
+def load_run_audit_config(path: Path) -> RunAuditConfig:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"run audit config must be a JSON object: {path}")
+    if payload.get("schema_version") != RUN_AUDIT_CONFIG_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported run audit config schema: "
+            f"{payload.get('schema_version')!r}; expected {RUN_AUDIT_CONFIG_SCHEMA_VERSION!r}."
+        )
+    config = payload.get("config")
+    if not isinstance(config, Mapping):
+        raise ValueError(f"run audit config payload must include a config object: {path}")
+    return run_audit_config_from_dict(config)
+
+
+def run_audit_config_payload(
+    config: RunAuditConfig,
+    *,
+    source: Mapping[str, Any] | None = None,
+    calibration: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+        "config": run_audit_config_to_dict(config),
+    }
+    if source is not None:
+        payload["source"] = dict(source)
+    if calibration is not None:
+        payload["calibration"] = dict(calibration)
+    return payload
 
 
 def audit_run(
@@ -1352,6 +1421,13 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _required_bool(payload: Mapping[str, Any], field_name: str) -> bool:
+    value = payload[field_name]
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean.")
+    return value
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -1470,6 +1546,7 @@ def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]
         ),
         "max_consecutive_promotion_failures": result.max_consecutive_promotion_failures,
         "require_benchmark": require_benchmark,
+        "require_latest_promotion": False,
         "require_benchmark_opponent_coverage": bool(result.require_benchmark_opponent_coverage),
     }
 

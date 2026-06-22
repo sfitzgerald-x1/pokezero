@@ -18,7 +18,7 @@ from pokezero.linear_policy import (
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.evaluation import PromotionGateConfig
-from pokezero.run_audit import RunAuditConfig, RunAuditFailure
+from pokezero.run_audit import RunAuditConfig, RunAuditFailure, run_audit_config_payload
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
@@ -1519,6 +1519,69 @@ class SelfPlayTest(unittest.TestCase):
         self.assertFalse(audit_config.require_benchmark)
         self.assertTrue(audit_config.require_latest_promotion)
         self.assertTrue(audit_config.require_benchmark_opponent_coverage)
+
+    def test_selfplay_cli_iterate_uses_post_iteration_audit_config_file(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+        )
+        fake_epoch = SimpleNamespace(loss=0.25, accuracy=0.75)
+        fake_iteration = SimpleNamespace(
+            iteration=1,
+            metrics=fake_metrics,
+            training=SimpleNamespace(final_metrics=fake_epoch),
+            checkpoint_path=Path("run/iteration-0001/linear-policy.json"),
+        )
+        fake_result = SimpleNamespace(
+            run_dir=Path("run"),
+            iterations=(fake_iteration,),
+            latest_checkpoint_path=Path("run/iteration-0001/linear-policy.json"),
+        )
+        audit_defaults = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.72,
+            min_latest_benchmark_games=8,
+            require_benchmark=True,
+            require_benchmark_opponent_coverage=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            config_path.write_text(json.dumps(run_audit_config_payload(audit_defaults), indent=2), encoding="utf-8")
+            with (
+                patch("pokezero.selfplay_cli.run_selfplay_iterations", return_value=fake_result) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = selfplay_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--evaluation-games",
+                        "2",
+                        "--audit-after-iteration",
+                        "--audit-config",
+                        str(config_path),
+                        "--audit-min-latest-benchmark-games",
+                        "4",
+                        "--audit-allow-missing-benchmark-opponents",
+                    ]
+                )
+
+        audit_config = run.call_args.kwargs["post_iteration_audit_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(audit_config.min_latest_benchmark_win_rate, 0.72)
+        self.assertEqual(audit_config.min_latest_benchmark_games, 4)
+        self.assertTrue(audit_config.require_benchmark)
+        self.assertFalse(audit_config.require_benchmark_opponent_coverage)
 
     def test_selfplay_cli_iterate_profile_boolean_overrides(self) -> None:
         fake_metrics = CollectionMetrics(
