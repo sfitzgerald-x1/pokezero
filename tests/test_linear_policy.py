@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pokezero.linear_policy as linear_policy_module
 from pokezero.actions import ACTION_SCHEMA_VERSION
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
@@ -261,6 +262,30 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertIn("features_from_window", payload["sources"])
         self.assertIn("def features_from_window", payload["sources"]["features_from_window"])
         self.assertRegex(linear_feature_fingerprint(), r"^[0-9a-f]{64}$")
+
+    def test_linear_feature_fingerprint_changes_when_extractor_source_changes(self) -> None:
+        original = linear_feature_fingerprint()
+        linear_feature_fingerprint.cache_clear()
+        try:
+            with patch.object(
+                linear_policy_module,
+                "_callable_fingerprint_source",
+                side_effect=lambda function: f"changed:{function.__name__}",
+            ):
+                changed = linear_feature_fingerprint()
+        finally:
+            linear_feature_fingerprint.cache_clear()
+
+        self.assertNotEqual(changed, original)
+
+    def test_linear_feature_fingerprint_requires_source_files(self) -> None:
+        linear_feature_fingerprint.cache_clear()
+        try:
+            with patch.object(linear_policy_module.inspect, "getsource", side_effect=OSError("missing")):
+                with self.assertRaisesRegex(RuntimeError, "requires source files"):
+                    linear_feature_fingerprint()
+        finally:
+            linear_feature_fingerprint.cache_clear()
 
     def test_linear_feature_extractor_golden_hash(self) -> None:
         features = features_from_window(

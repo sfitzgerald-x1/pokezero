@@ -64,9 +64,10 @@ def _linear_feature_fingerprint_payload() -> dict[str, Any]:
 def _callable_fingerprint_source(function: Any) -> str:
     try:
         return inspect.getsource(function)
-    except OSError:
-        code = function.__code__
-        return repr((code.co_code, code.co_consts, code.co_names))
+    except OSError as exc:
+        raise RuntimeError(
+            "Linear feature fingerprint requires source files for the feature extractor."
+        ) from exc
 
 
 @dataclass(frozen=True)
