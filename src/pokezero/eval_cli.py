@@ -913,6 +913,7 @@ def _cpu_smoke_plan(args: argparse.Namespace) -> int:
     print("cpu_smoke_plan:")
     print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
     print("note: smoke-profile thresholds validate command flow, not policy strength.")
+    print("note: replace placeholder paths, including --showdown-root, before running.")
     print("commands:")
     for index, step in enumerate(recipe["steps"], start=1):
         print(f"{index}. {step['name']}")

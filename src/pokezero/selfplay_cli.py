@@ -173,8 +173,12 @@ def main(argv: list[str] | None = None) -> int:
 def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
-    if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
-        raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
+    auto_promotion_gate_config = _auto_promotion_gate_config_from_args(args) if args.auto_promote else None
+    if args.auto_promote and args.evaluation_games <= 0 and auto_promotion_gate_config.require_benchmark:
+        raise ValueError(
+            "--auto-promote requires --evaluation-games > 0 unless the resolved promotion gate profile "
+            "allows missing benchmarks."
+        )
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
     validate_post_iteration_audit_evaluation_games(
         post_iteration_audit_config,
@@ -268,17 +272,21 @@ def _print_run_summary(result) -> None:
 def _auto_promotion_config_from_args(args: argparse.Namespace) -> SelfPlayPromotionConfig | None:
     if not args.auto_promote:
         return None
-    gate_args = argparse.Namespace(**vars(args))
-    gate_args.registry = None
     label_prefix = args.promotion_label_prefix if args.promotion_label_prefix else None
     return SelfPlayPromotionConfig(
         registry_path=args.promotion_registry,
-        gate_config=_gate_config_from_args(gate_args),
+        gate_config=_auto_promotion_gate_config_from_args(args),
         artifact_dir=args.promotion_artifact_dir,
         label_prefix=label_prefix,
         notes=args.promotion_notes,
         allow_duplicate=args.allow_duplicate_promotion,
     )
+
+
+def _auto_promotion_gate_config_from_args(args: argparse.Namespace):
+    gate_args = argparse.Namespace(**vars(args))
+    gate_args.registry = None
+    return _gate_config_from_args(gate_args)
 
 
 def _promotion_status(promotion) -> str:

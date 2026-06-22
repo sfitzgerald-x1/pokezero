@@ -1640,6 +1640,32 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertFalse(run.call_args.kwargs["auto_promotion_config"].gate_config.require_benchmark)
 
+    def test_selfplay_cli_auto_promote_respects_smoke_profile_missing_benchmark_default(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.selfplay_cli.run_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = selfplay_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--auto-promote",
+                        "--promotion-registry",
+                        "promotions.json",
+                        "--profile",
+                        "smoke",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        gate_config = run.call_args.kwargs["auto_promotion_config"].gate_config
+        self.assertFalse(gate_config.require_benchmark)
+        self.assertEqual(gate_config.min_benchmark_games, 0)
+
     def test_selfplay_cli_report_prints_manifest_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
