@@ -36,18 +36,19 @@ Implemented:
 - `cpu-readiness-report` can roll up core pilot readiness, long-run derived audit health, and promotion-registry opponent-pool readiness from existing artifacts without launching games.
 - Source provenance is recorded in major run artifacts so dirty or unexpected code snapshots are visible during review.
 - A read-only Gen 3 randbat belief sidecar and compact belief observation features exist, but the detailed sidecar state is not required for the current linear CPU loop.
+- A real local smoke-scale `cpu-pilot-run` has passed against a local Showdown checkout with two seeded pilots, deterministic teacher scenario preflight, rollout-backed `status_pressure` branch gates, audit calibration, and calibrated audit replay. This proves the wrapper path works on local artifacts; it is still too thin to define long-run quality thresholds.
 
 ## What Is Left
 
 The remaining work is less about wiring and more about making the loop empirically usable.
 
-1. Run a real local CPU pilot suite.
+1. Run a stronger local CPU pilot suite for long-run threshold evidence.
 
-   Use `cpu-pilot-run` with the current teacher scenario preflight and representative teacher-branch gates. The purpose is to prove the wrappers, local Showdown path, teacher bootstrap, linear self-play, audit calibration, and config replay all work together outside unit tests.
+   The first smoke-scale local pilot proved that the wrappers, local Showdown path, teacher bootstrap, linear self-play, audit calibration, and config replay work together outside unit tests. The next pilot should increase pilot count, games, benchmark games, and calibration sufficiency floors enough to produce a credible starter audit config.
 
-2. Promote a calibrated audit config from pilot evidence.
+2. Promote a calibrated audit config from stronger pilot evidence.
 
-   The pilot suite should produce a reusable audit config only after enough pilot manifests, benchmark iterations, and benchmark games are present. Thin smoke thresholds should not become the long-run policy.
+   The smoke-scale pilot did write and replay a calibrated config, but it used the minimum benchmark-game floor needed for plumbing validation. A reusable long-run config should come only after enough pilot manifests, benchmark iterations, and benchmark games are present. Thin smoke thresholds should not become the long-run policy.
 
 3. Generate a current scripted-teacher bootstrap checkpoint.
 
@@ -77,16 +78,17 @@ The remaining work is less about wiring and more about making the loop empirical
 
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
-1. Run a real `cpu-pilot-run` and inspect it with `cpu-pilot-report` plus `cpu-readiness-report`.
-2. Add missing preflight or audit checks discovered while attempting that real pilot.
-3. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
-4. Run and document a reproducible teacher-bootstrap experiment.
-5. Run and document comparable cold-start and teacher-bootstrap linear self-play experiments.
-6. Tighten long-run audit thresholds based on the pilot and early long-run artifacts.
+1. Run a stronger `cpu-pilot-run` with higher evidence floors, then inspect it with `cpu-pilot-report` plus `cpu-readiness-report`.
+2. Add missing preflight or audit checks discovered while scaling that pilot beyond the smoke profile.
+3. Run and document a reproducible teacher-bootstrap experiment.
+4. Run and document comparable cold-start and teacher-bootstrap linear self-play experiments.
+5. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
+6. Tighten long-run audit thresholds based on the stronger pilot and early long-run artifacts.
 
 ## Progress Updates
 
 - Added `cpu-readiness-report` so the core pilot, long-run, and promotion readiness artifacts can be evaluated in one read-only command. This closes the immediate reporting gap for existing artifacts; the next task is to run a real local CPU pilot suite and use the report to identify any missing preflight or audit checks.
+- Ran a real local smoke-scale CPU pilot suite at `runs/cpu-pilots-local-20260622-smoke-1` against `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`. The suite passed in 139.5 seconds with two seeded pilots, deterministic teacher scenario preflights passing 13/13 scenarios per pilot, rollout-backed `status_pressure` branch gates passing with 13 aggregate observations, zero capped games in the nested smoke self-play runs, generated audit calibration, and calibrated audit replay. `cpu-pilot-report --require-ready --require-smoke-ready --require-calibration-run-count 2 --require-calibration-benchmark-iterations 4 --require-calibration-min-benchmark-games 1` passed. `cpu-readiness-report --pilot-summary ...` reports the pilot item as PASS while the overall checklist remains not ready because no long-run summary or promotion registry was supplied.
 
 ## Out Of Scope For This Milestone
 
