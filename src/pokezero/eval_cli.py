@@ -933,7 +933,11 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     if args.compare_profile is not None:
         profile = evaluation_profile(args.compare_profile)
         profile_audit = _profile_audit_payload(args.paths, profile_name=profile.name, config=profile.audit_config)
-    sufficiency_requested = args.require_run_count > 0 or args.require_benchmark_iterations > 0
+    sufficiency_requested = (
+        args.require_run_count > 0
+        or args.require_benchmark_iterations > 0
+        or args.require_min_benchmark_games > 0
+    )
     sufficiency_errors = _calibration_sufficiency_errors(
         result,
         require_run_count=args.require_run_count,

@@ -45,6 +45,25 @@ _RUN_AUDIT_CONFIG_FIELDS = (
     "require_latest_promotion",
     "require_benchmark_opponent_coverage",
 )
+_RUN_AUDIT_CONFIG_FLOAT_FIELDS = frozenset(
+    (
+        "min_latest_benchmark_win_rate",
+        "max_latest_collection_capped_rate",
+        "max_latest_benchmark_capped_rate",
+        "max_benchmark_win_rate_drop",
+    )
+)
+_RUN_AUDIT_CONFIG_OPTIONAL_FLOAT_FIELDS = frozenset(
+    (
+        "max_latest_average_decision_rounds",
+        "max_latest_benchmark_average_decision_rounds",
+        "max_latest_process_peak_rss_mb",
+    )
+)
+_RUN_AUDIT_CONFIG_INT_FIELDS = frozenset(("min_latest_benchmark_games", "max_consecutive_promotion_failures"))
+_RUN_AUDIT_CONFIG_BOOL_FIELDS = frozenset(
+    ("require_benchmark", "require_latest_promotion", "require_benchmark_opponent_coverage")
+)
 
 
 @dataclass(frozen=True)
@@ -113,8 +132,36 @@ def run_audit_config_from_dict(
     if unknown_fields:
         raise ValueError(f"unknown run audit config fields: {', '.join(unknown_fields)}")
     values = run_audit_config_to_dict(defaults) if defaults is not None else {}
-    values.update({field: payload[field] for field in _RUN_AUDIT_CONFIG_FIELDS if field in payload})
+    values.update(
+        {
+            field: _validated_run_audit_config_value(field, payload[field])
+            for field in _RUN_AUDIT_CONFIG_FIELDS
+            if field in payload
+        }
+    )
     return RunAuditConfig(**values)
+
+
+def _validated_run_audit_config_value(field: str, value: Any) -> float | int | bool | None:
+    if field in _RUN_AUDIT_CONFIG_BOOL_FIELDS:
+        if not isinstance(value, bool):
+            raise ValueError(f"{field} must be a JSON boolean.")
+        return value
+    if field in _RUN_AUDIT_CONFIG_INT_FIELDS:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{field} must be a JSON integer.")
+        return value
+    if field in _RUN_AUDIT_CONFIG_FLOAT_FIELDS:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{field} must be a JSON number.")
+        return float(value)
+    if field in _RUN_AUDIT_CONFIG_OPTIONAL_FLOAT_FIELDS:
+        if value is None:
+            return None
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"{field} must be a JSON number or null.")
+        return float(value)
+    raise ValueError(f"unsupported run audit config field: {field}")
 
 
 def run_audit_config_payload(
@@ -1545,6 +1592,7 @@ def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]
         ),
         "max_consecutive_promotion_failures": result.max_consecutive_promotion_failures,
         "require_benchmark": require_benchmark,
+        "require_latest_promotion": False,
         "require_benchmark_opponent_coverage": bool(result.require_benchmark_opponent_coverage),
     }
 

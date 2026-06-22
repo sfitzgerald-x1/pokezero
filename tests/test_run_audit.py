@@ -1518,8 +1518,10 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(calibrate_exit, 0)
         self.assertEqual(calibrate_payload["written_config_path"], str(config_path))
         self.assertFalse(calibrate_payload["config_write_skipped"])
+        self.assertFalse(calibrate_payload["suggested_config"]["require_latest_promotion"])
         self.assertEqual(config_payload["schema_version"], RUN_AUDIT_CONFIG_SCHEMA_VERSION)
         self.assertEqual(config_payload["config"]["min_latest_benchmark_games"], 20)
+        self.assertFalse(config_payload["config"]["require_latest_promotion"])
         self.assertEqual(config_payload["source"]["command"], "audit-calibrate")
         self.assertEqual(audit_exit, 0)
         self.assertTrue(audit_payload["passed"])
@@ -1539,8 +1541,8 @@ class RunAuditTest(unittest.TestCase):
                     [
                         "audit-calibrate",
                         str(manifest_path),
-                        "--require-run-count",
-                        "2",
+                        "--require-min-benchmark-games",
+                        "50",
                         "--write-config",
                         str(config_path),
                         "--json",
@@ -1549,6 +1551,11 @@ class RunAuditTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
 
         self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["calibration_sufficient"])
+        self.assertEqual(
+            payload["calibration_sufficiency_errors"],
+            ["calibration_min_benchmark_games 20 is below required 50"],
+        )
         self.assertTrue(payload["config_write_skipped"])
         self.assertIsNone(payload["written_config_path"])
         self.assertFalse(config_path.exists())
@@ -1614,6 +1621,31 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Unsupported run audit config schema", stderr.getvalue())
+
+    def test_eval_cli_audit_rejects_wrong_config_value_type(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+                        "config": {"require_benchmark": "false"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["audit", str(manifest_path), "--config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("require_benchmark must be a JSON boolean", stderr.getvalue())
 
     def test_eval_cli_audit_config_file_layers_over_profile_defaults(self) -> None:
         manifest = selfplay_manifest(
