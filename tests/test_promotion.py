@@ -432,6 +432,11 @@ class PromotionRegistryTest(unittest.TestCase):
         )
         self.assertEqual(payload["opponent_pool_excluded_current_policy_spec"], latest_spec)
         self.assertIsNone(payload["opponent_pool_verified"])
+        self.assertEqual(len(payload["entry_statuses"]), 3)
+        self.assertEqual(payload["entry_statuses"][0]["selected_as"], ["opponent_pool"])
+        self.assertEqual(payload["entry_statuses"][-1]["selected_as"], ["latest"])
+        self.assertEqual(payload["entry_statuses"][-1]["verification_status"], "not_verified")
+        self.assertEqual(payload["entry_statuses"][-1]["checkpoint_exists"], "not_verified")
 
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -484,10 +489,14 @@ class PromotionRegistryTest(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("opponent_pool_policy_specs:", stdout.getvalue())
-        self.assertIn(registry.entries[0].checkpoint_policy_spec or "", stdout.getvalue())
-        self.assertNotIn(f"- {registry.entries[-1].checkpoint_policy_spec}", stdout.getvalue())
-        self.assertIn("pass --verify", stdout.getvalue())
+        output = stdout.getvalue()
+        self.assertIn("opponent_pool_policy_specs:", output)
+        self.assertIn(registry.entries[0].checkpoint_policy_spec or "", output)
+        self.assertNotIn(f"- {registry.entries[-1].checkpoint_policy_spec}", output)
+        self.assertIn("status=not_verified", output)
+        self.assertIn("selected=opponent_pool", output)
+        self.assertIn("selected=latest", output)
+        self.assertIn("pass --verify", output)
 
     def test_eval_cli_promotions_rejects_current_policy_without_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -723,6 +732,9 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertFalse(payload["verification"]["passed"])
         self.assertIn("checkpoint_exists", failed_verification_check_names_from_payload(payload["verification"]))
+        self.assertEqual(payload["entry_statuses"][0]["verification_status"], "fail")
+        self.assertEqual(payload["entry_statuses"][0]["checkpoint_exists"], "fail")
+        self.assertIn("checkpoint_exists", payload["entry_statuses"][0]["failed_checks"])
 
     def test_eval_cli_promotions_verify_can_require_checksum_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -778,6 +790,10 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["verification"]["verified_loadable_count"], 1)
+        self.assertEqual(payload["entry_statuses"][0]["verification_status"], "pass")
+        self.assertEqual(payload["entry_statuses"][0]["checkpoint_exists"], "pass")
+        self.assertEqual(payload["entry_statuses"][0]["loadable"], "pass")
+        self.assertEqual(payload["entry_statuses"][0]["policy_id_matches"], "pass")
         check_names = {check["name"] for check in payload["verification"]["checks"]}
         self.assertIn("checkpoint_policy_loadable", check_names)
 

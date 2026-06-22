@@ -207,8 +207,14 @@ def _promotions(args: argparse.Namespace) -> int:
         if args.verify
         else None
     )
+    entry_statuses = _promotion_entry_statuses(
+        registry,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
     if args.json:
         payload = registry.to_dict()
+        payload["entry_statuses"] = entry_statuses
         if opponent_pool is not None:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
             payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
@@ -224,12 +230,18 @@ def _promotions(args: argparse.Namespace) -> int:
         print(f"latest_checkpoint: {registry.latest.checkpoint_path or '-'}")
     if registry.entries:
         print("entries:")
+        status_by_sequence = {status["sequence"]: status for status in entry_statuses}
         for entry in registry.entries:
             label = f" label={entry.label}" if entry.label else ""
             source = f" source={entry.source_checkpoint_path}" if entry.source_checkpoint_path else ""
+            status = status_by_sequence[entry.sequence]
+            selected_as = ",".join(status["selected_as"]) if status["selected_as"] else "-"
             print(
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
-                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}{source}"
+                f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at} "
+                f"status={status['verification_status']} selected={selected_as} "
+                f"exists={status['checkpoint_exists']} checksum={status['checksum']} "
+                f"loadable={status['loadable']}{label}{source}"
             )
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
@@ -241,6 +253,93 @@ def _promotions(args: argparse.Namespace) -> int:
     if verification is not None:
         _print_registry_verification(verification)
     return 0 if verification is None or verification.passed else 2
+
+
+def _promotion_entry_statuses(
+    registry,
+    *,
+    verification,
+    opponent_pool,
+) -> list[dict[str, object]]:
+    checks_by_sequence: dict[int, list[object]] = {}
+    if verification is not None:
+        for check in verification.checks:
+            if check.entry_sequence is None:
+                continue
+            checks_by_sequence.setdefault(check.entry_sequence, []).append(check)
+    opponent_pool_specs = set(opponent_pool or ())
+    latest_sequence = registry.latest.sequence if registry.latest is not None else None
+    statuses: list[dict[str, object]] = []
+    for entry in registry.entries:
+        checks = tuple(checks_by_sequence.get(entry.sequence, ()))
+        selected_as = []
+        if entry.sequence == latest_sequence:
+            selected_as.append("latest")
+        if entry.checkpoint_policy_spec in opponent_pool_specs:
+            selected_as.append("opponent_pool")
+        failed_checks = [check.name for check in checks if not check.passed]
+        statuses.append(
+            {
+                "sequence": entry.sequence,
+                "policy_id": entry.policy_id,
+                "label": entry.label,
+                "checkpoint_path": entry.checkpoint_path,
+                "checkpoint_policy_spec": entry.checkpoint_policy_spec,
+                "source_checkpoint_path": entry.source_checkpoint_path,
+                "source_type": entry.source_type,
+                "source_iteration": entry.source_iteration,
+                "promoted_at": entry.promoted_at,
+                "selected_as": selected_as,
+                "verification_status": _entry_verification_status(
+                    checks,
+                    verification_enabled=verification is not None,
+                ),
+                "checkpoint_exists": _verification_check_status(
+                    checks,
+                    ("checkpoint_exists",),
+                    verification_enabled=verification is not None,
+                ),
+                "checksum": _verification_check_status(
+                    checks,
+                    ("checkpoint_sha256", "checkpoint_sha256_present"),
+                    verification_enabled=verification is not None,
+                ),
+                "loadable": _verification_check_status(
+                    checks,
+                    ("checkpoint_policy_loadable",),
+                    verification_enabled=verification is not None,
+                ),
+                "policy_id_matches": _verification_check_status(
+                    checks,
+                    ("checkpoint_policy_id",),
+                    verification_enabled=verification is not None,
+                ),
+                "failed_checks": failed_checks,
+            }
+        )
+    return statuses
+
+
+def _entry_verification_status(checks: tuple[object, ...], *, verification_enabled: bool) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    if not checks:
+        return "not_checked"
+    return "pass" if all(check.passed for check in checks) else "fail"
+
+
+def _verification_check_status(
+    checks: tuple[object, ...],
+    names: tuple[str, ...],
+    *,
+    verification_enabled: bool,
+) -> str:
+    if not verification_enabled:
+        return "not_verified"
+    for check in checks:
+        if check.name in names:
+            return "pass" if check.passed else "fail"
+    return "not_checked"
 
 
 def _audit(args: argparse.Namespace) -> int:
