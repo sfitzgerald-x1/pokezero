@@ -384,10 +384,18 @@ def _promotions(args: argparse.Namespace) -> int:
         verification=verification,
         opponent_pool=opponent_pool,
     )
+    opponent_pool_registry_level_verified = _opponent_pool_registry_level_verification_passed(
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
     opponent_pool_preflight_verified = (
         None
-        if selected_opponent_pool_verified is None or opponent_pool_current_policy_verified is None
-        else selected_opponent_pool_verified and opponent_pool_current_policy_verified
+        if selected_opponent_pool_verified is None or opponent_pool_registry_level_verified is None
+        else (
+            selected_opponent_pool_verified
+            and opponent_pool_registry_level_verified
+            and opponent_pool_current_policy_verified is not False
+        )
     )
     if args.json:
         payload = registry.to_dict()
@@ -398,6 +406,7 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["opponent_pool_verified"] = opponent_pool_verified
             payload["selected_opponent_pool_verified"] = selected_opponent_pool_verified
             payload["opponent_pool_current_policy_verified"] = opponent_pool_current_policy_verified
+            payload["opponent_pool_registry_level_verified"] = opponent_pool_registry_level_verified
             payload["opponent_pool_preflight_verified"] = opponent_pool_preflight_verified
             payload["opponent_pool_verification_exit_scope"] = (
                 None
@@ -467,7 +476,11 @@ def _promotions(args: argparse.Namespace) -> int:
             print(f"selected_opponent_pool_verification: {'PASS' if selected_opponent_pool_verified else 'FAIL'}")
             print(
                 "opponent_pool_current_policy_verification: "
-                f"{'PASS' if opponent_pool_current_policy_verified else 'FAIL'}"
+                f"{_verification_bool_label(opponent_pool_current_policy_verified)}"
+            )
+            print(
+                "opponent_pool_registry_level_verification: "
+                f"{'PASS' if opponent_pool_registry_level_verified else 'FAIL'}"
             )
             print(
                 "opponent_pool_preflight_verification: "
@@ -560,10 +573,28 @@ def _opponent_pool_current_policy_verification_passed(
         entry_statuses,
         lambda status: status["opponent_pool_status"] == "excluded_current_policy",
     )
+    if not current_policy_statuses:
+        return None
     return all(
         not status["failed_checks"]
         for status in current_policy_statuses
     )
+
+
+def _opponent_pool_registry_level_verification_passed(
+    *,
+    verification,
+    opponent_pool,
+) -> bool | None:
+    if verification is None or opponent_pool is None:
+        return None
+    return all(check.passed for check in verification.checks if check.entry_sequence is None)
+
+
+def _verification_bool_label(value: bool | None) -> str:
+    if value is None:
+        return "N/A"
+    return "PASS" if value else "FAIL"
 
 
 def _entry_status_group(entry_statuses: list[dict[str, object]], predicate) -> tuple[dict[str, object], ...]:
