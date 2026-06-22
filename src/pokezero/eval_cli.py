@@ -25,8 +25,10 @@ from .promotion import load_promotion_registry, record_promotion, verify_promoti
 from .run_audit import (
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
     DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+    DEFAULT_AUDIT_CALIBRATION_MARGIN,
     RunAuditConfig,
     audit_run,
+    calibrate_run_audit,
 )
 
 
@@ -84,6 +86,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument("--require-latest-promotion", action="store_true", help="Fail unless the latest iteration recorded a promotion.")
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
+
+    audit_calibrate = subparsers.add_parser("audit-calibrate", help="Suggest audit thresholds from an observed self-play run.")
+    audit_calibrate.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
+    audit_calibrate.add_argument(
+        "--margin",
+        type=float,
+        default=DEFAULT_AUDIT_CALIBRATION_MARGIN,
+        help="Fractional safety margin applied to observed threshold suggestions.",
+    )
+    audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
+    audit_calibrate.set_defaults(func=_audit_calibrate)
     return parser
 
 
@@ -198,6 +211,15 @@ def _audit(args: argparse.Namespace) -> int:
     return 0 if result.passed else 2
 
 
+def _audit_calibrate(args: argparse.Namespace) -> int:
+    result = calibrate_run_audit(args.path, margin=args.margin)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_audit_calibration(result)
+    return 0
+
+
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
     parser.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
@@ -294,6 +316,24 @@ def _print_audit_result(result) -> None:
     for check in result.checks:
         check_status = "pass" if check.passed else "fail"
         print(f"- {check_status} {check.name}: observed={check.observed} threshold={check.threshold}")
+
+
+def _print_audit_calibration(result) -> None:
+    print(f"source: {result.source_type}")
+    print(f"manifest: {result.manifest_path}")
+    print(f"iterations: {result.iteration_count}")
+    print(f"benchmark_iterations: {result.benchmark_iteration_count}")
+    print(f"margin: {result.margin:.3f}")
+    print("suggested_config:")
+    for key, value in result.suggested_config().items():
+        print(f"- {key}: {_format_optional_float(value) if isinstance(value, float) else value}")
+    print("suggested_audit_flags:")
+    flags = result.suggested_cli_flags()
+    print(" ".join(flags) if flags else "-")
+    if result.notes:
+        print("notes:")
+        for note in result.notes:
+            print(f"- {note}")
 
 
 def _print_registry_verification(result) -> None:

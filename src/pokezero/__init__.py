@@ -137,8 +137,10 @@ from .promotion import (
     verify_promotion_registry,
 )
 from .run_audit import (
+    DEFAULT_AUDIT_CALIBRATION_MARGIN,
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
     DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+    RunAuditCalibrationResult,
     RunAuditCheck,
     RunAuditConfig,
     RunAuditFailure,
@@ -146,6 +148,7 @@ from .run_audit import (
     RunAuditOpponentRegression,
     RunAuditResult,
     audit_run,
+    calibrate_run_audit,
     enforce_run_audit,
 )
 from .selfplay import (
@@ -181,6 +184,7 @@ __all__ = [
     "BattleBeliefSnapshot",
     "CandidateSetSummary",
     "CollectionMetrics",
+    "DEFAULT_AUDIT_CALIBRATION_MARGIN",
     "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
     "DEFAULT_BENCHMARK_GAMES",
     "DEFAULT_MAX_BENCHMARK_CAPPED_RATE",
@@ -250,6 +254,7 @@ __all__ = [
     "RunAuditIterationSummary",
     "RunAuditOpponentRegression",
     "RunAuditResult",
+    "RunAuditCalibrationResult",
     "SELFPLAY_RUN_SCHEMA_VERSION",
     "SelfPlayIterationResult",
     "SelfPlayPromotionConfig",
@@ -276,6 +281,7 @@ __all__ = [
     "TransformerTrainingResult",
     "TrainingBatch",
     "batch_training_examples",
+    "calibrate_run_audit",
     "canonical_switch_action_map",
     "collect_rollouts",
     "collect_selfplay_rollouts",
