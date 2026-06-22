@@ -36,6 +36,7 @@ from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
+from .source_metadata import collect_source_metadata
 
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
@@ -100,6 +101,7 @@ class NeuralSelfPlayIterationResult:
     accepted_policy_spec: str | None = None
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
+    source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -109,6 +111,7 @@ class NeuralSelfPlayIterationResult:
         return {
             "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
             "iteration": self.iteration,
+            "source": dict(self.source),
             "rollout_path": str(self.rollout_path),
             "training_rollout_path": str(self.training_rollout_path),
             "checkpoint_path": str(self.checkpoint_path),
@@ -140,6 +143,7 @@ class NeuralSelfPlayRunResult:
     prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     prior_invocation_configs: tuple[Mapping[str, Any], ...] = ()
+    source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
@@ -181,6 +185,7 @@ class NeuralSelfPlayRunResult:
         return {
             "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
+            "source": dict(self.source),
             "invocation_configs": invocation_configs,
             "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
@@ -194,7 +199,17 @@ class NeuralSelfPlayRunResult:
 def load_neural_selfplay_run_manifest(run_dir: Path) -> Mapping[str, Any]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
-        raise FileNotFoundError(f"Neural self-play run manifest does not exist: {manifest_path}")
+        iteration_manifests = _load_iteration_manifests(run_dir)
+        if not iteration_manifests:
+            raise FileNotFoundError(f"Neural self-play run manifest does not exist: {manifest_path}")
+        run_result = NeuralSelfPlayRunResult(
+            run_dir=run_dir,
+            iterations=(),
+            prior_iteration_manifests=iteration_manifests,
+            prior_invocation_configs=_load_prior_invocation_configs(run_dir),
+            source=_mapping(iteration_manifests[-1].get("source", {})),
+        )
+        return run_result.to_dict()
     manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
     if manifest.get("schema_version") != NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
         raise ValueError(f"Unsupported neural self-play run schema: {manifest.get('schema_version')!r}.")
@@ -247,6 +262,7 @@ def run_neural_selfplay_iterations(
     promotion_pool_registry_path = promotion_registry_path or (
         auto_promotion_config.registry_path if auto_promotion_config is not None else None
     )
+    source_metadata = collect_source_metadata()
     promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
 
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -301,6 +317,7 @@ def run_neural_selfplay_iterations(
         "evaluation_games": evaluation_games,
         "evaluation_seed_start": evaluation_seed_start,
         "worker_count": worker_count,
+        "source": source_metadata,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -401,6 +418,7 @@ def run_neural_selfplay_iterations(
             advancement=advancement,
             opponent_pool_config=opponent_pool_manifest_config,
             invocation_config=invocation_config,
+            source=source_metadata,
         )
         _write_json(iteration_manifest_path, result.to_manifest_dict())
         results.append(result)
@@ -413,6 +431,7 @@ def run_neural_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
                 invocation_config=invocation_config,
                 prior_invocation_configs=prior_invocation_configs,
+                source=source_metadata,
             ).to_dict(),
         )
         if auto_promotion_config is not None:
@@ -457,6 +476,7 @@ def run_neural_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
                 invocation_config=invocation_config,
                 prior_invocation_configs=prior_invocation_configs,
+                source=source_metadata,
             ).to_dict(),
         )
         _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
@@ -467,6 +487,7 @@ def run_neural_selfplay_iterations(
         prior_iteration_manifests=tuple(prior_iteration_manifests),
         invocation_config=invocation_config,
         prior_invocation_configs=prior_invocation_configs,
+        source=source_metadata,
     )
 
 
@@ -754,6 +775,11 @@ def _load_prior_iteration_manifests(
 ) -> tuple[Mapping[str, Any], ...]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
+        iteration_manifests = _load_iteration_manifests(run_dir)
+        if iteration_manifests:
+            if not resume:
+                raise ValueError("run_dir already contains neural iteration manifests; pass resume=True to continue it.")
+            return iteration_manifests
         if list(run_dir.glob("iteration-*")):
             if not resume:
                 raise ValueError("run_dir already contains iteration directories; pass resume=True to inspect or continue it.")
@@ -770,6 +796,16 @@ def _load_prior_iteration_manifests(
     if not iterations:
         raise ValueError("cannot resume: neural self-play run manifest contains no iterations.")
     return iterations
+
+
+def _load_iteration_manifests(run_dir: Path) -> tuple[Mapping[str, Any], ...]:
+    manifests: list[Mapping[str, Any]] = []
+    for manifest_path in sorted(run_dir.glob("iteration-*/manifest.json")):
+        manifest = _mapping(json.loads(manifest_path.read_text(encoding="utf-8")))
+        if manifest.get("schema_version") != NEURAL_SELFPLAY_RUN_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported neural self-play iteration schema: {manifest.get('schema_version')!r}.")
+        manifests.append(manifest)
+    return tuple(manifests)
 
 
 def _load_prior_invocation_configs(run_dir: Path) -> tuple[Mapping[str, Any], ...]:

@@ -9,12 +9,14 @@ from unittest.mock import patch
 
 from pokezero.bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from pokezero.bootstrap_cli import build_arg_parser as build_bootstrap_arg_parser
-from pokezero.eval_cli import _git_source_metadata, main as eval_cli_main
+from pokezero.eval_cli import main as eval_cli_main
 from pokezero.eval_cli import build_arg_parser as build_eval_arg_parser
 from pokezero.evaluation import PromotionGateConfig, evaluate_promotion_gate
 from pokezero.neural_selfplay import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay_cli import build_arg_parser as build_selfplay_arg_parser
+import pokezero.source_metadata as source_metadata
+from pokezero.source_metadata import collect_source_metadata
 
 
 class PromotionGateTest(unittest.TestCase):
@@ -533,7 +535,7 @@ class PromotionGateTest(unittest.TestCase):
             "dirty": False,
         }
         with (
-            patch("pokezero.eval_cli._git_source_metadata", return_value=source),
+            patch("pokezero.eval_cli.collect_source_metadata", return_value=source),
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
         ):
             exit_code = eval_cli_main(
@@ -614,14 +616,35 @@ class PromotionGateTest(unittest.TestCase):
                 parser.parse_args(argv[3:])
 
     def test_git_source_metadata_is_optional_outside_git_checkout(self) -> None:
-        with patch("pokezero.eval_cli._git_output", side_effect=OSError("git unavailable")):
-            metadata = _git_source_metadata(Path("/tmp/not-a-repo"))
+        with patch("pokezero.source_metadata._git_output", side_effect=OSError("git unavailable")):
+            metadata = collect_source_metadata(Path("/tmp/not-a-repo"))
 
         self.assertFalse(metadata["available"])
         self.assertIsNone(metadata["repo_root"])
         self.assertIsNone(metadata["head"])
         self.assertIsNone(metadata["dirty"])
         self.assertIn("git unavailable", metadata["error"])
+
+    def test_git_source_metadata_defaults_to_package_source_location(self) -> None:
+        calls = []
+
+        def fake_git_output(cwd: Path, *args: str) -> str:
+            calls.append((cwd, args))
+            outputs = {
+                ("rev-parse", "--show-toplevel"): "/repo",
+                ("rev-parse", "HEAD"): "abc123",
+                ("branch", "--show-current"): "main",
+                ("status", "--porcelain"): "",
+            }
+            return outputs[args]
+
+        with patch("pokezero.source_metadata._git_output", side_effect=fake_git_output):
+            metadata = collect_source_metadata()
+
+        expected_cwd = Path(source_metadata.__file__).resolve().parent
+        self.assertTrue(metadata["available"])
+        self.assertTrue(calls)
+        self.assertEqual({cwd for cwd, _args in calls}, {expected_cwd})
 
     def test_git_source_metadata_collects_branch_head_and_dirty_state(self) -> None:
         def fake_git_output(_cwd: Path, *args: str) -> str:
@@ -633,8 +656,8 @@ class PromotionGateTest(unittest.TestCase):
             }
             return outputs[args]
 
-        with patch("pokezero.eval_cli._git_output", side_effect=fake_git_output):
-            metadata = _git_source_metadata(Path("/repo"))
+        with patch("pokezero.source_metadata._git_output", side_effect=fake_git_output):
+            metadata = collect_source_metadata(Path("/repo"))
 
         self.assertTrue(metadata["available"])
         self.assertEqual(metadata["repo_root"], "/repo")
@@ -652,8 +675,8 @@ class PromotionGateTest(unittest.TestCase):
             }
             return outputs[args]
 
-        with patch("pokezero.eval_cli._git_output", side_effect=fake_git_output):
-            metadata = _git_source_metadata(Path("/repo"))
+        with patch("pokezero.source_metadata._git_output", side_effect=fake_git_output):
+            metadata = collect_source_metadata(Path("/repo"))
 
         self.assertTrue(metadata["available"])
         self.assertIsNone(metadata["branch"])
@@ -661,8 +684,8 @@ class PromotionGateTest(unittest.TestCase):
 
     def test_git_source_metadata_is_optional_on_timeout(self) -> None:
         timeout = subprocess.TimeoutExpired(cmd=("git", "status", "--porcelain"), timeout=5)
-        with patch("pokezero.eval_cli._git_output", side_effect=timeout):
-            metadata = _git_source_metadata(Path("/repo"))
+        with patch("pokezero.source_metadata._git_output", side_effect=timeout):
+            metadata = collect_source_metadata(Path("/repo"))
 
         self.assertFalse(metadata["available"])
         self.assertIsNone(metadata["head"])
@@ -688,7 +711,7 @@ class PromotionGateTest(unittest.TestCase):
                 "dirty": True,
             }
             with (
-                patch("pokezero.eval_cli._git_source_metadata", return_value=source),
+                patch("pokezero.eval_cli.collect_source_metadata", return_value=source),
                 patch(
                     "pokezero.eval_cli.subprocess.run",
                     side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],

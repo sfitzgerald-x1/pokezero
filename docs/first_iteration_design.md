@@ -26,6 +26,7 @@ Implemented:
 - Promotion registry lifecycle reporting that summarizes latest, selected opponent-pool, selection-eligible, unselectable, excluded-current, stale, and failed-verification promoted checkpoints.
 - Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, optional policy loadability, and stored artifact checksums.
 - Append-only promotion registry for recording gate-passing checkpoints with same-host per-registry write locking, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, filtering historical opponents to promoted checkpoints, and previewing or requiring the selected promoted opponent pool before long runs.
+- Source provenance snapshots in teacher bootstrap, linear self-play, neural self-play, and CPU smoke artifacts, including repo root, branch, head, and dirty marker when git metadata is available.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 - Compact public-belief observation features for revealed opposing Pokemon, including surviving candidate count, uncertainty, possible ability/item/move counts, bucketed per-value possible-fact features, and revealed ability/item flags.
 
