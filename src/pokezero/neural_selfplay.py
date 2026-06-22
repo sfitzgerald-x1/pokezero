@@ -366,7 +366,11 @@ def run_neural_selfplay_iterations(
                 promotion_config=auto_promotion_config,
                 iteration=iteration,
             )
-            accepted_policy_spec = _promotion_policy_spec(promotion.entry) if promotion.recorded else None
+            accepted_policy_spec = (
+                promotion.registry.selection_checkpoint_policy_spec_for_entry(promotion.entry)
+                if promotion.recorded and promotion.entry is not None
+                else None
+            )
             advancement = _promotion_advancement_decision(
                 promotion=promotion,
                 candidate_policy_id=training.model_config.policy_id,
@@ -480,7 +484,7 @@ def _benchmark_incumbent_policy_spec(
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
-    entry = _promotion_incumbent_entry(promotion_config)
+    entry = _promotion_incumbent_entry_from_registry(registry, promotion_config)
     if entry is None or entry.checkpoint_policy_spec is None:
         return fallback_policy_spec
     return registry.selection_checkpoint_policy_spec_for_entry(entry) or fallback_policy_spec
@@ -521,6 +525,13 @@ def _promotion_incumbent_entry(
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
+    return _promotion_incumbent_entry_from_registry(registry, promotion_config)
+
+
+def _promotion_incumbent_entry_from_registry(
+    registry,
+    promotion_config: NeuralSelfPlayPromotionConfig,
+) -> "PromotionRegistryEntry | None":
     incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
     if incumbent_policy_id is None:
         return registry.latest
@@ -528,12 +539,6 @@ def _promotion_incumbent_entry(
         if entry.policy_id == incumbent_policy_id:
             return entry
     return None
-
-
-def _promotion_policy_spec(entry: "PromotionRegistryEntry | None") -> str | None:
-    if entry is None:
-        return None
-    return entry.checkpoint_policy_spec
 
 
 def _promotion_advancement_decision(

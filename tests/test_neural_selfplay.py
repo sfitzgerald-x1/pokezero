@@ -378,6 +378,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             registry = load_promotion_registry(registry_path)
             first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
             second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            first_selection_spec = registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])
 
         self.assertEqual(len(registry.entries), 2)
         self.assertEqual(registry.entries[0].source_type, NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
@@ -387,9 +388,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(registry.entries[0].checkpoint_policy_spec, f"neural:{registry.entries[0].checkpoint_path}")
         self.assertEqual(first_manifest["promotion"]["recorded"], True)
         self.assertEqual(first_manifest["advancement"]["reason"], "promotion_recorded")
-        self.assertEqual(first_manifest["next_current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
-        self.assertEqual(second_manifest["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
-        self.assertEqual(collected[1]["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
+        self.assertEqual(first_manifest["next_current_policy_spec"], first_selection_spec)
+        self.assertEqual(second_manifest["current_policy_spec"], first_selection_spec)
+        self.assertEqual(collected[1]["current_policy_spec"], first_selection_spec)
 
     def test_promoted_checkpoint_specs_verify_registry_before_neural_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

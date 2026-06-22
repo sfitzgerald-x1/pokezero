@@ -178,7 +178,7 @@ class PromotionRegistryVerificationResult:
 
 
 def load_promotion_registry(path: Path) -> PromotionRegistry:
-    registry_path = path.expanduser()
+    registry_path = path.expanduser().resolve(strict=False)
     if not registry_path.exists():
         return PromotionRegistry(path=registry_path, entries=())
     if not registry_path.is_file():
@@ -516,15 +516,18 @@ def _resolve_selection_checkpoint_path(
             registry_path.parent / manifest_path,
             manifest_path,
         )
-    candidates: list[Path] = [raw_path]
-    if not raw_path.is_absolute():
+    candidates: list[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
         candidates.append(registry_path.parent / raw_path)
         for candidate_manifest in manifest_candidates:
             candidates.append(candidate_manifest.parent / raw_path)
             candidates.append(candidate_manifest.parent.parent / raw_path)
+        candidates.append(raw_path)
     for candidate in _dedupe_paths(candidates):
         if candidate.exists() and candidate.is_file():
-            return candidate
+            return candidate.resolve(strict=False)
     return None
 
 

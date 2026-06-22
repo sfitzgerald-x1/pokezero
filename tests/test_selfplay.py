@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -579,7 +580,7 @@ class SelfPlayTest(unittest.TestCase):
                 promotion_registry_path=registry_path,
             )
 
-        promoted_spec = f"linear:{promoted_checkpoint_path}"
+        promoted_spec = f"linear:{promoted_checkpoint_path.resolve(strict=False)}"
         self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertNotIn(result.iterations[0].checkpoint_policy_spec, result.iterations[1].opponent_policy_specs)
@@ -603,6 +604,35 @@ class SelfPlayTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "checkpoint_policy_loadable"):
                 _promoted_checkpoint_specs(registry_path)
+
+    def test_promoted_checkpoint_specs_resolves_relative_registry_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "runs" / "promotions.json"
+            checkpoint_path = registry_path.parent / "promoted" / "linear-policy.json"
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            save_linear_model(
+                checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted-1",
+                ),
+            )
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(Path("promoted/linear-policy.json"),),
+                policy_ids=("linear-promoted-1",),
+            )
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_path)
+                specs = _promoted_checkpoint_specs(Path("runs/promotions.json"))
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(specs, (f"linear:{checkpoint_path.resolve(strict=False)}",))
 
     def test_run_selfplay_iterations_auto_promotes_and_feeds_next_opponent_pool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -641,7 +671,7 @@ class SelfPlayTest(unittest.TestCase):
 
         first_promotion = result.iterations[0].promotion
         second_promotion = result.iterations[1].promotion
-        first_promoted_spec = f"linear:{registry_payload['entries'][0]['checkpoint_path']}"
+        first_promoted_spec = f"linear:{Path(registry_payload['entries'][0]['checkpoint_path']).resolve(strict=False)}"
         self.assertTrue(first_promotion.recorded if first_promotion else False)
         self.assertTrue(second_promotion.recorded if second_promotion else False)
         self.assertEqual(len(registry_payload["entries"]), 2)

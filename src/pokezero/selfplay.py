@@ -615,7 +615,7 @@ def _benchmark_incumbent_policy_spec(
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
-    entry = _promotion_incumbent_entry(promotion_config)
+    entry = _promotion_incumbent_entry_from_registry(registry, promotion_config)
     if entry is None or not entry.checkpoint_path:
         return fallback_policy_spec
     return registry.selection_checkpoint_policy_spec_for_entry(entry) or fallback_policy_spec
@@ -654,6 +654,10 @@ def _promotion_incumbent_entry(promotion_config: SelfPlayPromotionConfig):
     from .promotion import load_promotion_registry
 
     registry = load_promotion_registry(promotion_config.registry_path)
+    return _promotion_incumbent_entry_from_registry(registry, promotion_config)
+
+
+def _promotion_incumbent_entry_from_registry(registry, promotion_config: SelfPlayPromotionConfig):
     incumbent_policy_id = promotion_config.gate_config.incumbent_policy_id
     if incumbent_policy_id is None:
         return registry.latest
