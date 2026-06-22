@@ -259,11 +259,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero unless the config includes calibration metadata.",
     )
-    audit_config_report.add_argument(
-        "--fail-on-audit",
-        action="store_true",
-        help="When paths are supplied, return non-zero if any manifest fails this config.",
-    )
     audit_config_report.add_argument("--json", action="store_true", help="Print the config report as JSON.")
     audit_config_report.set_defaults(func=_audit_config_report)
 
@@ -1764,8 +1759,6 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         if args.paths or args.manifest_glob
         else ()
     )
-    if args.fail_on_audit and not paths:
-        raise ValueError("--fail-on-audit requires at least one manifest path or --manifest-glob.")
     preflight_runs = tuple(
         _audit_config_preflight_run_payload(path, config=config_payload["config_object"])
         for path in paths
@@ -1780,7 +1773,6 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         preflight_passed=preflight_passed,
         require_source=args.require_source,
         require_calibration=args.require_calibration,
-        fail_on_audit=args.fail_on_audit,
     )
     passed = all(bool(check["passed"]) for check in checks)
     report = {
@@ -1818,18 +1810,33 @@ def _load_audit_config_report_payload(path: Path) -> dict[str, object]:
 
 
 def _audit_config_preflight_run_payload(path: Path, *, config: RunAuditConfig) -> dict[str, object]:
-    result = audit_run(path, config=config)
-    return {
-        "manifest_path": str(result.manifest_path),
-        "source_type": result.source_type,
-        "latest_iteration": result.latest_iteration,
-        "latest_benchmark_win_rate": result.latest_benchmark_win_rate,
-        "latest_benchmark_games": result.iterations[-1].benchmark_games if result.iterations else 0,
-        "latest_collection_capped_rate": result.latest_collection_capped_rate,
-        "latest_benchmark_capped_rate": result.latest_benchmark_capped_rate,
-        "passed": result.passed,
-        "failed_checks": [check.name for check in result.checks if not check.passed],
-    }
+    try:
+        result = audit_run(path, config=config)
+    except Exception as exc:
+        return {
+            "manifest_path": str(path),
+            "source_type": None,
+            "latest_iteration": None,
+            "latest_benchmark_win_rate": None,
+            "latest_benchmark_games": 0,
+            "latest_collection_capped_rate": None,
+            "latest_benchmark_capped_rate": None,
+            "passed": False,
+            "failed_checks": ["manifest_error"],
+            "error": str(exc),
+        }
+    else:
+        return {
+            "manifest_path": str(result.manifest_path),
+            "source_type": result.source_type,
+            "latest_iteration": result.latest_iteration,
+            "latest_benchmark_win_rate": result.latest_benchmark_win_rate,
+            "latest_benchmark_games": result.iterations[-1].benchmark_games if result.iterations else 0,
+            "latest_collection_capped_rate": result.latest_collection_capped_rate,
+            "latest_benchmark_capped_rate": result.latest_benchmark_capped_rate,
+            "passed": result.passed,
+            "failed_checks": [check.name for check in result.checks if not check.passed],
+        }
 
 
 def _audit_config_report_checks(
@@ -1838,7 +1845,6 @@ def _audit_config_report_checks(
     preflight_passed: bool | None,
     require_source: bool,
     require_calibration: bool,
-    fail_on_audit: bool,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = [
         {
@@ -1871,7 +1877,7 @@ def _audit_config_report_checks(
                 "message": "calibration metadata is required",
             }
         )
-    if fail_on_audit:
+    if preflight_passed is not None:
         checks.append(
             {
                 "name": "preflight_audit_passed",
@@ -1886,6 +1892,7 @@ def _audit_config_report_checks(
 
 def _print_audit_config_report(report: Mapping[str, object]) -> None:
     print("audit_config_report:")
+    print(f"passed: {'PASS' if report['passed'] else 'FAIL'}")
     print(f"config: {report['audit_config_path']}")
     print(f"schema_version: {report['schema_version']}")
     print(f"source_metadata: {'present' if report['source'] is not None else 'missing'}")
@@ -1901,6 +1908,11 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
         print(f"calibration_run_count: {_format_summary_value(calibration.get('run_count'))}")
         print(f"calibration_benchmark_iterations: {_format_summary_value(calibration.get('benchmark_iteration_count'))}")
         print(f"calibration_aggregate_mode: {_format_summary_value(calibration.get('aggregate_mode'))}")
+        calibration_paths = calibration.get("paths")
+        if isinstance(calibration_paths, list):
+            print("calibration_paths:")
+            for path in calibration_paths:
+                print(f"- {path}")
     print("thresholds:")
     config = report.get("config")
     if isinstance(config, Mapping):
@@ -1925,6 +1937,8 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
                 f"bench_games={_format_summary_value(run.get('latest_benchmark_games'))} "
                 f"failed_checks={failed_summary}"
             )
+            if run.get("error") is not None:
+                print(f"  error: {run.get('error')}")
     print("checks:")
     for check in report.get("checks", ()):
         if not isinstance(check, Mapping):
