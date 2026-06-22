@@ -300,6 +300,63 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(decision.metadata["teacher_branch"], "damaging_move")
 
+    def test_scripted_teacher_does_not_treat_glare_into_ghost_as_type_immune(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "glare", "move_name": "Glare"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["teacher_branch"], "status_pressure")
+        self.assertEqual(decision.metadata["teacher_score"], 55.0)
+
+    def test_scripted_teacher_marks_toxic_into_steel_as_no_effect(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Skarmory", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "toxic", "move_name": "Toxic"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["teacher_branch"], "status_no_effect")
+        self.assertIn("no effect", decision.metadata["teacher_reason"])
+
+    def test_scripted_teacher_marks_burn_into_fire_as_no_effect(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "willowisp", "move_name": "Will-O-Wisp"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["teacher_branch"], "status_no_effect")
+        self.assertIn("no effect", decision.metadata["teacher_reason"])
+
     def test_scripted_teacher_values_rapid_spin_when_own_side_has_hazards(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
@@ -622,6 +679,36 @@ def teacher_dex():
                     "priority": 0,
                     "status": "par",
                 },
+                "glare": {
+                    "id": "glare",
+                    "name": "Glare",
+                    "type": "Normal",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 100,
+                    "priority": 0,
+                    "status": "par",
+                },
+                "toxic": {
+                    "id": "toxic",
+                    "name": "Toxic",
+                    "type": "Poison",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 85,
+                    "priority": 0,
+                    "status": "tox",
+                },
+                "willowisp": {
+                    "id": "willowisp",
+                    "name": "Will-O-Wisp",
+                    "type": "Fire",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": 75,
+                    "priority": 0,
+                    "status": "brn",
+                },
             },
             "species": {
                 "charizard": {"id": "charizard", "name": "Charizard", "types": ["Fire", "Flying"], "baseStats": {}},
@@ -630,6 +717,7 @@ def teacher_dex():
                 "starmie": {"id": "starmie", "name": "Starmie", "types": ["Water", "Psychic"], "baseStats": {}},
                 "snorlax": {"id": "snorlax", "name": "Snorlax", "types": ["Normal"], "baseStats": {}},
                 "dusclops": {"id": "dusclops", "name": "Dusclops", "types": ["Ghost"], "baseStats": {}},
+                "skarmory": {"id": "skarmory", "name": "Skarmory", "types": ["Steel", "Flying"], "baseStats": {}},
             },
             "typeChart": {
                 "flying": {"Rock": 1, "Ground": 3},
@@ -638,6 +726,7 @@ def teacher_dex():
                 "ghost": {"Normal": 3, "Ghost": 2},
                 "rock": {"Fire": 2, "Water": 1},
                 "ground": {"Electric": 3, "Water": 1},
+                "steel": {"Poison": 3, "Fire": 1},
                 "water": {"Fire": 2, "Rock": 2, "Ground": 2},
                 "normal": {"Ghost": 3},
             },

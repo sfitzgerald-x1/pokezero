@@ -427,7 +427,13 @@ def _status_move_score(
 def _status_move_has_no_effect(move, opponent_types: tuple[str, ...], dex: ShowdownDex) -> bool:
     status = normalize_id(move.status)
     normalized_types = {normalize_id(value) for value in opponent_types}
-    if status == "par" and dex.effectiveness(move.type, opponent_types) == 0.0:
+    # In Gen 3, Thunder Wave follows Electric immunity, but other paralysis
+    # status moves such as Glare should not inherit Normal-type damage immunity.
+    if (
+        status == "par"
+        and normalize_id(move.type) == "electric"
+        and dex.effectiveness(move.type, opponent_types) == 0.0
+    ):
         return True
     if status in {"psn", "tox"} and normalized_types.intersection({"poison", "steel"}):
         return True
