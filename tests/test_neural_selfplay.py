@@ -1,5 +1,7 @@
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -23,6 +25,7 @@ from pokezero.neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
+from pokezero.neural_cli import main as neural_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure
@@ -63,6 +66,53 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     )
+
+    def test_neural_cli_auto_promote_requires_evaluation_games_by_default(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--initial-policy",
+                    "random-legal",
+                    "--auto-promote",
+                    "--promotion-registry",
+                    "promotions.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--auto-promote requires --evaluation-games", stderr.getvalue())
+
+    def test_neural_cli_auto_promote_allows_missing_benchmark_without_evaluation_games(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--initial-policy",
+                        "random-legal",
+                        "--auto-promote",
+                        "--promotion-registry",
+                        "promotions.json",
+                        "--allow-missing-benchmark",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(run.call_args.kwargs["auto_promotion_config"].gate_config.require_benchmark)
 
     def test_run_neural_selfplay_iterations_writes_manifests_and_accumulates_training_data(self) -> None:
         collected = []

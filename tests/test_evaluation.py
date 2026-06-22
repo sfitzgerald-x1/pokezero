@@ -585,6 +585,49 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(override_exit, 0)
         self.assertTrue(override_payload["passed"])
 
+    def test_eval_cli_gate_long_run_profile_enforces_stricter_benchmark_capped_rate(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["benchmark"] = benchmark_payload(
+            policy_id="linear-selfplay-test-iter-0001",
+            wins=18,
+            losses=2,
+            capped_games=2,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as default_stdout:
+                default_exit = eval_cli_main(
+                    [
+                        "gate",
+                        str(manifest_path),
+                        "--min-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            default_payload = json.loads(default_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as long_run_stdout:
+                long_run_exit = eval_cli_main(
+                    [
+                        "gate",
+                        str(manifest_path),
+                        "--profile",
+                        "long-run",
+                        "--min-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            long_run_payload = json.loads(long_run_stdout.getvalue())
+
+        self.assertEqual(default_exit, 0)
+        self.assertTrue(default_payload["passed"])
+        self.assertEqual(long_run_exit, 2)
+        self.assertIn("benchmark_capped_rate", failed_check_names_from_payload(long_run_payload))
+
 
 def selfplay_manifest() -> dict:
     return {

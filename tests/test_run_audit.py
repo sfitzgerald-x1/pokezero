@@ -1153,6 +1153,45 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(override_exit, 0)
         self.assertTrue(override_payload["passed"])
 
+    def test_eval_cli_audit_long_run_profile_enforces_stricter_benchmark_capped_rate(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=18, losses=2, capped_games=2),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as default_stdout:
+                default_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            default_payload = json.loads(default_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as long_run_stdout:
+                long_run_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--profile",
+                        "long-run",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--json",
+                    ]
+                )
+            long_run_payload = json.loads(long_run_stdout.getvalue())
+
+        self.assertEqual(default_exit, 0)
+        self.assertTrue(default_payload["passed"])
+        self.assertEqual(long_run_exit, 2)
+        self.assertIn("latest_benchmark_capped_rate", failed_check_names_from_payload(long_run_payload))
+
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
     return {
