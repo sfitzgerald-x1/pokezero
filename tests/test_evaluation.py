@@ -1149,6 +1149,8 @@ class PromotionGateTest(unittest.TestCase):
         calibration_argv = recipe["steps"][2]["argv"]
         self.assertIn("--write-audit-config", calibration_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), calibration_argv)
+        self.assertIn("--calibration-aggregate-mode", calibration_argv)
+        self.assertEqual(calibration_argv[calibration_argv.index("--calibration-aggregate-mode") + 1], "envelope")
         self.assertIn("--calibration-require-run-count", calibration_argv)
         self.assertIn("2", calibration_argv)
         audit_argv = recipe["steps"][3]["argv"]
@@ -1212,6 +1214,7 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(second_pilot_argv[second_pilot_argv.index("--seed-start") + 1], "250")
         calibration_argv = run.call_args_list[2].args[0]
         self.assertEqual(calibration_argv[:4], ["./.venv/bin/python", "-m", "pokezero.eval_cli", "compare"])
+        self.assertEqual(calibration_argv[calibration_argv.index("--calibration-aggregate-mode") + 1], "envelope")
         self.assertIn("--write-audit-config", calibration_argv)
         output = stdout.getvalue()
         self.assertIn("cpu_pilot_run:", output)

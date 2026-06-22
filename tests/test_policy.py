@@ -172,6 +172,25 @@ class PolicyBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Mystery Move"):
             policy.select_action(obs, rng=random.Random(1))
 
+    def test_scripted_teacher_accepts_forced_recharge_pseudo_move(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "recharge", "move_name": "Recharge"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.metadata["action_family"], "move")
+        self.assertIn("forced pseudo-move", decision.metadata["teacher_reason"])
+
     def test_scripted_teacher_keeps_good_attack_over_neutral_switch(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
