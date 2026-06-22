@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.eval_cli import main as eval_cli_main
-from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, compare_run_manifests
+from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, calibrate_run_audits, compare_run_manifests
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
@@ -534,6 +534,91 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(calibration.max_consecutive_promotion_failures, 1)
         self.assertTrue(audit.passed)
 
+    def test_calibrate_run_audits_aggregates_thresholds_across_pilot_runs(self) -> None:
+        first = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),)),)
+        )
+        second = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 12, 8, 2),)),)
+        )
+        second["iterations"][0]["collection_metrics"]["capped_games"] = 2
+        second["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 25.0
+        second["iterations"][0]["benchmark"]["average_decision_rounds"] = 30.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_path = Path(temp_dir) / "first.json"
+            second_path = Path(temp_dir) / "second.json"
+            write_manifest(first_path, first)
+            write_manifest(second_path, second)
+
+            calibration = calibrate_run_audits((first_path, second_path), margin=0.10)
+            envelope = calibrate_run_audits((first_path, second_path), margin=0.10, aggregate_mode="envelope")
+            first_audit = audit_run(first_path, config=RunAuditConfig(**envelope.suggested_config()))
+            second_audit = audit_run(second_path, config=RunAuditConfig(**envelope.suggested_config()))
+
+        self.assertEqual(calibration.run_count, 2)
+        self.assertEqual(calibration.aggregate_mode, "median")
+        self.assertEqual(calibration.iteration_count, 2)
+        self.assertEqual(calibration.benchmark_iteration_count, 2)
+        self.assertEqual(calibration.source_type, "linear_selfplay")
+        self.assertEqual(calibration.min_latest_benchmark_win_rate, 0.585)
+        self.assertEqual(calibration.max_latest_collection_capped_rate, 0.16)
+        self.assertEqual(calibration.max_latest_benchmark_capped_rate, 0.105)
+        self.assertEqual(calibration.max_latest_average_decision_rounds, 19.25)
+        self.assertEqual(calibration.max_latest_benchmark_average_decision_rounds, 23.1)
+        self.assertEqual(envelope.aggregate_mode, "envelope")
+        self.assertEqual(envelope.min_latest_benchmark_win_rate, 0.54)
+        self.assertEqual(envelope.max_latest_collection_capped_rate, 0.22)
+        self.assertTrue(first_audit.passed)
+        self.assertTrue(second_audit.passed)
+        self.assertIn("--min-latest-benchmark-win-rate", calibration.suggested_cli_flags())
+
+    def test_calibrate_run_audits_allows_missing_benchmarks_if_any_pilot_lacks_them(self) -> None:
+        benchmarked = selfplay_manifest(iterations=(selfplay_iteration(iteration=1),))
+        unbenchmarked = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            benchmarked_path = Path(temp_dir) / "benchmarked.json"
+            unbenchmarked_path = Path(temp_dir) / "unbenchmarked.json"
+            write_manifest(benchmarked_path, benchmarked)
+            write_manifest(unbenchmarked_path, unbenchmarked)
+
+            calibration = calibrate_run_audits((benchmarked_path, unbenchmarked_path))
+            config = RunAuditConfig(**calibration.suggested_config())
+
+        self.assertFalse(calibration.require_benchmark)
+        self.assertFalse(calibration.require_benchmark_opponent_coverage)
+        self.assertIn("--allow-missing-benchmark", calibration.suggested_cli_flags())
+        self.assertIn("--allow-missing-benchmark-opponents", calibration.suggested_cli_flags())
+        self.assertNotIn("--min-latest-benchmark-win-rate", calibration.suggested_cli_flags())
+        self.assertEqual(config.min_latest_benchmark_win_rate, 0.0)
+        self.assertEqual(config.max_latest_benchmark_capped_rate, 1.0)
+        self.assertIn("allows missing benchmarks", calibration.notes[1])
+
+    def test_calibrate_run_audits_marks_mixed_source_types(self) -> None:
+        linear = selfplay_manifest(iterations=(selfplay_iteration(iteration=1),))
+        neural = neural_selfplay_manifest(iterations=(neural_iteration(iteration=1, wins=13, losses=7, capped_games=0),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            linear_path = Path(temp_dir) / "linear.json"
+            neural_path = Path(temp_dir) / "neural.json"
+            write_manifest(linear_path, linear)
+            write_manifest(neural_path, neural)
+
+            calibration = calibrate_run_audits((linear_path, neural_path))
+
+        self.assertEqual(calibration.source_type, "mixed")
+        self.assertEqual(calibration.run_count, 2)
+
+    def test_calibrate_run_audits_single_path_still_returns_aggregate_result(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            calibration = calibrate_run_audits((manifest_path,))
+
+        self.assertEqual(calibration.run_count, 1)
+        self.assertEqual(calibration.paths, (manifest_path,))
+        self.assertEqual(calibration.aggregate_mode, "median")
+
     def test_calibrate_run_audit_allows_missing_benchmark_when_history_has_none(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -936,6 +1021,49 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
+
+    def test_eval_cli_audit_calibrate_aggregates_multiple_runs_json(self) -> None:
+        first = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),)),)
+        )
+        second = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 12, 8, 2),)),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_path = Path(temp_dir) / "first.json"
+            second_path = Path(temp_dir) / "second.json"
+            write_manifest(first_path, first)
+            write_manifest(second_path, second)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-calibrate", str(first_path), str(second_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["run_count"], 2)
+        self.assertEqual(payload["aggregate_mode"], "median")
+        self.assertEqual(len(payload["sources"]), 2)
+        self.assertEqual(payload["suggested_config"]["min_latest_benchmark_win_rate"], 0.585)
+        self.assertIn("Aggregated from multiple audit calibrations", payload["notes"][0])
+
+    def test_eval_cli_audit_calibrate_aggregates_multiple_runs_text(self) -> None:
+        first = selfplay_manifest(iterations=(selfplay_iteration(iteration=1),))
+        second = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_path = Path(temp_dir) / "first.json"
+            second_path = Path(temp_dir) / "second.json"
+            write_manifest(first_path, first)
+            write_manifest(second_path, second)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-calibrate", str(first_path), str(second_path)])
+            output = stdout.getvalue()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("runs: 2", output)
+        self.assertIn("aggregate_mode: median", output)
+        self.assertIn("manifests:", output)
+        self.assertIn("--allow-missing-benchmark", output)
 
     def test_eval_cli_compare_prints_json(self) -> None:
         linear_manifest = selfplay_manifest(
