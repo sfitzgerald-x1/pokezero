@@ -35,6 +35,7 @@ from .source_metadata import collect_source_metadata
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
+PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -119,6 +120,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Report compact lifecycle counts for promoted checkpoints, including latest, "
             "selected opponent-pool, stale, unselectable, and verification-status buckets."
+        ),
+    )
+    promotions.add_argument(
+        "--retention-plan",
+        action="store_true",
+        help=(
+            "With --opponent-pool-size, print a non-destructive retention preview that marks "
+            "selected, current, stale, and manual-review promotion entries."
         ),
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
@@ -450,6 +459,8 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--require-opponent-pool-size requires --opponent-pool-size.")
     if args.write_opponent_pool is not None and args.opponent_pool_size is None:
         raise ValueError("--write-opponent-pool requires --opponent-pool-size.")
+    if args.retention_plan and args.opponent_pool_size is None:
+        raise ValueError("--retention-plan requires --opponent-pool-size.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
     if (
@@ -547,6 +558,19 @@ def _promotions(args: argparse.Namespace) -> int:
         if opponent_pool is not None
         else None
     )
+    retention_plan = (
+        _promotion_retention_plan_payload(
+            registry=registry,
+            entry_statuses=entry_statuses,
+            opponent_pool=opponent_pool,
+            available_opponent_pool=available_opponent_pool,
+            current_policy_spec=preview_current_policy_spec,
+            requested_size=args.opponent_pool_size,
+            verification=verification,
+        )
+        if args.retention_plan and opponent_pool is not None
+        else None
+    )
     if args.write_opponent_pool is not None and opponent_pool_snapshot is not None:
         _write_json_payload(args.write_opponent_pool, opponent_pool_snapshot)
     if args.json:
@@ -580,6 +604,8 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["opponent_pool_snapshot"] = opponent_pool_snapshot
             if args.write_opponent_pool is not None:
                 payload["opponent_pool_snapshot_path"] = str(args.write_opponent_pool)
+        if retention_plan is not None:
+            payload["retention_plan"] = retention_plan
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -613,6 +639,8 @@ def _promotions(args: argparse.Namespace) -> int:
             )
     if args.lifecycle:
         _print_promotion_lifecycle_summary(lifecycle_summary)
+    if retention_plan is not None:
+        _print_promotion_retention_plan(retention_plan)
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
@@ -760,6 +788,137 @@ def _opponent_pool_snapshot_entry(status: Mapping[str, object]) -> dict[str, obj
         "policy_id_matches": status["policy_id_matches"],
         "failed_checks": list(status["failed_checks"]),
     }
+
+
+def _promotion_retention_plan_payload(
+    *,
+    registry,
+    entry_statuses: list[dict[str, object]],
+    opponent_pool,
+    available_opponent_pool,
+    current_policy_spec: str | None,
+    requested_size: int | None,
+    verification,
+) -> dict[str, object]:
+    entries = [
+        _promotion_retention_plan_entry(
+            status,
+            verification_enabled=verification is not None,
+        )
+        for status in entry_statuses
+    ]
+    action_counts = _count_plan_values(entries, "recommended_action")
+    return {
+        "schema_version": PROMOTION_RETENTION_PLAN_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "registry_path": str(registry.path),
+        "registry_latest_policy_id": registry.latest.policy_id if registry.latest is not None else None,
+        "registry_latest_checkpoint_path": registry.latest.checkpoint_path if registry.latest is not None else None,
+        "excluded_current_policy_spec": current_policy_spec,
+        "requested_opponent_pool_size": requested_size,
+        "selected_opponent_pool_size": len(opponent_pool),
+        "available_opponent_pool_size": len(available_opponent_pool) if available_opponent_pool is not None else None,
+        "verification_enabled": verification is not None,
+        "summary": {
+            "total_entries": len(entries),
+            "retain_count": int(action_counts.get("retain", 0)),
+            "verify_before_cleanup_count": int(action_counts.get("verify_before_cleanup", 0)),
+            "cleanup_candidate_count": int(action_counts.get("cleanup_candidate", 0)),
+            "manual_review_count": int(action_counts.get("manual_review", 0)),
+            "recommended_action_counts": action_counts,
+        },
+        "entries": entries,
+    }
+
+
+def _promotion_retention_plan_entry(
+    status: Mapping[str, object],
+    *,
+    verification_enabled: bool,
+) -> dict[str, object]:
+    action, reason = _promotion_retention_recommendation(
+        status,
+        verification_enabled=verification_enabled,
+    )
+    return {
+        "sequence": status["sequence"],
+        "policy_id": status["policy_id"],
+        "label": status["label"],
+        "selection_checkpoint_policy_spec": status["selection_checkpoint_policy_spec"],
+        "checkpoint_path": status["checkpoint_path"],
+        "source_checkpoint_path": status["source_checkpoint_path"],
+        "source_type": status["source_type"],
+        "source_iteration": status["source_iteration"],
+        "promoted_at": status["promoted_at"],
+        "selected_as": list(status["selected_as"]),
+        "opponent_pool_status": status["opponent_pool_status"],
+        "opponent_pool_skip_reason": status["opponent_pool_skip_reason"],
+        "verification_status": status["verification_status"],
+        "checkpoint_exists": status["checkpoint_exists"],
+        "checksum": status["checksum"],
+        "loadable": status["loadable"],
+        "policy_id_matches": status["policy_id_matches"],
+        "failed_checks": list(status["failed_checks"]),
+        "recommended_action": action,
+        "recommendation_reason": reason,
+    }
+
+
+def _promotion_retention_recommendation(
+    status: Mapping[str, object],
+    *,
+    verification_enabled: bool,
+) -> tuple[str, str]:
+    selected_as = set(status["selected_as"] if isinstance(status["selected_as"], list) else ())
+    if "latest" in selected_as:
+        return "retain", "latest_promotion"
+    if "opponent_pool" in selected_as:
+        return "retain", "selected_opponent_pool"
+    if status["opponent_pool_status"] == "excluded_current_policy":
+        return "retain", "current_policy_exclusion"
+    if status["opponent_pool_status"] == "unselectable":
+        return "manual_review", "missing_selection_checkpoint"
+    if status["failed_checks"]:
+        return "manual_review", "verification_failed"
+    if status["opponent_pool_status"] == "available_outside_requested_size":
+        if not verification_enabled:
+            return "verify_before_cleanup", "stale_outside_requested_pool_unverified"
+        return "cleanup_candidate", "stale_outside_requested_pool"
+    return "retain", "not_stale"
+
+
+def _count_plan_values(entries: list[Mapping[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in entries:
+        value = str(entry[key])
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _print_promotion_retention_plan(plan: Mapping[str, object]) -> None:
+    summary = plan["summary"] if isinstance(plan["summary"], Mapping) else {}
+    print("retention_plan:")
+    print(f"- schema_version: {plan['schema_version']}")
+    print(f"- verification_enabled: {plan['verification_enabled']}")
+    print(f"- selected_opponent_pool_size: {plan['selected_opponent_pool_size']}")
+    print(f"- available_opponent_pool_size: {plan['available_opponent_pool_size']}")
+    print(f"- retain_count: {summary.get('retain_count', 0)}")
+    print(f"- verify_before_cleanup_count: {summary.get('verify_before_cleanup_count', 0)}")
+    print(f"- cleanup_candidate_count: {summary.get('cleanup_candidate_count', 0)}")
+    print(f"- manual_review_count: {summary.get('manual_review_count', 0)}")
+    print("retention_entries:")
+    entries = plan["entries"] if isinstance(plan["entries"], list) else []
+    if not entries:
+        print("- none")
+        return
+    for entry in entries:
+        selected_as = ",".join(entry["selected_as"]) if entry["selected_as"] else "-"
+        print(
+            f"- {entry['sequence']}: action={entry['recommended_action']} "
+            f"reason={entry['recommendation_reason']} pool={entry['opponent_pool_status']} "
+            f"selected={selected_as} verification={entry['verification_status']} "
+            f"checkpoint={entry['checkpoint_path'] or '-'}"
+        )
 
 
 def _promotion_lifecycle_summary(

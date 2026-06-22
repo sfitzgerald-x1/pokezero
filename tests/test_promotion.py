@@ -9,7 +9,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pokezero.eval_cli import OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION, main as eval_cli_main
+from pokezero.eval_cli import (
+    OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION,
+    PROMOTION_RETENTION_PLAN_SCHEMA_VERSION,
+    main as eval_cli_main,
+)
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.linear_policy import LinearPolicyModel, save_linear_model
 from pokezero.opponents import historical_opponent_policy_specs
@@ -1174,6 +1178,121 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("--write-opponent-pool requires --opponent-pool-size", stderr.getvalue())
         self.assertFalse(snapshot_path.exists())
 
+    def test_eval_cli_promotions_retention_plan_requires_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--retention-plan",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--retention-plan requires --opponent-pool-size", stderr.getvalue())
+
+    def test_eval_cli_promotions_json_reports_retention_plan_for_stale_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=4)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        plan = payload["retention_plan"]
+        self.assertEqual(plan["schema_version"], PROMOTION_RETENTION_PLAN_SCHEMA_VERSION)
+        self.assertFalse(plan["verification_enabled"])
+        self.assertEqual(plan["selected_opponent_pool_size"], 2)
+        self.assertEqual(plan["available_opponent_pool_size"], 3)
+        self.assertEqual(plan["summary"]["verify_before_cleanup_count"], 1)
+        self.assertEqual(plan["summary"]["cleanup_candidate_count"], 0)
+        self.assertEqual(plan["summary"]["retain_count"], 3)
+        entries_by_sequence = {entry["sequence"]: entry for entry in plan["entries"]}
+        self.assertEqual(entries_by_sequence[1]["recommended_action"], "verify_before_cleanup")
+        self.assertEqual(
+            entries_by_sequence[1]["recommendation_reason"],
+            "stale_outside_requested_pool_unverified",
+        )
+        self.assertEqual(entries_by_sequence[2]["recommended_action"], "retain")
+        self.assertEqual(entries_by_sequence[3]["recommended_action"], "retain")
+        self.assertEqual(entries_by_sequence[4]["recommended_action"], "retain")
+        self.assertEqual(entries_by_sequence[4]["recommendation_reason"], "latest_promotion")
+
+    def test_eval_cli_promotions_verified_retention_plan_marks_cleanup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=4)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        plan = payload["retention_plan"]
+        self.assertTrue(plan["verification_enabled"])
+        entries_by_sequence = {entry["sequence"]: entry for entry in plan["entries"]}
+        self.assertEqual(entries_by_sequence[1]["recommended_action"], "cleanup_candidate")
+        self.assertEqual(entries_by_sequence[1]["recommendation_reason"], "stale_outside_requested_pool")
+        self.assertEqual(plan["summary"]["cleanup_candidate_count"], 1)
+        self.assertEqual(plan["summary"]["manual_review_count"], 0)
+
+    def test_eval_cli_promotions_retention_plan_marks_broken_stale_entry_for_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            (temp_path / "checkpoint-1.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertTrue(payload["opponent_pool_preflight_verified"])
+        entries_by_sequence = {entry["sequence"]: entry for entry in payload["retention_plan"]["entries"]}
+        self.assertEqual(entries_by_sequence[1]["recommended_action"], "manual_review")
+        self.assertEqual(entries_by_sequence[1]["recommendation_reason"], "verification_failed")
+        self.assertIn("checkpoint_exists", entries_by_sequence[1]["failed_checks"])
+        self.assertEqual(payload["retention_plan"]["summary"]["manual_review_count"], 1)
+
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=3)
@@ -1275,6 +1394,30 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("pool=excluded_current_policy", output)
         self.assertIn("pass --verify", output)
         self.assertEqual(snapshot["policy_specs"], [registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])])
+
+    def test_eval_cli_promotions_text_prints_retention_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=3)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "1",
+                        "--retention-plan",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("retention_plan:", output)
+        self.assertIn("- verify_before_cleanup_count: 1", output)
+        self.assertIn("retention_entries:", output)
+        self.assertIn("action=verify_before_cleanup", output)
+        self.assertIn("reason=stale_outside_requested_pool_unverified", output)
 
     def test_eval_cli_promotions_text_omits_pool_status_without_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
