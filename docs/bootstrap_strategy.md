@@ -264,7 +264,7 @@ Verify that recorded promoted checkpoints still resolve and match stored checksu
 python -m pokezero.eval_cli promotions --registry runs/promotions.json --verify
 ```
 
-This check is CPU-only and read-only. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, or a stored checkpoint checksum no longer matches the file on disk.
+This check is CPU-only and read-only. It uses the same raw checkpoint paths that policy selection consumes, so a relative path must resolve from the current working directory. It fails when registry sequences are malformed, a promoted checkpoint path no longer resolves, an embedded gate result is not passing, or a stored checkpoint checksum no longer matches the file on disk. Add `--require-checksum` when every promoted entry is expected to come from a managed artifact copy with checksum metadata.
 
 Collection capped rate and benchmark capped rate are separate checks. Collection capped rate measures training-data health for the latest iteration or bootstrap corpus. Benchmark capped rate measures the candidate policy's evaluation-time stall tendency. Win rate intentionally uses all benchmark games as the denominator, so capped games hurt both win rate and capped-rate health.
 

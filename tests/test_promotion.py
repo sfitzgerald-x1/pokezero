@@ -393,6 +393,29 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertIn("checkpoint_exists", failed_verification_check_names(result))
 
+    def test_verify_promotion_registry_matches_selection_raw_path_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "run" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text("{}", encoding="utf-8")
+            manifest_relative_checkpoint = manifest_path.parent / "iteration-0001" / "linear-policy.json"
+            manifest_relative_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            manifest_relative_checkpoint.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_manifest(
+                registry_path,
+                promotion_registry_payload(
+                    checkpoint_path="iteration-0001/linear-policy.json",
+                    manifest_path=str(manifest_path),
+                ),
+            )
+
+            result = verify_promotion_registry(registry_path)
+
+        self.assertFalse(result.passed)
+        self.assertIn("checkpoint_exists", failed_verification_check_names(result))
+
     def test_verify_promotion_registry_fails_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -416,6 +439,19 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertFalse(result.passed)
         self.assertIn("checkpoint_sha256", failed_verification_check_names(result))
+
+    def test_verify_promotion_registry_can_require_checksum_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "linear-policy.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_manifest(registry_path, promotion_registry_payload(checkpoint_path=str(checkpoint_path)))
+
+            result = verify_promotion_registry(registry_path, require_checksums=True)
+
+        self.assertFalse(result.passed)
+        self.assertIn("checkpoint_sha256_present", failed_verification_check_names(result))
 
     def test_verify_promotion_registry_fails_non_contiguous_sequences(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -450,6 +486,30 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertFalse(payload["verification"]["passed"])
         self.assertIn("checkpoint_exists", failed_verification_check_names_from_payload(payload["verification"]))
+
+    def test_eval_cli_promotions_verify_can_require_checksum_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "linear-policy.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
+            registry_path = temp_path / "promotions.json"
+            write_manifest(registry_path, promotion_registry_payload(checkpoint_path=str(checkpoint_path)))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--verify",
+                        "--require-checksum",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("checkpoint_sha256_present", failed_verification_check_names_from_payload(payload["verification"]))
 
 
 def selfplay_manifest() -> dict:
@@ -572,7 +632,7 @@ def passing_gate_config() -> PromotionGateConfig:
     )
 
 
-def promotion_registry_payload(*, checkpoint_path: str) -> dict:
+def promotion_registry_payload(*, checkpoint_path: str, manifest_path: str = "run/manifest.json") -> dict:
     return {
         "schema_version": PROMOTION_REGISTRY_SCHEMA_VERSION,
         "registry_path": "promotions.json",
@@ -583,7 +643,7 @@ def promotion_registry_payload(*, checkpoint_path: str) -> dict:
                 "sequence": 1,
                 "policy_id": "linear-selfplay-test-iter-0001",
                 "checkpoint_path": checkpoint_path,
-                "manifest_path": "run/manifest.json",
+                "manifest_path": manifest_path,
                 "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
                 "source_iteration": 1,
                 "promoted_at": "2026-06-02T00:00:00Z",

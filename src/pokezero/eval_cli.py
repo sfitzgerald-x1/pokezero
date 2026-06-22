@@ -61,6 +61,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promotions.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
     promotions.add_argument("--verify", action="store_true", help="Verify promoted checkpoint paths and stored checksums.")
     promotions.add_argument("--skip-checksum", action="store_true", help="With --verify, skip checksum validation even when metadata exists.")
+    promotions.add_argument("--require-checksum", action="store_true", help="With --verify, fail entries that do not include checksum metadata.")
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
 
@@ -131,9 +132,15 @@ def _promote(args: argparse.Namespace) -> int:
 
 
 def _promotions(args: argparse.Namespace) -> int:
+    if args.skip_checksum and args.require_checksum:
+        raise ValueError("--skip-checksum cannot be combined with --require-checksum.")
     registry = load_promotion_registry(args.registry)
     verification = (
-        verify_promotion_registry(args.registry, verify_checksums=not args.skip_checksum)
+        verify_promotion_registry(
+            args.registry,
+            verify_checksums=not args.skip_checksum,
+            require_checksums=args.require_checksum,
+        )
         if args.verify
         else None
     )
@@ -280,6 +287,7 @@ def _print_registry_verification(result) -> None:
     status = "PASS" if result.passed else "FAIL"
     print(f"verification_status: {status}")
     print(f"checked_checkpoints: {result.checked_checkpoint_count}")
+    print(f"verified_checksums: {result.verified_checksum_count}")
     print("verification_checks:")
     for check in result.checks:
         check_status = "pass" if check.passed else "fail"

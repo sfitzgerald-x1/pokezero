@@ -19,11 +19,12 @@ from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZe
 from pokezero.neural_selfplay import (
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
     NeuralSelfPlayPromotionConfig,
+    _promoted_checkpoint_specs,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
 from pokezero.evaluation import PromotionGateConfig
-from pokezero.promotion import load_promotion_registry
+from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.rollout import RolloutConfig
 
 
@@ -273,6 +274,40 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(first_manifest["next_current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
         self.assertEqual(second_manifest["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
         self.assertEqual(collected[1]["current_policy_spec"], registry.entries[0].checkpoint_policy_spec)
+
+    def test_promoted_checkpoint_specs_verify_registry_before_neural_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "promotions.json"
+            registry_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": PROMOTION_REGISTRY_SCHEMA_VERSION,
+                        "registry_path": str(registry_path),
+                        "latest_policy_id": "entity-test-iter-0001",
+                        "latest_checkpoint_path": str(temp_path / "missing-transformer.pt"),
+                        "entries": [
+                            {
+                                "sequence": 1,
+                                "policy_id": "entity-test-iter-0001",
+                                "checkpoint_path": str(temp_path / "missing-transformer.pt"),
+                                "manifest_path": "runs/neural/manifest.json",
+                                "source_type": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+                                "source_iteration": 1,
+                                "promoted_at": "2026-06-02T00:00:00Z",
+                                "label": None,
+                                "notes": None,
+                                "gate_result": {"passed": True},
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "promotion registry verification failed"):
+                _promoted_checkpoint_specs(registry_path)
 
     def test_run_neural_selfplay_iterations_can_promote_after_initial_gate_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

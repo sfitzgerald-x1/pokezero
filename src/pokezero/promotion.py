@@ -130,6 +130,7 @@ class PromotionRegistryVerificationResult:
     registry_path: Path
     entry_count: int
     checked_checkpoint_count: int
+    verified_checksum_count: int
     checks: tuple[PromotionRegistryVerificationCheck, ...]
 
     @property
@@ -141,6 +142,7 @@ class PromotionRegistryVerificationResult:
             "registry_path": str(self.registry_path),
             "entry_count": self.entry_count,
             "checked_checkpoint_count": self.checked_checkpoint_count,
+            "verified_checksum_count": self.verified_checksum_count,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
         }
@@ -222,12 +224,14 @@ def verify_promotion_registry(
     path: Path,
     *,
     verify_checksums: bool = True,
+    require_checksums: bool = False,
 ) -> PromotionRegistryVerificationResult:
     registry = load_promotion_registry(path)
     checks: list[PromotionRegistryVerificationCheck] = [
         _sequence_check(registry),
     ]
     checked_checkpoint_count = 0
+    verified_checksum_count = 0
     for entry in registry.entries:
         checks.append(_gate_result_passed_check(entry))
         if not entry.checkpoint_path:
@@ -242,10 +246,7 @@ def verify_promotion_registry(
                 )
             )
             continue
-        resolved_checkpoint = _resolve_checkpoint_path(
-            entry.checkpoint_path,
-            manifest_path=Path(entry.manifest_path),
-        )
+        resolved_checkpoint = _resolve_selection_checkpoint_path(entry.checkpoint_path)
         checks.append(
             PromotionRegistryVerificationCheck(
                 name="checkpoint_exists",
@@ -261,6 +262,7 @@ def verify_promotion_registry(
         checked_checkpoint_count += 1
         if verify_checksums and entry.checkpoint_sha256 is not None:
             observed_sha256 = _sha256_file(resolved_checkpoint)
+            verified_checksum_count += 1
             checks.append(
                 PromotionRegistryVerificationCheck(
                     name="checkpoint_sha256",
@@ -271,10 +273,22 @@ def verify_promotion_registry(
                     message="promotion checkpoint checksum matches registry metadata",
                 )
             )
+        elif require_checksums:
+            checks.append(
+                PromotionRegistryVerificationCheck(
+                    name="checkpoint_sha256_present",
+                    passed=False,
+                    entry_sequence=entry.sequence,
+                    observed=None,
+                    expected="sha256 metadata",
+                    message="promotion checkpoint checksum metadata is required",
+                )
+            )
     return PromotionRegistryVerificationResult(
         registry_path=registry.path,
         entry_count=len(registry.entries),
         checked_checkpoint_count=checked_checkpoint_count,
+        verified_checksum_count=verified_checksum_count,
         checks=tuple(checks),
     )
 
@@ -373,6 +387,13 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Pa
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
+    return None
+
+
+def _resolve_selection_checkpoint_path(checkpoint_path: str) -> Path | None:
+    raw_path = Path(checkpoint_path).expanduser()
+    if raw_path.exists() and raw_path.is_file():
+        return raw_path
     return None
 
 
