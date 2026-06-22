@@ -33,6 +33,8 @@ class PromotionRegistryEntry:
     gate_result: Mapping[str, Any]
     source_checkpoint_path: str | None = None
     checkpoint_sha256: str | None = None
+    retention_archived_from_checkpoint_path: str | None = None
+    retention_archived_at: str | None = None
 
     @property
     def checkpoint_policy_spec(self) -> str | None:
@@ -57,6 +59,10 @@ class PromotionRegistryEntry:
             payload["source_checkpoint_path"] = self.source_checkpoint_path
         if self.checkpoint_sha256 is not None:
             payload["checkpoint_sha256"] = self.checkpoint_sha256
+        if self.retention_archived_from_checkpoint_path is not None:
+            payload["retention_archived_from_checkpoint_path"] = self.retention_archived_from_checkpoint_path
+        if self.retention_archived_at is not None:
+            payload["retention_archived_at"] = self.retention_archived_at
         return payload
 
 
@@ -387,6 +393,8 @@ def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
         gate_result=_mapping(entry.get("gate_result", {})),
         source_checkpoint_path=_optional_str(entry.get("source_checkpoint_path")),
         checkpoint_sha256=_optional_str(entry.get("checkpoint_sha256")),
+        retention_archived_from_checkpoint_path=_optional_str(entry.get("retention_archived_from_checkpoint_path")),
+        retention_archived_at=_optional_str(entry.get("retention_archived_at")),
     )
 
 
