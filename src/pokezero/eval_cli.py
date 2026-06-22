@@ -3226,7 +3226,7 @@ def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe")
     recipe_mapping = recipe if isinstance(recipe, Mapping) else {}
-    report = _cpu_long_run_derived_run_report(summary)
+    report, report_source = _cpu_long_run_compare_derived_run_report(summary)
     wrapper_passed = status == "passed"
     derived_audit_passed = report.get("available") is True and report.get("audit_passed") is True
     return {
@@ -3240,6 +3240,7 @@ def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object
         "profile": recipe_mapping.get("profile"),
         "runtime_audit_source": recipe_mapping.get("runtime_audit_source"),
         "derived_run_report": report,
+        "derived_run_report_source": report_source,
         "derived_audit_passed": derived_audit_passed,
         "latest_iteration": report.get("latest_iteration"),
         "latest_benchmark_win_rate": report.get("latest_benchmark_win_rate"),
@@ -3252,6 +3253,13 @@ def _cpu_long_run_compare_entry(summary_path: Path, summary: Mapping[str, object
         "derived_error": report.get("error"),
         "failed_checks": list(report.get("failed_checks") or ()),
     }
+
+
+def _cpu_long_run_compare_derived_run_report(summary: Mapping[str, object]) -> tuple[Mapping[str, object], str]:
+    persisted_report = summary.get("derived_run_report")
+    if isinstance(persisted_report, Mapping):
+        return persisted_report, "persisted"
+    return _cpu_long_run_derived_run_report(summary), "computed"
 
 
 def _cpu_long_run_compare_label(summary_path: Path, run_dir: object) -> str:
