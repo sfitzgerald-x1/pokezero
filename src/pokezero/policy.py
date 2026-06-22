@@ -39,6 +39,7 @@ SCRIPTED_TEACHER_BRANCHES = (
     "setup",
     "spikes_available",
     "spikes_maxed",
+    "status_no_effect",
     "status_pressure",
     "switch",
     "switch_missing_target",
@@ -343,7 +344,7 @@ def _move_score(
     if move_id == "rapidspin":
         return _rapid_spin_score(action_index, move, metadata, dex, self_types, opponent_types, hp_fraction)
     if move.gen3_category == "Status" or move.base_power <= 0:
-        return _status_move_score(action_index, move, metadata, hp_fraction, team_status_cure_score=team_status_cure_score)
+        return _status_move_score(action_index, move, metadata, dex, hp_fraction, team_status_cure_score=team_status_cure_score)
 
     return _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
 
@@ -381,6 +382,7 @@ def _status_move_score(
     action_index: int,
     move,
     metadata: Mapping[str, Any],
+    dex: ShowdownDex,
     hp_fraction: float,
     *,
     team_status_cure_score: float,
@@ -390,6 +392,16 @@ def _status_move_score(
     if move_id in {"spikes"}:
         return _spikes_score(action_index, move, metadata)
     if move.status and opponent_status == "none":
+        opponent_types = _metadata_species_types(metadata.get("opponent_active"), dex)
+        if _status_move_has_no_effect(move, opponent_types, dex):
+            type_label = "/".join(opponent_types) if opponent_types else "unknown type"
+            return _ActionScore(
+                action_index,
+                "move",
+                4.0,
+                f"{move.name}: status has no effect on {type_label}",
+                "status_no_effect",
+            )
         return _ActionScore(action_index, "move", 55.0, f"{move.name}: status pressure", "status_pressure")
     if move.heal:
         score = 58.0 if hp_fraction < 0.45 else 8.0
@@ -410,6 +422,24 @@ def _status_move_score(
             )
         return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status", "team_status_cure_no_status")
     return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status", "low_impact_status")
+
+
+def _status_move_has_no_effect(move, opponent_types: tuple[str, ...], dex: ShowdownDex) -> bool:
+    status = normalize_id(move.status)
+    normalized_types = {normalize_id(value) for value in opponent_types}
+    # In Gen 3, Thunder Wave follows Electric immunity, but other paralysis
+    # status moves such as Glare should not inherit Normal-type damage immunity.
+    if (
+        status == "par"
+        and normalize_id(move.type) == "electric"
+        and dex.effectiveness(move.type, opponent_types) == 0.0
+    ):
+        return True
+    if status in {"psn", "tox"} and normalized_types.intersection({"poison", "steel"}):
+        return True
+    if status == "brn" and "fire" in normalized_types:
+        return True
+    return False
 
 
 def _rapid_spin_score(
