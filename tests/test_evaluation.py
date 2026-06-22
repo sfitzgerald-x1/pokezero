@@ -525,6 +525,9 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("--audit-profile smoke", output)
         self.assertIn("./.venv/bin/python -m pokezero.eval_cli audit-calibrate", output)
         self.assertIn("--compare-profile smoke", output)
+        self.assertIn("--write-config 'runs/local smoke/smoke-audit-config.json'", output)
+        self.assertIn("./.venv/bin/python -m pokezero.eval_cli audit 'runs/local smoke/selfplay'", output)
+        self.assertIn("--audit-config 'runs/local smoke/smoke-audit-config.json'", output)
 
     def test_eval_cli_cpu_smoke_plan_prints_json_recipe(self) -> None:
         source = {
@@ -556,16 +559,43 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(payload["run_root"], "runs/smoke")
         self.assertEqual(payload["python_binary"], "./.venv/bin/python")
         self.assertEqual(payload["showdown_root"], "/tmp/showdown")
+        self.assertEqual(payload["audit_config_path"], "runs/smoke/smoke-audit-config.json")
         self.assertEqual(payload["source"], source)
         self.assertEqual([step["name"] for step in payload["steps"]], [
             "bootstrap teacher checkpoint",
             "run smoke self-play iteration loop",
             "inspect self-play report",
             "audit smoke run",
-            "calibrate and compare smoke profile",
+            "calibrate smoke audit config",
+            "audit smoke run with calibrated config",
         ])
         self.assertIn("linear:runs/smoke/teacher-bootstrap/linear-bootstrap.json", payload["steps"][1]["argv"])
-        self.assertIn("--fail-on-profile", payload["steps"][-1]["argv"])
+        self.assertIn("--fail-on-profile", payload["steps"][-2]["argv"])
+        self.assertIn("--write-config", payload["steps"][-2]["argv"])
+        self.assertIn("runs/smoke/smoke-audit-config.json", payload["steps"][-2]["argv"])
+        self.assertIn("--audit-config", payload["steps"][-1]["argv"])
+        self.assertIn("runs/smoke/smoke-audit-config.json", payload["steps"][-1]["argv"])
+
+    def test_eval_cli_cpu_smoke_plan_accepts_custom_audit_config_path(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--run-root",
+                    "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
+                    "--audit-config-path",
+                    "runs/audit-configs/smoke.json",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["audit_config_path"], "runs/audit-configs/smoke.json")
+        self.assertIn("runs/audit-configs/smoke.json", payload["steps"][-2]["argv"])
+        self.assertIn("runs/audit-configs/smoke.json", payload["steps"][-1]["argv"])
 
     def test_eval_cli_cpu_smoke_plan_omits_showdown_root_when_unset(self) -> None:
         with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -714,7 +744,7 @@ class PromotionGateTest(unittest.TestCase):
                 patch("pokezero.eval_cli.collect_source_metadata", return_value=source),
                 patch(
                     "pokezero.eval_cli.subprocess.run",
-                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(6)],
                 ) as run,
                 patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -732,25 +762,32 @@ class PromotionGateTest(unittest.TestCase):
             summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_count, 6)
         first_argv = run.call_args_list[0].args[0]
         self.assertEqual(first_argv[:4], ["./.venv/bin/python", "-m", "pokezero.bootstrap_cli", "teacher"])
         second_argv = run.call_args_list[1].args[0]
         self.assertIn("--profile", second_argv)
         self.assertIn("smoke", second_argv)
+        config_argv = run.call_args_list[4].args[0]
+        self.assertIn("--write-config", config_argv)
+        self.assertIn(str(run_root / "smoke-audit-config.json"), config_argv)
+        audit_config_argv = run.call_args_list[5].args[0]
+        self.assertIn("--audit-config", audit_config_argv)
+        self.assertIn(str(run_root / "smoke-audit-config.json"), audit_config_argv)
         output = stdout.getvalue()
         self.assertIn("cpu_smoke_run:", output)
-        self.assertIn("running_step: 1/5 bootstrap teacher checkpoint", output)
+        self.assertIn("running_step: 1/6 bootstrap teacher checkpoint", output)
         self.assertIn("cpu_smoke_run: PASS", output)
         self.assertEqual(summary["schema_version"], "pokezero.cpu_smoke_run_summary.v1")
         self.assertEqual(summary["status"], "passed")
         self.assertEqual(summary["failed_step"], None)
         self.assertEqual(summary["recipe"]["run_root"], str(run_root))
+        self.assertEqual(summary["recipe"]["audit_config_path"], str(run_root / "smoke-audit-config.json"))
         self.assertEqual(summary["source"], source)
         self.assertEqual(summary["recipe"]["source"], source)
-        self.assertEqual(len(summary["steps"]), 5)
-        self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 5)
-        self.assertEqual([step["returncode"] for step in summary["steps"]], [0] * 5)
+        self.assertEqual(len(summary["steps"]), 6)
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 6)
+        self.assertEqual([step["returncode"] for step in summary["steps"]], [0] * 6)
         self.assertIn("started_at", summary)
         self.assertIn("ended_at", summary)
         self.assertIsInstance(summary["duration_seconds"], float)
@@ -765,7 +802,7 @@ class PromotionGateTest(unittest.TestCase):
             with (
                 patch(
                     "pokezero.eval_cli.subprocess.run",
-                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(6)],
                 ),
                 patch("sys.stdout", new_callable=io.StringIO),
             ):
@@ -817,7 +854,7 @@ class PromotionGateTest(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(observed_statuses, ["running"] * 5)
+        self.assertEqual(observed_statuses, ["running"] * 6)
 
     def test_eval_cli_cpu_smoke_run_warns_and_continues_after_summary_update_failure(self) -> None:
         write_count = 0
@@ -837,7 +874,7 @@ class PromotionGateTest(unittest.TestCase):
                 patch("pokezero.eval_cli._write_json_payload", side_effect=flaky_write),
                 patch(
                     "pokezero.eval_cli.subprocess.run",
-                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(6)],
                 ) as run,
                 patch("sys.stdout", new_callable=io.StringIO),
                 patch("sys.stderr", new_callable=io.StringIO) as stderr,
@@ -853,7 +890,7 @@ class PromotionGateTest(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_count, 6)
         self.assertEqual(write_count, 2)
         self.assertIn("warning: failed to update cpu smoke summary", stderr.getvalue())
 
