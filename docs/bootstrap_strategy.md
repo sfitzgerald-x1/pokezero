@@ -104,7 +104,7 @@ python -m pokezero.bootstrap_cli teacher-benchmark \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-Use this as a cheap quality check after changing scripted-teacher heuristics. It does not train a checkpoint or write a manifest.
+Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters alongside win rates, but it does not train a checkpoint or write a manifest.
 
 Default teacher bootstrap collection includes three opponent families:
 

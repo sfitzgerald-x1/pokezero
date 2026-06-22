@@ -11,6 +11,7 @@ from pokezero.bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
+    TeacherBenchmarkResult,
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
@@ -212,7 +213,7 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertNotIn("linear-bootstrap-test vs scripted-teacher", labels)
 
     def test_benchmark_teacher_policy_runs_teacher_against_baseline_in_both_seats(self) -> None:
-        report = benchmark_teacher_policy(
+        result = benchmark_teacher_policy(
             env_factory=OneTurnEnv,
             rollout_config=RolloutConfig(max_decision_rounds=5),
             teacher_policy_spec="simple-legal",
@@ -220,6 +221,7 @@ class TeacherBootstrapTest(unittest.TestCase):
             games=1,
             seed_start=10,
         )
+        report = result.benchmark
 
         self.assertEqual(report.total_games, 2)
         self.assertEqual(
@@ -232,6 +234,49 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(head_to_head.second_policy_id, "random-legal")
         self.assertEqual(head_to_head.first_policy_wins, 1)
         self.assertEqual(head_to_head.second_policy_wins, 1)
+        self.assertEqual(result.teacher_decision_summary["total_decisions"], 4)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 0)
+
+    def test_benchmark_teacher_policy_reports_scripted_teacher_fallbacks(self) -> None:
+        result = benchmark_teacher_policy(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            teacher_policy_spec="scripted-teacher?allow_fallback=true",
+            baseline_policy_specs=("random-legal",),
+            games=1,
+            seed_start=10,
+        )
+
+        self.assertEqual(result.benchmark.total_games, 2)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_reasons"]["dex unavailable"], 2)
+
+    def test_benchmark_teacher_policy_rejects_non_positive_games(self) -> None:
+        with self.assertRaisesRegex(ValueError, "games must be positive"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=("random-legal",),
+                games=0,
+            )
+
+    def test_benchmark_teacher_policy_rejects_empty_or_same_teacher_baselines(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one baseline"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=(),
+            )
+        with self.assertRaisesRegex(ValueError, "distinct from the teacher"):
+            benchmark_teacher_policy(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                baseline_policy_specs=("simple-legal",),
+            )
 
     def test_run_teacher_bootstrap_refuses_existing_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -424,8 +469,18 @@ class TeacherBootstrapTest(unittest.TestCase):
                 ),
             ),
         )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+            },
+        )
 
-        with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_report) as benchmark:
+        with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result) as benchmark:
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = bootstrap_cli_main(
                     [
@@ -456,5 +511,6 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(len(kwargs["baseline_policy_specs"]), 1)
         self.assertEqual(kwargs["baseline_policy_specs"][0], "random-legal")
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["total_games"], 2)
-        self.assertEqual(payload["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
+        self.assertEqual(payload["benchmark"]["total_games"], 2)
+        self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
+        self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)

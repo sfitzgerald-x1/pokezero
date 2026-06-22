@@ -161,7 +161,7 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         if args.baseline_policy is not None
         else None
     )
-    report = benchmark_teacher_policy(
+    result = benchmark_teacher_policy(
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=RolloutConfig(
             max_decision_rounds=args.max_decision_rounds,
@@ -173,9 +173,9 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
     )
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
-        _print_benchmark_report(report)
+        _print_teacher_benchmark_result(result)
     return 0
 
 
@@ -232,7 +232,8 @@ def _print_teacher_summary(result) -> None:
     print(f"manifest: {result.manifest_path}")
 
 
-def _print_benchmark_report(report) -> None:
+def _print_teacher_benchmark_result(result) -> None:
+    report = result.benchmark
     print(f"format: {report.format_id}")
     print(f"games_per_matchup: {report.games_per_matchup}")
     print(f"total_games: {report.total_games}")
@@ -244,6 +245,20 @@ def _print_benchmark_report(report) -> None:
             f"{row.second_policy_id}_wr={row.second_policy_win_rate:.3f} "
             f"capped={row.capped_games}"
         )
+    if any(row.capped_games for row in report.head_to_head_results):
+        print("note: benchmark win rates include capped games in the denominator.")
+    summary = result.teacher_decision_summary
+    print(
+        "teacher_decisions: "
+        f"scripted={summary.get('scripted_teacher_decisions', 0)} "
+        f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
+        f"fallbacks={summary.get('fallback_decisions', 0)}"
+    )
+    fallback_reasons = summary.get("fallback_reasons") or {}
+    if fallback_reasons:
+        print("teacher_fallback_reasons:")
+        for reason, count in sorted(fallback_reasons.items()):
+            print(f"- {reason}: {count}")
 
 
 if __name__ == "__main__":
