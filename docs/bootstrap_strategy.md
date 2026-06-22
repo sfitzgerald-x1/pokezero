@@ -160,10 +160,12 @@ python -m pokezero.bootstrap_cli teacher-benchmark \
   --min-teacher-win-rate 0.55 \
   --max-capped-rate 0.10 \
   --fail-on-degraded-decisions \
+  --require-teacher-branch damaging_move \
+  --min-teacher-branch-count damaging_move=1 \
   --out runs/scripted-teacher-benchmark.json
 ```
 
-Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters plus low-cardinality teacher branch counts and top teacher decision reasons alongside win rates, so heuristic-specific branches can be audited without reading raw rollout JSONL. It does not train a checkpoint or write a manifest. Optional threshold flags make it usable as a CPU preflight gate: it exits `2` when any requested win-rate, capped-rate, or degraded-decision check fails, while still writing the JSON report requested by `--out`.
+Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters plus low-cardinality teacher branch counts and top teacher decision reasons alongside win rates, so heuristic-specific branches can be audited without reading raw rollout JSONL. It does not train a checkpoint or write a manifest. Optional threshold flags make it usable as a CPU preflight gate: it exits `2` when any requested win-rate, capped-rate, degraded-decision, or teacher-branch coverage check fails, while still writing the JSON report requested by `--out`. Use `--require-teacher-branch BRANCH` when a branch must appear at least once, and `--min-teacher-branch-count BRANCH=N` when a branch needs a minimum sample count. Unknown branch names fail explicitly so typos do not look like heuristic regressions.
 
 The scripted teacher remains strict by default. With the default `scripted-teacher` policy, unresolved moves or missing metadata fail fast with exit `1` before a benchmark report is produced. Use `allow_fallback=true` and/or `allow_unknown_moves=true` only when the goal is to measure degraded decisions via `--fail-on-degraded-decisions`.
 

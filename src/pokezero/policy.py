@@ -26,6 +26,26 @@ _SIDE_HAZARDS = {"spikes", "stealthrock", "toxicspikes"}
 # Other forced Gen 3 moves seen in requests, including Struggle and lock-in moves,
 # are ordinary dex moves and should keep using normal strict validation.
 _FORCED_PSEUDO_MOVE_IDS = {"recharge"}
+SCRIPTED_TEACHER_BRANCHES = (
+    "damaging_move",
+    "damaging_no_effect",
+    "fallback",
+    "forced_pseudo_move",
+    "low_impact_status",
+    "rapid_spin_blocked_by_ghost",
+    "rapid_spin_clear_hazards",
+    "rapid_spin_no_hazards",
+    "recovery",
+    "setup",
+    "spikes_available",
+    "spikes_maxed",
+    "status_pressure",
+    "switch",
+    "switch_missing_target",
+    "team_status_cure",
+    "team_status_cure_no_status",
+    "unknown_move",
+)
 
 
 @dataclass(frozen=True)
