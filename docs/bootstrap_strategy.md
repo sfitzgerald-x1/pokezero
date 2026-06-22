@@ -455,7 +455,7 @@ python -m pokezero.eval_cli promotions \
   --verify-opponent-pool-only
 ```
 
-The apply command only moves entries already marked `cleanup_candidate`, only for managed promoted artifact copies, and leaves source run checkpoints untouched. It archives the stale artifact and rewrites that promotion entry's checkpoint path to the archive location so registry verification and historical auditability continue to work. It is not a permanent deletion policy; remove or compact archive directories separately only after deciding those checkpoints are no longer needed.
+The apply command only moves entries already marked `cleanup_candidate`, only for managed promoted artifact copies, and leaves source run checkpoints untouched. Confirmed archive requires the same promotions preflight to pass before any file is moved. It archives the stale artifact and rewrites that promotion entry's checkpoint path to the archive location so registry verification and historical auditability continue to work. Already archived entries are retained on later retention-plan runs instead of being re-archived. It is not a permanent deletion policy; remove or compact archive directories separately only after deciding those checkpoints are no longer needed.
 
 Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected. Snapshots include `generated_at`, so compare `policy_specs` and selected entries rather than whole-file equality when checking whether the selected pool changed.
 

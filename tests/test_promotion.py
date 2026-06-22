@@ -1497,6 +1497,205 @@ class PromotionRegistryTest(unittest.TestCase):
         )
         self.assertIn("retention_archived_at", registry_payload["entries"][0])
 
+    def test_eval_cli_promotions_apply_retention_plan_is_idempotent_for_archived_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            archive_dir = temp_path / "archive"
+            first_args = [
+                "promotions",
+                "--registry",
+                str(registry_path),
+                "--opponent-pool-size",
+                "2",
+                "--retention-plan",
+                "--apply-retention-plan",
+                "--retention-apply-confirm",
+                "archive",
+                "--retention-archive-dir",
+                str(archive_dir),
+                "--verify",
+                "--verify-loadable",
+                "--verify-opponent-pool-only",
+                "--json",
+            ]
+
+            with patch("sys.stdout", new_callable=io.StringIO) as first_stdout:
+                first_exit = eval_cli_main(first_args)
+            first_payload = json.loads(first_stdout.getvalue())
+            first_archive_path = first_payload["retention_apply"]["entries"][0]["archive_path"]
+
+            with patch("sys.stdout", new_callable=io.StringIO) as second_stdout:
+                second_exit = eval_cli_main(first_args)
+            second_payload = json.loads(second_stdout.getvalue())
+            registry_after = load_promotion_registry(registry_path)
+
+        self.assertEqual(first_exit, 0)
+        self.assertEqual(second_exit, 0)
+        second_entries = {entry["sequence"]: entry for entry in second_payload["retention_plan"]["entries"]}
+        self.assertEqual(second_entries[1]["recommended_action"], "retain")
+        self.assertEqual(second_entries[1]["recommendation_reason"], "already_archived")
+        self.assertEqual(second_payload["retention_apply"]["summary"]["applied_count"], 0)
+        self.assertEqual(registry_after.entries[0].checkpoint_path, first_archive_path)
+
+    def test_eval_cli_promotions_apply_retention_plan_skips_failed_verification_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            registry_before = load_promotion_registry(registry_path)
+            stale_artifact_path = Path(registry_before.entries[0].checkpoint_path or "")
+            stale_artifact_path.unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--apply-retention-plan",
+                        "--retention-apply-confirm",
+                        "archive",
+                        "--retention-archive-dir",
+                        str(temp_path / "archive"),
+                        "--verify",
+                        "--verify-loadable",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+            archive_files = list((temp_path / "archive").glob("*"))
+
+        self.assertEqual(exit_code, 0)
+        entries_by_sequence = {entry["sequence"]: entry for entry in result["retention_apply"]["entries"]}
+        self.assertEqual(entries_by_sequence[1]["apply_action"], "skip")
+        self.assertEqual(entries_by_sequence[1]["apply_reason"], "not_cleanup_candidate")
+        self.assertEqual(result["retention_apply"]["summary"]["applied_count"], 0)
+        self.assertEqual(archive_files, [])
+
+    def test_eval_cli_promotions_apply_retention_plan_skips_non_managed_cleanup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][0]["source_checkpoint_path"] = payload["entries"][0]["checkpoint_path"]
+            write_manifest(registry_path, payload)
+            registry_before = load_promotion_registry(registry_path)
+            stale_artifact_path = Path(registry_before.entries[0].checkpoint_path or "")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--apply-retention-plan",
+                        "--retention-apply-confirm",
+                        "archive",
+                        "--retention-archive-dir",
+                        str(temp_path / "archive"),
+                        "--verify",
+                        "--verify-loadable",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+            stale_artifact_exists_after = stale_artifact_path.exists()
+
+        self.assertEqual(exit_code, 0)
+        plan_entries = {entry["sequence"]: entry for entry in result["retention_plan"]["entries"]}
+        self.assertEqual(plan_entries[1]["recommended_action"], "cleanup_candidate")
+        apply_entries = {entry["sequence"]: entry for entry in result["retention_apply"]["entries"]}
+        self.assertEqual(apply_entries[1]["apply_action"], "skip")
+        self.assertEqual(apply_entries[1]["apply_reason"], "not_managed_artifact_copy")
+        self.assertTrue(stale_artifact_exists_after)
+
+    def test_eval_cli_promotions_apply_retention_plan_refuses_confirmed_archive_on_failing_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][-1]["sequence"] = 5
+            write_manifest(registry_path, payload)
+            original_checkpoint_path = Path(payload["entries"][0]["checkpoint_path"])
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--retention-plan",
+                        "--apply-retention-plan",
+                        "--retention-apply-confirm",
+                        "archive",
+                        "--retention-archive-dir",
+                        str(temp_path / "archive"),
+                        "--verify",
+                        "--verify-loadable",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            archive_files = list((temp_path / "archive").glob("*"))
+            original_checkpoint_exists_after = original_checkpoint_path.exists()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("requires a passing promotions preflight", stderr.getvalue())
+        self.assertTrue(original_checkpoint_exists_after)
+        self.assertEqual(archive_files, [])
+
+    def test_eval_cli_promotions_apply_retention_plan_rolls_back_moved_artifact_on_registry_rewrite_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_managed_registry_with_entries(temp_path, count=4)
+            registry_before = load_promotion_registry(registry_path)
+            stale_artifact_path = Path(registry_before.entries[0].checkpoint_path or "")
+            archive_dir = temp_path / "archive"
+
+            with patch(
+                "pokezero.eval_cli._rewrite_retention_archived_checkpoint_paths",
+                side_effect=OSError("simulated registry write failure"),
+            ):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = eval_cli_main(
+                        [
+                            "promotions",
+                            "--registry",
+                            str(registry_path),
+                            "--opponent-pool-size",
+                            "2",
+                            "--retention-plan",
+                            "--apply-retention-plan",
+                            "--retention-apply-confirm",
+                            "archive",
+                            "--retention-archive-dir",
+                            str(archive_dir),
+                            "--verify",
+                            "--verify-loadable",
+                            "--verify-opponent-pool-only",
+                            "--json",
+                        ]
+                    )
+            archive_files = list(archive_dir.glob("*"))
+            registry_after = load_promotion_registry(registry_path)
+            stale_artifact_exists_after = stale_artifact_path.exists()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("simulated registry write failure", stderr.getvalue())
+        self.assertTrue(stale_artifact_exists_after)
+        self.assertEqual(archive_files, [])
+        self.assertEqual(registry_after.entries[0].checkpoint_path, registry_before.entries[0].checkpoint_path)
+
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=3)

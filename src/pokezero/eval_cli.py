@@ -626,6 +626,15 @@ def _promotions(args: argparse.Namespace) -> int:
         if args.retention_plan and opponent_pool is not None
         else None
     )
+    promotions_exit_code = _promotions_exit_code(
+        verification=verification,
+        opponent_pool=opponent_pool,
+        required_opponent_pool_size=args.require_opponent_pool_size,
+        opponent_pool_preflight_verified=opponent_pool_preflight_verified,
+        verify_opponent_pool_only=args.verify_opponent_pool_only,
+    )
+    if args.retention_apply_confirm == "archive" and promotions_exit_code != 0:
+        raise ValueError("--retention-apply-confirm archive requires a passing promotions preflight.")
     retention_apply = (
         _promotion_retention_apply_payload(
             registry_path=registry.path,
@@ -676,13 +685,7 @@ def _promotions(args: argparse.Namespace) -> int:
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return _promotions_exit_code(
-            verification=verification,
-            opponent_pool=opponent_pool,
-            required_opponent_pool_size=args.require_opponent_pool_size,
-            opponent_pool_preflight_verified=opponent_pool_preflight_verified,
-            verify_opponent_pool_only=args.verify_opponent_pool_only,
-        )
+        return promotions_exit_code
     print(f"registry: {registry.path}")
     print(f"promotions: {len(registry.entries)}")
     if registry.latest is not None:
@@ -755,13 +758,7 @@ def _promotions(args: argparse.Namespace) -> int:
             print("note: pass --verify to confirm the previewed registry is selectable by runtime.")
     if verification is not None:
         _print_registry_verification(verification)
-    return _promotions_exit_code(
-        verification=verification,
-        opponent_pool=opponent_pool,
-        required_opponent_pool_size=args.require_opponent_pool_size,
-        opponent_pool_preflight_verified=opponent_pool_preflight_verified,
-        verify_opponent_pool_only=args.verify_opponent_pool_only,
-    )
+    return promotions_exit_code
 
 
 def _promotions_exit_code(
@@ -849,6 +846,8 @@ def _opponent_pool_snapshot_entry(status: Mapping[str, object]) -> dict[str, obj
         "source_checkpoint_path": status["source_checkpoint_path"],
         "source_type": status["source_type"],
         "source_iteration": status["source_iteration"],
+        "retention_archived_from_checkpoint_path": status["retention_archived_from_checkpoint_path"],
+        "retention_archived_at": status["retention_archived_at"],
         "promoted_at": status["promoted_at"],
         "verification_status": status["verification_status"],
         "checkpoint_exists": status["checkpoint_exists"],
@@ -955,6 +954,8 @@ def _promotion_retention_recommendation(
         return "retain", "selected_opponent_pool"
     if status["opponent_pool_status"] == "excluded_current_policy":
         return "retain", "current_policy_exclusion"
+    if status["retention_archived_at"] is not None:
+        return "retain", "already_archived"
     if status["opponent_pool_status"] == "available_outside_requested_size":
         if not verification_enabled:
             return "verify_before_cleanup", "stale_outside_requested_pool_unverified"
@@ -1076,6 +1077,8 @@ def _promotion_retention_apply_entry(
         "label": entry.get("label"),
         "checkpoint_path": entry.get("checkpoint_path"),
         "source_checkpoint_path": entry.get("source_checkpoint_path"),
+        "retention_archived_from_checkpoint_path": entry.get("retention_archived_from_checkpoint_path"),
+        "retention_archived_at": entry.get("retention_archived_at"),
         "recommended_action": entry.get("recommended_action"),
         "recommendation_reason": entry.get("recommendation_reason"),
     }
@@ -1163,28 +1166,44 @@ def _apply_retention_archive_entries(
     if not archive_entries:
         return
     updates: dict[int, str] = {}
+    moved_entries: list[tuple[Path, Path, dict[str, object]]] = []
     archive_root: Path | None = None
-    for entry in archive_entries:
-        source_path = Path(str(entry["resolved_checkpoint_path"]))
-        archive_path = Path(str(entry["archive_path"]))
-        if archive_root is None:
-            archive_root = archive_path.parent
-            archive_root.mkdir(parents=True, exist_ok=True)
-        if archive_path.exists():
-            entry["apply_status"] = "skipped"
-            entry["apply_reason"] = "archive_path_exists"
-            continue
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source_path), str(archive_path))
+    try:
+        for entry in archive_entries:
+            source_path = Path(str(entry["resolved_checkpoint_path"]))
+            archive_path = Path(str(entry["archive_path"]))
+            if archive_root is None:
+                archive_root = archive_path.parent
+                archive_root.mkdir(parents=True, exist_ok=True)
+            if archive_path.exists():
+                entry["apply_status"] = "skipped"
+                entry["apply_reason"] = "archive_path_exists"
+                continue
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source_path), str(archive_path))
+            moved_entries.append((archive_path, source_path, entry))
+            updates[int(entry["sequence"])] = str(archive_path)
+        if updates:
+            _rewrite_retention_archived_checkpoint_paths(
+                registry_path=registry_path,
+                checkpoint_path_updates=updates,
+                generated_at=generated_at,
+            )
+    except Exception:
+        _rollback_retention_archive_moves(moved_entries)
+        raise
+    for _, _, entry in moved_entries:
         entry["apply_status"] = "applied"
         entry["apply_reason"] = "archived"
-        updates[int(entry["sequence"])] = str(archive_path)
-    if updates:
-        _rewrite_retention_archived_checkpoint_paths(
-            registry_path=registry_path,
-            checkpoint_path_updates=updates,
-            generated_at=generated_at,
-        )
+
+
+def _rollback_retention_archive_moves(moved_entries: list[tuple[Path, Path, dict[str, object]]]) -> None:
+    for archive_path, source_path, entry in reversed(moved_entries):
+        if archive_path.exists() and not source_path.exists():
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(archive_path), str(source_path))
+        entry["apply_status"] = "rolled_back"
+        entry["apply_reason"] = "archive_apply_failed_rolled_back"
 
 
 def _rewrite_retention_archived_checkpoint_paths(
@@ -1205,7 +1224,7 @@ def _rewrite_retention_archived_checkpoint_paths(
             continue
         previous_checkpoint_path = entry.get("checkpoint_path")
         entry["checkpoint_path"] = checkpoint_path_updates[sequence]
-        entry["retention_archived_from_checkpoint_path"] = previous_checkpoint_path
+        entry.setdefault("retention_archived_from_checkpoint_path", previous_checkpoint_path)
         entry["retention_archived_at"] = generated_at
     _write_json_payload(registry_path, payload)
 
@@ -1476,6 +1495,8 @@ def _promotion_entry_statuses(
                 "source_checkpoint_path": entry.source_checkpoint_path,
                 "source_type": entry.source_type,
                 "source_iteration": entry.source_iteration,
+                "retention_archived_from_checkpoint_path": entry.retention_archived_from_checkpoint_path,
+                "retention_archived_at": entry.retention_archived_at,
                 "promoted_at": entry.promoted_at,
                 "selected_as": selected_as,
                 "opponent_pool_status": opponent_pool_status,
