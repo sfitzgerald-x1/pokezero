@@ -922,6 +922,8 @@ class SelfPlayTest(unittest.TestCase):
                         "--audit-after-iteration",
                         "--audit-min-latest-benchmark-games",
                         "2",
+                        "--audit-max-latest-average-decision-rounds",
+                        "200",
                         "--audit-allow-missing-benchmark",
                         "--audit-require-latest-promotion",
                     ]
@@ -941,6 +943,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")
         self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_win_rate, 0.0)
         self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_latest_average_decision_rounds, 200.0)
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
         self.assertTrue(kwargs["post_iteration_audit_config"].require_latest_promotion)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
@@ -985,6 +988,8 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("0.600", output)
         self.assertIn("0.125000", output)
         self.assertIn("0.8750", output)
+        self.assertIn("avg_dec", output)
+        self.assertIn("2.000", output)
         self.assertIn(" val ", output)
         self.assertIn("fit metrics measure imitation", output)
         self.assertNotIn("0.250000", output)

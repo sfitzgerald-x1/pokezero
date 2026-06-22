@@ -23,6 +23,7 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--audit-min-latest-benchmark-games", type=int, default=None)
     parser.add_argument("--audit-max-latest-collection-capped-rate", type=float, default=None)
     parser.add_argument("--audit-max-latest-benchmark-capped-rate", type=float, default=None)
+    parser.add_argument("--audit-max-latest-average-decision-rounds", type=float, default=None)
     parser.add_argument("--audit-max-benchmark-win-rate-drop", type=float, default=None)
     parser.add_argument("--audit-max-consecutive-promotion-failures", type=int, default=None)
     parser.add_argument(
@@ -57,6 +58,10 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
         max_latest_benchmark_capped_rate=_arg_or_default(
             args.audit_max_latest_benchmark_capped_rate,
             defaults.max_latest_benchmark_capped_rate,
+        ),
+        max_latest_average_decision_rounds=_arg_or_default(
+            args.audit_max_latest_average_decision_rounds,
+            defaults.max_latest_average_decision_rounds,
         ),
         max_benchmark_win_rate_drop=_arg_or_default(
             args.audit_max_benchmark_win_rate_drop,
