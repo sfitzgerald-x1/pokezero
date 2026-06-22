@@ -61,7 +61,7 @@ Replay import remains valuable after a randbat replay source is identified. A no
 ## Near-Term Implementation Plan
 
 - Use the initial capped-game scoring policy: self-play defaults to `--capped-terminal-value -0.25`, a mild double-loss penalty that can be tuned later.
-- Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, max-layer Spikes suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; richer hazard planning and matchup context remain future work.
+- Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, basic Spikes pressure with max-layer suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; deeper hazard sequencing and matchup context remain future work.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.

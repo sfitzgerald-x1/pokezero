@@ -65,6 +65,8 @@ The design below still describes the target direction, but the implementation de
 
 The current docs now separate the cold self-play baseline from the imitation-bootstrap path in `docs/bootstrap_strategy.md`. The implementation supports both at the harness level: cold runs can start from `random-legal`, while bootstrap runs can generate a scripted-teacher checkpoint through `bootstrap_cli teacher`, then start self-play from that checkpoint via `--initial-policy linear:<checkpoint>` and carry held-out validation JSONL with `--validation-data`.
 
+`docs/cpu_self_play_roadmap.md` tracks the remaining CPU milestone work. The short version is that the wiring is mostly present; the next phase is running real local pilots, calibrating audit configs from enough evidence, generating a current teacher-bootstrap checkpoint, and comparing cold-start versus teacher-bootstrap linear self-play runs under the same guardrails.
+
 The Gen 3 belief work also started as a read-only sidecar and deterministic public-information engine rather than being immediately embedded into a learned policy. Compact belief facts and counts are now included in `PokeZeroObservationV0`; detailed candidate variants and evidence logs remain sidecar-only until a neural input format needs explicit masks or richer set-branch embeddings.
 
 Parallelization has started at the single-machine collection layer with `--workers`. It is not yet a distributed rollout system.

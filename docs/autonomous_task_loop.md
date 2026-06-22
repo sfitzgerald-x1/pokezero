@@ -10,20 +10,23 @@ The working source of truth is:
 
 - `docs/first_iteration_design.md`
 - `docs/bootstrap_strategy.md`
+- `docs/cpu_self_play_roadmap.md`
 - `docs/goals.md`
 
 At the start of each task, read those docs and identify the smallest unfinished item that improves the CPU self-play loop's validity, measurement, or operability.
 
 ## Current Task Priority
 
-Based on the current plan, the next CPU-compatible work should focus on making long-running CPU experiments easier to trust and compare:
+The CPU-first infrastructure is now mostly wired. New tasks should focus on proving and tightening the loop with real local CPU evidence rather than adding more generic scaffolding.
 
-- Use named evaluation profiles and run-audit output to tune long-run benchmark thresholds from actual CPU experiments.
-- Prefer the CPU pilot-suite wrapper for repeatable threshold-calibration pilots before promoting audit configs into longer unattended runs.
-- Use managed checkpoint lifecycle previews and recoverable archiving to keep promoted-policy selection auditable during long runs.
-- Use lightweight CPU experiment audits to tune practical long-run thresholds without GPU training.
+Use `docs/cpu_self_play_roadmap.md` as the current checklist. In priority order, prefer work that:
 
-GPU-dependent PPO work, large-scale training, and distributed orchestration remain later milestones.
+- makes `cpu-pilot-run`, `cpu-pilot-report`, `cpu-long-run-run`, `cpu-long-run-report`, or `cpu-long-run-compare` more trustworthy against real artifacts
+- improves strict teacher preflight, teacher branch coverage, or teacher benchmark evidence
+- helps produce a current teacher-bootstrap checkpoint and comparable cold-start versus teacher-bootstrap linear self-play runs
+- tightens audit configs, promotion registry preflights, or run-health reporting based on pilot evidence
+
+GPU-dependent PPO work, large-scale training, raw replay corpus conversion, and distributed orchestration remain later milestones.
 
 ## Per-Task Workflow
 
