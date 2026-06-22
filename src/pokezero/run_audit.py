@@ -215,6 +215,7 @@ class RunComparisonEntry:
     latest_checkpoint_path: str | None
     latest_benchmark_win_rate: float | None
     best_benchmark_win_rate: float | None
+    best_benchmark_games: int
     latest_benchmark_games: int
     latest_collection_capped_rate: float | None
     latest_benchmark_capped_rate: float | None
@@ -235,6 +236,7 @@ class RunComparisonEntry:
             "latest_checkpoint_path": self.latest_checkpoint_path,
             "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
             "best_benchmark_win_rate": self.best_benchmark_win_rate,
+            "best_benchmark_games": self.best_benchmark_games,
             "latest_benchmark_games": self.latest_benchmark_games,
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
@@ -247,20 +249,44 @@ class RunComparisonEntry:
 
 
 @dataclass(frozen=True)
+class RunComparisonError:
+    label: str
+    path: str
+    error: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "path": self.path,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
 class RunComparisonResult:
     entries: tuple[RunComparisonEntry, ...]
+    errors: tuple[RunComparisonError, ...] = ()
+    min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
 
     @property
     def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
-        return _best_entry_by_optional_value(self.entries, "latest_benchmark_win_rate")
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.latest_benchmark_games >= self.min_benchmark_games),
+            "latest_benchmark_win_rate",
+        )
 
     @property
     def best_historical_benchmark_entry(self) -> RunComparisonEntry | None:
-        return _best_entry_by_optional_value(self.entries, "best_benchmark_win_rate")
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.best_benchmark_games >= self.min_benchmark_games),
+            "best_benchmark_win_rate",
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "entries": [entry.to_dict() for entry in self.entries],
+            "errors": [error.to_dict() for error in self.errors],
+            "min_benchmark_games": self.min_benchmark_games,
             "best_latest_benchmark_label": (
                 self.best_latest_benchmark_entry.label
                 if self.best_latest_benchmark_entry is not None
@@ -414,11 +440,36 @@ def enforce_run_audit(
 
 
 def compare_run_manifests(paths: Iterable[Path]) -> RunComparisonResult:
+    return compare_run_manifests_with_threshold(paths, min_benchmark_games=DEFAULT_MIN_BENCHMARK_GAMES)
+
+
+def compare_run_manifests_with_threshold(
+    paths: Iterable[Path],
+    *,
+    min_benchmark_games: int,
+) -> RunComparisonResult:
+    if min_benchmark_games < 0:
+        raise ValueError("min_benchmark_games must be non-negative.")
     selected_paths = tuple(paths)
     if not selected_paths:
         raise ValueError("at least one run path is required.")
+    entries: list[RunComparisonEntry] = []
+    errors: list[RunComparisonError] = []
+    for path in selected_paths:
+        try:
+            entries.append(_comparison_entry(path))
+        except Exception as exc:
+            errors.append(
+                RunComparisonError(
+                    label=_comparison_error_label(path),
+                    path=str(path),
+                    error=str(exc),
+                )
+            )
     return RunComparisonResult(
-        entries=tuple(_comparison_entry(path) for path in selected_paths),
+        entries=tuple(entries),
+        errors=tuple(errors),
+        min_benchmark_games=min_benchmark_games,
     )
 
 
@@ -513,6 +564,7 @@ def _comparison_entry(path: Path) -> RunComparisonEntry:
         latest_checkpoint_path=latest.checkpoint_path,
         latest_benchmark_win_rate=audit.latest_benchmark_win_rate,
         best_benchmark_win_rate=audit.best_benchmark_win_rate,
+        best_benchmark_games=_best_benchmark_games(audit.iterations),
         latest_benchmark_games=latest.benchmark_games,
         latest_collection_capped_rate=audit.latest_collection_capped_rate,
         latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
@@ -529,6 +581,28 @@ def _comparison_label(manifest_path: Path) -> str:
     if parent.name:
         return parent.name
     return manifest_path.name
+
+
+def _comparison_error_label(path: Path) -> str:
+    candidate = path.expanduser()
+    if candidate.name == "manifest.json" and candidate.parent.name:
+        return candidate.parent.name
+    return candidate.name or str(candidate)
+
+
+def _best_benchmark_games(iterations: tuple[RunAuditIterationSummary, ...]) -> int:
+    benchmark_iterations = tuple(
+        iteration
+        for iteration in iterations
+        if iteration.benchmark_win_rate is not None and iteration.benchmark_games > 0
+    )
+    if not benchmark_iterations:
+        return 0
+    best = max(
+        benchmark_iterations,
+        key=lambda iteration: (float(iteration.benchmark_win_rate or 0.0), iteration.benchmark_games),
+    )
+    return best.benchmark_games
 
 
 def _best_entry_by_optional_value(

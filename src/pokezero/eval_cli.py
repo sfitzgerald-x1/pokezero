@@ -29,7 +29,7 @@ from .run_audit import (
     RunAuditConfig,
     audit_run,
     calibrate_run_audit,
-    compare_run_manifests,
+    compare_run_manifests_with_threshold,
 )
 
 
@@ -115,6 +115,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
+    compare.add_argument(
+        "--min-benchmark-games",
+        type=int,
+        default=DEFAULT_MIN_BENCHMARK_GAMES,
+        help="Minimum benchmark games required for a run to be eligible for best-run labels.",
+    )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
@@ -265,12 +271,12 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 
 def _compare(args: argparse.Namespace) -> int:
-    result = compare_run_manifests(args.paths)
+    result = compare_run_manifests_with_threshold(args.paths, min_benchmark_games=args.min_benchmark_games)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
-    return 0
+    return 2 if result.errors else 0
 
 
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
@@ -397,6 +403,8 @@ def _print_audit_calibration(result) -> None:
 
 def _print_run_comparison(result) -> None:
     print(f"runs: {len(result.entries)}")
+    print(f"errors: {len(result.errors)}")
+    print(f"min_benchmark_games_for_best: {result.min_benchmark_games}")
     latest = result.best_latest_benchmark_entry
     historical = result.best_historical_benchmark_entry
     print(f"best_latest_benchmark: {latest.label if latest is not None else '-'}")
@@ -424,6 +432,11 @@ def _print_run_comparison(result) -> None:
             f"{_format_optional_bool(entry.latest_advancement_recorded):>6} "
             f"{entry.latest_checkpoint_path or '-'}"
         )
+    if result.errors:
+        print("")
+        print("errors:")
+        for error in result.errors:
+            print(f"- {error.label}: {error.error}")
 
 
 def _print_registry_verification(result) -> None:
