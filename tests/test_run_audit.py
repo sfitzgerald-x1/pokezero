@@ -43,6 +43,316 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
+    def test_audit_validates_recorded_promoted_opponent_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(
+                invocation_config(required_pool_size=2, promoted_checkpoint_count=2),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertTrue(result.passed)
+        self.assertTrue(check.passed)
+        self.assertEqual(check.observed, 1.0)
+
+    def test_audit_fails_recorded_undersized_promoted_opponent_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(
+                invocation_config(required_pool_size=2, promoted_checkpoint_count=1),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
+
+    def test_audit_applies_current_policy_exclusion_to_recorded_promoted_pool_requirement(self) -> None:
+        current_policy = "linear:runs/promoted-2/linear-policy.json"
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    current_policy_spec=current_policy,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(
+                invocation_config(
+                    required_pool_size=2,
+                    promoted_checkpoint_count=2,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
+
+    def test_audit_applies_historical_cap_to_recorded_promoted_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-3/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(
+                invocation_config(
+                    required_pool_size=2,
+                    promoted_checkpoint_count=3,
+                    max_historical_opponents=1,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("required=2,max_historical=1", check.message)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
+
+    def test_audit_fails_malformed_promoted_pool_requirement_without_crashing(self) -> None:
+        config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
+        config["opponent_pool"]["required_promoted_opponent_pool_size"] = "two"
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(config,),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertIsNone(check.observed)
+        self.assertIn("invalid_required_promoted_opponent_pool_size", check.message)
+
+    def test_audit_fails_negative_promoted_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            invocation_configs=(
+                invocation_config(required_pool_size=-1, promoted_checkpoint_count=2),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertIsNone(check.observed)
+        self.assertIn("invalid_required_promoted_opponent_pool_size", check.message)
+
+    def test_audit_fails_invalid_promoted_pool_cap_without_double_counting_cap(self) -> None:
+        config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
+        config["opponent_pool"]["max_historical_opponents"] = "many"
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(config,),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 1.0)
+        self.assertIn("missing_or_invalid_max_historical_opponents", check.message)
+        self.assertNotIn("max_historical=0", check.message)
+        self.assertNotIn("launch_selectable=0", check.message)
+
+    def test_audit_attributes_promoted_pool_requirement_to_covered_invocation_iterations(self) -> None:
+        first_config = invocation_config(required_pool_size=1, promoted_checkpoint_count=1)
+        first_config["first_iteration"] = 1
+        first_config["iterations_requested"] = 1
+        second_config = invocation_config(required_pool_size=2, promoted_checkpoint_count=1)
+        second_config["first_iteration"] = 2
+        second_config["iterations_requested"] = 1
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(first_config, second_config),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("invocation_2:launch_selectable=1,required=2", check.message)
+        self.assertIn("invocation_2:iteration_2:selected=1,required=2", check.message)
+        self.assertNotIn("invocation_1:iteration_2", check.message)
+
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -1933,13 +2243,20 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_capped_rate", failed_check_names_from_payload(long_run_payload))
 
 
-def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
-    return {
+def selfplay_manifest(
+    *,
+    iterations: tuple[dict, ...],
+    invocation_configs: tuple[dict, ...] = (),
+) -> dict:
+    payload = {
         "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
         "run_dir": "run",
         "latest_checkpoint_path": iterations[-1]["checkpoint_path"],
         "iterations": list(iterations),
     }
+    if invocation_configs:
+        payload["invocation_configs"] = list(invocation_configs)
+    return payload
 
 
 def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
@@ -1953,6 +2270,45 @@ def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
     }
 
 
+def invocation_config(
+    *,
+    required_pool_size: int | None,
+    promoted_checkpoint_count: int,
+    max_historical_opponents: int = 3,
+) -> dict:
+    return {
+        "resume": False,
+        "first_iteration": 1,
+        "iterations_requested": 1,
+        "games_per_iteration": 10,
+        "seed_start_argument": 1,
+        "first_iteration_seed_start": 1,
+        "initial_policy_spec": "random-legal",
+        "evaluation_games": 10,
+        "evaluation_seed_start": 1_000_000,
+        "worker_count": 1,
+        "opponent_pool": {
+            "fixed_opponent_policy_specs": ["random-legal", "simple-legal"],
+            "max_historical_opponents": max_historical_opponents,
+            "promotion_registry_path": "promotions.json",
+            "promotion_pool_registry_path": "promotions.json",
+            "required_promoted_opponent_pool_size": required_pool_size,
+            "promoted_checkpoint_policy_specs": [
+                f"linear:runs/promoted-{index}/linear-policy.json"
+                for index in range(1, promoted_checkpoint_count + 1)
+            ],
+        },
+        "auto_promotion": {
+            "enabled": False,
+            "registry_path": None,
+            "artifact_dir": None,
+            "label_prefix": None,
+            "notes": None,
+            "allow_duplicate": False,
+        },
+    }
+
+
 def selfplay_iteration(
     *,
     iteration: int,
@@ -1962,12 +2318,16 @@ def selfplay_iteration(
     rows: tuple[tuple[str, int, int, int], ...] | None = None,
     benchmark: bool = True,
     promotion_recorded: bool | None = None,
+    current_policy_spec: str = "random-legal",
+    opponent_policy_specs: tuple[str, ...] = ("random-legal",),
 ) -> dict:
     policy_id = f"linear-selfplay-test-iter-{iteration:04d}"
     payload = {
         "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
         "iteration": iteration,
         "checkpoint_path": f"run/iteration-{iteration:04d}/linear-policy.json",
+        "current_policy_spec": current_policy_spec,
+        "opponent_policy_specs": list(opponent_policy_specs),
         "collection_metrics": collection_metrics(games=10, capped_games=0),
         "training": {"model": {"policy_id": policy_id}},
         "benchmark": (
