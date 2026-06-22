@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 from typing import Iterable
 
@@ -211,29 +212,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "cpu-smoke-plan",
         help="Print a tiny CPU-only command recipe for end-to-end bootstrap/self-play validation.",
     )
-    smoke_plan.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the printed recipe.")
-    smoke_plan.add_argument(
-        "--python-binary",
-        default=sys.executable,
-        help="Python executable used by the printed recipe. Defaults to the interpreter running this command.",
-    )
-    smoke_plan.add_argument(
-        "--showdown-root",
-        default="/path/to/pokemon-showdown",
-        help="Built Pokemon Showdown checkout root used by the printed recipe.",
-    )
-    smoke_plan.add_argument("--workers", type=int, default=1, help="Worker count used by the printed recipe.")
-    smoke_plan.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
-    smoke_plan.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
-    smoke_plan.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
-    smoke_plan.add_argument("--selfplay-iterations", type=int, default=2, help="Self-play iterations.")
-    smoke_plan.add_argument("--selfplay-games", type=int, default=4, help="Self-play collection games per iteration.")
-    smoke_plan.add_argument("--evaluation-games", type=int, default=2, help="Self-play benchmark games per matchup.")
-    smoke_plan.add_argument("--feature-count", type=int, default=4096, help="Small linear feature count for the smoke run.")
-    smoke_plan.add_argument("--window-size", type=int, default=4, help="Temporal window size for bootstrap and self-play.")
-    smoke_plan.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap used by the printed recipe.")
+    _add_cpu_smoke_arguments(smoke_plan)
     smoke_plan.add_argument("--json", action="store_true", help="Print the recipe as JSON.")
     smoke_plan.set_defaults(func=_cpu_smoke_plan)
+
+    smoke_run = subparsers.add_parser(
+        "cpu-smoke-run",
+        help="Execute the tiny CPU-only bootstrap/self-play validation recipe sequentially.",
+    )
+    _add_cpu_smoke_arguments(smoke_run)
+    smoke_run.set_defaults(func=_cpu_smoke_run)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
@@ -304,6 +292,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
+
+
+def _add_cpu_smoke_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the smoke recipe.")
+    parser.add_argument(
+        "--python-binary",
+        default=sys.executable,
+        help="Python executable used by the smoke recipe. Defaults to the interpreter running this command.",
+    )
+    parser.add_argument(
+        "--showdown-root",
+        default="/path/to/pokemon-showdown",
+        help="Built Pokemon Showdown checkout root used by the smoke recipe.",
+    )
+    parser.add_argument("--workers", type=int, default=1, help="Worker count used by the smoke recipe.")
+    parser.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
+    parser.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
+    parser.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
+    parser.add_argument("--selfplay-iterations", type=int, default=2, help="Self-play iterations.")
+    parser.add_argument("--selfplay-games", type=int, default=4, help="Self-play collection games per iteration.")
+    parser.add_argument("--evaluation-games", type=int, default=2, help="Self-play benchmark games per matchup.")
+    parser.add_argument("--feature-count", type=int, default=4096, help="Small linear feature count for the smoke run.")
+    parser.add_argument("--window-size", type=int, default=4, help="Temporal window size for bootstrap and self-play.")
+    parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap used by the smoke recipe.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -910,7 +922,7 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 
 def _cpu_smoke_plan(args: argparse.Namespace) -> int:
-    _validate_cpu_smoke_plan_args(args)
+    _validate_cpu_smoke_args(args)
     recipe = _cpu_smoke_recipe(args)
     if args.json:
         print(json.dumps(recipe, indent=2, sort_keys=True))
@@ -926,7 +938,28 @@ def _cpu_smoke_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def _validate_cpu_smoke_plan_args(args: argparse.Namespace) -> None:
+def _cpu_smoke_run(args: argparse.Namespace) -> int:
+    _validate_cpu_smoke_args(args)
+    recipe = _cpu_smoke_recipe(args)
+    print("cpu_smoke_run:")
+    print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
+    print("note: smoke-profile thresholds validate command flow, not policy strength.")
+    print("note: use a fresh --run-root; this command does not delete existing artifacts.")
+    for index, step in enumerate(recipe["steps"], start=1):
+        print(f"running_step: {index}/{len(recipe['steps'])} {step['name']}", flush=True)
+        print(_shell_join(step["argv"]), flush=True)
+        completed = subprocess.run(step["argv"])
+        if completed.returncode != 0:
+            print(
+                f"error: cpu smoke step {index} failed with exit code {completed.returncode}: {step['name']}",
+                file=sys.stderr,
+            )
+            return int(completed.returncode)
+    print("cpu_smoke_run: PASS")
+    return 0
+
+
+def _validate_cpu_smoke_args(args: argparse.Namespace) -> None:
     positive_fields = (
         "workers",
         "train_games",

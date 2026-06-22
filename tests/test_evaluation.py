@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -587,6 +588,63 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("workers must be positive", stderr.getvalue())
+
+    def test_eval_cli_cpu_smoke_run_executes_recipe_steps(self) -> None:
+        with (
+            patch(
+                "pokezero.eval_cli.subprocess.run",
+                side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+            ) as run,
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-run",
+                    "--run-root",
+                    "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_count, 5)
+        first_argv = run.call_args_list[0].args[0]
+        self.assertEqual(first_argv[:4], ["./.venv/bin/python", "-m", "pokezero.bootstrap_cli", "teacher"])
+        second_argv = run.call_args_list[1].args[0]
+        self.assertIn("--profile", second_argv)
+        self.assertIn("smoke", second_argv)
+        output = stdout.getvalue()
+        self.assertIn("cpu_smoke_run:", output)
+        self.assertIn("running_step: 1/5 bootstrap teacher checkpoint", output)
+        self.assertIn("cpu_smoke_run: PASS", output)
+
+    def test_eval_cli_cpu_smoke_run_stops_on_failed_step(self) -> None:
+        with (
+            patch(
+                "pokezero.eval_cli.subprocess.run",
+                side_effect=[SimpleNamespace(returncode=0), SimpleNamespace(returncode=7)],
+            ) as run,
+            patch("sys.stdout", new_callable=io.StringIO),
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-run",
+                    "--run-root",
+                    "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                ]
+            )
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("cpu smoke step 2 failed with exit code 7", stderr.getvalue())
 
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
