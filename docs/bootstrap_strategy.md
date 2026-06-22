@@ -66,7 +66,8 @@ Replay import remains valuable after a randbat replay source is identified. It s
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
-- Track benchmark win rate, capped-game rate, validation fit, and games per hour for both paths. Treat validation fit as imitation-health only.
+- Track benchmark win rate, capped-game rate, validation fit, games per hour, and average decision-round length for both paths. Treat validation fit as imitation-health only.
+- Use `python -m pokezero.eval_cli audit-calibrate <run-dir>` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
 - Add a replay-to-trajectory importer after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape

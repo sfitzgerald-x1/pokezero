@@ -24,6 +24,8 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
+DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
+_THRESHOLD_EPSILON = 1e-12
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,73 @@ class RunAuditResult:
         }
 
 
+@dataclass(frozen=True)
+class RunAuditCalibrationResult:
+    manifest_path: Path
+    schema_version: str
+    source_type: str
+    iteration_count: int
+    benchmark_iteration_count: int
+    margin: float
+    require_benchmark: bool
+    min_latest_benchmark_win_rate: float | None
+    min_latest_benchmark_games: int
+    max_latest_collection_capped_rate: float | None
+    max_latest_benchmark_capped_rate: float | None
+    max_latest_average_decision_rounds: float | None
+    max_latest_benchmark_average_decision_rounds: float | None
+    max_benchmark_win_rate_drop: float | None
+    max_consecutive_promotion_failures: int
+    notes: tuple[str, ...] = ()
+
+    def suggested_config(self) -> dict[str, float | int | bool | None]:
+        return {
+            "min_latest_benchmark_win_rate": self.min_latest_benchmark_win_rate,
+            "min_latest_benchmark_games": self.min_latest_benchmark_games,
+            "max_latest_collection_capped_rate": self.max_latest_collection_capped_rate,
+            "max_latest_benchmark_capped_rate": self.max_latest_benchmark_capped_rate,
+            "max_latest_average_decision_rounds": self.max_latest_average_decision_rounds,
+            "max_latest_benchmark_average_decision_rounds": self.max_latest_benchmark_average_decision_rounds,
+            "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
+            "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
+            "require_benchmark": self.require_benchmark,
+        }
+
+    def suggested_cli_flags(self) -> tuple[str, ...]:
+        flags: list[str] = []
+        for field_name, flag_name in (
+            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
+            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
+            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
+            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
+            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
+            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
+            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                    continue
+                flags.extend((flag_name, str(value)))
+        if not self.require_benchmark:
+            flags.append("--allow-missing-benchmark")
+        return tuple(flags)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "manifest_path": str(self.manifest_path),
+            "schema_version": self.schema_version,
+            "source_type": self.source_type,
+            "iteration_count": self.iteration_count,
+            "benchmark_iteration_count": self.benchmark_iteration_count,
+            "margin": self.margin,
+            "suggested_config": self.suggested_config(),
+            "suggested_cli_flags": list(self.suggested_cli_flags()),
+            "notes": list(self.notes),
+        }
+
+
 class RunAuditFailure(RuntimeError):
     def __init__(self, result: RunAuditResult) -> None:
         self.result = result
@@ -272,6 +341,84 @@ def enforce_run_audit(
     if not result.passed:
         raise RunAuditFailure(result)
     return result
+
+
+def calibrate_run_audit(
+    path: Path,
+    *,
+    margin: float = DEFAULT_AUDIT_CALIBRATION_MARGIN,
+) -> RunAuditCalibrationResult:
+    if margin < 0.0:
+        raise ValueError("margin must be non-negative.")
+    result = audit_run(path, config=_permissive_audit_config())
+    benchmark_iterations = tuple(iteration for iteration in result.iterations if iteration.benchmark_games > 0)
+    notes: list[str] = []
+    if not benchmark_iterations:
+        notes.append("No benchmark iterations were present; suggested audit config allows missing benchmarks.")
+    observed_drop = _max_observed_same_opponent_drop(result.iterations)
+    if benchmark_iterations and observed_drop is None:
+        notes.append("No same-opponent regression history was present; using the default benchmark drop threshold.")
+    min_benchmark_games = (
+        min(iteration.benchmark_games for iteration in benchmark_iterations)
+        if benchmark_iterations
+        else 0
+    )
+    if benchmark_iterations and min_benchmark_games < DEFAULT_MIN_BENCHMARK_GAMES:
+        notes.append(
+            "Observed benchmark game counts are below the default audit minimum; "
+            "calibration keeps the observed minimum so the pilot remains reproducible."
+        )
+
+    return RunAuditCalibrationResult(
+        manifest_path=result.manifest_path,
+        schema_version=result.schema_version,
+        source_type=result.source_type,
+        iteration_count=len(result.iterations),
+        benchmark_iteration_count=len(benchmark_iterations),
+        margin=margin,
+        require_benchmark=bool(benchmark_iterations),
+        min_latest_benchmark_win_rate=_floor_observed_rate(
+            _min_optional(iteration.benchmark_win_rate for iteration in benchmark_iterations),
+            margin=margin,
+        ),
+        min_latest_benchmark_games=min_benchmark_games,
+        max_latest_collection_capped_rate=_ceiling_observed_rate(
+            _max_optional(iteration.collection_capped_rate for iteration in result.iterations),
+            margin=margin,
+            minimum=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
+        ),
+        max_latest_benchmark_capped_rate=_ceiling_observed_rate(
+            _max_optional(iteration.benchmark_capped_rate for iteration in benchmark_iterations),
+            margin=margin,
+            minimum=DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
+        ),
+        max_latest_average_decision_rounds=_ceiling_observed_float(
+            _max_optional(iteration.average_decision_rounds for iteration in result.iterations),
+            margin=margin,
+        ),
+        max_latest_benchmark_average_decision_rounds=_ceiling_observed_float(
+            _max_optional(iteration.benchmark_average_decision_rounds for iteration in benchmark_iterations),
+            margin=margin,
+        ),
+        max_benchmark_win_rate_drop=(
+            (
+                DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
+                if observed_drop is None
+                else _ceiling_observed_rate(
+                    observed_drop,
+                    margin=margin,
+                    minimum=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
+                )
+            )
+            if benchmark_iterations
+            else None
+        ),
+        max_consecutive_promotion_failures=max(
+            DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+            _max_consecutive_promotion_failures(result.iterations),
+        ),
+        notes=tuple(notes),
+    )
 
 
 def _source_type(schema_version: str) -> str:
@@ -495,7 +642,7 @@ def _benchmark_regression_check(
     max_drop = max(regression.drop for regression in regressions)
     return RunAuditCheck(
         name="benchmark_win_rate_drop_by_opponent",
-        passed=max_drop <= config.max_benchmark_win_rate_drop,
+        passed=_threshold_lte(max_drop, config.max_benchmark_win_rate_drop),
         observed=max_drop,
         threshold=config.max_benchmark_win_rate_drop,
         message="latest same-opponent benchmark win rates have not regressed too far from previous best",
@@ -612,3 +759,84 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _permissive_audit_config() -> RunAuditConfig:
+    return RunAuditConfig(
+        min_latest_benchmark_win_rate=0.0,
+        min_latest_benchmark_games=0,
+        max_latest_collection_capped_rate=1.0,
+        max_latest_benchmark_capped_rate=1.0,
+        max_benchmark_win_rate_drop=1.0,
+        max_consecutive_promotion_failures=1_000_000,
+        require_benchmark=False,
+    )
+
+
+def _min_optional(values: Any) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return min(present) if present else None
+
+
+def _max_optional(values: Any) -> float | None:
+    present = tuple(float(value) for value in values if value is not None)
+    return max(present) if present else None
+
+
+def _floor_observed_rate(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(max(0.0, value * (1.0 - margin)))
+
+
+def _ceiling_observed_rate(
+    value: float | None,
+    *,
+    margin: float,
+    minimum: float = 0.0,
+) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(min(1.0, max(minimum, value * (1.0 + margin))))
+
+
+def _ceiling_observed_float(value: float | None, *, margin: float) -> float | None:
+    if value is None:
+        return None
+    return _round_threshold(value * (1.0 + margin))
+
+
+def _round_threshold(value: float) -> float:
+    return round(value, 6)
+
+
+def _threshold_lte(observed: float, threshold: float) -> bool:
+    return observed <= threshold + _THRESHOLD_EPSILON
+
+
+def _max_observed_same_opponent_drop(iterations: tuple[RunAuditIterationSummary, ...]) -> float | None:
+    previous_best: dict[str, float] = {}
+    drops: list[float] = []
+    for iteration in iterations:
+        if iteration.benchmark_games <= 0:
+            continue
+        for opponent in iteration.benchmark_opponents:
+            best_previous = previous_best.get(opponent.opponent_policy_id)
+            if best_previous is not None:
+                drops.append(max(0.0, best_previous - opponent.win_rate))
+                previous_best[opponent.opponent_policy_id] = max(best_previous, opponent.win_rate)
+            else:
+                previous_best[opponent.opponent_policy_id] = opponent.win_rate
+    return max(drops) if drops else None
+
+
+def _max_consecutive_promotion_failures(iterations: tuple[RunAuditIterationSummary, ...]) -> int:
+    longest = 0
+    current = 0
+    for iteration in iterations:
+        if iteration.promotion_recorded is False:
+            current += 1
+            longest = max(longest, current)
+            continue
+        current = 0
+    return longest
