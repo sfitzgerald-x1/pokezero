@@ -189,7 +189,7 @@ Compare several long-run wrapper summaries directly:
   --summary-glob 'runs/linear-long-run-*/cpu-long-run-run-summary.json'
 ```
 
-The compare command reads wrapper summaries, uses each summary's persisted `derived_run_report` when available, falls back to recomputing derived nested audit health for older summaries, and surfaces wrapper status, audit pass/fail, latest benchmark win rate, capped rates, decision-round metrics, RSS high-water, and load errors. It is a run-health comparison tool, not a standalone policy-strength claim. By default, it returns `0` when all requested summaries load even if some runs are non-passing; add `--fail-on-non-passing` when shell automation should return `2` for failed wrappers or failed derived audit health. Load errors return `1`. Use `--json` for automation.
+The compare command reads wrapper summaries, uses each summary's persisted `derived_run_report` when available, falls back to recomputing derived nested audit health for older summaries, and surfaces wrapper status, audit pass/fail, latest benchmark win rate, capped rates, decision-round metrics, RSS high-water, and load errors. It is a run-health comparison tool, not a standalone policy-strength claim. By default, it returns `0` when all requested summaries load even if some runs are non-passing; add `--fail-on-non-passing` when shell automation should return `2` for failed wrappers or failed derived audit health. Load errors return `1`. Add `--refresh-derived-audit` when every row should ignore persisted snapshots and recompute current derived health from each live nested manifest. Use `--json` for automation.
 
 Import normalized replay decisions into standard rollout JSONL:
 
