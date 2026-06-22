@@ -130,6 +130,7 @@ Quickly benchmark the scripted teacher itself against fixed baselines before run
 python -m pokezero.bootstrap_cli teacher-benchmark \
   --games 50 \
   --showdown-root /path/to/pokemon-showdown \
+  --teacher-policy 'scripted-teacher?allow_fallback=true&allow_unknown_moves=true' \
   --min-teacher-win-rate 0.55 \
   --max-capped-rate 0.10 \
   --fail-on-degraded-decisions \
@@ -137,6 +138,8 @@ python -m pokezero.bootstrap_cli teacher-benchmark \
 ```
 
 Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters alongside win rates, but it does not train a checkpoint or write a manifest. Optional threshold flags make it usable as a CPU preflight gate: it exits `2` when any requested win-rate, capped-rate, or degraded-decision check fails, while still writing the JSON report requested by `--out`.
+
+The scripted teacher remains strict by default. With the default `scripted-teacher` policy, unresolved moves or missing metadata fail fast with exit `1` before a benchmark report is produced. Use `allow_fallback=true` and/or `allow_unknown_moves=true` only when the goal is to measure degraded decisions via `--fail-on-degraded-decisions`.
 
 Default teacher bootstrap collection includes three opponent families:
 

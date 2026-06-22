@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -14,7 +15,7 @@ from .bootstrap import (
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
-from .collection import policy_from_spec, policy_spec_with_showdown_root
+from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
@@ -178,7 +179,6 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
     )
     policy_showdown_root = env_config.resolved_showdown_root()
     teacher_policy = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
-    teacher_policy_id = policy_from_spec(teacher_policy).policy_id
     baseline_policies = (
         tuple(policy_spec_with_showdown_root(spec, policy_showdown_root) for spec in args.baseline_policy)
         if args.baseline_policy is not None
@@ -195,6 +195,7 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         games=args.games,
         seed_start=args.seed_start,
     )
+    teacher_policy_id = _teacher_policy_id_from_spec(args.teacher_policy) or _teacher_policy_id_from_benchmark(result)
     checks = _teacher_benchmark_checks(
         result,
         teacher_policy_id=teacher_policy_id,
@@ -223,8 +224,35 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
 def _validate_optional_rate(value: float | None, flag_name: str) -> None:
     if value is None:
         return
-    if value < 0.0 or value > 1.0:
+    if not math.isfinite(value) or value < 0.0 or value > 1.0:
         raise ValueError(f"{flag_name} must be between 0 and 1.")
+
+
+def _teacher_policy_id_from_spec(spec: str) -> str | None:
+    policy_body = spec.strip().partition("?")[0].strip()
+    lowered = policy_body.lower()
+    if lowered in {"random-legal", "simple-legal", "scripted-teacher"}:
+        return lowered
+    if lowered.startswith("linear:"):
+        checkpoint = policy_body[len("linear:") :].strip()
+        if not checkpoint:
+            return None
+        try:
+            payload = json.loads(Path(checkpoint).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        policy_id = payload.get("policy_id")
+        if isinstance(policy_id, str) and policy_id.strip():
+            return policy_id
+    return None
+
+
+def _teacher_policy_id_from_benchmark(result) -> str:
+    if result.benchmark.matchups:
+        return result.benchmark.matchups[0].p1_policy_id
+    if result.benchmark.head_to_head_results:
+        return result.benchmark.head_to_head_results[0].first_policy_id
+    return "unknown-teacher"
 
 
 def _teacher_benchmark_checks(
@@ -236,6 +264,7 @@ def _teacher_benchmark_checks(
     fail_on_degraded_decisions: bool,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = []
+    matched_head_to_heads = 0
     for row in result.benchmark.head_to_head_results:
         if row.first_policy_id == teacher_policy_id:
             teacher_win_rate = row.first_policy_win_rate
@@ -245,6 +274,7 @@ def _teacher_benchmark_checks(
             opponent_policy_id = row.first_policy_id
         else:
             continue
+        matched_head_to_heads += 1
         capped_rate = row.capped_games / row.games if row.games else 0.0
         if min_teacher_win_rate is not None:
             checks.append(
@@ -255,7 +285,7 @@ def _teacher_benchmark_checks(
                     threshold=min_teacher_win_rate,
                     message=(
                         f"teacher win rate vs {opponent_policy_id} "
-                        f"{teacher_win_rate:.3f} >= {min_teacher_win_rate:.3f}"
+                        f"observed={teacher_win_rate:.3f} required>={min_teacher_win_rate:.3f}"
                     ),
                 )
             )
@@ -268,10 +298,20 @@ def _teacher_benchmark_checks(
                     threshold=max_capped_rate,
                     message=(
                         f"capped rate vs {opponent_policy_id} "
-                        f"{capped_rate:.3f} <= {max_capped_rate:.3f}"
+                        f"observed={capped_rate:.3f} required<={max_capped_rate:.3f}"
                     ),
                 )
             )
+    if (min_teacher_win_rate is not None or max_capped_rate is not None) and matched_head_to_heads == 0:
+        checks.append(
+            _preflight_check(
+                name="teacher_head_to_head_present",
+                passed=False,
+                observed=0,
+                threshold=1,
+                message=f"teacher policy {teacher_policy_id} did not appear in any benchmark head-to-head row",
+            )
+        )
     if fail_on_degraded_decisions:
         unknown_moves = int(result.teacher_decision_summary.get("unknown_move_decisions", 0))
         fallbacks = int(result.teacher_decision_summary.get("fallback_decisions", 0))

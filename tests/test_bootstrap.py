@@ -673,3 +673,84 @@ class TeacherBootstrapTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--min-teacher-win-rate must be between 0 and 1", stderr.getvalue())
+
+    def test_bootstrap_cli_teacher_benchmark_rejects_non_finite_thresholds(self) -> None:
+        for flag in ("--min-teacher-win-rate", "--max-capped-rate"):
+            with self.subTest(flag=flag):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            flag,
+                            "nan",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(f"{flag} must be between 0 and 1", stderr.getvalue())
+
+    def test_bootstrap_cli_teacher_benchmark_fails_vacuous_threshold_when_teacher_row_missing(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=2,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="other-policy vs random-legal",
+                    p1_policy_id="other-policy",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+            },
+        )
+
+        with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = bootstrap_cli_main(
+                    [
+                        "teacher-benchmark",
+                        "--games",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--teacher-policy",
+                        "scripted-teacher",
+                        "--min-teacher-win-rate",
+                        "0.55",
+                        "--json",
+                    ]
+                )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["teacher_policy_id"], "scripted-teacher")
+        self.assertFalse(payload["passed"])
+        self.assertEqual(
+            [check["name"] for check in payload["checks"]],
+            ["teacher_head_to_head_present"],
+        )
