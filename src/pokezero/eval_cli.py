@@ -2121,8 +2121,26 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
         print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
         print(f"calibration_output_path: {_format_summary_value(recipe.get('calibration_output_path'))}")
         print(f"replay_output_path: {_format_summary_value(recipe.get('replay_output_path'))}")
+        calibration_summary = _load_pilot_report_json_summary(recipe.get("calibration_output_path"))
+        if calibration_summary is None:
+            print("calibration_sufficient: -")
+            print("calibration_written_audit_config_path: -")
+            print("calibration_audit_config_write_error: -")
+        else:
+            print(f"calibration_sufficient: {_format_summary_value(calibration_summary.get('audit_calibration_sufficient'))}")
+            print(
+                "calibration_written_audit_config_path: "
+                f"{_format_summary_value(calibration_summary.get('written_audit_config_path'))}"
+            )
+            print(
+                "calibration_audit_config_write_error: "
+                f"{_format_summary_value(calibration_summary.get('audit_config_write_error'))}"
+            )
         replay_summary = _load_pilot_report_json_summary(recipe.get("replay_output_path"))
-        if replay_summary is not None:
+        if replay_summary is None:
+            print("replay_audit_failed: -")
+            print("replay_failed_check_count: -")
+        else:
             print(f"replay_audit_failed: {_format_summary_value(replay_summary.get('audit_failed'))}")
             print(f"replay_failed_check_count: {_comparison_failed_check_count(replay_summary)}")
     failed_step = summary.get("failed_step")
