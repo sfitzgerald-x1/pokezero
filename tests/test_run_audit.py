@@ -1843,6 +1843,116 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(override_exit, 0)
         self.assertTrue(override_payload["passed"])
 
+    def test_eval_cli_audit_config_report_json_includes_metadata_and_preflight(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        config_payload = run_audit_config_payload(
+            RunAuditConfig(min_latest_benchmark_win_rate=0.60, min_latest_benchmark_games=20),
+            source={"branch": "main", "head": "abc123", "dirty": False},
+            calibration={
+                "source_type": "linear_selfplay",
+                "run_count": 2,
+                "benchmark_iteration_count": 2,
+                "aggregate_mode": "envelope",
+                "paths": ["runs/pilot-a/manifest.json", "runs/pilot-b/manifest.json"],
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            write_manifest(config_path, config_payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        str(manifest_path),
+                        "--require-source",
+                        "--require-calibration",
+                        "--fail-on-audit",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["audit_config_path"], str(config_path))
+        self.assertEqual(payload["source"]["head"], "abc123")
+        self.assertEqual(payload["calibration"]["run_count"], 2)
+        self.assertTrue(payload["preflight_requested"])
+        self.assertTrue(payload["preflight_passed"])
+        self.assertEqual(payload["preflight_runs"][0]["manifest_path"], str(manifest_path))
+        self.assertEqual(payload["preflight_runs"][0]["failed_checks"], [])
+        self.assertEqual(payload["config"]["min_latest_benchmark_win_rate"], 0.60)
+
+    def test_eval_cli_audit_config_report_requires_calibration_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(config_path, run_audit_config_payload(RunAuditConfig(), source={"head": "abc123"}))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["audit-config-report", str(config_path), "--require-calibration", "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertIn("calibration_metadata_present", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_config_report_fail_on_audit_returns_nonzero(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        strict_config = RunAuditConfig(min_latest_benchmark_win_rate=0.90, min_latest_benchmark_games=20)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            write_manifest(config_path, run_audit_config_payload(strict_config))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["audit-config-report", str(config_path), str(manifest_path), "--fail-on-audit", "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertFalse(payload["preflight_passed"])
+        self.assertIn("preflight_audit_passed", failed_check_names_from_payload(payload))
+        self.assertIn("latest_benchmark_win_rate", payload["preflight_runs"][0]["failed_checks"])
+
+    def test_eval_cli_audit_config_report_text_prints_config_and_preflight(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            write_manifest(
+                config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(min_latest_benchmark_win_rate=0.60, min_latest_benchmark_games=20),
+                    calibration={"source_type": "linear_selfplay", "run_count": 1},
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-config-report", str(config_path), str(manifest_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("audit_config_report:", output)
+        self.assertIn("calibration_metadata: present", output)
+        self.assertIn("- min_latest_benchmark_win_rate: 0.6", output)
+        self.assertIn("preflight: PASS", output)
+
     def test_eval_cli_audit_rejects_profile_with_audit_config(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)

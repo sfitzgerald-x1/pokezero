@@ -23,6 +23,7 @@ from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
+    RUN_AUDIT_CONFIG_SCHEMA_VERSION,
     RunAuditConfig,
     audit_run,
     calibrate_run_audit,
@@ -31,6 +32,7 @@ from .run_audit import (
     load_run_audit_config,
     run_audit_config_from_dict,
     run_audit_config_payload,
+    run_audit_config_to_dict,
 )
 from .source_metadata import collect_source_metadata
 
@@ -226,6 +228,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
+
+    audit_config_report = subparsers.add_parser(
+        "audit-config-report",
+        help="Inspect a reusable run-audit config and optionally replay it against manifests.",
+    )
+    audit_config_report.add_argument("audit_config", type=Path, help="Versioned run-audit config JSON path.")
+    audit_config_report.add_argument(
+        "paths",
+        type=Path,
+        nargs="*",
+        help="Optional self-play or neural self-play run directories or manifest.json paths to audit with this config.",
+    )
+    audit_config_report.add_argument(
+        "--manifest-glob",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern for run directories or manifest.json files to audit with this config. "
+            "May be repeated and is expanded in sorted order."
+        ),
+    )
+    audit_config_report.add_argument(
+        "--require-source",
+        action="store_true",
+        help="Return non-zero unless the config includes source provenance metadata.",
+    )
+    audit_config_report.add_argument(
+        "--require-calibration",
+        action="store_true",
+        help="Return non-zero unless the config includes calibration metadata.",
+    )
+    audit_config_report.add_argument(
+        "--fail-on-audit",
+        action="store_true",
+        help="When paths are supplied, return non-zero if any manifest fails this config.",
+    )
+    audit_config_report.add_argument("--json", action="store_true", help="Print the config report as JSON.")
+    audit_config_report.set_defaults(func=_audit_config_report)
 
     audit_calibrate = subparsers.add_parser("audit-calibrate", help="Suggest audit thresholds from observed self-play runs.")
     audit_calibrate.add_argument(
@@ -1715,6 +1755,186 @@ def _audit(args: argparse.Namespace) -> int:
     else:
         _print_audit_result(result)
     return 0 if result.passed else 2
+
+
+def _audit_config_report(args: argparse.Namespace) -> int:
+    config_payload = _load_audit_config_report_payload(args.audit_config)
+    paths = (
+        _expanded_manifest_paths(args.paths, args.manifest_glob)
+        if args.paths or args.manifest_glob
+        else ()
+    )
+    if args.fail_on_audit and not paths:
+        raise ValueError("--fail-on-audit requires at least one manifest path or --manifest-glob.")
+    preflight_runs = tuple(
+        _audit_config_preflight_run_payload(path, config=config_payload["config_object"])
+        for path in paths
+    )
+    preflight_passed = (
+        None
+        if not preflight_runs
+        else all(bool(run["passed"]) for run in preflight_runs)
+    )
+    checks = _audit_config_report_checks(
+        config_payload,
+        preflight_passed=preflight_passed,
+        require_source=args.require_source,
+        require_calibration=args.require_calibration,
+        fail_on_audit=args.fail_on_audit,
+    )
+    passed = all(bool(check["passed"]) for check in checks)
+    report = {
+        "audit_config_path": str(args.audit_config),
+        "schema_version": config_payload["schema_version"],
+        "config": run_audit_config_to_dict(config_payload["config_object"]),
+        "source": config_payload["source"],
+        "calibration": config_payload["calibration"],
+        "preflight_requested": bool(preflight_runs),
+        "preflight_passed": preflight_passed,
+        "preflight_runs": list(preflight_runs),
+        "checks": checks,
+        "passed": passed,
+    }
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_audit_config_report(report)
+    return 0 if passed else 2
+
+
+def _load_audit_config_report_payload(path: Path) -> dict[str, object]:
+    raw_payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw_payload, Mapping):
+        raise ValueError(f"run audit config must be a JSON object: {path}")
+    config = load_run_audit_config(path)
+    source = raw_payload.get("source")
+    calibration = raw_payload.get("calibration")
+    return {
+        "schema_version": raw_payload.get("schema_version", RUN_AUDIT_CONFIG_SCHEMA_VERSION),
+        "config_object": config,
+        "source": dict(source) if isinstance(source, Mapping) else None,
+        "calibration": dict(calibration) if isinstance(calibration, Mapping) else None,
+    }
+
+
+def _audit_config_preflight_run_payload(path: Path, *, config: RunAuditConfig) -> dict[str, object]:
+    result = audit_run(path, config=config)
+    return {
+        "manifest_path": str(result.manifest_path),
+        "source_type": result.source_type,
+        "latest_iteration": result.latest_iteration,
+        "latest_benchmark_win_rate": result.latest_benchmark_win_rate,
+        "latest_benchmark_games": result.iterations[-1].benchmark_games if result.iterations else 0,
+        "latest_collection_capped_rate": result.latest_collection_capped_rate,
+        "latest_benchmark_capped_rate": result.latest_benchmark_capped_rate,
+        "passed": result.passed,
+        "failed_checks": [check.name for check in result.checks if not check.passed],
+    }
+
+
+def _audit_config_report_checks(
+    config_payload: Mapping[str, object],
+    *,
+    preflight_passed: bool | None,
+    require_source: bool,
+    require_calibration: bool,
+    fail_on_audit: bool,
+) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = [
+        {
+            "name": "config_loadable",
+            "passed": True,
+            "observed": config_payload.get("schema_version"),
+            "threshold": RUN_AUDIT_CONFIG_SCHEMA_VERSION,
+            "message": "audit config loaded successfully",
+        }
+    ]
+    source_present = config_payload.get("source") is not None
+    calibration_present = config_payload.get("calibration") is not None
+    if require_source:
+        checks.append(
+            {
+                "name": "source_metadata_present",
+                "passed": source_present,
+                "observed": source_present,
+                "threshold": True,
+                "message": "source provenance metadata is required",
+            }
+        )
+    if require_calibration:
+        checks.append(
+            {
+                "name": "calibration_metadata_present",
+                "passed": calibration_present,
+                "observed": calibration_present,
+                "threshold": True,
+                "message": "calibration metadata is required",
+            }
+        )
+    if fail_on_audit:
+        checks.append(
+            {
+                "name": "preflight_audit_passed",
+                "passed": preflight_passed is True,
+                "observed": preflight_passed,
+                "threshold": True,
+                "message": "all supplied manifests must pass this audit config",
+            }
+        )
+    return checks
+
+
+def _print_audit_config_report(report: Mapping[str, object]) -> None:
+    print("audit_config_report:")
+    print(f"config: {report['audit_config_path']}")
+    print(f"schema_version: {report['schema_version']}")
+    print(f"source_metadata: {'present' if report['source'] is not None else 'missing'}")
+    print(f"calibration_metadata: {'present' if report['calibration'] is not None else 'missing'}")
+    source = report.get("source")
+    if isinstance(source, Mapping):
+        print(f"source_branch: {_format_summary_value(source.get('branch'))}")
+        print(f"source_head: {_format_summary_value(source.get('head'))}")
+        print(f"source_dirty: {_format_summary_value(source.get('dirty'))}")
+    calibration = report.get("calibration")
+    if isinstance(calibration, Mapping):
+        print(f"calibration_source_type: {_format_summary_value(calibration.get('source_type'))}")
+        print(f"calibration_run_count: {_format_summary_value(calibration.get('run_count'))}")
+        print(f"calibration_benchmark_iterations: {_format_summary_value(calibration.get('benchmark_iteration_count'))}")
+        print(f"calibration_aggregate_mode: {_format_summary_value(calibration.get('aggregate_mode'))}")
+    print("thresholds:")
+    config = report.get("config")
+    if isinstance(config, Mapping):
+        for key, value in config.items():
+            print(f"- {key}: {_format_summary_value(value)}")
+    preflight_passed = report.get("preflight_passed")
+    if preflight_passed is None:
+        print("preflight: not_requested")
+    else:
+        print(f"preflight: {'PASS' if preflight_passed else 'FAIL'}")
+        print("preflight_runs:")
+        for run in report.get("preflight_runs", ()):
+            if not isinstance(run, Mapping):
+                continue
+            run_status = "PASS" if run.get("passed") else "FAIL"
+            failed_checks = run.get("failed_checks")
+            failed_summary = ", ".join(str(check) for check in failed_checks) if failed_checks else "-"
+            print(
+                f"- {run_status} {run.get('manifest_path')} "
+                f"latest_iteration={_format_summary_value(run.get('latest_iteration'))} "
+                f"latest_wr={_format_optional_float(run.get('latest_benchmark_win_rate'))} "
+                f"bench_games={_format_summary_value(run.get('latest_benchmark_games'))} "
+                f"failed_checks={failed_summary}"
+            )
+    print("checks:")
+    for check in report.get("checks", ()):
+        if not isinstance(check, Mapping):
+            continue
+        status = "pass" if check.get("passed") else "fail"
+        print(
+            f"- {status} {check.get('name')}: "
+            f"observed={_format_summary_value(check.get('observed'))} "
+            f"threshold={_format_summary_value(check.get('threshold'))}"
+        )
 
 
 def _profiles(args: argparse.Namespace) -> int:

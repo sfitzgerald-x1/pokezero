@@ -337,6 +337,19 @@ python -m pokezero.eval_cli audit runs/new-run --audit-config runs/audit-configs
 
 The config file is versioned JSON and records the suggested audit thresholds plus source and calibration metadata. `--write-config` requires at least one sufficiency requirement, such as `--require-run-count`, `--require-benchmark-iterations`, or `--require-min-benchmark-games`, so thin pilot evidence is not accidentally turned into a reusable long-run policy. `audit`, `compare --audit-config`, and post-iteration self-play flags can consume it. Explicit threshold flags still override values from the config file.
 
+Before applying a calibrated config to a longer unattended run, inspect and optionally replay it against the pilot manifests that produced it:
+
+```bash
+python -m pokezero.eval_cli audit-config-report runs/pilot-audit-config.json \
+  --require-source \
+  --require-calibration
+python -m pokezero.eval_cli audit-config-report runs/pilot-audit-config.json \
+  runs/pilot-*/selfplay/manifest.json \
+  --fail-on-audit
+```
+
+The report prints the config thresholds, source provenance, calibration metadata, and optional per-manifest preflight results. Use `--json` for automation. `--require-source` and `--require-calibration` make missing provenance or calibration metadata fail fast, and `--fail-on-audit` returns non-zero when any supplied manifest fails the config.
+
 Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Add `--audit-profile smoke`, `--audit-profile default`, `--audit-profile long-run`, or `--audit-config runs/audit-configs/pilot-long-run.json` when the run should enforce a reusable audit policy during iteration; explicit `--audit-*` thresholds and boolean requirement flags still override the selected profile or config file. Because `--evaluation-games` is per benchmark matchup while audit benchmark-game thresholds are aggregate counts, the CLI rejects benchmark-required audit configs whose requested evaluation games cannot satisfy the configured audit floor. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, `--audit-max-latest-process-peak-rss-mb 8192`, `--audit-require-benchmark`, `--audit-allow-missing-benchmark`, `--audit-require-benchmark-opponents`, `--audit-allow-missing-benchmark-opponents`, `--audit-require-latest-promotion`, or `--audit-allow-missing-latest-promotion`.
 
 Compare cold-start, teacher-bootstrap, and neural iteration runs side by side:
