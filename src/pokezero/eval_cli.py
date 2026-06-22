@@ -2686,6 +2686,7 @@ def _cpu_pilot_smoke_report(
             if isinstance(count, int):
                 key = str(branch)
                 teacher_branch_counts[key] = teacher_branch_counts.get(key, 0) + count
+    smoke_report_ready_reasons = _cpu_pilot_smoke_not_ready_reasons(pilots)
     return {
         "pilot_count": recipe.get("pilot_count"),
         "discovered_pilot_count": len(pilots),
@@ -2698,8 +2699,8 @@ def _cpu_pilot_smoke_report(
         "teacher_branch_preflight_non_passed_count": preflight_requested_count - preflight_passed_count,
         "teacher_branch_counts": dict(sorted(teacher_branch_counts.items())),
         "pilots": pilots,
-        "smoke_report_ready": not _cpu_pilot_smoke_not_ready_reasons(pilots),
-        "smoke_report_ready_reasons": _cpu_pilot_smoke_not_ready_reasons(pilots),
+        "smoke_report_ready": not smoke_report_ready_reasons,
+        "smoke_report_ready_reasons": smoke_report_ready_reasons,
     }
 
 
@@ -2710,8 +2711,17 @@ def _cpu_pilot_smoke_not_ready_reasons(pilots: list[Mapping[str, object]]) -> li
         return reasons
     if any(pilot.get("summary_available") is not True for pilot in pilots):
         reasons.append("pilot_smoke_summary_missing")
-    if any(pilot.get("status") not in ("passed", None) for pilot in pilots):
+    if any(
+        pilot.get("summary_available") is True and pilot.get("status") != "passed"
+        for pilot in pilots
+    ):
         reasons.append("pilot_smoke_summary_not_passed")
+    if any(
+        pilot.get("summary_available") is True
+        and pilot.get("teacher_branch_preflight") is None
+        for pilot in pilots
+    ):
+        reasons.append("teacher_branch_preflight_unavailable")
     if any(_cpu_pilot_preflight_requested_but_not_passed(pilot) for pilot in pilots):
         reasons.append("teacher_branch_preflight_not_passed")
     return reasons
