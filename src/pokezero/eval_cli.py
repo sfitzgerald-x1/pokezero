@@ -461,14 +461,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "cpu-long-run-plan",
         help="Print a guarded self-play long-run command from a ready CPU pilot-suite summary.",
     )
-    _add_cpu_long_run_arguments(long_run_plan, include_json=True, include_summary_path=False)
+    _add_cpu_long_run_arguments(
+        long_run_plan,
+        include_json=True,
+        include_summary_path=False,
+        profile_choices=profile_choices,
+    )
     long_run_plan.set_defaults(func=_cpu_long_run_plan)
 
     long_run_run = subparsers.add_parser(
         "cpu-long-run-run",
         help="Execute a guarded self-play long-run command from a ready CPU pilot-suite summary.",
     )
-    _add_cpu_long_run_arguments(long_run_run, include_json=False, include_summary_path=True)
+    _add_cpu_long_run_arguments(
+        long_run_run,
+        include_json=False,
+        include_summary_path=True,
+        profile_choices=profile_choices,
+    )
     long_run_run.set_defaults(func=_cpu_long_run_run)
 
     long_run_report = subparsers.add_parser(
@@ -680,6 +690,7 @@ def _add_cpu_long_run_arguments(
     *,
     include_json: bool,
     include_summary_path: bool,
+    profile_choices: tuple[str, ...],
 ) -> None:
     parser.add_argument(
         "pilot_path",
@@ -721,6 +732,15 @@ def _add_cpu_long_run_arguments(
     parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
     parser.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    parser.add_argument(
+        "--profile",
+        choices=profile_choices,
+        default="long-run",
+        help=(
+            "Named promotion profile passed to selfplay_cli and used for launch feasibility. "
+            "Defaults to long-run; use smoke only for local rehearsal runs."
+        ),
+    )
     parser.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
     parser.add_argument(
         "--require-promoted-opponent-pool-size",
@@ -3084,13 +3104,22 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         audit_config_path=audit_config_path,
     )
     ready_reasons.extend(_cpu_long_run_input_not_ready_reasons(args))
-    promotion_gate_feasibility_error = _cpu_long_run_promotion_gate_feasibility_error(args.evaluation_games)
+    promotion_gate_feasibility_error = _cpu_long_run_promotion_gate_feasibility_error(
+        args.evaluation_games,
+        profile_name=args.profile,
+    )
     if promotion_gate_feasibility_error is not None:
         ready_reasons.append("promotion_gate_not_satisfiable_by_evaluation_games")
     audit_feasibility_error = None
-    if not ready_reasons and audit_config_path is not None:
+    runtime_audit_source = "pilot-audit-config" if args.profile == "long-run" else "profile"
+    runtime_audit_config_path = audit_config_path if runtime_audit_source == "pilot-audit-config" else None
+    runtime_audit_profile = args.profile if runtime_audit_source == "profile" else None
+    if not ready_reasons:
         try:
-            audit_config = load_run_audit_config(audit_config_path)
+            audit_config = _cpu_long_run_runtime_audit_config(
+                args,
+                audit_config_path=audit_config_path,
+            )
         except (OSError, TypeError, ValueError, KeyError) as exc:
             audit_feasibility_error = str(exc)
             ready_reasons.append("audit_config_unavailable_for_audit_feasibility")
@@ -3120,7 +3149,11 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         "pilot_artifact_report": artifact_report,
         "pilot_smoke_report": smoke_report,
         "run_dir": str(args.run_dir),
+        "profile": args.profile,
         "audit_config_path": None if audit_config_path is None else str(audit_config_path),
+        "runtime_audit_source": runtime_audit_source,
+        "runtime_audit_config_path": None if runtime_audit_config_path is None else str(runtime_audit_config_path),
+        "runtime_audit_profile": runtime_audit_profile,
         "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
         "long_run_ready": ready,
@@ -3203,17 +3236,25 @@ def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
     return None
 
 
-def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int) -> str | None:
-    gate_config = evaluation_profile("long-run").gate_config
+def _cpu_long_run_runtime_audit_config(args: argparse.Namespace, *, audit_config_path: Path | None) -> RunAuditConfig:
+    if args.profile == "long-run":
+        if audit_config_path is None:
+            raise ValueError("pilot audit config path is required for long-run audit feasibility.")
+        return load_run_audit_config(audit_config_path)
+    return evaluation_profile(args.profile).audit_config
+
+
+def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int, *, profile_name: str) -> str | None:
+    gate_config = evaluation_profile(profile_name).gate_config
     if gate_config.require_benchmark and evaluation_games < gate_config.min_benchmark_games:
         return (
-            "long-run auto-promotion requires enough --evaluation-games to satisfy the per-opponent "
+            f"{profile_name} auto-promotion requires enough --evaluation-games to satisfy the per-opponent "
             f"benchmark-game floor: at least {gate_config.min_benchmark_games} games per benchmark "
             f"opponent are required, but evaluation-games is {evaluation_games}."
         )
     if gate_config.min_incumbent_games > 0 and evaluation_games < gate_config.min_incumbent_games:
         return (
-            "long-run auto-promotion requires enough --evaluation-games to satisfy the incumbent "
+            f"{profile_name} auto-promotion requires enough --evaluation-games to satisfy the incumbent "
             f"benchmark-game floor: at least {gate_config.min_incumbent_games} incumbent games are "
             f"required, but evaluation-games is {evaluation_games}."
         )
@@ -3307,11 +3348,13 @@ def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: 
         args.promotion_label_prefix,
         "--auto-promote",
         "--profile",
-        "long-run",
+        args.profile,
         "--audit-after-iteration",
-        "--audit-config",
-        str(audit_config_path),
     ]
+    if args.profile == "long-run":
+        argv.extend(["--audit-config", str(audit_config_path)])
+    else:
+        argv.extend(["--audit-profile", args.profile])
     if args.promotion_notes is not None:
         argv.extend(["--promotion-notes", args.promotion_notes])
     if args.require_promoted_opponent_pool_size is not None:
@@ -3326,8 +3369,10 @@ def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: 
 def _print_cpu_long_run_plan(payload: Mapping[str, object]) -> None:
     print("cpu_long_run_plan:")
     print(f"ready: {_format_optional_bool(bool(payload.get('long_run_ready')))}")
+    print(f"profile: {_format_summary_value(payload.get('profile'))}")
     print(f"pilot_summary: {_format_summary_value(payload.get('pilot_summary_path'))}")
     print(f"audit_config_path: {_format_summary_value(payload.get('audit_config_path'))}")
+    print(f"runtime_audit_source: {_format_summary_value(payload.get('runtime_audit_source'))}")
     if payload.get("promotion_gate_feasibility_error"):
         print(f"promotion_gate_feasibility_error: {payload['promotion_gate_feasibility_error']}")
     if payload.get("audit_feasibility_error"):

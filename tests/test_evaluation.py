@@ -2726,6 +2726,10 @@ if __name__ == "__main__":
         self.assertTrue(payload["long_run_ready"])
         self.assertEqual(payload["long_run_ready_reasons"], [])
         self.assertEqual(payload["audit_config_path"], str(audit_config_path))
+        self.assertEqual(payload["profile"], "long-run")
+        self.assertEqual(payload["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(payload["runtime_audit_config_path"], str(audit_config_path))
+        self.assertIsNone(payload["runtime_audit_profile"])
         step = payload["steps"][0]
         argv = step["argv"]
         self.assertEqual(argv[:4], ["./.venv/bin/python", "-m", "pokezero.selfplay_cli", "iterate"])
@@ -2737,6 +2741,92 @@ if __name__ == "__main__":
         self.assertEqual(argv[argv.index("--promotion-registry") + 1], str(long_run_dir / "promotions.json"))
         self.assertEqual(argv[argv.index("--promotion-artifact-dir") + 1], str(long_run_dir / "promoted-checkpoints"))
         self.assertEqual(argv[argv.index("--validation-data") + 1], str(validation_path))
+
+    def test_eval_cli_cpu_long_run_plan_can_use_smoke_profile_for_rehearsal_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                audit_config_min_latest_benchmark_games=20,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "rehearsal-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--evaluation-games",
+                        "1",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["profile"], "smoke")
+        self.assertIsNone(payload["promotion_gate_feasibility_error"])
+        self.assertIsNone(payload["audit_feasibility_error"])
+        self.assertEqual(payload["audit_config_path"], str(audit_config_path))
+        self.assertEqual(payload["runtime_audit_source"], "profile")
+        self.assertIsNone(payload["runtime_audit_config_path"])
+        self.assertEqual(payload["runtime_audit_profile"], "smoke")
+        argv = payload["steps"][0]["argv"]
+        self.assertEqual(argv[argv.index("--profile") + 1], "smoke")
+        self.assertEqual(argv[argv.index("--evaluation-games") + 1], "1")
+        self.assertIn("--audit-profile", argv)
+        self.assertEqual(argv[argv.index("--audit-profile") + 1], "smoke")
+        self.assertNotIn("--audit-config", argv)
+
+    def test_eval_cli_cpu_long_run_run_uses_smoke_profile_audit_for_rehearsal_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                audit_config_min_latest_benchmark_games=20,
+            )
+            long_run_dir = temp_path / "rehearsal-run"
+            summary_path = long_run_dir / "cpu-long-run-run-summary.json"
+            completed = subprocess.CompletedProcess(args=["unused"], returncode=0)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", return_value=completed) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--run-dir",
+                        str(long_run_dir),
+                        "--summary-path",
+                        str(summary_path),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--evaluation-games",
+                        "1",
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once()
+        argv = run.call_args.args[0]
+        self.assertEqual(summary["recipe"]["audit_config_path"], str(audit_config_path))
+        self.assertEqual(summary["recipe"]["runtime_audit_source"], "profile")
+        self.assertIsNone(summary["recipe"]["runtime_audit_config_path"])
+        self.assertEqual(summary["recipe"]["runtime_audit_profile"], "smoke")
+        self.assertIn("--audit-profile", argv)
+        self.assertEqual(argv[argv.index("--audit-profile") + 1], "smoke")
+        self.assertNotIn("--audit-config", argv)
 
     def test_eval_cli_cpu_long_run_plan_fails_when_required_generated_audit_config_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4170,6 +4260,7 @@ def write_ready_cpu_long_run_pilot(
     temp_path: Path,
     *,
     min_latest_benchmark_games: int = 20,
+    audit_config_min_latest_benchmark_games: int = 1,
 ) -> tuple[Path, Path, Path, Path]:
     pilot_root = temp_path / "pilots"
     checkpoint_path = temp_path / "bootstrap" / "linear-bootstrap.json"
@@ -4194,7 +4285,20 @@ def write_ready_cpu_long_run_pilot(
     write_json(
         audit_config_path,
         run_audit_config_payload(
-            smoke_test_audit_config(),
+            RunAuditConfig(
+                min_latest_benchmark_win_rate=0.50,
+                min_latest_benchmark_games=audit_config_min_latest_benchmark_games,
+                max_latest_collection_capped_rate=1.0,
+                max_latest_benchmark_capped_rate=1.0,
+                max_latest_average_decision_rounds=None,
+                max_latest_benchmark_average_decision_rounds=None,
+                max_latest_process_peak_rss_mb=None,
+                max_benchmark_win_rate_drop=1.0,
+                max_consecutive_promotion_failures=1,
+                require_benchmark=False,
+                require_latest_promotion=False,
+                require_benchmark_opponent_coverage=False,
+            ),
             calibration={
                 "source_type": SELFPLAY_RUN_SCHEMA_VERSION,
                 "run_count": 2,
