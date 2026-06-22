@@ -130,7 +130,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     audit = subparsers.add_parser("audit", help="Audit a self-play run manifest for regression health.")
     audit.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
-    audit.add_argument("--profile", choices=profile_choices, default="default", help="Named threshold profile used as defaults for audit checks.")
+    audit.add_argument("--profile", choices=profile_choices, default=None, help="Named threshold profile used as defaults for audit checks.")
     audit.add_argument(
         "--audit-config",
         type=Path,
@@ -244,7 +244,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Write the suggested audit thresholds as a reusable run-audit config JSON. "
-            "The file is written only when calibration sufficiency and profile checks pass."
+            "Requires at least one --require-* sufficiency flag and writes only when sufficiency/profile checks pass."
         ),
     )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
@@ -1184,10 +1184,15 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
     profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
     wrote_config_path = None
     if args.write_config is not None:
+        if not sufficiency_requested:
+            raise ValueError(
+                "--write-config requires at least one calibration sufficiency requirement "
+                "(--require-run-count, --require-benchmark-iterations, or --require-min-benchmark-games)."
+            )
         if sufficiency_errors:
             raise ValueError("--write-config requires calibration sufficiency checks to pass.")
-        if args.fail_on_profile and profile_failed:
-            raise ValueError("--write-config requires the selected profile audit to pass when --fail-on-profile is set.")
+        if profile_failed:
+            raise ValueError("--write-config requires the selected profile audit to pass.")
         config = run_audit_config_from_dict(result.suggested_config())
         calibration_paths = (
             tuple(result.paths)
@@ -1780,6 +1785,8 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
 
 
 def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
+    if getattr(args, "audit_config", None) is not None and getattr(args, "profile", None) is not None:
+        raise ValueError("--profile cannot be combined with --audit-config.")
     profile_config = evaluation_profile(args.profile).audit_config
     if getattr(args, "audit_config", None) is not None:
         profile_config = load_run_audit_config(args.audit_config)

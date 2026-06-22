@@ -103,6 +103,8 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig | None:
+    if args.audit_profile is not None and args.audit_config is not None:
+        raise ValueError("--audit-profile cannot be combined with --audit-config.")
     if not args.audit_after_iteration:
         if args.audit_config is not None:
             raise ValueError("--audit-config requires --audit-after-iteration.")

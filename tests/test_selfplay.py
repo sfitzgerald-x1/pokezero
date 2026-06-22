@@ -1583,6 +1583,59 @@ class SelfPlayTest(unittest.TestCase):
         self.assertTrue(audit_config.require_benchmark)
         self.assertFalse(audit_config.require_benchmark_opponent_coverage)
 
+    def test_selfplay_cli_iterate_rejects_post_iteration_audit_profile_with_config_file(self) -> None:
+        audit_defaults = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.72,
+            min_latest_benchmark_games=8,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            config_path.write_text(json.dumps(run_audit_config_payload(audit_defaults), indent=2), encoding="utf-8")
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = selfplay_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--evaluation-games",
+                        "2",
+                        "--audit-after-iteration",
+                        "--audit-profile",
+                        "smoke",
+                        "--audit-config",
+                        str(config_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-profile cannot be combined with --audit-config", stderr.getvalue())
+
+    def test_selfplay_cli_iterate_rejects_audit_config_without_post_iteration_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            config_path.write_text(json.dumps(run_audit_config_payload(RunAuditConfig()), indent=2), encoding="utf-8")
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = selfplay_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--audit-config",
+                        str(config_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-config requires --audit-after-iteration", stderr.getvalue())
+
     def test_selfplay_cli_iterate_profile_boolean_overrides(self) -> None:
         fake_metrics = CollectionMetrics(
             games=2,
