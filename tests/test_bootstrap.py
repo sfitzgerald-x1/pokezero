@@ -10,8 +10,11 @@ from urllib.parse import quote
 from pokezero.bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
+    MAX_TEACHER_REASON_SUMMARY,
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
     TeacherBenchmarkResult,
+    _top_teacher_counts,
+    _top_teacher_reasons,
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
@@ -73,6 +76,22 @@ class OneTurnEnv:
 
 
 class TeacherBootstrapTest(unittest.TestCase):
+    def test_teacher_top_summaries_are_capped_and_deterministic(self) -> None:
+        counts = {f"branch-{index:02d}": 1 for index in range(12)}
+        counts["branch-11"] = 3
+        counts["branch-10"] = 2
+
+        top_branches = _top_teacher_counts(counts)
+        top_reasons = _top_teacher_reasons(counts)
+
+        self.assertEqual(len(top_branches), MAX_TEACHER_REASON_SUMMARY)
+        self.assertEqual(top_branches[0], {"branch": "branch-11", "count": 3})
+        self.assertEqual(top_branches[1], {"branch": "branch-10", "count": 2})
+        self.assertEqual(top_branches[2], {"branch": "branch-00", "count": 1})
+        self.assertEqual(len(top_reasons), MAX_TEACHER_REASON_SUMMARY)
+        self.assertEqual(top_reasons[0], {"reason": "branch-11", "count": 3})
+        self.assertEqual(top_reasons[2], {"reason": "branch-00", "count": 1})
+
     def test_run_teacher_bootstrap_writes_manifest_checkpoint_and_current_only_training_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -123,6 +142,10 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(manifest["teacher_decision_summary"]["total_decisions"], 3)
         self.assertEqual(manifest["teacher_decision_summary"]["unknown_move_decisions"], 0)
         self.assertEqual(manifest["teacher_decision_summary"]["fallback_decisions"], 0)
+        self.assertEqual(manifest["teacher_decision_summary"]["teacher_branch_counts"], {})
+        self.assertEqual(manifest["teacher_decision_summary"]["top_teacher_branches"], [])
+        self.assertEqual(manifest["teacher_decision_summary"]["teacher_reason_unique_count"], 0)
+        self.assertEqual(manifest["teacher_decision_summary"]["top_teacher_reasons"], [])
         self.assertIsNotNone(manifest["training"]["validation_metrics"])
         self.assertGreater(manifest["training"]["validation_metrics"]["examples"], 0)
         self.assertEqual(manifest["training"]["model"]["feature_fingerprint"], linear_feature_fingerprint())
@@ -260,6 +283,15 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
         self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
         self.assertEqual(result.teacher_decision_summary["fallback_reasons"]["dex unavailable"], 2)
+        self.assertEqual(result.teacher_decision_summary["teacher_branch_counts"]["fallback"], 2)
+        self.assertEqual(
+            result.teacher_decision_summary["top_teacher_branches"],
+            [{"branch": "fallback", "count": 2}],
+        )
+        self.assertEqual(
+            result.teacher_decision_summary["top_teacher_reasons"],
+            [{"reason": "dex unavailable", "count": 2}],
+        )
 
     def test_benchmark_teacher_policy_rejects_non_positive_games(self) -> None:
         with self.assertRaisesRegex(ValueError, "games must be positive"):
@@ -486,6 +518,12 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_branch_counts": {"damaging_move": 4},
+                "top_teacher_branches": [{"branch": "damaging_move", "count": 4}],
+                "teacher_reason_unique_count": 1,
+                "top_teacher_reasons": [
+                    {"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}
+                ],
             },
         )
 
@@ -526,6 +564,14 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(payload["benchmark"]["total_games"], 2)
         self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
         self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)
+        self.assertEqual(
+            payload["teacher_decision_summary"]["top_teacher_branches"],
+            [{"branch": "damaging_move", "count": 4}],
+        )
+        self.assertEqual(
+            payload["teacher_decision_summary"]["top_teacher_reasons"],
+            [{"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}],
+        )
 
     def test_bootstrap_cli_teacher_benchmark_can_fail_preflight_and_write_report(self) -> None:
         fake_metrics = CollectionMetrics(
@@ -560,6 +606,16 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 1,
                 "fallback_decisions": 1,
                 "fallback_reasons": {"fallback": 1},
+                "teacher_branch_counts": {"fallback": 1, "unknown_move": 1},
+                "top_teacher_branches": [
+                    {"branch": "fallback", "count": 1},
+                    {"branch": "unknown_move", "count": 1},
+                ],
+                "teacher_reason_unique_count": 2,
+                "top_teacher_reasons": [
+                    {"reason": "fallback", "count": 1},
+                    {"reason": "unknown move", "count": 1},
+                ],
             },
         )
 
@@ -635,6 +691,14 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_branch_counts": {"spikes_available": 3},
+                "top_teacher_branches": [
+                    {"branch": "spikes_available", "count": 3}
+                ],
+                "teacher_reason_unique_count": 1,
+                "top_teacher_reasons": [
+                    {"reason": "Spikes: hazard pressure layers=0/3", "count": 3}
+                ],
             },
         )
 
@@ -663,6 +727,10 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("preflight: PASS", output)
         self.assertIn("PASS teacher_win_rate:random-legal", output)
+        self.assertIn("teacher_top_branches:", output)
+        self.assertIn("3x spikes_available", output)
+        self.assertIn("teacher_top_reasons:", output)
+        self.assertIn("3x Spikes: hazard pressure layers=0/3", output)
         self.assertIn(f"report: {report_path}", output)
         self.assertTrue(report_exists)
 
@@ -735,6 +803,10 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_branch_counts": {},
+                "top_teacher_branches": [],
+                "teacher_reason_unique_count": 0,
+                "top_teacher_reasons": [],
             },
         )
 

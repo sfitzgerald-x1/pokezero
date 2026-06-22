@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import sys
+from typing import Mapping
 
 from .bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
@@ -420,6 +421,8 @@ def _print_teacher_summary(result) -> None:
             f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
             f"fallbacks={summary.get('fallback_decisions', 0)}"
         )
+    _print_teacher_top_branches(summary)
+    _print_teacher_top_reasons(summary)
     print(f"manifest: {result.manifest_path}")
 
 
@@ -445,6 +448,8 @@ def _print_teacher_benchmark_result(result, *, checks: list[dict[str, object]], 
         f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
         f"fallbacks={summary.get('fallback_decisions', 0)}"
     )
+    _print_teacher_top_branches(summary)
+    _print_teacher_top_reasons(summary)
     if checks:
         print(f"preflight: {'PASS' if passed else 'FAIL'}")
         for check in checks:
@@ -457,6 +462,28 @@ def _print_teacher_benchmark_result(result, *, checks: list[dict[str, object]], 
         print("teacher_fallback_reasons:")
         for reason, count in sorted(fallback_reasons.items()):
             print(f"- {reason}: {count}")
+
+
+def _print_teacher_top_branches(summary: Mapping[str, object]) -> None:
+    top_branches = summary.get("top_teacher_branches") or ()
+    if not isinstance(top_branches, list) or not top_branches:
+        return
+    print("teacher_top_branches:")
+    for item in top_branches:
+        if not isinstance(item, Mapping):
+            continue
+        print(f"- {item.get('count', 0)}x {item.get('branch', '')}")
+
+
+def _print_teacher_top_reasons(summary: Mapping[str, object]) -> None:
+    top_reasons = summary.get("top_teacher_reasons") or ()
+    if not isinstance(top_reasons, list) or not top_reasons:
+        return
+    print("teacher_top_reasons:")
+    for item in top_reasons:
+        if not isinstance(item, Mapping):
+            continue
+        print(f"- {item.get('count', 0)}x {item.get('reason', '')}")
 
 
 if __name__ == "__main__":

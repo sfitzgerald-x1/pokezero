@@ -201,6 +201,7 @@ class ScriptedTeacherPolicy:
                 "action_family": selected.kind,
                 "teacher_score": selected.score,
                 "teacher_reason": selected.reason,
+                "teacher_branch": selected.branch,
             },
         )
 
@@ -215,7 +216,12 @@ class ScriptedTeacherPolicy:
             action_index=decision.action_index,
             policy_id=self.policy_id,
             action_probability=decision.action_probability,
-            metadata={**dict(decision.metadata), "policy_family": "scripted-teacher", "teacher_reason": reason},
+            metadata={
+                **dict(decision.metadata),
+                "policy_family": "scripted-teacher",
+                "teacher_reason": reason,
+                "teacher_branch": "fallback",
+            },
         )
 
     def _dex(self) -> ShowdownDex | None:
@@ -234,6 +240,7 @@ class _ActionScore:
     kind: str
     score: float
     reason: str
+    branch: str = "unknown"
 
 
 def legal_action_indices(legal_action_mask: Sequence[bool]) -> tuple[int, ...]:
@@ -302,12 +309,12 @@ def _move_score(
     raw_move_id = normalize_id(raw_move_name)
     if raw_move_id in _FORCED_PSEUDO_MOVE_IDS:
         display_name = str(candidate.get("move_name") or candidate.get("move_id") or "forced move")
-        return _ActionScore(action_index, "move", 1.0, f"{display_name}: forced pseudo-move")
+        return _ActionScore(action_index, "move", 1.0, f"{display_name}: forced pseudo-move", "forced_pseudo_move")
     move = dex.move_info(raw_move_name)
     if move is None:
         if not allow_unknown_moves:
             raise ValueError(f"scripted-teacher could not resolve move: {candidate.get('move_name') or candidate.get('move_id')}")
-        return _ActionScore(action_index, "move", 12.0, "unknown move")
+        return _ActionScore(action_index, "move", 12.0, "unknown move", "unknown_move")
 
     self_types = _metadata_species_types(metadata.get("self_active"), dex)
     opponent_types = _metadata_species_types(metadata.get("opponent_active"), dex)
@@ -331,7 +338,7 @@ def _damaging_move_score(
 ) -> _ActionScore:
     effectiveness = dex.effectiveness(move.type, opponent_types)
     if effectiveness == 0.0:
-        return _ActionScore(action_index, "move", 0.0, f"{move.name} has no effect")
+        return _ActionScore(action_index, "move", 0.0, f"{move.name} has no effect", "damaging_no_effect")
     stab = 1.5 if move.type in self_types else 1.0
     accuracy = max(0.5, min(1.0, move.accuracy / 100.0 if move.accuracy else 1.0))
     score = move.base_power * effectiveness * stab * accuracy
@@ -346,6 +353,7 @@ def _damaging_move_score(
         "move",
         score,
         f"{move.name}: bp={move.base_power} type={move.type} eff={effectiveness:g} stab={stab:g}",
+        "damaging_move",
     )
 
 
@@ -362,13 +370,13 @@ def _status_move_score(
     if move_id in {"spikes"}:
         return _spikes_score(action_index, move, metadata)
     if move.status and opponent_status == "none":
-        return _ActionScore(action_index, "move", 55.0, f"{move.name}: status pressure")
+        return _ActionScore(action_index, "move", 55.0, f"{move.name}: status pressure", "status_pressure")
     if move.heal:
         score = 58.0 if hp_fraction < 0.45 else 8.0
-        return _ActionScore(action_index, "move", score, f"{move.name}: recovery")
+        return _ActionScore(action_index, "move", score, f"{move.name}: recovery", "recovery")
     if any(value > 0 for value in move.boosts.values()):
         score = 36.0 if hp_fraction >= 0.55 else 12.0
-        return _ActionScore(action_index, "move", score, f"{move.name}: setup")
+        return _ActionScore(action_index, "move", score, f"{move.name}: setup", "setup")
     if move_id in {"healbell", "aromatherapy"}:
         status_weight = _team_status_cure_weight(metadata.get("self_team"))
         if status_weight > 0.0:
@@ -378,9 +386,10 @@ def _status_move_score(
                 "move",
                 score,
                 f"{move.name}: team status cure weight={status_weight:g}",
+                "team_status_cure",
             )
-        return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status")
-    return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status")
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status", "team_status_cure_no_status")
+    return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status", "low_impact_status")
 
 
 def _rapid_spin_score(
@@ -394,7 +403,7 @@ def _rapid_spin_score(
 ) -> _ActionScore:
     hazard_count = _side_hazard_count(metadata.get("self_side_conditions"))
     if dex.effectiveness(move.type, opponent_types) == 0.0:
-        return _ActionScore(action_index, "move", 4.0, f"{move.name}: blocked by Ghost")
+        return _ActionScore(action_index, "move", 4.0, f"{move.name}: blocked by Ghost", "rapid_spin_blocked_by_ghost")
     if hazard_count <= 0:
         damage_score = _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
         return _ActionScore(
@@ -402,8 +411,15 @@ def _rapid_spin_score(
             "move",
             damage_score.score,
             f"{move.name}: no side hazards; {damage_score.reason}",
+            "rapid_spin_no_hazards",
         )
-    return _ActionScore(action_index, "move", min(76.0, 58.0 + (10.0 * hazard_count)), f"{move.name}: clears hazards={hazard_count}")
+    return _ActionScore(
+        action_index,
+        "move",
+        min(76.0, 58.0 + (10.0 * hazard_count)),
+        f"{move.name}: clears hazards={hazard_count}",
+        "rapid_spin_clear_hazards",
+    )
 
 
 def _spikes_score(action_index: int, move, metadata: Mapping[str, Any]) -> _ActionScore:
@@ -413,8 +429,8 @@ def _spikes_score(action_index: int, move, metadata: Mapping[str, Any]) -> _Acti
         metadata.get("opponent_side_condition_counts"),
     )
     if known_layers >= 3:
-        return _ActionScore(action_index, "move", 10.0, f"{move.name}: opponent Spikes already maxed")
-    return _ActionScore(action_index, "move", 62.0, f"{move.name}: hazard pressure layers={known_layers}/3")
+        return _ActionScore(action_index, "move", 10.0, f"{move.name}: opponent Spikes already maxed", "spikes_maxed")
+    return _ActionScore(action_index, "move", 62.0, f"{move.name}: hazard pressure layers={known_layers}/3", "spikes_available")
 
 
 def _switch_score(
@@ -428,7 +444,7 @@ def _switch_score(
     action_index = int(candidate["action_index"])
     pokemon = candidate.get("pokemon")
     if not isinstance(pokemon, Mapping):
-        return _ActionScore(action_index, "switch", 0.0, "missing switch target")
+        return _ActionScore(action_index, "switch", 0.0, "missing switch target", "switch_missing_target")
     species = str(pokemon.get("species") or "unknown")
     hp_fraction = _metadata_hp_fraction(pokemon, default=0.0)
     candidate_types = _metadata_species_types(pokemon, dex)
@@ -456,6 +472,7 @@ def _switch_score(
             f"switch to {species}: hp={hp_fraction:.2f} incoming={incoming:g} "
             f"preserve={preservation_bonus:.1f} status_penalty={status_penalty:.1f}"
         ),
+        "switch",
     )
 
 
