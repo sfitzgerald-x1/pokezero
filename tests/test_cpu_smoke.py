@@ -117,10 +117,34 @@ class CPUSmokeTest(unittest.TestCase):
                         "simple-legal",
                         "--audit-profile",
                         "smoke",
+                        "--format",
+                        "gen3randombattle",
+                        "--max-decision-rounds",
+                        "17",
+                        "--workers",
+                        "2",
                         "--train-games",
                         "3",
                         "--validation-games",
                         "2",
+                        "--bootstrap-benchmark-games",
+                        "7",
+                        "--preflight-games",
+                        "8",
+                        "--selfplay-iterations",
+                        "4",
+                        "--games-per-iteration",
+                        "5",
+                        "--evaluation-games",
+                        "6",
+                        "--feature-count",
+                        "64",
+                        "--window-size",
+                        "2",
+                        "--epochs",
+                        "3",
+                        "--learning-rate",
+                        "0.02",
                         "--json",
                     ]
                 )
@@ -133,9 +157,68 @@ class CPUSmokeTest(unittest.TestCase):
         self.assertEqual(kwargs["audit_profile"], "smoke")
         self.assertEqual(kwargs["train_games"], 3)
         self.assertEqual(kwargs["validation_games"], 2)
+        self.assertEqual(kwargs["bootstrap_benchmark_games"], 7)
+        self.assertEqual(kwargs["preflight_games"], 8)
+        self.assertEqual(kwargs["selfplay_iterations"], 4)
+        self.assertEqual(kwargs["games_per_iteration"], 5)
+        self.assertEqual(kwargs["evaluation_games"], 6)
+        self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["teacher_policy_spec"], "simple-legal")
         self.assertEqual(kwargs["bootstrap_opponent_policy_specs"], ("random-legal",))
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("simple-legal",))
+        self.assertEqual(kwargs["feature_count"], 64)
+        self.assertEqual(kwargs["window_size"], 2)
+        self.assertEqual(kwargs["epochs"], 3)
+        self.assertEqual(kwargs["learning_rate"], 0.02)
+        self.assertEqual(kwargs["rollout_config"].format_id, "gen3randombattle")
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 17)
+
+    def test_cpu_smoke_cli_prints_calibration_warning_for_tiny_runs(self) -> None:
+        fake_result = SimpleNamespace(
+            passed=True,
+            run_dir=Path("/tmp/smoke"),
+            summary_path=Path("/tmp/smoke/summary.json"),
+            audit_profile="smoke",
+            bootstrap=SimpleNamespace(
+                manifest_path=Path("/tmp/smoke/bootstrap/manifest.json"),
+                checkpoint_path=Path("/tmp/smoke/bootstrap/linear-bootstrap.json"),
+            ),
+            selfplay=SimpleNamespace(
+                run_dir=Path("/tmp/smoke/selfplay"),
+                latest_checkpoint_path=Path("/tmp/smoke/selfplay/iteration-1/linear-policy.json"),
+            ),
+            promotion_registry_path=Path("/tmp/smoke/promotions.json"),
+            audit=SimpleNamespace(passed=True, checks=()),
+            calibration=SimpleNamespace(
+                notes=("Observed benchmark game counts are below the default audit minimum.",),
+                min_latest_benchmark_games=1,
+                suggested_cli_flags=lambda: ("--min-latest-benchmark-games", "1"),
+            ),
+        )
+        with patch("pokezero.cpu_smoke_cli._run", return_value=fake_result):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = cpu_smoke_cli_main(["--run-dir", "/tmp/pokezero-smoke"])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("calibration_notes:", output)
+        self.assertIn("calibration_warning:", output)
+
+    def test_run_cpu_smoke_experiment_rejects_partial_run_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "smoke"
+            (run_dir / "bootstrap").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "partial artifacts"):
+                run_cpu_smoke_experiment(
+                    run_dir=run_dir,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    teacher_policy_spec="simple-legal",
+                    bootstrap_opponent_policy_specs=("random-legal",),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    feature_count=32,
+                    window_size=1,
+                )
 
 
 if __name__ == "__main__":

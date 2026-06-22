@@ -123,6 +123,15 @@ def _print_summary(result) -> None:
     failed = [check.name for check in result.audit.checks if not check.passed]
     if failed:
         print(f"audit_failed_checks: {', '.join(failed)}")
+    if result.calibration.notes:
+        print("calibration_notes:")
+        for note in result.calibration.notes:
+            print(f"- {note}")
+    if result.calibration.min_latest_benchmark_games < 20:
+        print(
+            "calibration_warning: smoke-run suggested flags are only a plumbing sanity check; "
+            "do not use them as quality thresholds for larger experiments without more benchmark games."
+        )
     print("suggested_audit_flags:")
     flags = result.calibration.suggested_cli_flags()
     print(" ".join(flags) if flags else "-")

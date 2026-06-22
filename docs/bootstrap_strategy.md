@@ -80,7 +80,7 @@ python -m pokezero.cpu_smoke_cli \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This command runs a tiny scripted-teacher bootstrap, starts one linear self-play iteration from the generated checkpoint, evaluates and records a smoke-profile promotion, audits the self-play manifest, calibrates starter audit flags from the smoke run, and writes `summary.json`. Defaults are intentionally small and use `--audit-profile smoke`; increase the game counts or switch to `--audit-profile default` only after the local harness is working.
+This command runs a tiny scripted-teacher bootstrap, starts one linear self-play iteration from the generated checkpoint, evaluates and records a smoke-profile promotion, audits the self-play manifest, calibrates starter audit flags from the smoke run, and writes `summary.json`. Defaults are intentionally small and use `--audit-profile smoke`; increase the game counts or switch to `--audit-profile default` only after the local harness is working. Smoke-derived calibration flags are plumbing sanity-check guidance only, not quality thresholds for larger experiments.
 
 Import normalized replay decisions into standard rollout JSONL:
 

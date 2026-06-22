@@ -94,8 +94,6 @@ def run_cpu_smoke_experiment(
     epochs: int = 1,
     learning_rate: float = 0.05,
 ) -> CPUSmokeRunResult:
-    if run_dir.exists() and (run_dir / "summary.json").exists():
-        raise ValueError(f"CPU smoke summary already exists: {run_dir / 'summary.json'}")
     profile = evaluation_profile(audit_profile)
     resolved_run_dir = run_dir.expanduser().resolve(strict=False)
     bootstrap_dir = resolved_run_dir / "bootstrap"
@@ -103,6 +101,15 @@ def run_cpu_smoke_experiment(
     promotion_registry_path = resolved_run_dir / "promotions.json"
     promotion_artifact_dir = resolved_run_dir / "promoted-checkpoints"
     summary_path = resolved_run_dir / "summary.json"
+    _require_fresh_smoke_run(
+        summary_path=summary_path,
+        partial_artifact_paths=(
+            bootstrap_dir,
+            selfplay_dir,
+            promotion_registry_path,
+            promotion_artifact_dir,
+        ),
+    )
     training_config = LinearTrainingConfig(
         feature_count=feature_count,
         window_size=window_size,
@@ -168,3 +175,19 @@ def run_cpu_smoke_experiment(
     resolved_run_dir.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(result.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
     return result
+
+
+def _require_fresh_smoke_run(
+    *,
+    summary_path: Path,
+    partial_artifact_paths: tuple[Path, ...],
+) -> None:
+    if summary_path.exists():
+        raise ValueError(f"CPU smoke summary already exists: {summary_path}")
+    existing_paths = tuple(path for path in partial_artifact_paths if path.exists())
+    if existing_paths:
+        formatted_paths = ", ".join(str(path) for path in existing_paths)
+        raise ValueError(
+            "CPU smoke run directory contains partial artifacts without summary.json; "
+            f"choose a new run_dir or clean the partial run first: {formatted_paths}"
+        )
