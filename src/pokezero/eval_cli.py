@@ -70,6 +70,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     promotions.add_argument(
+        "--require-opponent-pool-size",
+        type=int,
+        default=None,
+        help=(
+            "With --opponent-pool-size, return non-zero unless at least this many promoted "
+            "historical opponents are selected."
+        ),
+    )
+    promotions.add_argument(
         "--current-policy-spec",
         default=None,
         help="Policy spec to exclude from --opponent-pool-size instead of the latest promoted policy.",
@@ -236,6 +245,10 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--verify-loadable requires --verify.")
     if args.current_policy_spec is not None and args.opponent_pool_size is None:
         raise ValueError("--current-policy-spec requires --opponent-pool-size.")
+    if args.require_opponent_pool_size is not None and args.opponent_pool_size is None:
+        raise ValueError("--require-opponent-pool-size requires --opponent-pool-size.")
+    if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
+        raise ValueError("--require-opponent-pool-size must be non-negative.")
     registry = load_promotion_registry(args.registry)
     preview_current_policy_spec = args.current_policy_spec
     if preview_current_policy_spec is None and args.opponent_pool_size is not None and registry.latest is not None:
@@ -270,10 +283,21 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
             payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
             payload["opponent_pool_verified"] = verification.passed if verification is not None else None
+            payload["opponent_pool_requested_size"] = args.opponent_pool_size
+            payload["opponent_pool_selected_size"] = len(opponent_pool)
+            payload["opponent_pool_required_size"] = args.require_opponent_pool_size
+            payload["opponent_pool_requirement_passed"] = _opponent_pool_requirement_passed(
+                opponent_pool,
+                required_size=args.require_opponent_pool_size,
+            )
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if verification is None or verification.passed else 2
+        return _promotions_exit_code(
+            verification=verification,
+            opponent_pool=opponent_pool,
+            required_opponent_pool_size=args.require_opponent_pool_size,
+        )
     print(f"registry: {registry.path}")
     print(f"promotions: {len(registry.entries)}")
     if registry.latest is not None:
@@ -296,6 +320,19 @@ def _promotions(args: argparse.Namespace) -> int:
             )
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
+        print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
+        print(f"opponent_pool_selected_size: {len(opponent_pool)}")
+        if args.require_opponent_pool_size is not None:
+            pool_status = (
+                "PASS"
+                if _opponent_pool_requirement_passed(
+                    opponent_pool,
+                    required_size=args.require_opponent_pool_size,
+                )
+                else "FAIL"
+            )
+            print(f"opponent_pool_required_size: {args.require_opponent_pool_size}")
+            print(f"opponent_pool_requirement: {pool_status}")
         print("opponent_pool_policy_specs:")
         for spec in opponent_pool:
             print(f"- {spec}")
@@ -303,7 +340,32 @@ def _promotions(args: argparse.Namespace) -> int:
             print("note: pass --verify to confirm the previewed registry is selectable by runtime.")
     if verification is not None:
         _print_registry_verification(verification)
-    return 0 if verification is None or verification.passed else 2
+    return _promotions_exit_code(
+        verification=verification,
+        opponent_pool=opponent_pool,
+        required_opponent_pool_size=args.require_opponent_pool_size,
+    )
+
+
+def _promotions_exit_code(
+    *,
+    verification,
+    opponent_pool,
+    required_opponent_pool_size: int | None,
+) -> int:
+    if verification is not None and not verification.passed:
+        return 2
+    if not _opponent_pool_requirement_passed(opponent_pool, required_size=required_opponent_pool_size):
+        return 2
+    return 0
+
+
+def _opponent_pool_requirement_passed(
+    opponent_pool,
+    *,
+    required_size: int | None,
+) -> bool:
+    return required_size is None or (opponent_pool is not None and len(opponent_pool) >= required_size)
 
 
 def _promotion_entry_statuses(

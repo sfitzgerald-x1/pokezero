@@ -501,6 +501,58 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(payload["entry_statuses"][-1]["selected_as"], ["latest"])
         self.assertEqual(payload["entry_statuses"][-1]["verification_status"], "not_verified")
         self.assertEqual(payload["entry_statuses"][-1]["checkpoint_exists"], "not_verified")
+        self.assertEqual(payload["opponent_pool_requested_size"], 2)
+        self.assertEqual(payload["opponent_pool_selected_size"], 2)
+        self.assertIsNone(payload["opponent_pool_required_size"])
+        self.assertTrue(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_json_can_require_opponent_pool_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=3)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["opponent_pool_selected_size"], 2)
+        self.assertEqual(payload["opponent_pool_required_size"], 2)
+        self.assertTrue(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_json_fails_when_required_pool_is_too_small(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["opponent_pool_selected_size"], 1)
+        self.assertEqual(payload["opponent_pool_required_size"], 2)
+        self.assertFalse(payload["opponent_pool_requirement_passed"])
 
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -581,12 +633,36 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("opponent_pool_policy_specs:", output)
+        self.assertIn("opponent_pool_selected_size: 1", output)
         self.assertIn(registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0]) or "", output)
         self.assertNotIn(f"- {registry.selection_checkpoint_policy_spec_for_entry(registry.entries[-1])}", output)
         self.assertIn("status=not_verified", output)
         self.assertIn("selected=opponent_pool", output)
         self.assertIn("selected=latest", output)
         self.assertIn("pass --verify", output)
+
+    def test_eval_cli_promotions_text_reports_failed_required_pool_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 2)
+        output = stdout.getvalue()
+        self.assertIn("opponent_pool_selected_size: 1", output)
+        self.assertIn("opponent_pool_required_size: 2", output)
+        self.assertIn("opponent_pool_requirement: FAIL", output)
 
     def test_eval_cli_promotions_verify_json_marks_partial_status_for_unchecked_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -628,6 +704,24 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--current-policy-spec requires --opponent-pool-size", stderr.getvalue())
+
+    def test_eval_cli_promotions_rejects_required_pool_size_without_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=1)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--require-opponent-pool-size",
+                        "1",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--require-opponent-pool-size requires --opponent-pool-size", stderr.getvalue())
 
     def test_eval_cli_promote_can_copy_checkpoint_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
