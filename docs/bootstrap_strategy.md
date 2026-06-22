@@ -56,7 +56,7 @@ Curated Gen 3 randbat replays may still be useful, but the corpus source is unre
 
 Keep Path A running as a baseline, but build Path B around the scripted Gen 3 randbat teacher. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
 
-Replay import remains valuable after a randbat replay source is identified. It should share the same rollout JSONL schema and player-relative observation path, but it should not block the first bootstrap iteration.
+Replay import remains valuable after a randbat replay source is identified. A normalized replay-to-rollout scaffold now exists and writes the same rollout JSONL schema used by self-play collection, but raw Showdown replay discovery, curation, and conversion are still unresolved. It should not block the first bootstrap iteration.
 
 ## Near-Term Implementation Plan
 
@@ -68,9 +68,19 @@ Replay import remains valuable after a randbat replay source is identified. It s
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
 - Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
 - Use `python -m pokezero.eval_cli audit-calibrate <run-dir>` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
-- Add a replay-to-trajectory importer after a useful Gen 3 randbat replay corpus is identified.
+- Extend the normalized replay-to-rollout importer with a raw Showdown replay converter after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape
+
+Import normalized replay decisions into standard rollout JSONL:
+
+```bash
+python -m pokezero.replay_import_cli import \
+  --input data/normalized-replays/battle-001.json \
+  --output runs/replay-bootstrap/rollouts.jsonl
+```
+
+The importer expects player-relative observations and fixed action indices in the normalized replay file. Raw Showdown replay conversion remains a separate corpus-specific step.
 
 Generate the initial scripted-teacher bootstrap checkpoint in one command:
 
