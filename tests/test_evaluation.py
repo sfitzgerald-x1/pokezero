@@ -3917,6 +3917,7 @@ if __name__ == "__main__":
             healthy_summary["recipe"]["runtime_audit_source"] = "profile"
             healthy_summary["recipe"]["runtime_audit_profile"] = "smoke"
             healthy_summary["recipe"]["runtime_audit_config_path"] = None
+            healthy_summary["recipe"]["evaluation_games"] = 33
             write_json(healthy_root / "cpu-long-run-run-summary.json", healthy_summary)
             failed_summary = cpu_long_run_summary(
                 status="failed",
@@ -3943,8 +3944,16 @@ if __name__ == "__main__":
         self.assertTrue(payload["entries"][0]["passing"])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.65)
         self.assertEqual(payload["entries"][0]["runtime_audit_source"], "profile")
+        self.assertTrue(payload["entries"][0]["runtime_audit_available"])
+        self.assertEqual(payload["entries"][0]["runtime_audit_recorded_evaluation_games"], 33)
+        self.assertEqual(
+            payload["entries"][0]["runtime_audit_command_flags"],
+            ["--evaluation-games", "33", "--audit-after-iteration", "--audit-profile", "smoke"],
+        )
+        self.assertEqual(payload["entries"][0]["runtime_audit"]["audit_profile"], "smoke")
         self.assertFalse(payload["entries"][1]["passing"])
         self.assertEqual(payload["entries"][1]["status"], "failed")
+        self.assertFalse(payload["entries"][1]["runtime_audit_available"])
         self.assertEqual(payload["entries"][1]["derived_error"], "manifest_not_found")
 
     def test_eval_cli_cpu_long_run_compare_prefers_persisted_derived_report(self) -> None:
@@ -4097,6 +4106,7 @@ if __name__ == "__main__":
             summary["recipe"]["runtime_audit_source"] = "profile"
             summary["recipe"]["runtime_audit_profile"] = "smoke"
             summary["recipe"]["runtime_audit_config_path"] = None
+            summary["recipe"]["evaluation_games"] = 12
             write_json(run_root / "cpu-long-run-run-summary.json", summary)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -4110,6 +4120,9 @@ if __name__ == "__main__":
         self.assertIn("summaries: 1", output)
         self.assertIn("non_passing: 0", output)
         self.assertIn("refresh_derived_audit: no", output)
+        self.assertIn("runtime_audits:", output)
+        self.assertIn("recorded_eval=12", output)
+        self.assertIn("--evaluation-games 12 --audit-after-iteration --audit-profile smoke", output)
         self.assertIn(str(run_root), output)
 
     def test_eval_cli_cpu_long_run_compare_reports_load_errors(self) -> None:

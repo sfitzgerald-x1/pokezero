@@ -3715,6 +3715,7 @@ def _cpu_long_run_compare_entry(
     recipe = summary.get("recipe")
     recipe_mapping = recipe if isinstance(recipe, Mapping) else {}
     report, report_source = _cpu_long_run_summary_derived_run_report(summary, refresh=refresh_derived_audit)
+    runtime_audit = _cpu_long_run_runtime_audit_report(summary)
     wrapper_passed = status == "passed"
     derived_audit_passed = report.get("available") is True and report.get("audit_passed") is True
     return {
@@ -3726,7 +3727,13 @@ def _cpu_long_run_compare_entry(
         "failed_reason": summary.get("failed_reason"),
         "run_dir": recipe_mapping.get("run_dir"),
         "profile": recipe_mapping.get("profile"),
-        "runtime_audit_source": recipe_mapping.get("runtime_audit_source"),
+        "runtime_audit_source": runtime_audit.get("source"),
+        "runtime_audit": runtime_audit,
+        "runtime_audit_available": runtime_audit.get("available"),
+        "runtime_audit_profile": runtime_audit.get("audit_profile"),
+        "runtime_audit_config_path": runtime_audit.get("audit_config_path"),
+        "runtime_audit_recorded_evaluation_games": runtime_audit.get("recorded_evaluation_games"),
+        "runtime_audit_command_flags": list(runtime_audit.get("post_iteration_command_flags") or ()),
         "derived_run_report": report,
         "derived_run_report_source": report_source,
         "derived_audit_passed": derived_audit_passed,
@@ -4352,6 +4359,20 @@ def _print_cpu_long_run_compare(payload: Mapping[str, object]) -> None:
             f"{_format_optional_one_decimal(entry.get('latest_process_peak_rss_mb')):>8} "
             f"{_format_summary_value(entry.get('run_dir'))}"
         )
+    if entries:
+        print("")
+        print("runtime_audits:")
+        for entry in entries:
+            flags = tuple(str(flag) for flag in entry.get("runtime_audit_command_flags", ()))
+            print(
+                f"- {entry.get('label')}: "
+                f"available={_format_optional_bool(entry.get('runtime_audit_available'))} "
+                f"source={_format_summary_value(entry.get('runtime_audit_source'))} "
+                f"profile={_format_summary_value(entry.get('runtime_audit_profile'))} "
+                f"config={_format_summary_value(entry.get('runtime_audit_config_path'))} "
+                f"recorded_eval={_format_summary_value(entry.get('runtime_audit_recorded_evaluation_games'))} "
+                f"flags={_shell_join(flags) if flags else '-'}"
+            )
     failed_entries = tuple(entry for entry in entries if entry.get("passing") is not True)
     if failed_entries:
         print("")
