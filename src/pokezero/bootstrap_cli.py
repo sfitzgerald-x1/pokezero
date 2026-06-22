@@ -19,6 +19,7 @@ from .bootstrap import (
 from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .policy import SCRIPTED_TEACHER_BRANCHES
 from .rollout import RolloutConfig
 
 TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION = "pokezero.teacher_benchmark_preflight.v1"
@@ -105,6 +106,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail if the teacher used unknown-move or fallback decisions during the benchmark.",
     )
+    teacher_benchmark.add_argument(
+        "--require-teacher-branch",
+        action="append",
+        default=None,
+        help=(
+            "Fail unless this scripted-teacher branch appears at least once in teacher_branch_counts. "
+            "May be repeated."
+        ),
+    )
+    teacher_benchmark.add_argument(
+        "--min-teacher-branch-count",
+        action="append",
+        default=None,
+        metavar="BRANCH=COUNT",
+        help=(
+            "Fail unless the scripted-teacher branch appears at least COUNT times. "
+            "May be repeated."
+        ),
+    )
     teacher_benchmark.add_argument("--json", action="store_true", help="Print the benchmark report as JSON.")
     teacher_benchmark.set_defaults(func=_teacher_benchmark)
     return parser
@@ -174,6 +194,10 @@ def _teacher(args: argparse.Namespace) -> int:
 def _teacher_benchmark(args: argparse.Namespace) -> int:
     _validate_optional_rate(args.min_teacher_win_rate, "--min-teacher-win-rate")
     _validate_optional_rate(args.max_capped_rate, "--max-capped-rate")
+    required_teacher_branches = _parse_required_teacher_branches(tuple(args.require_teacher_branch or ()))
+    min_teacher_branch_counts = _parse_teacher_branch_count_requirements(
+        tuple(args.min_teacher_branch_count or ())
+    )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -203,6 +227,8 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         min_teacher_win_rate=args.min_teacher_win_rate,
         max_capped_rate=args.max_capped_rate,
         fail_on_degraded_decisions=args.fail_on_degraded_decisions,
+        required_teacher_branches=required_teacher_branches,
+        min_teacher_branch_counts=min_teacher_branch_counts,
     )
     passed = all(bool(check["passed"]) for check in checks)
     payload = _teacher_benchmark_payload(
@@ -227,6 +253,38 @@ def _validate_optional_rate(value: float | None, flag_name: str) -> None:
         return
     if not math.isfinite(value) or value < 0.0 or value > 1.0:
         raise ValueError(f"{flag_name} must be between 0 and 1.")
+
+
+def _parse_required_teacher_branches(values: tuple[str, ...]) -> tuple[str, ...]:
+    branches = tuple(value.strip() for value in values)
+    if any(not branch for branch in branches):
+        raise ValueError("--require-teacher-branch values must be non-empty.")
+    return branches
+
+
+def _parse_teacher_branch_count_requirements(values: tuple[str, ...]) -> dict[str, int]:
+    requirements: dict[str, int] = {}
+    for value in values:
+        branch, separator, raw_count = value.partition("=")
+        branch = branch.strip()
+        raw_count = raw_count.strip()
+        if not separator or not branch or not raw_count:
+            raise ValueError("--min-teacher-branch-count values must use BRANCH=COUNT.")
+        try:
+            count = int(raw_count)
+        except ValueError as exc:
+            raise ValueError("--min-teacher-branch-count COUNT must be an integer.") from exc
+        if count <= 0:
+            raise ValueError("--min-teacher-branch-count COUNT must be a positive integer.")
+        requirements[branch] = count
+    return requirements
+
+
+def _teacher_branch_count(branch_counts: Mapping[str, object], branch: str) -> int:
+    try:
+        return int(branch_counts.get(branch, 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _teacher_policy_id_from_spec(spec: str) -> str | None:
@@ -263,6 +321,8 @@ def _teacher_benchmark_checks(
     min_teacher_win_rate: float | None,
     max_capped_rate: float | None,
     fail_on_degraded_decisions: bool,
+    required_teacher_branches: tuple[str, ...],
+    min_teacher_branch_counts: Mapping[str, int],
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = []
     matched_head_to_heads = 0
@@ -327,6 +387,50 @@ def _teacher_benchmark_checks(
                     "teacher degraded decisions "
                     f"{degraded} == 0 (unknown_moves={unknown_moves}, fallbacks={fallbacks})"
                 ),
+            )
+        )
+    raw_branch_counts = result.teacher_decision_summary.get("teacher_branch_counts", {})
+    branch_counts = raw_branch_counts if isinstance(raw_branch_counts, dict) else {}
+    known_branches = set(SCRIPTED_TEACHER_BRANCHES)
+    requested_branches = set(required_teacher_branches) | set(min_teacher_branch_counts)
+    unknown_branches = requested_branches - known_branches
+    for branch in sorted(unknown_branches):
+        checks.append(
+            _preflight_check(
+                name=f"teacher_branch_known:{branch}",
+                passed=False,
+                observed=0,
+                threshold=1,
+                message=(
+                    f"teacher branch {branch} is not a known scripted-teacher branch; "
+                    "check the branch name before treating this as a teacher regression"
+                ),
+            )
+        )
+    for branch in sorted(set(required_teacher_branches) - unknown_branches):
+        observed = _teacher_branch_count(branch_counts, branch)
+        checks.append(
+            _preflight_check(
+                name=f"teacher_branch_present:{branch}",
+                passed=observed > 0,
+                observed=observed,
+                threshold=1,
+                message=f"teacher branch {branch} observed {observed} time(s); required>=1",
+            )
+        )
+    for branch, minimum in sorted(
+        (branch, minimum)
+        for branch, minimum in min_teacher_branch_counts.items()
+        if branch not in unknown_branches
+    ):
+        observed = _teacher_branch_count(branch_counts, branch)
+        checks.append(
+            _preflight_check(
+                name=f"teacher_branch_count:{branch}",
+                passed=observed >= minimum,
+                observed=observed,
+                threshold=minimum,
+                message=f"teacher branch {branch} observed {observed} time(s); required>={minimum}",
             )
         )
     return checks
