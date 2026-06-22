@@ -1201,6 +1201,7 @@ def _cpu_smoke_run(args: argparse.Namespace) -> int:
         "started_at": run_started_at,
         "ended_at": None,
         "duration_seconds": None,
+        "source": recipe["source"],
         "recipe": recipe,
         "steps": step_summaries,
         "failed_step": None,
@@ -1285,6 +1286,12 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
     print(f"started_at: {_format_summary_value(summary.get('started_at'))}")
     print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
     print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
+    source = summary.get("source")
+    if isinstance(source, Mapping):
+        print(f"source_available: {_format_summary_value(source.get('available'))}")
+        print(f"source_branch: {_format_summary_value(source.get('branch'))}")
+        print(f"source_head: {_format_summary_value(source.get('head'))}")
+        print(f"source_dirty: {_format_summary_value(source.get('dirty'))}")
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -1479,6 +1486,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     return {
         "purpose": "tiny CPU-only bootstrap/self-play plumbing validation",
         "warning": "smoke-profile thresholds validate command flow, not policy strength",
+        "source": _git_source_metadata(Path.cwd()),
         "run_root": str(run_root),
         "python_binary": python_binary,
         "showdown_root": showdown_root,
@@ -1491,6 +1499,49 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
             for name, argv in steps
         ],
     }
+
+
+def _git_source_metadata(cwd: Path) -> dict[str, object]:
+    try:
+        repo_root = _git_output(cwd, "rev-parse", "--show-toplevel")
+        head = _git_output(cwd, "rev-parse", "HEAD")
+        branch = _git_output(cwd, "branch", "--show-current")
+        status = _git_output(cwd, "status", "--porcelain")
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        return {
+            "available": False,
+            "repo_root": None,
+            "branch": None,
+            "head": None,
+            "dirty": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "available": True,
+        "repo_root": repo_root,
+        "branch": branch or None,
+        "head": head,
+        "dirty": bool(status.strip()),
+    }
+
+
+def _git_output(cwd: Path, *args: str) -> str:
+    process = subprocess.Popen(
+        ("git", *args),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        stdout, _stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise
+    if process.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed with exit code {process.returncode}")
+    return stdout.strip()
 
 
 def _shell_join(argv: list[str]) -> str:

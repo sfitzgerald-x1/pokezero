@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pokezero.bootstrap import TEACHER_BOOTSTRAP_SCHEMA_VERSION
 from pokezero.bootstrap_cli import build_arg_parser as build_bootstrap_arg_parser
-from pokezero.eval_cli import main as eval_cli_main
+from pokezero.eval_cli import _git_source_metadata, main as eval_cli_main
 from pokezero.eval_cli import build_arg_parser as build_eval_arg_parser
 from pokezero.evaluation import PromotionGateConfig, evaluate_promotion_gate
 from pokezero.neural_selfplay import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
@@ -524,7 +524,17 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("--compare-profile smoke", output)
 
     def test_eval_cli_cpu_smoke_plan_prints_json_recipe(self) -> None:
-        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+        source = {
+            "available": True,
+            "repo_root": "/repo",
+            "branch": "scott/source-metadata",
+            "head": "abc123",
+            "dirty": False,
+        }
+        with (
+            patch("pokezero.eval_cli._git_source_metadata", return_value=source),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
             exit_code = eval_cli_main(
                 [
                     "cpu-smoke-plan",
@@ -543,6 +553,7 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(payload["run_root"], "runs/smoke")
         self.assertEqual(payload["python_binary"], "./.venv/bin/python")
         self.assertEqual(payload["showdown_root"], "/tmp/showdown")
+        self.assertEqual(payload["source"], source)
         self.assertEqual([step["name"] for step in payload["steps"]], [
             "bootstrap teacher checkpoint",
             "run smoke self-play iteration loop",
@@ -601,6 +612,16 @@ class PromotionGateTest(unittest.TestCase):
             with self.subTest(step=step["name"]):
                 parser.parse_args(argv[3:])
 
+    def test_git_source_metadata_is_optional_outside_git_checkout(self) -> None:
+        with patch("pokezero.eval_cli._git_output", side_effect=OSError("git unavailable")):
+            metadata = _git_source_metadata(Path("/tmp/not-a-repo"))
+
+        self.assertFalse(metadata["available"])
+        self.assertIsNone(metadata["repo_root"])
+        self.assertIsNone(metadata["head"])
+        self.assertIsNone(metadata["dirty"])
+        self.assertIn("git unavailable", metadata["error"])
+
     def test_eval_cli_cpu_smoke_plan_rejects_non_positive_counts(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
             exit_code = eval_cli_main(["cpu-smoke-plan", "--workers", "0"])
@@ -613,7 +634,15 @@ class PromotionGateTest(unittest.TestCase):
             showdown_root = Path(temp_dir) / "showdown"
             showdown_root.mkdir()
             run_root = Path(temp_dir) / "runs" / "smoke"
+            source = {
+                "available": True,
+                "repo_root": "/repo",
+                "branch": "scott/source-metadata",
+                "head": "abc123",
+                "dirty": True,
+            }
             with (
+                patch("pokezero.eval_cli._git_source_metadata", return_value=source),
                 patch(
                     "pokezero.eval_cli.subprocess.run",
                     side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
@@ -648,6 +677,8 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(summary["status"], "passed")
         self.assertEqual(summary["failed_step"], None)
         self.assertEqual(summary["recipe"]["run_root"], str(run_root))
+        self.assertEqual(summary["source"], source)
+        self.assertEqual(summary["recipe"]["source"], source)
         self.assertEqual(len(summary["steps"]), 5)
         self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 5)
         self.assertEqual([step["returncode"] for step in summary["steps"]], [0] * 5)
@@ -828,6 +859,10 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("cpu_smoke_report:", output)
         self.assertIn("status: PASS", output)
+        self.assertIn("source_available: True", output)
+        self.assertIn("source_branch: main", output)
+        self.assertIn("source_head: abc123", output)
+        self.assertIn("source_dirty: False", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS bootstrap teacher checkpoint returncode=0", output)
 
@@ -1196,6 +1231,13 @@ def cpu_smoke_summary(*, status: str, failed_step_index: int | None = None) -> d
         "started_at": "2026-06-22T12:00:00.000Z",
         "ended_at": "2026-06-22T12:01:00.000Z",
         "duration_seconds": 60.0,
+        "source": {
+            "available": True,
+            "repo_root": "/repo",
+            "branch": "main",
+            "head": "abc123",
+            "dirty": False,
+        },
         "recipe": {"run_root": "run", "steps": []},
         "steps": steps,
         "failed_step": (
