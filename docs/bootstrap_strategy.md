@@ -80,7 +80,7 @@ Run a tiny CPU smoke validation before spending time on larger experiments:
   --showdown-root /path/to/pokemon-showdown
 ```
 
-This executes the teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts. The wrapper writes `RUN_ROOT/cpu-smoke-run-summary.json` with the executed recipe, per-step exit codes, timestamps, and final pass/fail status. Pass `--summary-path` to write that artifact somewhere else.
+This executes the teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile steps sequentially, stopping on the first non-zero exit. Use a fresh `--run-root`; the command does not delete existing artifacts. The wrapper writes `RUN_ROOT/cpu-smoke-run-summary.json` with the executed recipe, git source metadata for the checkout where the command was invoked when available, per-step exit codes, timestamps, and final pass/fail status. Pass `--summary-path` to write that artifact somewhere else. A dirty source marker is a reproducibility warning; it does not include the uncommitted patch contents.
 
 Inspect that wrapper summary later:
 
