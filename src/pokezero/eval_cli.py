@@ -3908,6 +3908,7 @@ def _cpu_long_run_calibration_result(
         "samples": samples,
         "suggested_config": suggested_config,
         "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
+        "suggested_post_iteration_flags": list(_post_iteration_audit_config_cli_flags(suggested_config)),
         "min_latest_benchmark_games": suggested_config["min_latest_benchmark_games"],
         "require_benchmark": suggested_config["require_benchmark"],
         "require_benchmark_opponent_coverage": suggested_config["require_benchmark_opponent_coverage"],
@@ -3935,6 +3936,7 @@ def _empty_cpu_long_run_calibration_result(
         "samples": [],
         "suggested_config": suggested_config,
         "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
+        "suggested_post_iteration_flags": list(_post_iteration_audit_config_cli_flags(suggested_config)),
         "min_latest_benchmark_games": 0,
         "require_benchmark": False,
         "require_benchmark_opponent_coverage": False,
@@ -4094,6 +4096,9 @@ def _print_cpu_long_run_calibration(payload: Mapping[str, object]) -> None:
     print("suggested_audit_flags:")
     flags = tuple(str(flag) for flag in payload.get("suggested_audit_flags", ()))
     print(" ".join(flags) if flags else "-")
+    print("suggested_post_iteration_flags:")
+    post_iteration_flags = tuple(str(flag) for flag in payload.get("suggested_post_iteration_flags", ()))
+    print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
     if "calibration_sufficient" in payload:
         errors = tuple(str(error) for error in payload.get("calibration_sufficiency_errors", ()))
         _print_calibration_sufficiency(errors)
@@ -4153,6 +4158,42 @@ def _audit_config_cli_flags(config: Mapping[str, object]) -> tuple[str, ...]:
         flags.append("--allow-missing-benchmark")
     if not config.get("require_benchmark_opponent_coverage"):
         flags.append("--allow-missing-benchmark-opponents")
+    return tuple(flags)
+
+
+def _post_iteration_audit_config_cli_flags(config: Mapping[str, object]) -> tuple[str, ...]:
+    nullable_fields = {
+        "max_latest_average_decision_rounds",
+        "max_latest_benchmark_average_decision_rounds",
+        "max_latest_process_peak_rss_mb",
+    }
+    flags: list[str] = ["--audit-after-iteration"]
+    for field_name, flag_name in (
+        ("min_latest_benchmark_win_rate", "--audit-min-latest-benchmark-win-rate"),
+        ("min_latest_benchmark_games", "--audit-min-latest-benchmark-games"),
+        ("max_latest_collection_capped_rate", "--audit-max-latest-collection-capped-rate"),
+        ("max_latest_benchmark_capped_rate", "--audit-max-latest-benchmark-capped-rate"),
+        ("max_latest_average_decision_rounds", "--audit-max-latest-average-decision-rounds"),
+        ("max_latest_benchmark_average_decision_rounds", "--audit-max-latest-benchmark-average-decision-rounds"),
+        ("max_latest_process_peak_rss_mb", "--audit-max-latest-process-peak-rss-mb"),
+        ("max_benchmark_win_rate_drop", "--audit-max-benchmark-win-rate-drop"),
+        ("max_consecutive_promotion_failures", "--audit-max-consecutive-promotion-failures"),
+    ):
+        value = config.get(field_name)
+        if value is None and field_name not in nullable_fields:
+            continue
+        flags.extend((flag_name, "none" if value is None else str(value)))
+    flags.append("--audit-require-benchmark" if config.get("require_benchmark") else "--audit-allow-missing-benchmark")
+    flags.append(
+        "--audit-require-benchmark-opponents"
+        if config.get("require_benchmark_opponent_coverage")
+        else "--audit-allow-missing-benchmark-opponents"
+    )
+    flags.append(
+        "--audit-require-latest-promotion"
+        if config.get("require_latest_promotion")
+        else "--audit-allow-missing-latest-promotion"
+    )
     return tuple(flags)
 
 

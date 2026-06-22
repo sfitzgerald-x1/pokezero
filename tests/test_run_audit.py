@@ -976,6 +976,30 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(calibration.max_consecutive_promotion_failures, 1)
         self.assertTrue(audit.passed)
 
+    def test_post_iteration_calibration_flags_clear_nullable_threshold_defaults(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = calibrate_run_audit(manifest_path)
+
+        expected_config = RunAuditConfig(**result.suggested_config())
+        flags = result.suggested_post_iteration_cli_flags()
+
+        self.assertIsNone(expected_config.max_latest_process_peak_rss_mb)
+        self.assertIn("--audit-max-latest-process-peak-rss-mb", flags)
+        self.assertIn("none", flags)
+        with patch(
+            "pokezero.cli_audit.DEFAULT_POST_ITERATION_AUDIT_CONFIG",
+            RunAuditConfig(max_latest_process_peak_rss_mb=4096.0),
+        ):
+            parsed_config = post_iteration_config_from_flags(flags)
+
+        self.assertEqual(parsed_config, expected_config)
+
     def test_calibrate_run_audits_aggregates_thresholds_across_pilot_runs(self) -> None:
         first = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, rows=(("random-legal", 14, 6, 0),)),)

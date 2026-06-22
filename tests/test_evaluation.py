@@ -4099,7 +4099,26 @@ if __name__ == "__main__":
         self.assertEqual(config["max_consecutive_promotion_failures"], 2)
         self.assertTrue(config["require_benchmark"])
         self.assertTrue(config["require_benchmark_opponent_coverage"])
+        self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_flags"])
+        self.assertIn("--audit-min-latest-benchmark-games", payload["suggested_post_iteration_flags"])
         self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
+
+    def test_eval_cli_cpu_long_run_calibrate_text_prints_post_iteration_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "run"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["derived_run_report"] = long_run_derived_report(latest_benchmark_games=20)
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("suggested_post_iteration_flags:", output)
+        self.assertIn("--audit-after-iteration", output)
+        self.assertIn("--audit-min-latest-benchmark-games 20", output)
 
     def test_eval_cli_cpu_long_run_calibrate_reads_benchmark_games_from_older_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

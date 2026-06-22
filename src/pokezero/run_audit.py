@@ -1595,6 +1595,11 @@ def _suggested_audit_cli_flags(result: Any) -> tuple[str, ...]:
 
 def _suggested_post_iteration_audit_cli_flags(result: Any) -> tuple[str, ...]:
     config = _suggested_audit_config(result)
+    nullable_fields = {
+        "max_latest_average_decision_rounds",
+        "max_latest_benchmark_average_decision_rounds",
+        "max_latest_process_peak_rss_mb",
+    }
     flags: list[str] = ["--audit-after-iteration"]
     for field_name, flag_name in (
         ("min_latest_benchmark_win_rate", "--audit-min-latest-benchmark-win-rate"),
@@ -1608,8 +1613,9 @@ def _suggested_post_iteration_audit_cli_flags(result: Any) -> tuple[str, ...]:
         ("max_consecutive_promotion_failures", "--audit-max-consecutive-promotion-failures"),
     ):
         value = config[field_name]
-        if value is not None:
-            flags.extend((flag_name, str(value)))
+        if value is None and field_name not in nullable_fields:
+            continue
+        flags.extend((flag_name, "none" if value is None else str(value)))
     flags.append("--audit-require-benchmark" if config["require_benchmark"] else "--audit-allow-missing-benchmark")
     flags.append(
         "--audit-require-benchmark-opponents"
