@@ -1754,7 +1754,8 @@ class SelfPlayTest(unittest.TestCase):
     def test_selfplay_cli_report_can_print_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
-            write_report_manifest(run_dir)
+            source = report_source_metadata(branch="scott/json-report", head="abc777", dirty=False)
+            write_report_manifest(run_dir, source=source)
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir), "--json"])
@@ -1762,7 +1763,9 @@ class SelfPlayTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["schema_version"], SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(payload["source"], source)
         self.assertEqual(payload["iterations"][0]["iteration"], 1)
+        self.assertNotIn("source_metadata:", stdout.getvalue())
 
     def test_selfplay_cli_report_reconstructs_from_iteration_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1782,6 +1785,18 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("invocations: 1", output)
         self.assertIn("pool_registry=promotions.json", output)
         self.assertIn("linear-policy.json", output)
+
+    def test_selfplay_cli_report_reconstructs_without_source_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir, top_level=False)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("iterations: 1", stdout.getvalue())
+        self.assertIn("source_metadata: -", stdout.getvalue())
 
     def test_selfplay_cli_report_handles_missing_and_unavailable_source_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
