@@ -767,6 +767,7 @@ def _training_result_to_dict(result: LinearTrainingResult) -> dict[str, Any]:
             "action_schema_version": result.model.action_schema_version,
             "observation_schema_version": result.model.observation_schema_version,
             "feature_schema_version": result.model.feature_schema_version,
+            "feature_fingerprint": result.model.feature_fingerprint,
             "feature_count": result.model.feature_count,
             "window_size": result.model.window_size,
         },

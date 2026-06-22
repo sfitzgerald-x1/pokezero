@@ -19,9 +19,11 @@ from pokezero.linear_policy import (
     evaluate_linear_policy,
     features_from_observation_window,
     features_from_window,
+    linear_feature_fingerprint,
     load_linear_model,
     save_linear_model,
     train_linear_policy,
+    _linear_feature_fingerprint_payload,
 )
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -216,6 +218,7 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(restored.action_schema_version, ACTION_SCHEMA_VERSION)
         self.assertEqual(restored.observation_schema_version, OBSERVATION_SCHEMA_VERSION)
         self.assertEqual(restored.feature_schema_version, LINEAR_FEATURE_SCHEMA_VERSION)
+        self.assertEqual(restored.feature_fingerprint, linear_feature_fingerprint())
         self.assertEqual(restored.predict_action(features, LEGAL_TWO_ACTION_MASK), model.predict_action(features, LEGAL_TWO_ACTION_MASK))
 
     def test_linear_checkpoint_rejects_stale_runtime_schema_versions(self) -> None:
@@ -235,12 +238,29 @@ class LinearPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing required field"):
             LinearPolicyModel.from_dict(missing)
 
+    def test_linear_checkpoint_rejects_stale_feature_fingerprint(self) -> None:
+        payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+        payload["feature_fingerprint"] = "stale"
+
+        with self.assertRaisesRegex(ValueError, "Unsupported linear feature fingerprint"):
+            LinearPolicyModel.from_dict(payload)
+
     def test_linear_checkpoint_rejects_stale_policy_schema_version(self) -> None:
         payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
         payload["schema_version"] = "pokezero.linear_policy.v1"
 
         with self.assertRaisesRegex(ValueError, "Unsupported linear policy schema"):
             LinearPolicyModel.from_dict(payload)
+
+    def test_linear_feature_fingerprint_payload_tracks_extractor_source_and_schemas(self) -> None:
+        payload = _linear_feature_fingerprint_payload()
+
+        self.assertEqual(payload["action_schema_version"], ACTION_SCHEMA_VERSION)
+        self.assertEqual(payload["feature_schema_version"], LINEAR_FEATURE_SCHEMA_VERSION)
+        self.assertEqual(payload["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
+        self.assertIn("features_from_window", payload["sources"])
+        self.assertIn("def features_from_window", payload["sources"]["features_from_window"])
+        self.assertRegex(linear_feature_fingerprint(), r"^[0-9a-f]{64}$")
 
     def test_linear_feature_extractor_golden_hash(self) -> None:
         features = features_from_window(

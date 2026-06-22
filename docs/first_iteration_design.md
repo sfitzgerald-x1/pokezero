@@ -16,7 +16,7 @@ Implemented:
 - Random legal, simple legal, and initial scripted-teacher baseline policies.
 - CPU-only masked linear softmax baseline with behavior-cloning and reward-weighted objectives.
 - Linear auxiliary opponent-action prediction head trained from recorded opponent move/switch labels.
-- Linear checkpoint save/load with version-tag compatibility checks.
+- Linear checkpoint save/load with version-tag and content-derived feature-fingerprint compatibility checks.
 - Baseline rollout benchmarking and checkpoint benchmarking.
 - Scripted-teacher bootstrap workflow that collects teacher-only train/validation rollouts, includes teacher-mirror states by default, runs strict-teacher preflight, trains a linear behavior-cloning checkpoint, benchmarks it, and records a manifest.
 - Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests, resumable runs, parallel collection workers, auto-promotion, and run reporting.
@@ -39,7 +39,7 @@ Partially implemented:
 
 Known limitations:
 
-- Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
+- Linear checkpoint compatibility now includes a content-derived feature-extractor fingerprint; broader neural/checkpoint compatibility still relies mostly on versioned schema and config tags.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
 - Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions; useful long-run threshold settings still need empirical validation.
