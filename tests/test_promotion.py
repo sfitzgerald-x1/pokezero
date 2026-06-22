@@ -665,6 +665,270 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertFalse(payload["verification"]["passed"])
         self.assertIn("checkpoint_exists", failed_verification_check_names_from_payload(payload["verification"]))
 
+    def test_eval_cli_promotions_can_verify_selected_opponent_pool_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            (temp_path / "checkpoint-1.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        outside_status = next(status for status in payload["entry_statuses"] if status["sequence"] == 1)
+        selected_statuses = [
+            status
+            for status in payload["entry_statuses"]
+            if "opponent_pool" in status["selected_as"]
+        ]
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertFalse(payload["opponent_pool_verified"])
+        self.assertTrue(payload["selected_opponent_pool_verified"])
+        self.assertTrue(payload["opponent_pool_current_policy_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertTrue(payload["opponent_pool_preflight_verified"])
+        self.assertEqual(payload["opponent_pool_verification_exit_scope"], "opponent_pool_plus_current")
+        self.assertEqual(outside_status["checkpoint_exists"], "fail")
+        self.assertTrue(selected_statuses)
+        self.assertTrue(all(not status["failed_checks"] for status in selected_statuses))
+
+    def test_eval_cli_promotions_selected_opponent_pool_verification_fails_for_broken_selected_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            (temp_path / "checkpoint-2.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        selected_status = next(status for status in payload["entry_statuses"] if status["sequence"] == 2)
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertFalse(payload["opponent_pool_verified"])
+        self.assertFalse(payload["selected_opponent_pool_verified"])
+        self.assertTrue(payload["opponent_pool_current_policy_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertFalse(payload["opponent_pool_preflight_verified"])
+        self.assertEqual(payload["opponent_pool_verification_exit_scope"], "opponent_pool_plus_current")
+        self.assertEqual(selected_status["opponent_pool_status"], "selected")
+        self.assertEqual(selected_status["checkpoint_exists"], "fail")
+        self.assertIn("checkpoint_exists", selected_status["failed_checks"])
+
+    def test_eval_cli_promotions_selected_pool_only_fails_empty_selected_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=1)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "3",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["verification"]["passed"])
+        self.assertFalse(payload["selected_opponent_pool_verified"])
+        self.assertTrue(payload["opponent_pool_current_policy_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertFalse(payload["opponent_pool_preflight_verified"])
+        self.assertEqual(payload["opponent_pool_selected_size"], 0)
+
+    def test_eval_cli_promotions_selected_pool_only_still_gates_excluded_current_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            (temp_path / "checkpoint-4.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        latest_status = next(status for status in payload["entry_statuses"] if status["sequence"] == 4)
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertTrue(payload["selected_opponent_pool_verified"])
+        self.assertFalse(payload["opponent_pool_current_policy_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertFalse(payload["opponent_pool_preflight_verified"])
+        self.assertEqual(latest_status["selected_as"], ["latest"])
+        self.assertEqual(latest_status["opponent_pool_status"], "excluded_current_policy")
+        self.assertEqual(latest_status["checkpoint_exists"], "fail")
+
+    def test_eval_cli_promotions_selected_pool_only_still_gates_registry_level_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][3]["sequence"] = 5
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertTrue(payload["selected_opponent_pool_verified"])
+        self.assertTrue(payload["opponent_pool_current_policy_verified"])
+        self.assertFalse(payload["opponent_pool_registry_level_verified"])
+        self.assertFalse(payload["opponent_pool_preflight_verified"])
+        self.assertIn("sequence_contiguous", failed_verification_check_names_from_payload(payload["verification"]))
+
+    def test_eval_cli_promotions_selected_pool_only_marks_external_current_policy_not_applicable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            external_current_spec = f"linear:{temp_path / 'external-current.json'}"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--current-policy-spec",
+                        external_current_spec,
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["verification"]["passed"])
+        self.assertTrue(payload["selected_opponent_pool_verified"])
+        self.assertIsNone(payload["opponent_pool_current_policy_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertTrue(payload["opponent_pool_preflight_verified"])
+        self.assertTrue(
+            all(status["opponent_pool_status"] != "excluded_current_policy" for status in payload["entry_statuses"])
+        )
+
+    def test_eval_cli_promotions_verify_keeps_registry_scoped_opponent_pool_verified_without_new_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=4)
+            (temp_path / "checkpoint-1.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertFalse(payload["opponent_pool_verified"])
+        self.assertTrue(payload["selected_opponent_pool_verified"])
+        self.assertTrue(payload["opponent_pool_registry_level_verified"])
+        self.assertTrue(payload["opponent_pool_preflight_verified"])
+        self.assertEqual(payload["opponent_pool_verification_exit_scope"], "registry")
+
+    def test_eval_cli_promotions_verify_opponent_pool_only_requires_verify_and_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as missing_verify:
+                missing_verify_exit = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "1",
+                        "--verify-opponent-pool-only",
+                    ]
+                )
+            with patch("sys.stderr", new_callable=io.StringIO) as missing_pool:
+                missing_pool_exit = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                    ]
+                )
+
+        self.assertEqual(missing_verify_exit, 1)
+        self.assertIn("--verify-opponent-pool-only requires --verify", missing_verify.getvalue())
+        self.assertEqual(missing_pool_exit, 1)
+        self.assertIn("--verify-opponent-pool-only requires --opponent-pool-size", missing_pool.getvalue())
+
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=3)
