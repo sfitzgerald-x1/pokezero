@@ -503,6 +503,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(payload["entry_statuses"][-1]["checkpoint_exists"], "not_verified")
         self.assertEqual(payload["opponent_pool_requested_size"], 2)
         self.assertEqual(payload["opponent_pool_selected_size"], 2)
+        self.assertEqual(payload["opponent_pool_available_size"], 2)
         self.assertIsNone(payload["opponent_pool_required_size"])
         self.assertTrue(payload["opponent_pool_requirement_passed"])
 
@@ -527,8 +528,29 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["opponent_pool_selected_size"], 2)
+        self.assertEqual(payload["opponent_pool_available_size"], 2)
         self.assertEqual(payload["opponent_pool_required_size"], 2)
         self.assertTrue(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_rejects_required_pool_size_above_requested_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=10)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "3",
+                        "--require-opponent-pool-size",
+                        "5",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--require-opponent-pool-size cannot exceed --opponent-pool-size", stderr.getvalue())
 
     def test_eval_cli_promotions_json_fails_when_required_pool_is_too_small(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -551,8 +573,36 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertEqual(payload["opponent_pool_selected_size"], 1)
+        self.assertEqual(payload["opponent_pool_available_size"], 1)
         self.assertEqual(payload["opponent_pool_required_size"], 2)
         self.assertFalse(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_required_pool_size_still_fails_when_verification_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=3)
+            (temp_path / "checkpoint-1.json").unlink()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["opponent_pool_requirement_passed"])
+        self.assertFalse(payload["verification"]["passed"])
+        self.assertIn("checkpoint_exists", failed_verification_check_names_from_payload(payload["verification"]))
 
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -634,6 +684,7 @@ class PromotionRegistryTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("opponent_pool_policy_specs:", output)
         self.assertIn("opponent_pool_selected_size: 1", output)
+        self.assertIn("opponent_pool_available_size: 1", output)
         self.assertIn(registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0]) or "", output)
         self.assertNotIn(f"- {registry.selection_checkpoint_policy_spec_for_entry(registry.entries[-1])}", output)
         self.assertIn("status=not_verified", output)

@@ -249,10 +249,24 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--require-opponent-pool-size requires --opponent-pool-size.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
+    if (
+        args.require_opponent_pool_size is not None
+        and args.opponent_pool_size is not None
+        and args.require_opponent_pool_size > args.opponent_pool_size
+    ):
+        raise ValueError("--require-opponent-pool-size cannot exceed --opponent-pool-size.")
     registry = load_promotion_registry(args.registry)
     preview_current_policy_spec = args.current_policy_spec
     if preview_current_policy_spec is None and args.opponent_pool_size is not None and registry.latest is not None:
         preview_current_policy_spec = registry.latest_selection_checkpoint_policy_spec()
+    available_opponent_pool = (
+        registry.opponent_pool_policy_specs(
+            max_historical_opponents=len(registry.entries),
+            current_policy_spec=preview_current_policy_spec,
+        )
+        if args.opponent_pool_size is not None
+        else None
+    )
     opponent_pool = (
         registry.opponent_pool_policy_specs(
             max_historical_opponents=args.opponent_pool_size,
@@ -285,6 +299,9 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["opponent_pool_verified"] = verification.passed if verification is not None else None
             payload["opponent_pool_requested_size"] = args.opponent_pool_size
             payload["opponent_pool_selected_size"] = len(opponent_pool)
+            payload["opponent_pool_available_size"] = (
+                len(available_opponent_pool) if available_opponent_pool is not None else None
+            )
             payload["opponent_pool_required_size"] = args.require_opponent_pool_size
             payload["opponent_pool_requirement_passed"] = _opponent_pool_requirement_passed(
                 opponent_pool,
@@ -322,6 +339,8 @@ def _promotions(args: argparse.Namespace) -> int:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
         print(f"opponent_pool_selected_size: {len(opponent_pool)}")
+        if available_opponent_pool is not None:
+            print(f"opponent_pool_available_size: {len(available_opponent_pool)}")
         if args.require_opponent_pool_size is not None:
             pool_status = (
                 "PASS"
