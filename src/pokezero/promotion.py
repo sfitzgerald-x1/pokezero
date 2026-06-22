@@ -36,8 +36,7 @@ class PromotionRegistryEntry:
     def checkpoint_policy_spec(self) -> str | None:
         if not self.checkpoint_path:
             return None
-        prefix = "neural:" if self.source_type == NEURAL_SELFPLAY_SOURCE_TYPE else "linear:"
-        return f"{prefix}{self.checkpoint_path}"
+        return _checkpoint_policy_spec(self.source_type, self.checkpoint_path)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -84,6 +83,21 @@ class PromotionRegistry:
             if entry.checkpoint_policy_spec is not None
         )
 
+    def selection_checkpoint_policy_specs(self) -> tuple[str, ...]:
+        return tuple(
+            spec
+            for entry in self.entries
+            if (spec := _selection_checkpoint_policy_spec(entry, registry_path=self.path)) is not None
+        )
+
+    def selection_checkpoint_policy_spec_for_entry(self, entry: PromotionRegistryEntry) -> str | None:
+        return _selection_checkpoint_policy_spec(entry, registry_path=self.path)
+
+    def latest_selection_checkpoint_policy_spec(self) -> str | None:
+        if self.latest is None:
+            return None
+        return self.selection_checkpoint_policy_spec_for_entry(self.latest)
+
     def opponent_pool_policy_specs(
         self,
         *,
@@ -91,7 +105,7 @@ class PromotionRegistry:
         current_policy_spec: str | None = None,
     ) -> tuple[str, ...]:
         return historical_opponent_policy_specs(
-            self.checkpoint_policy_specs(),
+            self.selection_checkpoint_policy_specs(),
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
         )
@@ -263,7 +277,11 @@ def verify_promotion_registry(
                 )
             )
             continue
-        resolved_checkpoint = _resolve_selection_checkpoint_path(entry.checkpoint_path)
+        resolved_checkpoint = _resolve_selection_checkpoint_path(
+            entry.checkpoint_path,
+            registry_path=registry.path,
+            manifest_path=Path(entry.manifest_path),
+        )
         checks.append(
             PromotionRegistryVerificationCheck(
                 name="checkpoint_exists",
@@ -278,7 +296,10 @@ def verify_promotion_registry(
             continue
         checked_checkpoint_count += 1
         if verify_loadable:
-            loadable_check, policy_id_check = _policy_loadable_checks(entry)
+            loadable_check, policy_id_check = _policy_loadable_checks(
+                entry,
+                resolved_checkpoint=resolved_checkpoint,
+            )
             checks.append(loadable_check)
             if loadable_check.passed:
                 verified_loadable_count += 1
@@ -364,20 +385,10 @@ def _gate_result_passed_check(entry: PromotionRegistryEntry) -> PromotionRegistr
 
 def _policy_loadable_checks(
     entry: PromotionRegistryEntry,
+    *,
+    resolved_checkpoint: Path,
 ) -> tuple[PromotionRegistryVerificationCheck, PromotionRegistryVerificationCheck | None]:
-    policy_spec = entry.checkpoint_policy_spec
-    if policy_spec is None:
-        return (
-            PromotionRegistryVerificationCheck(
-                name="checkpoint_policy_loadable",
-                passed=False,
-                entry_sequence=entry.sequence,
-                observed=None,
-                expected="loadable policy spec",
-                message="promotion checkpoint must have a loadable policy spec",
-            ),
-            None,
-        )
+    policy_spec = _checkpoint_policy_spec(entry.source_type, str(resolved_checkpoint))
     try:
         from .collection import policy_from_spec
 
@@ -469,11 +480,64 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Pa
     return None
 
 
-def _resolve_selection_checkpoint_path(checkpoint_path: str) -> Path | None:
+def _selection_checkpoint_policy_spec(
+    entry: PromotionRegistryEntry,
+    *,
+    registry_path: Path,
+) -> str | None:
+    if not entry.checkpoint_path:
+        return None
+    resolved = _resolve_selection_checkpoint_path(
+        entry.checkpoint_path,
+        registry_path=registry_path,
+        manifest_path=Path(entry.manifest_path),
+    )
+    checkpoint_path = str(resolved) if resolved is not None else entry.checkpoint_path
+    return _checkpoint_policy_spec(entry.source_type, checkpoint_path)
+
+
+def _checkpoint_policy_spec(source_type: str, checkpoint_path: str) -> str:
+    prefix = "neural:" if source_type == NEURAL_SELFPLAY_SOURCE_TYPE else "linear:"
+    return f"{prefix}{checkpoint_path}"
+
+
+def _resolve_selection_checkpoint_path(
+    checkpoint_path: str,
+    *,
+    registry_path: Path,
+    manifest_path: Path,
+) -> Path | None:
     raw_path = Path(checkpoint_path).expanduser()
-    if raw_path.exists() and raw_path.is_file():
-        return raw_path
+    manifest_candidates: tuple[Path, ...]
+    if manifest_path.is_absolute():
+        manifest_candidates = (manifest_path,)
+    else:
+        manifest_candidates = (
+            registry_path.parent / manifest_path,
+            manifest_path,
+        )
+    candidates: list[Path] = [raw_path]
+    if not raw_path.is_absolute():
+        candidates.append(registry_path.parent / raw_path)
+        for candidate_manifest in manifest_candidates:
+            candidates.append(candidate_manifest.parent / raw_path)
+            candidates.append(candidate_manifest.parent.parent / raw_path)
+    for candidate in _dedupe_paths(candidates):
+        if candidate.exists() and candidate.is_file():
+            return candidate
     return None
+
+
+def _dedupe_paths(paths: list[Path]) -> tuple[Path, ...]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return tuple(deduped)
 
 
 def _sha256_file(path: Path) -> str:

@@ -688,7 +688,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertIn("checkpoint_exists", failed_verification_check_names(result))
 
-    def test_verify_promotion_registry_matches_selection_raw_path_resolution(self) -> None:
+    def test_verify_promotion_registry_resolves_manifest_relative_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             manifest_path = temp_path / "run" / "manifest.json"
@@ -708,8 +708,75 @@ class PromotionRegistryTest(unittest.TestCase):
 
             result = verify_promotion_registry(registry_path)
 
-        self.assertFalse(result.passed)
-        self.assertIn("checkpoint_exists", failed_verification_check_names(result))
+        self.assertTrue(result.passed)
+        self.assertNotIn("checkpoint_exists", failed_verification_check_names(result))
+
+    def test_verify_promotion_registry_resolves_registry_relative_checkpoint_from_any_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with tempfile.TemporaryDirectory() as cwd_dir:
+                temp_path = Path(temp_dir)
+                registry_path = temp_path / "runs" / "promotions.json"
+                checkpoint_path = registry_path.parent / "promoted" / "linear-policy.json"
+                checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+                checkpoint_path.write_text("{}", encoding="utf-8")
+                write_manifest(
+                    registry_path,
+                    promotion_registry_payload(
+                        checkpoint_path="promoted/linear-policy.json",
+                        manifest_path="selfplay/manifest.json",
+                    ),
+                )
+
+                previous_cwd = Path.cwd()
+                try:
+                    os.chdir(cwd_dir)
+                    result = verify_promotion_registry(registry_path)
+                finally:
+                    os.chdir(previous_cwd)
+
+        self.assertTrue(result.passed)
+
+    def test_eval_cli_promotions_json_uses_resolved_selection_specs_for_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "runs" / "promotions.json"
+            first_checkpoint = registry_path.parent / "promoted" / "first.json"
+            second_checkpoint = registry_path.parent / "promoted" / "second.json"
+            first_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            first_checkpoint.write_text("{}", encoding="utf-8")
+            second_checkpoint.write_text("{}", encoding="utf-8")
+            payload = promotion_registry_payload(
+                checkpoint_path="promoted/first.json",
+                manifest_path="selfplay-a/manifest.json",
+            )
+            second_entry = dict(payload["entries"][0])
+            second_entry["sequence"] = 2
+            second_entry["policy_id"] = "linear-selfplay-test-iter-0002"
+            second_entry["checkpoint_path"] = "promoted/second.json"
+            second_entry["manifest_path"] = "selfplay-b/manifest.json"
+            payload["entries"].append(second_entry)
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "1",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["opponent_pool_policy_specs"], [f"linear:{first_checkpoint}"])
+        self.assertEqual(result["opponent_pool_excluded_current_policy_spec"], f"linear:{second_checkpoint}")
+        self.assertEqual(result["entry_statuses"][0]["selected_as"], ["opponent_pool"])
+        self.assertEqual(result["entry_statuses"][0]["selection_checkpoint_policy_spec"], f"linear:{first_checkpoint}")
+        self.assertEqual(result["entry_statuses"][1]["selected_as"], ["latest"])
+        self.assertEqual(result["entry_statuses"][1]["selection_checkpoint_policy_spec"], f"linear:{second_checkpoint}")
 
     def test_eval_cli_promotions_verify_json_marks_missing_checkpoint_path_as_failed_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

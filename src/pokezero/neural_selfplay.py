@@ -384,7 +384,7 @@ def run_neural_selfplay_iterations(
             results[-1] = result
             _write_json(iteration_manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                promoted_checkpoint_specs = list(promotion.registry.checkpoint_policy_specs())
+                promoted_checkpoint_specs = list(promotion.registry.selection_checkpoint_policy_specs())
         if advancement.advance_collector:
             next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
             checkpoint_history.append(str(next_policy_spec))
@@ -467,7 +467,7 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
-    return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
+    return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
 
 
 def _benchmark_incumbent_policy_spec(
@@ -477,10 +477,13 @@ def _benchmark_incumbent_policy_spec(
 ) -> str:
     if promotion_config is None:
         return fallback_policy_spec
+    from .promotion import load_promotion_registry
+
+    registry = load_promotion_registry(promotion_config.registry_path)
     entry = _promotion_incumbent_entry(promotion_config)
     if entry is None or entry.checkpoint_policy_spec is None:
         return fallback_policy_spec
-    return entry.checkpoint_policy_spec
+    return registry.selection_checkpoint_policy_spec_for_entry(entry) or fallback_policy_spec
 
 
 def _record_auto_promotion(
