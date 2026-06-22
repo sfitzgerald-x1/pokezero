@@ -22,6 +22,12 @@ from .evaluation import (
     evaluate_promotion_gate,
 )
 from .promotion import load_promotion_registry, record_promotion
+from .run_audit import (
+    DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
+    DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+    RunAuditConfig,
+    audit_run,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -55,6 +61,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promotions.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
+
+    audit = subparsers.add_parser("audit", help="Audit a self-play run manifest for regression health.")
+    audit.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
+    audit.add_argument("--min-latest-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
+    audit.add_argument("--min-latest-benchmark-games", type=int, default=DEFAULT_MIN_BENCHMARK_GAMES)
+    audit.add_argument("--max-latest-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
+    audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
+    audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP)
+    audit.add_argument(
+        "--max-consecutive-promotion-failures",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
+    )
+    audit.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because the latest benchmark is missing.")
+    audit.add_argument("--require-latest-promotion", action="store_true", help="Fail unless the latest iteration recorded a promotion.")
+    audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
+    audit.set_defaults(func=_audit)
     return parser
 
 
@@ -127,6 +150,27 @@ def _promotions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit(args: argparse.Namespace) -> int:
+    result = audit_run(
+        args.path,
+        config=RunAuditConfig(
+            min_latest_benchmark_win_rate=args.min_latest_benchmark_win_rate,
+            min_latest_benchmark_games=args.min_latest_benchmark_games,
+            max_latest_collection_capped_rate=args.max_latest_collection_capped_rate,
+            max_latest_benchmark_capped_rate=args.max_latest_benchmark_capped_rate,
+            max_benchmark_win_rate_drop=args.max_benchmark_win_rate_drop,
+            max_consecutive_promotion_failures=args.max_consecutive_promotion_failures,
+            require_benchmark=not args.allow_missing_benchmark,
+            require_latest_promotion=args.require_latest_promotion,
+        ),
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_audit_result(result)
+    return 0 if result.passed else 2
+
+
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-benchmark-win-rate", type=float, default=DEFAULT_MIN_BENCHMARK_WIN_RATE)
     parser.add_argument("--min-incumbent-win-rate", type=float, default=DEFAULT_MIN_INCUMBENT_WIN_RATE)
@@ -191,6 +235,33 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
         opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
         incumbent_policy_id=incumbent_policy_id,
     )
+
+
+def _print_audit_result(result) -> None:
+    status = "PASS" if result.passed else "FAIL"
+    print(f"status: {status}")
+    print(f"source: {result.source_type}")
+    print(f"manifest: {result.manifest_path}")
+    print(f"iterations: {len(result.iterations)}")
+    print(f"latest_iteration: {result.latest_iteration if result.latest_iteration is not None else '-'}")
+    print(f"latest_benchmark_win_rate: {_format_optional_float(result.latest_benchmark_win_rate)}")
+    print(f"best_benchmark_win_rate: {_format_optional_float(result.best_benchmark_win_rate)}")
+    print(f"latest_collection_capped_rate: {_format_optional_float(result.latest_collection_capped_rate)}")
+    print(f"latest_benchmark_capped_rate: {_format_optional_float(result.latest_benchmark_capped_rate)}")
+    print(f"consecutive_promotion_failures: {result.consecutive_promotion_failures}")
+    if result.benchmark_regressions:
+        print("benchmark_regressions:")
+        for regression in result.benchmark_regressions:
+            print(
+                f"- {regression.opponent_policy_id}: "
+                f"latest={regression.latest_win_rate:.3f} "
+                f"previous_best={regression.best_previous_win_rate:.3f} "
+                f"drop={regression.drop:.3f}"
+            )
+    print("checks:")
+    for check in result.checks:
+        check_status = "pass" if check.passed else "fail"
+        print(f"- {check_status} {check.name}: observed={check.observed} threshold={check.threshold}")
 
 
 def _print_gate_result(result) -> None:

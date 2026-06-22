@@ -20,7 +20,7 @@ Based on the current plan, the next CPU-compatible work should focus on making l
 
 - Strengthen long-run benchmark thresholds and regression detection.
 - Improve managed checkpoint lifecycle tooling where it affects promoted-policy selection.
-- Add lightweight CPU experiment checks that make promotion decisions auditable without GPU training.
+- Use lightweight CPU experiment audits to tune practical long-run thresholds without GPU training.
 
 GPU-dependent PPO work, large-scale training, and distributed orchestration remain later milestones.
 
