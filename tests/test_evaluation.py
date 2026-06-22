@@ -845,6 +845,28 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("failed_step: 2 run smoke self-play iteration loop returncode=7", output)
         self.assertIn("- 2: FAIL run smoke self-play iteration loop returncode=7", output)
 
+    def test_eval_cli_cpu_smoke_report_running_summary_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, cpu_smoke_summary(status="running"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("status: RUNNING", stdout.getvalue())
+
+    def test_eval_cli_cpu_smoke_report_unknown_status_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, cpu_smoke_summary(status="stale"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("status: STALE", stdout.getvalue())
+
     def test_eval_cli_cpu_smoke_report_json_includes_source_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "summary.json"
@@ -868,6 +890,16 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Unsupported cpu smoke summary schema", stderr.getvalue())
+
+    def test_eval_cli_cpu_smoke_report_missing_run_root_points_to_default_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "missing-run"
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(run_root)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(str(run_root / "cpu-smoke-run-summary.json"), stderr.getvalue())
 
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()

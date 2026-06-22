@@ -88,7 +88,7 @@ Inspect that wrapper summary later:
 ./.venv/bin/python -m pokezero.eval_cli cpu-smoke-report runs/cpu-smoke
 ```
 
-The report command accepts either the run root or the summary JSON path. It returns non-zero for recorded failed or incomplete smoke runs, so shell automation can use it as a quick wrapper-level health check.
+The report command accepts either the run root or the summary JSON path. It exits `0` for a recorded passed run, exits `2` for recorded failed, running, or unknown statuses, and exits `1` when the summary cannot be read or has an unsupported schema. Shell automation can use any non-zero exit as a wrapper-level health check failure, or distinguish `1` as "no valid summary was available" versus `2` as "a valid summary recorded a non-passing run."
 
 Inspect the generated commands without running them:
 

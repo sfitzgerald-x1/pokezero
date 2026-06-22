@@ -1086,7 +1086,11 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
 
 
 def _load_cpu_smoke_summary(path: Path) -> tuple[Path, dict[str, object]]:
-    summary_path = path / "cpu-smoke-run-summary.json" if path.is_dir() else path
+    summary_path = (
+        path / "cpu-smoke-run-summary.json"
+        if path.is_dir() or (not path.exists() and path.suffix != ".json")
+        else path
+    )
     if not summary_path.exists():
         raise FileNotFoundError(f"cpu smoke summary not found: {summary_path}")
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
