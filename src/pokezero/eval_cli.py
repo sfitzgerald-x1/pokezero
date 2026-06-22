@@ -157,6 +157,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Also evaluate each compared run against this named audit profile and include pass/fail status.",
     )
+    compare.add_argument(
+        "--fail-on-audit",
+        action="store_true",
+        help="With --audit-profile, return non-zero when any compared run fails the selected audit profile.",
+    )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
@@ -496,6 +501,8 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 
 def _compare(args: argparse.Namespace) -> int:
+    if args.fail_on_audit and args.audit_profile is None:
+        raise ValueError("--fail-on-audit requires --audit-profile.")
     audit_profile = evaluation_profile(args.audit_profile) if args.audit_profile is not None else None
     result = compare_run_manifests_with_threshold(
         args.paths,
@@ -507,7 +514,7 @@ def _compare(args: argparse.Namespace) -> int:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
-    return 2 if result.errors else 0
+    return 2 if result.errors or (args.fail_on_audit and result.audit_failed) else 0
 
 
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:

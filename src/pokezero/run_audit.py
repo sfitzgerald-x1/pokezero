@@ -300,16 +300,28 @@ class RunComparisonResult:
     @property
     def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
         return _best_entry_by_optional_value(
-            tuple(entry for entry in self.entries if entry.latest_benchmark_games >= self.min_benchmark_games),
+            tuple(
+                entry
+                for entry in self.entries
+                if entry.latest_benchmark_games >= self.min_benchmark_games and entry.audit_passed is not False
+            ),
             "latest_benchmark_win_rate",
         )
 
     @property
     def best_historical_benchmark_entry(self) -> RunComparisonEntry | None:
         return _best_entry_by_optional_value(
-            tuple(entry for entry in self.entries if entry.best_benchmark_games >= self.min_benchmark_games),
+            tuple(
+                entry
+                for entry in self.entries
+                if entry.best_benchmark_games >= self.min_benchmark_games and entry.audit_passed is not False
+            ),
             "best_benchmark_win_rate",
         )
+
+    @property
+    def audit_failed(self) -> bool:
+        return any(entry.audit_passed is False for entry in self.entries)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -317,6 +329,7 @@ class RunComparisonResult:
             "errors": [error.to_dict() for error in self.errors],
             "min_benchmark_games": self.min_benchmark_games,
             "audit_profile": self.audit_profile,
+            "audit_failed": self.audit_failed,
             "best_latest_benchmark_label": (
                 self.best_latest_benchmark_entry.label
                 if self.best_latest_benchmark_entry is not None
@@ -604,8 +617,8 @@ def _comparison_entry(
     audit_config: RunAuditConfig | None = None,
     audit_profile: str | None = None,
 ) -> RunComparisonEntry:
-    audit = audit_run(path, config=_permissive_audit_config())
     strict_audit = audit_run(path, config=audit_config) if audit_config is not None else None
+    audit = strict_audit if strict_audit is not None else audit_run(path, config=_permissive_audit_config())
     latest = audit.iterations[-1]
     process_peak_rss_mb = _max_optional(
         (
