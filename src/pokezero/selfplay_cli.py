@@ -308,6 +308,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
     print(f"run_dir: {manifest.get('run_dir')}")
     print(f"latest_checkpoint: {manifest.get('latest_checkpoint_path')}")
+    _print_source_metadata(_manifest_source_metadata(manifest))
     print(f"iterations: {len(iterations)}")
     if not iterations:
         return
@@ -389,6 +390,25 @@ def _print_invocation_report(invocation_configs: tuple[Mapping[str, Any], ...]) 
             f"promoted_available={len(promoted_specs)} "
             f"auto_promote={_format_bool(auto_promotion.get('enabled'))}"
         )
+
+
+def _manifest_source_metadata(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    source = manifest.get("source")
+    return dict(source) if isinstance(source, Mapping) else {}
+
+
+def _print_source_metadata(metadata: Mapping[str, Any]) -> None:
+    if not metadata:
+        print("source_metadata: -")
+        return
+    print("source_metadata:")
+    print(f"  available: {_format_bool(metadata.get('available'))}")
+    print(f"  branch: {_format_manifest_value(metadata.get('branch'))}")
+    print(f"  head: {_format_manifest_value(metadata.get('head'))}")
+    print(f"  dirty: {_format_bool(metadata.get('dirty'))}")
+    print(f"  repo_root: {_format_manifest_value(metadata.get('repo_root'))}")
+    if metadata.get("error") is not None:
+        print(f"  error: {_format_manifest_value(metadata.get('error'))}")
 
 
 def _manifest_promotion_status(iteration: Mapping[str, Any]) -> str:
