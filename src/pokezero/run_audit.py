@@ -438,15 +438,22 @@ def _latest_benchmark_average_decision_rounds_checks(
         return ()
     observed = latest.benchmark_average_decision_rounds
     if observed is None:
-        message = "latest benchmark average decision rounds are unavailable"
+        passed = latest.benchmark_games <= 0 and not config.require_benchmark
+        message = (
+            "latest benchmark average decision rounds are unavailable because latest benchmark is optional"
+            if passed
+            else "latest benchmark average decision rounds are unavailable"
+        )
     elif observed <= config.max_latest_benchmark_average_decision_rounds:
+        passed = True
         message = "latest benchmark average decision rounds are within limit"
     else:
+        passed = False
         message = "latest benchmark average decision rounds exceed limit"
     return (
         RunAuditCheck(
             name="latest_benchmark_average_decision_rounds",
-            passed=observed is not None and observed <= config.max_latest_benchmark_average_decision_rounds,
+            passed=passed,
             observed=observed,
             threshold=config.max_latest_benchmark_average_decision_rounds,
             message=message,

@@ -210,6 +210,54 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(average_check.threshold, 200.0)
         self.assertIn("exceed", average_check.message)
 
+    def test_audit_passes_latest_benchmark_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertTrue(average_check.passed)
+        self.assertEqual(average_check.observed, 12.0)
+        self.assertEqual(average_check.threshold, 200.0)
+        self.assertIn("within limit", average_check.message)
+
+    def test_audit_allows_missing_optional_benchmark_with_benchmark_average_threshold(self) -> None:
+        manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    require_benchmark=False,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertTrue(average_check.passed)
+        self.assertIsNone(average_check.observed)
+        self.assertIn("optional", average_check.message)
+
     def test_audit_derives_benchmark_average_decision_rounds_from_matchups(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
