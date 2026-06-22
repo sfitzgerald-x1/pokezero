@@ -27,6 +27,40 @@ DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
 DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 _THRESHOLD_EPSILON = 1e-12
+_AUDIT_CALIBRATION_FLAG_FIELDS = (
+    (
+        "min_latest_benchmark_win_rate",
+        "--min-latest-benchmark-win-rate",
+        "--audit-min-latest-benchmark-win-rate",
+    ),
+    ("min_latest_benchmark_games", "--min-latest-benchmark-games", "--audit-min-latest-benchmark-games"),
+    (
+        "max_latest_collection_capped_rate",
+        "--max-latest-collection-capped-rate",
+        "--audit-max-latest-collection-capped-rate",
+    ),
+    (
+        "max_latest_benchmark_capped_rate",
+        "--max-latest-benchmark-capped-rate",
+        "--audit-max-latest-benchmark-capped-rate",
+    ),
+    (
+        "max_latest_average_decision_rounds",
+        "--max-latest-average-decision-rounds",
+        "--audit-max-latest-average-decision-rounds",
+    ),
+    (
+        "max_latest_benchmark_average_decision_rounds",
+        "--max-latest-benchmark-average-decision-rounds",
+        "--audit-max-latest-benchmark-average-decision-rounds",
+    ),
+    ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop", "--audit-max-benchmark-win-rate-drop"),
+    (
+        "max_consecutive_promotion_failures",
+        "--max-consecutive-promotion-failures",
+        "--audit-max-consecutive-promotion-failures",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -339,49 +373,30 @@ class RunAuditCalibrationResult:
         }
 
     def suggested_cli_flags(self) -> tuple[str, ...]:
-        flags: list[str] = []
-        for field_name, flag_name in (
-            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
-            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
-            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
-            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
-            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
-            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
-            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
-            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
-                    continue
-                flags.extend((flag_name, str(value)))
-        if not self.require_benchmark:
-            flags.append("--allow-missing-benchmark")
-        if not self.require_benchmark_opponent_coverage:
-            flags.append("--allow-missing-benchmark-opponents")
-        return tuple(flags)
+        return self._suggested_flags(flag_column=1)
 
     def suggested_post_iteration_cli_flags(self) -> tuple[str, ...]:
-        flags: list[str] = ["--audit-after-iteration"]
-        for field_name, flag_name in (
-            ("min_latest_benchmark_win_rate", "--audit-min-latest-benchmark-win-rate"),
-            ("min_latest_benchmark_games", "--audit-min-latest-benchmark-games"),
-            ("max_latest_collection_capped_rate", "--audit-max-latest-collection-capped-rate"),
-            ("max_latest_benchmark_capped_rate", "--audit-max-latest-benchmark-capped-rate"),
-            ("max_latest_average_decision_rounds", "--audit-max-latest-average-decision-rounds"),
-            ("max_latest_benchmark_average_decision_rounds", "--audit-max-latest-benchmark-average-decision-rounds"),
-            ("max_benchmark_win_rate_drop", "--audit-max-benchmark-win-rate-drop"),
-            ("max_consecutive_promotion_failures", "--audit-max-consecutive-promotion-failures"),
-        ):
+        return self._suggested_flags(flag_column=2, prefix=("--audit-after-iteration",))
+
+    def _suggested_flags(self, *, flag_column: int, prefix: tuple[str, ...] = ()) -> tuple[str, ...]:
+        flags: list[str] = list(prefix)
+        for flag_spec in _AUDIT_CALIBRATION_FLAG_FIELDS:
+            field_name = flag_spec[0]
+            flag_name = flag_spec[flag_column]
             value = getattr(self, field_name)
-            if value is not None:
-                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
-                    continue
-                flags.extend((flag_name, str(value)))
+            if value is None:
+                continue
+            if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                continue
+            flags.extend((flag_name, str(value)))
         if not self.require_benchmark:
-            flags.append("--audit-allow-missing-benchmark")
+            flags.append("--audit-allow-missing-benchmark" if flag_column == 2 else "--allow-missing-benchmark")
         if not self.require_benchmark_opponent_coverage:
-            flags.append("--audit-allow-missing-benchmark-opponents")
+            flags.append(
+                "--audit-allow-missing-benchmark-opponents"
+                if flag_column == 2
+                else "--allow-missing-benchmark-opponents"
+            )
         return tuple(flags)
 
     def to_dict(self) -> dict[str, Any]:

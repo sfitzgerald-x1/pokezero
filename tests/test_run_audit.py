@@ -5,10 +5,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.cli_audit import post_iteration_audit_config_from_args
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.run_audit import RunAuditConfig, audit_run, calibrate_run_audit, compare_run_manifests
 from pokezero.evaluation import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
+from pokezero.selfplay_cli import build_arg_parser as build_selfplay_arg_parser
 
 
 class RunAuditTest(unittest.TestCase):
@@ -505,6 +507,23 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("--max-latest-average-decision-rounds", result.suggested_cli_flags())
         self.assertIn("--audit-after-iteration", result.suggested_post_iteration_cli_flags())
         self.assertIn("--audit-max-latest-average-decision-rounds", result.suggested_post_iteration_cli_flags())
+        parser = build_selfplay_arg_parser()
+        args = parser.parse_args(
+            [
+                "iterate",
+                "--run-dir",
+                "run",
+                "--iterations",
+                "1",
+                "--games-per-iteration",
+                "1",
+                *result.suggested_post_iteration_cli_flags(),
+            ]
+        )
+        self.assertEqual(
+            post_iteration_audit_config_from_args(args),
+            RunAuditConfig(**result.suggested_config()),
+        )
 
     def test_calibrated_thresholds_keep_clean_pilot_headroom_for_comparable_run(self) -> None:
         pilot = selfplay_manifest(
