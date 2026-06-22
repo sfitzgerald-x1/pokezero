@@ -32,6 +32,7 @@ Partially implemented:
 - Opponent-action prediction exists in the linear baseline and transformer scaffold as an auxiliary supervised head.
 - A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records with promotion-gated collector advancement, warm starts, resume support, and optional promotion-registry artifact management.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
+- CPU-only run audit CLI over linear and neural self-play manifests that checks latest benchmark health, capped-game rates, benchmark regression from previous best, and trailing promotion failures.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
 Known limitations:
@@ -39,7 +40,7 @@ Known limitations:
 - Checkpoint compatibility is guarded by hand-maintained schema/version tags, not content-derived feature fingerprints. Feature changes still need deliberate version bumps.
 - Parallel collection caches immutable linear models per collection call, but larger checkpoints and high worker counts still need memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
-- Neural iteration can use the shared promotion registry/gate path, but useful long-run threshold settings and regression policy still need empirical validation.
+- Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions; useful long-run threshold settings still need empirical validation.
 - The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves and safer switching. It is a bootstrap data source, not the intended long-term policy, and it still lacks hazards and deeper sequence planning.
 - Current observation belief features are compact bucketed facts and counts, not full explicit masks. Detailed candidate variants and evidence logs remain sidecar-only to avoid bloating every trajectory record.
 
@@ -48,7 +49,7 @@ Not implemented yet:
 - PPO-style online actor-critic training.
 - Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.
-- Long-run benchmark thresholds, automated regression detection, or richer managed checkpoint lifecycle tooling.
+- Empirically validated long-run benchmark thresholds or richer managed checkpoint lifecycle tooling.
 
 ## Deviations From Original Plan
 

@@ -195,6 +195,20 @@ Inspect the run:
 python -m pokezero.selfplay_cli report --run-dir runs/bootstrap-selfplay
 ```
 
+Audit a run for regression-health checks that are cheap to run on CPU:
+
+```bash
+python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
+  --min-latest-benchmark-win-rate 0.55 \
+  --min-latest-benchmark-games 50 \
+  --max-latest-collection-capped-rate 0.10 \
+  --max-latest-benchmark-capped-rate 0.10 \
+  --max-benchmark-win-rate-drop 0.05 \
+  --max-consecutive-promotion-failures 1
+```
+
+The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, regression from the previous best benchmark, and repeated promotion failures before the run is treated as healthy.
+
 Gate a candidate before promotion:
 
 ```bash
