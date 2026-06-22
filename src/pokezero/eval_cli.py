@@ -4468,28 +4468,65 @@ def _cpu_long_run_runtime_audit_report(summary: Mapping[str, object]) -> dict[st
         return payload
 
     config_dict = run_audit_config_to_dict(audit_config)
+    minimum_evaluation_games = _minimum_selfplay_post_iteration_evaluation_games(config_dict)
+    recorded_evaluation_games = _cpu_long_run_report_recorded_evaluation_games(recipe)
     payload.update(
         {
             "available": True,
             "error": None,
             "config": config_dict,
-            "minimum_evaluation_games": _minimum_selfplay_post_iteration_evaluation_games(config_dict),
+            "minimum_evaluation_games": minimum_evaluation_games,
+            "recorded_evaluation_games": recorded_evaluation_games,
             "post_iteration_command_flags": list(
-                _cpu_long_run_runtime_post_iteration_command_flags(recipe, config_dict)
+                _cpu_long_run_runtime_post_iteration_command_flags(
+                    recipe,
+                    config_dict,
+                    evaluation_games=recorded_evaluation_games or minimum_evaluation_games,
+                )
             ),
         }
     )
     return payload
 
 
+def _cpu_long_run_report_recorded_evaluation_games(recipe: Mapping[str, object]) -> int | None:
+    value = recipe.get("evaluation_games")
+    if value is not None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            return parsed
+
+    steps = recipe.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, Mapping):
+            continue
+        argv = step.get("argv")
+        if not isinstance(argv, list):
+            continue
+        try:
+            index = argv.index("--evaluation-games")
+            parsed = int(argv[index + 1])
+        except (ValueError, TypeError, IndexError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
 def _cpu_long_run_runtime_post_iteration_command_flags(
     recipe: Mapping[str, object],
     config: Mapping[str, object],
+    *,
+    evaluation_games: int,
 ) -> tuple[str, ...]:
     flags: list[str] = []
-    minimum_evaluation_games = _minimum_selfplay_post_iteration_evaluation_games(config)
-    if minimum_evaluation_games > 0:
-        flags.extend(("--evaluation-games", str(minimum_evaluation_games)))
+    if evaluation_games > 0:
+        flags.extend(("--evaluation-games", str(evaluation_games)))
     flags.append("--audit-after-iteration")
     if _cpu_long_run_report_audit_source(recipe) == "profile":
         profile_name = _cpu_long_run_report_runtime_audit_profile(recipe)
@@ -4502,8 +4539,7 @@ def _cpu_long_run_runtime_post_iteration_command_flags(
         flags.extend(("--audit-config", audit_config_path))
         return tuple(flags)
 
-    flags.extend(_post_iteration_audit_config_cli_flags(config)[1:])
-    return tuple(flags)
+    return _post_iteration_selfplay_command_flags(config)
 
 
 def _cpu_long_run_report_audit_config(recipe: Mapping[str, object]) -> RunAuditConfig:
@@ -4579,6 +4615,7 @@ def _print_cpu_long_run_runtime_audit_report(report: Mapping[str, object]) -> No
         print(f"audit_config_path: {_format_summary_value(report.get('audit_config_path'))}")
     if report.get("available") is True:
         print(f"minimum_evaluation_games: {_format_summary_value(report.get('minimum_evaluation_games'))}")
+        print(f"recorded_evaluation_games: {_format_summary_value(report.get('recorded_evaluation_games'))}")
         print("post_iteration_command_flags:")
         flags = tuple(str(flag) for flag in report.get("post_iteration_command_flags", ()))
         print(" ".join(flags) if flags else "-")
@@ -4667,6 +4704,7 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         "runtime_audit_source": runtime_audit_source,
         "runtime_audit_config_path": None if runtime_audit_config_path is None else str(runtime_audit_config_path),
         "runtime_audit_profile": runtime_audit_profile,
+        "evaluation_games": args.evaluation_games,
         "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
         "long_run_ready": ready,
