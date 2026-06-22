@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Iterable
 
 from .evaluation import (
     DEFAULT_MIN_BENCHMARK_GAMES,
@@ -195,7 +196,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--compare-profile",
         choices=profile_choices,
         default=None,
-        help="Also audit the calibrated runs against a named profile and report pass/fail status.",
+        help="Also audit the supplied runs against a named profile and report pass/fail status.",
     )
     audit_calibrate.add_argument(
         "--fail-on-profile",
@@ -1217,7 +1218,7 @@ def _print_calibration_sufficiency(errors: tuple[str, ...]) -> None:
 
 
 def _profile_audit_payload(
-    paths: tuple[Path, ...],
+    paths: Iterable[Path],
     *,
     profile_name: str,
     config: RunAuditConfig,
