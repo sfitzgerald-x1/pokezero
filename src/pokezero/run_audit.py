@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -474,6 +475,7 @@ def audit_run(
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
     checks = (
         _latest_collection_capped_check(latest, config),
+        _promoted_opponent_pool_requirement_check(manifest),
         *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
         *_latest_benchmark_average_decision_rounds_checks(latest, config),
@@ -897,6 +899,47 @@ def _latest_collection_capped_check(
     )
 
 
+def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> RunAuditCheck:
+    requirements: list[tuple[int, int]] = []
+    for invocation_config in _manifest_invocation_configs(manifest):
+        opponent_pool = _optional_mapping(invocation_config.get("opponent_pool"))
+        if opponent_pool is None:
+            continue
+        required_size = _optional_int(opponent_pool.get("required_promoted_opponent_pool_size"))
+        if required_size is None or required_size <= 0:
+            continue
+        promoted_specs = tuple(
+            str(spec)
+            for spec in _sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
+        )
+        requirements.append((len(promoted_specs), required_size))
+    if not requirements:
+        return RunAuditCheck(
+            name="promoted_opponent_pool_requirement",
+            passed=True,
+            observed=None,
+            threshold="not_recorded",
+            message="no promoted opponent pool requirement was recorded",
+        )
+    failures = tuple(
+        f"invocation_{index}:available={available},required={required}"
+        for index, (available, required) in enumerate(requirements, start=1)
+        if available < required
+    )
+    observed = min(available / required for available, required in requirements)
+    return RunAuditCheck(
+        name="promoted_opponent_pool_requirement",
+        passed=not failures,
+        observed=observed,
+        threshold=1.0,
+        message=(
+            "recorded promoted opponent pools satisfied their required sizes"
+            if not failures
+            else "recorded promoted opponent pool requirement was undersized: " + "; ".join(failures)
+        ),
+    )
+
+
 def _latest_average_decision_rounds_checks(
     latest: RunAuditIterationSummary,
     config: RunAuditConfig,
@@ -1243,6 +1286,26 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _manifest_invocation_configs(manifest: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    configs = manifest.get("invocation_configs")
+    if configs is not None:
+        return tuple(_mapping(config) for config in _sequence(configs))
+    configs_by_fingerprint: dict[str, Mapping[str, Any]] = {}
+    for iteration in tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ()))):
+        config = iteration.get("invocation_config")
+        if config is None:
+            continue
+        mapped = _mapping(config)
+        configs_by_fingerprint.setdefault(json.dumps(mapped, sort_keys=True), mapped)
+    return tuple(configs_by_fingerprint.values())
 
 
 def _games_per_hour(metrics: Mapping[str, Any] | None) -> float | None:

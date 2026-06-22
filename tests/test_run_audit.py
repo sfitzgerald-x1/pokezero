@@ -43,6 +43,55 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
+    def test_audit_validates_recorded_promoted_opponent_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            invocation_configs=(
+                invocation_config(required_pool_size=2, promoted_checkpoint_count=2),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertTrue(result.passed)
+        self.assertTrue(check.passed)
+        self.assertEqual(check.observed, 1.0)
+
+    def test_audit_fails_recorded_undersized_promoted_opponent_pool_requirement(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            invocation_configs=(
+                invocation_config(required_pool_size=2, promoted_checkpoint_count=1),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 0.5)
+        self.assertIn("available=1,required=2", check.message)
+
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -1933,13 +1982,20 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_capped_rate", failed_check_names_from_payload(long_run_payload))
 
 
-def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
-    return {
+def selfplay_manifest(
+    *,
+    iterations: tuple[dict, ...],
+    invocation_configs: tuple[dict, ...] = (),
+) -> dict:
+    payload = {
         "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
         "run_dir": "run",
         "latest_checkpoint_path": iterations[-1]["checkpoint_path"],
         "iterations": list(iterations),
     }
+    if invocation_configs:
+        payload["invocation_configs"] = list(invocation_configs)
+    return payload
 
 
 def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
@@ -1950,6 +2006,40 @@ def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
         "current_policy_spec": iterations[-1]["checkpoint_policy_spec"],
         "latest_accepted_checkpoint_path": iterations[-1]["checkpoint_path"],
         "iterations": list(iterations),
+    }
+
+
+def invocation_config(*, required_pool_size: int | None, promoted_checkpoint_count: int) -> dict:
+    return {
+        "resume": False,
+        "first_iteration": 1,
+        "iterations_requested": 1,
+        "games_per_iteration": 10,
+        "seed_start_argument": 1,
+        "first_iteration_seed_start": 1,
+        "initial_policy_spec": "random-legal",
+        "evaluation_games": 10,
+        "evaluation_seed_start": 1_000_000,
+        "worker_count": 1,
+        "opponent_pool": {
+            "fixed_opponent_policy_specs": ["random-legal", "simple-legal"],
+            "max_historical_opponents": 3,
+            "promotion_registry_path": "promotions.json",
+            "promotion_pool_registry_path": "promotions.json",
+            "required_promoted_opponent_pool_size": required_pool_size,
+            "promoted_checkpoint_policy_specs": [
+                f"linear:runs/promoted-{index}/linear-policy.json"
+                for index in range(1, promoted_checkpoint_count + 1)
+            ],
+        },
+        "auto_promotion": {
+            "enabled": False,
+            "registry_path": None,
+            "artifact_dir": None,
+            "label_prefix": None,
+            "notes": None,
+            "allow_duplicate": False,
+        },
     }
 
 
