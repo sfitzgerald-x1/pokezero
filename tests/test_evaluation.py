@@ -491,6 +491,66 @@ class PromotionGateTest(unittest.TestCase):
         self.assertGreater(long_run["gate"]["min_benchmark_win_rate"], 0.55)
         self.assertLess(long_run["gate"]["max_benchmark_capped_rate"], 0.10)
 
+    def test_eval_cli_cpu_smoke_plan_prints_text_recipe(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--run-root",
+                    "runs/local smoke",
+                    "--showdown-root",
+                    "/tmp/showdown root",
+                    "--workers",
+                    "2",
+                ]
+            )
+        output = stdout.getvalue()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("cpu_smoke_plan:", output)
+        self.assertIn("python -m pokezero.bootstrap_cli teacher", output)
+        self.assertIn("--run-dir 'runs/local smoke/teacher-bootstrap'", output)
+        self.assertIn("--showdown-root '/tmp/showdown root'", output)
+        self.assertIn("python -m pokezero.selfplay_cli iterate", output)
+        self.assertIn("--profile smoke", output)
+        self.assertIn("--audit-profile smoke", output)
+        self.assertIn("python -m pokezero.eval_cli audit-calibrate", output)
+        self.assertIn("--compare-profile smoke", output)
+
+    def test_eval_cli_cpu_smoke_plan_prints_json_recipe(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-smoke-plan",
+                    "--run-root",
+                    "runs/smoke",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["run_root"], "runs/smoke")
+        self.assertEqual(payload["showdown_root"], "/tmp/showdown")
+        self.assertEqual([step["name"] for step in payload["steps"]], [
+            "bootstrap teacher checkpoint",
+            "run smoke self-play iteration loop",
+            "inspect self-play report",
+            "audit smoke run",
+            "calibrate and compare smoke profile",
+        ])
+        self.assertIn("linear:runs/smoke/teacher-bootstrap/linear-bootstrap.json", payload["steps"][1]["argv"])
+        self.assertIn("--fail-on-profile", payload["steps"][-1]["argv"])
+
+    def test_eval_cli_cpu_smoke_plan_rejects_non_positive_counts(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = eval_cli_main(["cpu-smoke-plan", "--workers", "0"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("workers must be positive", stderr.getvalue())
+
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
         manifest["iterations"][0]["benchmark"] = None

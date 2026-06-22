@@ -72,6 +72,16 @@ Replay import remains valuable after a randbat replay source is identified. A no
 
 ## Supported Command Shape
 
+Print a tiny CPU smoke-run recipe before spending time on larger experiments:
+
+```bash
+python -m pokezero.eval_cli cpu-smoke-plan \
+  --run-root runs/cpu-smoke \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+The printed recipe chains the existing teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile commands with intentionally small counts. It is a plumbing validation aid, not strength evidence. Use `--json` when another script should consume the recipe.
+
 Import normalized replay decisions into standard rollout JSONL:
 
 ```bash

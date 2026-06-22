@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import sys
 from typing import Iterable
 
@@ -205,6 +206,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     audit_calibrate.add_argument("--json", action="store_true", help="Print the calibration result as JSON.")
     audit_calibrate.set_defaults(func=_audit_calibrate)
+
+    smoke_plan = subparsers.add_parser(
+        "cpu-smoke-plan",
+        help="Print a tiny CPU-only command recipe for end-to-end bootstrap/self-play validation.",
+    )
+    smoke_plan.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the printed recipe.")
+    smoke_plan.add_argument(
+        "--showdown-root",
+        default="/path/to/pokemon-showdown",
+        help="Built Pokemon Showdown checkout root used by the printed recipe.",
+    )
+    smoke_plan.add_argument("--workers", type=int, default=1, help="Worker count used by the printed recipe.")
+    smoke_plan.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
+    smoke_plan.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
+    smoke_plan.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
+    smoke_plan.add_argument("--selfplay-iterations", type=int, default=2, help="Self-play iterations.")
+    smoke_plan.add_argument("--selfplay-games", type=int, default=4, help="Self-play collection games per iteration.")
+    smoke_plan.add_argument("--evaluation-games", type=int, default=2, help="Self-play benchmark games per matchup.")
+    smoke_plan.add_argument("--feature-count", type=int, default=4096, help="Small linear feature count for the smoke run.")
+    smoke_plan.add_argument("--window-size", type=int, default=4, help="Temporal window size for bootstrap and self-play.")
+    smoke_plan.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap used by the printed recipe.")
+    smoke_plan.add_argument("--json", action="store_true", help="Print the recipe as JSON.")
+    smoke_plan.set_defaults(func=_cpu_smoke_plan)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
@@ -878,6 +902,176 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
             _print_calibration_sufficiency(sufficiency_errors)
     profile_failed = bool(profile_audit is not None and not profile_audit["passed"])
     return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
+
+
+def _cpu_smoke_plan(args: argparse.Namespace) -> int:
+    _validate_cpu_smoke_plan_args(args)
+    recipe = _cpu_smoke_recipe(args)
+    if args.json:
+        print(json.dumps(recipe, indent=2, sort_keys=True))
+        return 0
+    print("cpu_smoke_plan:")
+    print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
+    print("note: smoke-profile thresholds validate command flow, not policy strength.")
+    print("commands:")
+    for index, step in enumerate(recipe["steps"], start=1):
+        print(f"{index}. {step['name']}")
+        print(_shell_join(step["argv"]))
+    return 0
+
+
+def _validate_cpu_smoke_plan_args(args: argparse.Namespace) -> None:
+    positive_fields = (
+        "workers",
+        "train_games",
+        "validation_games",
+        "bootstrap_benchmark_games",
+        "selfplay_iterations",
+        "selfplay_games",
+        "evaluation_games",
+        "feature_count",
+        "window_size",
+    )
+    for field_name in positive_fields:
+        if getattr(args, field_name) <= 0:
+            raise ValueError(f"{field_name.replace('_', '-')} must be positive.")
+    if args.max_decision_rounds <= 0:
+        raise ValueError("max-decision-rounds must be positive.")
+
+
+def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
+    run_root = args.run_root
+    teacher_dir = run_root / "teacher-bootstrap"
+    selfplay_dir = run_root / "selfplay"
+    promotion_registry = run_root / "promotions.json"
+    promotion_artifact_dir = run_root / "promoted-checkpoints"
+    showdown_root = str(args.showdown_root)
+    steps = (
+        (
+            "bootstrap teacher checkpoint",
+            [
+                "python",
+                "-m",
+                "pokezero.bootstrap_cli",
+                "teacher",
+                "--run-dir",
+                str(teacher_dir),
+                "--train-games",
+                str(args.train_games),
+                "--validation-games",
+                str(args.validation_games),
+                "--workers",
+                str(args.workers),
+                "--showdown-root",
+                showdown_root,
+                "--benchmark-games",
+                str(args.bootstrap_benchmark_games),
+                "--preflight-games",
+                "1",
+                "--max-decision-rounds",
+                str(args.max_decision_rounds),
+                "--window-size",
+                str(args.window_size),
+                "--feature-count",
+                str(args.feature_count),
+            ],
+        ),
+        (
+            "run smoke self-play iteration loop",
+            [
+                "python",
+                "-m",
+                "pokezero.selfplay_cli",
+                "iterate",
+                "--run-dir",
+                str(selfplay_dir),
+                "--initial-policy",
+                f"linear:{teacher_dir / 'linear-bootstrap.json'}",
+                "--validation-data",
+                str(teacher_dir / "validation-rollouts.jsonl"),
+                "--iterations",
+                str(args.selfplay_iterations),
+                "--games-per-iteration",
+                str(args.selfplay_games),
+                "--workers",
+                str(args.workers),
+                "--evaluation-games",
+                str(args.evaluation_games),
+                "--promotion-registry",
+                str(promotion_registry),
+                "--promotion-artifact-dir",
+                str(promotion_artifact_dir),
+                "--auto-promote",
+                "--profile",
+                "smoke",
+                "--audit-after-iteration",
+                "--audit-profile",
+                "smoke",
+                "--showdown-root",
+                showdown_root,
+                "--max-decision-rounds",
+                str(args.max_decision_rounds),
+                "--window-size",
+                str(args.window_size),
+                "--feature-count",
+                str(args.feature_count),
+            ],
+        ),
+        (
+            "inspect self-play report",
+            [
+                "python",
+                "-m",
+                "pokezero.selfplay_cli",
+                "report",
+                "--run-dir",
+                str(selfplay_dir),
+            ],
+        ),
+        (
+            "audit smoke run",
+            [
+                "python",
+                "-m",
+                "pokezero.eval_cli",
+                "audit",
+                str(selfplay_dir),
+                "--profile",
+                "smoke",
+            ],
+        ),
+        (
+            "calibrate and compare smoke profile",
+            [
+                "python",
+                "-m",
+                "pokezero.eval_cli",
+                "audit-calibrate",
+                str(selfplay_dir),
+                "--compare-profile",
+                "smoke",
+                "--fail-on-profile",
+            ],
+        ),
+    )
+    return {
+        "purpose": "tiny CPU-only bootstrap/self-play plumbing validation",
+        "warning": "smoke-profile thresholds validate command flow, not policy strength",
+        "run_root": str(run_root),
+        "showdown_root": showdown_root,
+        "steps": [
+            {
+                "name": name,
+                "argv": argv,
+                "command": _shell_join(argv),
+            }
+            for name, argv in steps
+        ],
+    }
+
+
+def _shell_join(argv: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in argv)
 
 
 def _compare(args: argparse.Namespace) -> int:
