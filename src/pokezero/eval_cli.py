@@ -2668,7 +2668,7 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         _write_json_payload(args.write_config, config_payload)
         wrote_config_path = args.write_config
     if args.json:
-        payload = result.to_dict()
+        payload = _audit_calibration_payload(result)
         if profile_audit is not None:
             payload["profile_audit"] = profile_audit
         if sufficiency_requested:
@@ -3920,6 +3920,8 @@ def _cpu_long_run_calibration_result(
         "suggested_config": suggested_config,
         "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
         "suggested_post_iteration_flags": list(_post_iteration_audit_config_cli_flags(suggested_config)),
+        "minimum_evaluation_games": _minimum_selfplay_post_iteration_evaluation_games(suggested_config),
+        "suggested_post_iteration_command_flags": list(_post_iteration_selfplay_command_flags(suggested_config)),
         "min_latest_benchmark_games": suggested_config["min_latest_benchmark_games"],
         "require_benchmark": suggested_config["require_benchmark"],
         "require_benchmark_opponent_coverage": suggested_config["require_benchmark_opponent_coverage"],
@@ -3948,6 +3950,8 @@ def _empty_cpu_long_run_calibration_result(
         "suggested_config": suggested_config,
         "suggested_audit_flags": list(_audit_config_cli_flags(suggested_config)),
         "suggested_post_iteration_flags": list(_post_iteration_audit_config_cli_flags(suggested_config)),
+        "minimum_evaluation_games": _minimum_selfplay_post_iteration_evaluation_games(suggested_config),
+        "suggested_post_iteration_command_flags": list(_post_iteration_selfplay_command_flags(suggested_config)),
         "min_latest_benchmark_games": 0,
         "require_benchmark": False,
         "require_benchmark_opponent_coverage": False,
@@ -4110,6 +4114,10 @@ def _print_cpu_long_run_calibration(payload: Mapping[str, object]) -> None:
     print("suggested_post_iteration_flags:")
     post_iteration_flags = tuple(str(flag) for flag in payload.get("suggested_post_iteration_flags", ()))
     print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
+    print(f"minimum_evaluation_games: {_format_summary_value(payload.get('minimum_evaluation_games'))}")
+    print("suggested_post_iteration_command_flags:")
+    command_flags = tuple(str(flag) for flag in payload.get("suggested_post_iteration_command_flags", ()))
+    print(" ".join(command_flags) if command_flags else "-")
     if "calibration_sufficient" in payload:
         errors = tuple(str(error) for error in payload.get("calibration_sufficiency_errors", ()))
         _print_calibration_sufficiency(errors)
@@ -5991,7 +5999,9 @@ def _compare(args: argparse.Namespace) -> int:
     if args.json:
         payload = result.to_dict()
         if args.suggest_audit_calibration:
-            payload["audit_calibration"] = calibration.to_dict() if calibration is not None else None
+            payload["audit_calibration"] = (
+                _audit_calibration_payload(calibration) if calibration is not None else None
+            )
             payload["audit_calibration_error"] = calibration_error
             if calibration_sufficiency_requested:
                 payload["audit_calibration_sufficient"] = not calibration_sufficiency_errors
@@ -6235,10 +6245,25 @@ def _print_audit_calibration(result) -> None:
     print("suggested_post_iteration_flags:")
     post_iteration_flags = result.suggested_post_iteration_cli_flags()
     print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
+    suggested_config = result.suggested_config()
+    print(f"minimum_evaluation_games: {_minimum_selfplay_post_iteration_evaluation_games(suggested_config)}")
+    print("suggested_post_iteration_command_flags:")
+    command_flags = _post_iteration_selfplay_command_flags(suggested_config)
+    print(" ".join(command_flags) if command_flags else "-")
     if result.notes:
         print("notes:")
         for note in result.notes:
             print(f"- {note}")
+
+
+def _audit_calibration_payload(result) -> dict[str, object]:
+    payload = result.to_dict()
+    suggested_config = result.suggested_config()
+    payload["minimum_evaluation_games"] = _minimum_selfplay_post_iteration_evaluation_games(suggested_config)
+    payload["suggested_post_iteration_command_flags"] = list(
+        _post_iteration_selfplay_command_flags(suggested_config)
+    )
+    return payload
 
 
 def _calibration_sufficiency_errors(

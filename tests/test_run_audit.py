@@ -59,6 +59,24 @@ def selfplay_iterate_args_from_flags(flags: tuple[str, ...]):
     )
 
 
+def assert_valid_selfplay_post_iteration_command_flags(
+    test_case: unittest.TestCase,
+    *,
+    flags: tuple[str, ...],
+    config_payload: dict,
+    expected_evaluation_games: int,
+) -> None:
+    test_case.assertEqual(flags[:2], ("--evaluation-games", str(expected_evaluation_games)))
+    args = selfplay_iterate_args_from_flags(flags)
+    command_config = post_iteration_audit_config_from_args(args)
+    validate_post_iteration_audit_evaluation_games(
+        command_config,
+        evaluation_games=args.evaluation_games,
+        minimum_benchmark_matchups=MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+    )
+    test_case.assertEqual(command_config, RunAuditConfig(**config_payload))
+
+
 class RunAuditTest(unittest.TestCase):
     def test_audit_passes_healthy_linear_run(self) -> None:
         manifest = selfplay_manifest(
@@ -1657,6 +1675,13 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("--min-latest-benchmark-win-rate", payload["suggested_cli_flags"])
         self.assertIn("--audit-after-iteration", payload["suggested_post_iteration_cli_flags"])
         self.assertIn("--audit-min-latest-benchmark-win-rate", payload["suggested_post_iteration_cli_flags"])
+        self.assertEqual(payload["minimum_evaluation_games"], 5)
+        assert_valid_selfplay_post_iteration_command_flags(
+            self,
+            flags=tuple(payload["suggested_post_iteration_command_flags"]),
+            config_payload=payload["suggested_config"],
+            expected_evaluation_games=5,
+        )
 
     def test_eval_cli_audit_calibrate_can_discover_manifest_globs(self) -> None:
         first = selfplay_manifest(
@@ -1802,6 +1827,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("suggested_audit_flags:", stdout.getvalue())
         self.assertIn("suggested_post_iteration_flags:", stdout.getvalue())
+        self.assertIn("minimum_evaluation_games: 5", stdout.getvalue())
+        self.assertIn("suggested_post_iteration_command_flags:", stdout.getvalue())
+        self.assertIn("--evaluation-games 5 --audit-after-iteration", stdout.getvalue())
         self.assertIn("--audit-after-iteration", stdout.getvalue())
         self.assertIn("--max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
         self.assertIn("--audit-max-latest-benchmark-average-decision-rounds 13.2", stdout.getvalue())
@@ -2695,6 +2723,13 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["audit_calibration"]["source_type"], "linear_selfplay")
         self.assertEqual(payload["audit_calibration"]["margin"], 0.20)
         self.assertIn("--min-latest-benchmark-games", payload["audit_calibration"]["suggested_cli_flags"])
+        self.assertEqual(payload["audit_calibration"]["minimum_evaluation_games"], 13)
+        assert_valid_selfplay_post_iteration_command_flags(
+            self,
+            flags=tuple(payload["audit_calibration"]["suggested_post_iteration_command_flags"]),
+            config_payload=payload["audit_calibration"]["suggested_config"],
+            expected_evaluation_games=13,
+        )
         self.assertIsNone(payload["audit_calibration_error"])
 
     def test_eval_cli_compare_calibration_can_require_minimum_evidence(self) -> None:
@@ -3296,6 +3331,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("audit_calibration_suggestion:", output)
         self.assertIn("suggested_audit_flags:", output)
         self.assertIn("suggested_post_iteration_flags:", output)
+        self.assertIn("minimum_evaluation_games: 13", output)
+        self.assertIn("suggested_post_iteration_command_flags:", output)
+        self.assertIn("--evaluation-games 13 --audit-after-iteration", output)
         self.assertIn("--min-latest-benchmark-games", output)
         self.assertIn("--audit-min-latest-benchmark-games", output)
         self.assertNotIn("calibration_excluded_errors:", output)
