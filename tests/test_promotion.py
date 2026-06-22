@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pokezero.eval_cli import main as eval_cli_main
+from pokezero.eval_cli import OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION, main as eval_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.linear_policy import LinearPolicyModel, save_linear_model
 from pokezero.opponents import historical_opponent_policy_specs
@@ -706,6 +706,80 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertTrue(selected_statuses)
         self.assertTrue(all(not status["failed_checks"] for status in selected_statuses))
 
+    def test_eval_cli_promotions_can_write_verified_opponent_pool_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=3)
+            snapshot_path = temp_path / "pool-snapshot.json"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--verify",
+                        "--verify-opponent-pool-only",
+                        "--write-opponent-pool",
+                        str(snapshot_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["opponent_pool_snapshot_path"], str(snapshot_path))
+        self.assertEqual(payload["opponent_pool_snapshot"], snapshot)
+        self.assertEqual(snapshot["schema_version"], OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION)
+        self.assertEqual(snapshot["registry_path"], str(registry_path.resolve(strict=False)))
+        self.assertEqual(snapshot["requested_size"], 2)
+        self.assertEqual(snapshot["required_size"], 2)
+        self.assertEqual(snapshot["selected_size"], 2)
+        self.assertEqual(snapshot["available_size"], 2)
+        self.assertTrue(snapshot["requirement_passed"])
+        self.assertTrue(snapshot["verification_enabled"])
+        self.assertEqual(snapshot["verification_exit_scope"], "opponent_pool_plus_current")
+        self.assertTrue(snapshot["preflight_verified"])
+        self.assertTrue(snapshot["selected_opponent_pool_verified"])
+        self.assertEqual(snapshot["policy_specs"], payload["opponent_pool_policy_specs"])
+        self.assertEqual([entry["sequence"] for entry in snapshot["selected_entries"]], [1, 2])
+        self.assertTrue(all(entry["opponent_pool_status"] == "selected" for entry in snapshot["selected_entries"]))
+
+    def test_eval_cli_promotions_writes_snapshot_when_required_pool_size_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=2)
+            snapshot_path = temp_path / "pool-snapshot.json"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--require-opponent-pool-size",
+                        "2",
+                        "--write-opponent-pool",
+                        str(snapshot_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["opponent_pool_requirement_passed"])
+        self.assertFalse(snapshot["requirement_passed"])
+        self.assertEqual(snapshot["selected_size"], 1)
+        self.assertEqual(snapshot["required_size"], 2)
+
     def test_eval_cli_promotions_selected_opponent_pool_verification_fails_for_broken_selected_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -928,6 +1002,26 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("--verify-opponent-pool-only requires --verify", missing_verify.getvalue())
         self.assertEqual(missing_pool_exit, 1)
         self.assertIn("--verify-opponent-pool-only requires --opponent-pool-size", missing_pool.getvalue())
+
+    def test_eval_cli_promotions_write_opponent_pool_requires_pool_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=2)
+            snapshot_path = Path(temp_dir) / "pool-snapshot.json"
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--write-opponent-pool",
+                        str(snapshot_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--write-opponent-pool requires --opponent-pool-size", stderr.getvalue())
+        self.assertFalse(snapshot_path.exists())
 
     def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

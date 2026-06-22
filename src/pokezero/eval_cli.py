@@ -30,6 +30,7 @@ from .run_audit import (
 
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
+OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -98,6 +99,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--current-policy-spec",
         default=None,
         help="Policy spec to exclude from --opponent-pool-size instead of the latest promoted policy.",
+    )
+    promotions.add_argument(
+        "--write-opponent-pool",
+        type=Path,
+        default=None,
+        help=(
+            "With --opponent-pool-size, write a compact JSON snapshot of the selected promoted "
+            "opponent pool and preflight status."
+        ),
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
@@ -405,6 +415,8 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--current-policy-spec requires --opponent-pool-size.")
     if args.require_opponent_pool_size is not None and args.opponent_pool_size is None:
         raise ValueError("--require-opponent-pool-size requires --opponent-pool-size.")
+    if args.write_opponent_pool is not None and args.opponent_pool_size is None:
+        raise ValueError("--write-opponent-pool requires --opponent-pool-size.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
     if (
@@ -477,6 +489,28 @@ def _promotions(args: argparse.Namespace) -> int:
             and opponent_pool_current_policy_verified is not False
         )
     )
+    opponent_pool_snapshot = (
+        _opponent_pool_snapshot_payload(
+            registry=registry,
+            entry_statuses=entry_statuses,
+            opponent_pool=opponent_pool,
+            available_opponent_pool=available_opponent_pool,
+            current_policy_spec=preview_current_policy_spec,
+            requested_size=args.opponent_pool_size,
+            required_size=args.require_opponent_pool_size,
+            verification=verification,
+            verify_opponent_pool_only=args.verify_opponent_pool_only,
+            opponent_pool_verified=opponent_pool_verified,
+            selected_opponent_pool_verified=selected_opponent_pool_verified,
+            opponent_pool_current_policy_verified=opponent_pool_current_policy_verified,
+            opponent_pool_registry_level_verified=opponent_pool_registry_level_verified,
+            opponent_pool_preflight_verified=opponent_pool_preflight_verified,
+        )
+        if opponent_pool is not None
+        else None
+    )
+    if args.write_opponent_pool is not None and opponent_pool_snapshot is not None:
+        _write_json_payload(args.write_opponent_pool, opponent_pool_snapshot)
     if args.json:
         payload = registry.to_dict()
         payload["entry_statuses"] = entry_statuses
@@ -503,6 +537,9 @@ def _promotions(args: argparse.Namespace) -> int:
                 opponent_pool,
                 required_size=args.require_opponent_pool_size,
             )
+            payload["opponent_pool_snapshot"] = opponent_pool_snapshot
+            if args.write_opponent_pool is not None:
+                payload["opponent_pool_snapshot_path"] = str(args.write_opponent_pool)
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -573,6 +610,8 @@ def _promotions(args: argparse.Namespace) -> int:
         print("opponent_pool_policy_specs:")
         for spec in opponent_pool:
             print(f"- {spec}")
+        if args.write_opponent_pool is not None:
+            print(f"opponent_pool_snapshot: {args.write_opponent_pool}")
         if verification is None:
             print("note: pass --verify to confirm the previewed registry is selectable by runtime.")
     if verification is not None:
@@ -610,6 +649,63 @@ def _opponent_pool_requirement_passed(
     required_size: int | None,
 ) -> bool:
     return required_size is None or (opponent_pool is not None and len(opponent_pool) >= required_size)
+
+
+def _opponent_pool_snapshot_payload(
+    *,
+    registry,
+    entry_statuses: list[dict[str, object]],
+    opponent_pool,
+    available_opponent_pool,
+    current_policy_spec: str | None,
+    requested_size: int | None,
+    required_size: int | None,
+    verification,
+    verify_opponent_pool_only: bool,
+    opponent_pool_verified: bool | None,
+    selected_opponent_pool_verified: bool | None,
+    opponent_pool_current_policy_verified: bool | None,
+    opponent_pool_registry_level_verified: bool | None,
+    opponent_pool_preflight_verified: bool | None,
+) -> dict[str, object]:
+    selected_statuses = [
+        status
+        for status in entry_statuses
+        if "opponent_pool" in status["selected_as"]
+    ]
+    return {
+        "schema_version": OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "registry_path": str(registry.path),
+        "registry_latest_policy_id": registry.latest.policy_id if registry.latest is not None else None,
+        "registry_latest_checkpoint_path": registry.latest.checkpoint_path if registry.latest is not None else None,
+        "excluded_current_policy_spec": current_policy_spec,
+        "requested_size": requested_size,
+        "required_size": required_size,
+        "selected_size": len(opponent_pool),
+        "available_size": len(available_opponent_pool) if available_opponent_pool is not None else None,
+        "requirement_passed": _opponent_pool_requirement_passed(opponent_pool, required_size=required_size),
+        "verification_enabled": verification is not None,
+        "verification_exit_scope": (
+            None
+            if verification is None
+            else "opponent_pool_plus_current" if verify_opponent_pool_only else "registry"
+        ),
+        "opponent_pool_verified": opponent_pool_verified,
+        "selected_opponent_pool_verified": selected_opponent_pool_verified,
+        "current_policy_verified": opponent_pool_current_policy_verified,
+        "registry_level_verified": opponent_pool_registry_level_verified,
+        "preflight_verified": opponent_pool_preflight_verified,
+        "policy_specs": list(opponent_pool),
+        "selected_entries": selected_statuses,
+    }
+
+
+def _write_json_payload(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def _opponent_pool_verification_passed(

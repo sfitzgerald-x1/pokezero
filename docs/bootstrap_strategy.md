@@ -383,12 +383,17 @@ Preview the historical opponent pool that self-play would draw from before start
 python -m pokezero.eval_cli promotions \
   --registry runs/promotions.json \
   --opponent-pool-size 3 \
-  --require-opponent-pool-size 3
+  --require-opponent-pool-size 3 \
+  --verify \
+  --verify-opponent-pool-only \
+  --write-opponent-pool runs/opponent-pool-snapshot.json
 ```
 
 By default, the preview assumes the latest promoted checkpoint is the current collector and excludes it from the historical opponent slice, matching the steady-state auto-promotion loop. Add `--current-policy-spec linear:/path/to/current.json` to preview a different current collector. Add `--require-opponent-pool-size N` when using the command as a long-run preflight; it exits non-zero if fewer than `N` promoted historical opponents appear in the capped preview after current-policy exclusion. The requirement cannot exceed `--opponent-pool-size`. Use `--verify` or `--verify --verify-loadable` when the preflight must also prove promoted checkpoints exist, match checksums, and can be loaded by the runtime. Add `--verify-opponent-pool-only` when the long-run preflight should fail only for broken checkpoints in the selected opponent pool, any registry entry excluded as the current collector, or registry-level integrity failures, while still annotating stale entry-specific failures elsewhere in the registry. An external `--current-policy-spec` that is not a registry entry is used for pool exclusion but is not itself verified by registry verification. The report annotates each promotion entry with whether it is the latest checkpoint, part of the previewed opponent pool, and whether verification has checked checkpoint existence, checksums, loadability, and policy-id consistency.
 
 When an opponent pool is previewed, each entry also includes an `opponent_pool_status` such as `selected`, `unselectable`, `excluded_current_policy`, or `available_outside_requested_size`. Use these statuses to diagnose why a required pool is undersized before starting a long run.
+
+Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected.
 
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 
