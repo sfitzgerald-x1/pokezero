@@ -3197,6 +3197,69 @@ if __name__ == "__main__":
         self.assertEqual(failed_summary["steps"][0]["returncode"], None)
         self.assertEqual(failed_summary["steps"][0]["error_type"], "FileNotFoundError")
 
+    def test_eval_cli_cpu_long_run_report_prints_passed_summary_from_run_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            write_json(summary_path, cpu_long_run_summary(status="passed"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("cpu_long_run_report:", output)
+        self.assertIn("status: PASS", output)
+        self.assertIn("long_run_ready: yes", output)
+        self.assertIn("failed_reason: -", output)
+        self.assertIn("failed_step: -", output)
+        self.assertIn("- 1: PASS run guarded CPU self-play long run returncode=0", output)
+
+    def test_eval_cli_cpu_long_run_report_json_includes_rejected_plan_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            summary = cpu_long_run_summary(
+                status="failed",
+                failed_reason="long_run_not_ready",
+                long_run_ready=False,
+                ready_reasons=["pilot_suite_status_not_passed"],
+                steps=[],
+            )
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(summary_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["summary_source_path"], str(summary_path))
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["failed_reason"], "long_run_not_ready")
+        self.assertEqual(payload["recipe"]["long_run_ready"], False)
+        self.assertEqual(payload["recipe"]["long_run_ready_reasons"], ["pilot_suite_status_not_passed"])
+
+    def test_eval_cli_cpu_long_run_report_running_summary_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, cpu_long_run_summary(status="running"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("status: RUNNING", stdout.getvalue())
+
+    def test_eval_cli_cpu_long_run_report_rejects_wrong_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "summary.json"
+            write_json(summary_path, {"schema_version": "wrong"})
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Unsupported cpu long-run summary schema", stderr.getvalue())
+
     def test_eval_cli_cpu_pilot_report_includes_pilot_smoke_preflight_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "pilots"
@@ -4093,6 +4156,64 @@ def write_ready_cpu_long_run_pilot(
         ),
     )
     return pilot_root, audit_config_path, checkpoint_path, validation_path
+
+
+def cpu_long_run_summary(
+    *,
+    status: str,
+    failed_reason: str | None = None,
+    long_run_ready: bool = True,
+    ready_reasons: list[str] | None = None,
+    steps: list[dict] | None = None,
+) -> dict:
+    step_payloads = (
+        steps
+        if steps is not None
+        else [
+            {
+                "index": 1,
+                "name": "run guarded CPU self-play long run",
+                "status": "passed",
+                "returncode": 0,
+                "duration_seconds": 12.5,
+            }
+        ]
+    )
+    failed_step = None
+    if failed_reason == "step_failed" and step_payloads:
+        failed_step = {
+            "index": step_payloads[0]["index"],
+            "name": step_payloads[0]["name"],
+            "returncode": step_payloads[0].get("returncode"),
+        }
+    return {
+        "schema_version": "pokezero.cpu_long_run_summary.v1",
+        "status": status,
+        "summary_path": "run/cpu-long-run-run-summary.json",
+        "started_at": "2026-06-22T12:00:00.000Z",
+        "ended_at": "2026-06-22T12:01:00.000Z",
+        "duration_seconds": 60.0,
+        "source": {
+            "available": True,
+            "repo_root": "/repo",
+            "branch": "main",
+            "head": "abc123",
+            "dirty": False,
+        },
+        "recipe": {
+            "schema_version": "pokezero.cpu_long_run_plan.v1",
+            "long_run_ready": long_run_ready,
+            "long_run_ready_reasons": list(ready_reasons or ()),
+            "pilot_summary_path": "runs/cpu-pilots/cpu-pilot-suite-summary.json",
+            "audit_config_path": "runs/cpu-pilots/pilot-audit-config.json",
+            "run_dir": "runs/linear-long-run",
+            "steps": [],
+        },
+        "steps": step_payloads,
+        "failed_step": failed_step,
+        "failed_reason": failed_reason,
+        "long_run_ready_reasons": list(ready_reasons or ()),
+    }
 
 
 def write_json(path: Path, payload: dict) -> None:
