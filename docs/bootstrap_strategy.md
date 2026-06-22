@@ -111,7 +111,7 @@ Run a slightly broader CPU pilot suite when a single smoke run is not enough evi
   --seed-stride 10000
 ```
 
-This wrapper runs `cpu-smoke-run` repeatedly under `RUN_ROOT/pilot-0001`, `RUN_ROOT/pilot-0002`, and so on, using deterministic seed offsets for each pilot. After the pilots finish, it compares `RUN_ROOT/pilot-*/selfplay/manifest.json`, writes `RUN_ROOT/pilot-audit-config.json` through compare-time audit calibration with envelope aggregation and sufficiency requirements, then reruns `compare --audit-config --fail-on-audit` against the pilot manifests. Envelope aggregation is intentional here because the suite-level replay must keep every supplied pilot passable. That replay is a plumbing check for config loadability and wiring, not a held-out policy-quality signal; the generated config becomes meaningful when applied to later runs. The suite writes `RUN_ROOT/cpu-pilot-suite-summary.json` with the executed recipe, source metadata, per-step exit codes, timestamps, and final pass/fail status.
+This wrapper runs `cpu-smoke-run` repeatedly under `RUN_ROOT/pilot-0001`, `RUN_ROOT/pilot-0002`, and so on, using deterministic seed offsets for each pilot. After the pilots finish, it compares `RUN_ROOT/pilot-*/selfplay/manifest.json`, writes `RUN_ROOT/pilot-audit-config.json` through compare-time audit calibration with envelope aggregation and sufficiency requirements, then reruns `compare --audit-config --fail-on-audit` against the pilot manifests. Envelope aggregation is intentional here because the suite-level replay must keep every supplied pilot passable. That replay is a plumbing check for config loadability and wiring, not a held-out policy-quality signal; the generated config becomes meaningful when applied to later runs. The suite writes `RUN_ROOT/cpu-pilot-suite-summary.json` with the executed recipe, source metadata, per-step exit codes, timestamps, and final pass/fail status. It also persists the two compare JSON payloads as `RUN_ROOT/pilot-calibration-compare.json` and `RUN_ROOT/pilot-audit-replay.json`, so later reports can inspect the exact calibration suggestion and replay audit result without rerunning the suite.
 
 For pilot suites, `--audit-config-path` controls the suite-level calibrated audit config. Each nested smoke pilot still writes its own `PILOT_ROOT/smoke-audit-config.json`. Pilot seed offsets must stay within the smoke recipe's seed band, so `(pilot-count - 1) * seed-stride` must be less than `1_000_000`; this prevents pilot collection seeds from colliding with validation, benchmark, preflight, self-play, or evaluation seed bands.
 
@@ -124,7 +124,7 @@ Inspect or preflight the pilot suite without rerunning games:
 ./.venv/bin/python -m pokezero.eval_cli cpu-pilot-report runs/cpu-pilots
 ```
 
-Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
+The pilot report surfaces the calibrated audit config path, persisted compare artifact paths, and replay audit status when the replay JSON is available. Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
 
 Import normalized replay decisions into standard rollout JSONL:
 
