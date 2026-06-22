@@ -97,6 +97,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional promotion registry. When set, historical opponents come from promoted checkpoints instead of raw accepted neural checkpoints.",
     )
     iterate.add_argument(
+        "--require-promoted-opponent-pool-size",
+        type=int,
+        default=None,
+        help=(
+            "Fail before rollout collection unless at least this many promoted historical opponents "
+            "are selectable from the promotion registry after current-policy exclusion. "
+            "Cannot exceed --max-historical-opponents."
+        ),
+    )
+    iterate.add_argument(
         "--auto-promote",
         action="store_true",
         help="After each iteration, evaluate the promotion gate and record passing checkpoints in --promotion-registry.",
@@ -347,6 +357,7 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_seed_start=args.evaluation_seed_start,
         worker_count=args.workers,
         promotion_registry_path=args.promotion_registry,
+        required_promoted_opponent_pool_size=args.require_promoted_opponent_pool_size,
         auto_promotion_config=auto_promotion_config,
         post_iteration_audit_config=post_iteration_audit_config,
         resume=args.resume,

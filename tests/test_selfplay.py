@@ -578,12 +578,108 @@ class SelfPlayTest(unittest.TestCase):
                 fixed_opponent_policy_specs=("random-legal",),
                 max_historical_opponents=1,
                 promotion_registry_path=registry_path,
+                required_promoted_opponent_pool_size=1,
             )
 
         promoted_spec = f"linear:{promoted_checkpoint_path.resolve(strict=False)}"
         self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertNotIn(result.iterations[0].checkpoint_policy_spec, result.iterations[1].opponent_policy_specs)
+
+    def test_run_selfplay_iterations_can_require_promoted_opponent_pool_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            promoted_checkpoint_path = temp_path / "promoted-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                promoted_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted",
+                ),
+            )
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(promoted_checkpoint_path,),
+                policy_ids=("linear-promoted",),
+            )
+
+            with self.assertRaisesRegex(ValueError, "promoted opponent pool has 1 selectable opponents.*required 2"):
+                run_selfplay_iterations(
+                    run_dir=temp_path / "run",
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: self.fail("collection should not start when promoted pool is undersized"),
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    max_historical_opponents=2,
+                    promotion_registry_path=registry_path,
+                    required_promoted_opponent_pool_size=2,
+                )
+
+    def test_run_selfplay_iterations_rejects_required_promoted_pool_without_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "requires a promotion registry"):
+                run_selfplay_iterations(
+                    run_dir=Path(temp_dir) / "run",
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: self.fail("collection should not start without required registry"),
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    required_promoted_opponent_pool_size=1,
+                )
+
+    def test_run_selfplay_iterations_rejects_required_promoted_pool_above_historical_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            promoted_checkpoint_path = temp_path / "promoted-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                promoted_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted",
+                ),
+            )
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(promoted_checkpoint_path,),
+                policy_ids=("linear-promoted",),
+            )
+
+            with self.assertRaisesRegex(ValueError, "cannot exceed max_historical_opponents"):
+                run_selfplay_iterations(
+                    run_dir=temp_path / "run",
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: self.fail("collection should not start when requirement exceeds cap"),
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    max_historical_opponents=1,
+                    promotion_registry_path=registry_path,
+                    required_promoted_opponent_pool_size=2,
+                )
 
     def test_promoted_checkpoint_specs_verify_registry_before_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1194,6 +1290,8 @@ class SelfPlayTest(unittest.TestCase):
                         "--auto-promote",
                         "--promotion-registry",
                         "promotions.json",
+                        "--require-promoted-opponent-pool-size",
+                        "2",
                         "--promotion-artifact-dir",
                         "promoted-checkpoints",
                         "--promotion-label-prefix",
@@ -1235,6 +1333,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["evaluation_games"], 3)
         self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
+        self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)
         self.assertEqual(kwargs["auto_promotion_config"].registry_path, Path("promotions.json"))
         self.assertEqual(kwargs["auto_promotion_config"].artifact_dir, Path("promoted-checkpoints"))
         self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")

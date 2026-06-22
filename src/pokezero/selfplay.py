@@ -33,7 +33,7 @@ from .linear_policy import (
     save_linear_model,
     train_linear_policy,
 )
-from .opponents import opponent_pool_policy_specs
+from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .trajectory import BattleTrajectory
@@ -163,6 +163,7 @@ def run_selfplay_iterations(
     evaluation_seed_start: int = 1_000_000,
     validation_rollout_paths: Iterable[Path] | None = None,
     promotion_registry_path: Path | None = None,
+    required_promoted_opponent_pool_size: int | None = None,
     auto_promotion_config: SelfPlayPromotionConfig | None = None,
     post_iteration_audit_config: "RunAuditConfig | None" = None,
     resume: bool = False,
@@ -176,6 +177,8 @@ def run_selfplay_iterations(
         raise ValueError("max_historical_opponents must be non-negative.")
     if evaluation_games < 0:
         raise ValueError("evaluation_games must be non-negative.")
+    if required_promoted_opponent_pool_size is not None and required_promoted_opponent_pool_size < 0:
+        raise ValueError("required_promoted_opponent_pool_size must be non-negative.")
     if worker_count <= 0:
         raise ValueError("worker_count must be positive.")
 
@@ -242,6 +245,13 @@ def run_selfplay_iterations(
         if current_model is not None:
             _validate_training_config_matches_model(training_config, current_model)
     _validate_validation_rollout_paths(validation_paths)
+    _require_promoted_opponent_pool(
+        promoted_checkpoint_specs,
+        promotion_pool_registry_path=promotion_pool_registry_path,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+        required_size=required_promoted_opponent_pool_size,
+    )
     results: list[SelfPlayIterationResult] = []
 
     for offset in range(iterations):
@@ -576,6 +586,27 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
     return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
+
+
+def _require_promoted_opponent_pool(
+    promoted_checkpoint_specs: Iterable[str],
+    *,
+    promotion_pool_registry_path: Path | None,
+    current_policy_spec: str,
+    max_historical_opponents: int,
+    required_size: int | None,
+) -> None:
+    if required_size is None:
+        return
+    if promotion_pool_registry_path is None:
+        raise ValueError("required promoted opponent pool size requires a promotion registry.")
+    require_historical_opponent_pool_size(
+        promoted_checkpoint_specs,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+        required_size=required_size,
+        pool_label="promoted opponent pool",
+    )
 
 
 def _default_benchmark_reference_policy_specs(
