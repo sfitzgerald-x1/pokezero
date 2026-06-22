@@ -85,6 +85,7 @@ class ShowdownReplayState:
     public_active: Mapping[str, ShowdownPokemon]
     public_revealed: Mapping[str, tuple[ShowdownPokemon, ...]]
     side_conditions: Mapping[str, tuple[str, ...]]
+    side_condition_counts: Mapping[str, Mapping[str, int]]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     winner: Optional[str] = None
@@ -130,6 +131,8 @@ class PlayerRelativeBattleState:
     opponent_team: tuple[ShowdownPokemon, ...]
     self_side_conditions: tuple[str, ...]
     opponent_side_conditions: tuple[str, ...]
+    self_side_condition_counts: Mapping[str, int]
+    opponent_side_condition_counts: Mapping[str, int]
     belief_view: PlayerBeliefView
     legal_action_mask: tuple[bool, ...]
     recent_events: tuple[PlayerRelativePublicEvent, ...]
@@ -151,7 +154,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     requests: dict[str, Mapping[str, Any]] = {}
     public_active: dict[str, ShowdownPokemon] = {}
     public_revealed: dict[str, list[ShowdownPokemon]] = {}
-    side_conditions: dict[str, set[str]] = {"p1": set(), "p2": set()}
+    side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
     public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
     winner: Optional[str] = None
@@ -191,7 +194,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
-        _update_side_conditions(parts, side_conditions)
+        _update_side_conditions(parts, side_condition_counts)
         public_events.append(_public_event_from_line(line))
         public_lines.append(line)
 
@@ -201,7 +204,11 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         requests=requests,
         public_active=public_active,
         public_revealed={slot: tuple(pokemon) for slot, pokemon in public_revealed.items()},
-        side_conditions={slot: tuple(sorted(conditions)) for slot, conditions in side_conditions.items()},
+        side_conditions={slot: tuple(sorted(conditions)) for slot, conditions in _side_conditions_from_counts(side_condition_counts).items()},
+        side_condition_counts={
+            slot: dict(sorted(conditions.items()))
+            for slot, conditions in side_condition_counts.items()
+        },
         public_events=tuple(public_events),
         public_lines=tuple(public_lines),
         winner=winner,
@@ -279,6 +286,8 @@ def normalize_for_player(
         opponent_team=opponent_team,
         self_side_conditions=tuple(replay.side_conditions.get(showdown_slot, ())),
         opponent_side_conditions=tuple(replay.side_conditions.get(opponent_slot, ())),
+        self_side_condition_counts=dict(replay.side_condition_counts.get(showdown_slot, {})),
+        opponent_side_condition_counts=dict(replay.side_condition_counts.get(opponent_slot, {})),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -397,7 +406,14 @@ def _pokemon_from_public_line(parts: Sequence[str]) -> ShowdownPokemon | None:
     )
 
 
-def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, set[str]]) -> None:
+def _side_conditions_from_counts(side_condition_counts: Mapping[str, Mapping[str, int]]) -> dict[str, set[str]]:
+    return {
+        slot: {condition for condition, count in conditions.items() if count > 0}
+        for slot, conditions in side_condition_counts.items()
+    }
+
+
+def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, dict[str, int]]) -> None:
     event_type = parts[1] if len(parts) > 1 else ""
     if event_type not in {"-sidestart", "-sideend"} or len(parts) < 4:
         return
@@ -408,9 +424,20 @@ def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, set
     if not condition:
         return
     if event_type == "-sidestart":
-        side_conditions[slot].add(condition)
+        side_conditions[slot][condition] = min(
+            _side_condition_max_layers(condition),
+            side_conditions[slot].get(condition, 0) + 1,
+        )
     else:
-        side_conditions[slot].discard(condition)
+        side_conditions[slot].pop(condition, None)
+
+
+def _side_condition_max_layers(condition: str) -> int:
+    if condition == "spikes":
+        return 3
+    if condition == "toxicspikes":
+        return 2
+    return 1
 
 
 def _side_condition_identifier(raw_condition: str) -> str:
@@ -687,6 +714,8 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_showdown_slot": state.perspective.opponent_showdown_slot,
         "self_side_conditions": list(state.self_side_conditions),
         "opponent_side_conditions": list(state.opponent_side_conditions),
+        "self_side_condition_counts": dict(state.self_side_condition_counts),
+        "opponent_side_condition_counts": dict(state.opponent_side_condition_counts),
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],

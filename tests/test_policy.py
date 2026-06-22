@@ -341,6 +341,91 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 0)
 
+    def test_scripted_teacher_values_spikes_when_no_layers_are_known(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_side_conditions": [],
+                "opponent_side_condition_counts": {},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "spikes", "move_name": "Spikes"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIn("layers=0/3", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 62.0)
+
+    def test_scripted_teacher_values_spikes_when_layers_remain_available(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_side_conditions": ["spikes"],
+                "opponent_side_condition_counts": {"spikes": 2},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "spikes", "move_name": "Spikes"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIn("layers=2/3", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 62.0)
+
+    def test_scripted_teacher_preserves_legacy_spikes_metadata_behavior(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_side_conditions": ["spikes"],
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "spikes", "move_name": "Spikes"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIn("layers=1/3", decision.metadata["teacher_reason"])
+        self.assertEqual(decision.metadata["teacher_score"], 62.0)
+
+    def test_scripted_teacher_does_not_value_spikes_when_maxed(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "opponent_side_conditions": ["spikes"],
+                "opponent_side_condition_counts": {"spikes": 3},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "spikes", "move_name": "Spikes"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+
     def test_scripted_teacher_penalizes_statused_switch_targets(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
@@ -471,6 +556,15 @@ def teacher_dex():
                     "id": "healbell",
                     "name": "Heal Bell",
                     "type": "Normal",
+                    "category": "Status",
+                    "basePower": 0,
+                    "accuracy": True,
+                    "priority": 0,
+                },
+                "spikes": {
+                    "id": "spikes",
+                    "name": "Spikes",
+                    "type": "Ground",
                     "category": "Status",
                     "basePower": 0,
                     "accuracy": True,
