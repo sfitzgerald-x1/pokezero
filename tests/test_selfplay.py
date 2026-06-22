@@ -21,6 +21,7 @@ from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayPromotionConfig,
+    _promoted_checkpoint_specs,
     collect_selfplay_rollouts,
     run_selfplay_iterations,
 )
@@ -399,6 +400,15 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertEqual(result.iterations[1].opponent_policy_specs, ("random-legal", promoted_spec))
         self.assertNotIn(result.iterations[0].checkpoint_policy_spec, result.iterations[1].opponent_policy_specs)
+
+    def test_promoted_checkpoint_specs_verify_registry_before_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "promotions.json"
+            write_promotion_registry(registry_path, checkpoint_paths=(temp_path / "missing-linear.json",))
+
+            with self.assertRaisesRegex(ValueError, "promotion registry verification failed"):
+                _promoted_checkpoint_specs(registry_path)
 
     def test_run_selfplay_iterations_auto_promotes_and_feeds_next_opponent_pool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -445,7 +445,12 @@ def _benchmark_checkpoint(
 def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[str, ...]:
     if promotion_registry_path is None:
         return ()
-    from .promotion import load_promotion_registry
+    from .promotion import load_promotion_registry, verify_promotion_registry
+
+    verification = verify_promotion_registry(promotion_registry_path)
+    if not verification.passed:
+        failed = ", ".join(check.name for check in verification.checks if not check.passed)
+        raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
     return load_promotion_registry(promotion_registry_path).checkpoint_policy_specs()
 

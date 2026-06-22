@@ -128,8 +128,11 @@ from .promotion import (
     PromotionRecordResult,
     PromotionRegistry,
     PromotionRegistryEntry,
+    PromotionRegistryVerificationCheck,
+    PromotionRegistryVerificationResult,
     load_promotion_registry,
     record_promotion,
+    verify_promotion_registry,
 )
 from .run_audit import (
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
@@ -231,6 +234,8 @@ __all__ = [
     "PromotionRecordResult",
     "PromotionRegistry",
     "PromotionRegistryEntry",
+    "PromotionRegistryVerificationCheck",
+    "PromotionRegistryVerificationResult",
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
     "RolloutRecord",
@@ -317,4 +322,5 @@ __all__ = [
     "train_transformer_policy",
     "training_batch_to_torch",
     "training_batch_from_examples",
+    "verify_promotion_registry",
 ]

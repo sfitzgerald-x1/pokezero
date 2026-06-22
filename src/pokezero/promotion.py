@@ -105,6 +105,49 @@ class PromotionRecordResult:
         }
 
 
+@dataclass(frozen=True)
+class PromotionRegistryVerificationCheck:
+    name: str
+    passed: bool
+    entry_sequence: int | None
+    observed: str | int | bool | None
+    expected: str | int | bool | None
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "entry_sequence": self.entry_sequence,
+            "observed": self.observed,
+            "expected": self.expected,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
+class PromotionRegistryVerificationResult:
+    registry_path: Path
+    entry_count: int
+    checked_checkpoint_count: int
+    verified_checksum_count: int
+    checks: tuple[PromotionRegistryVerificationCheck, ...]
+
+    @property
+    def passed(self) -> bool:
+        return all(check.passed for check in self.checks)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "registry_path": str(self.registry_path),
+            "entry_count": self.entry_count,
+            "checked_checkpoint_count": self.checked_checkpoint_count,
+            "verified_checksum_count": self.verified_checksum_count,
+            "passed": self.passed,
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
 def load_promotion_registry(path: Path) -> PromotionRegistry:
     registry_path = path.expanduser()
     if not registry_path.exists():
@@ -177,6 +220,79 @@ def record_promotion(
     )
 
 
+def verify_promotion_registry(
+    path: Path,
+    *,
+    verify_checksums: bool = True,
+    require_checksums: bool = False,
+) -> PromotionRegistryVerificationResult:
+    registry = load_promotion_registry(path)
+    checks: list[PromotionRegistryVerificationCheck] = [
+        _sequence_check(registry),
+    ]
+    checked_checkpoint_count = 0
+    verified_checksum_count = 0
+    for entry in registry.entries:
+        checks.append(_gate_result_passed_check(entry))
+        if not entry.checkpoint_path:
+            checks.append(
+                PromotionRegistryVerificationCheck(
+                    name="checkpoint_path_present",
+                    passed=False,
+                    entry_sequence=entry.sequence,
+                    observed=entry.checkpoint_path,
+                    expected="non-empty",
+                    message="promotion entry must include a checkpoint path",
+                )
+            )
+            continue
+        resolved_checkpoint = _resolve_selection_checkpoint_path(entry.checkpoint_path)
+        checks.append(
+            PromotionRegistryVerificationCheck(
+                name="checkpoint_exists",
+                passed=resolved_checkpoint is not None,
+                entry_sequence=entry.sequence,
+                observed=entry.checkpoint_path,
+                expected="existing file",
+                message="promotion checkpoint path resolves to an existing file",
+            )
+        )
+        if resolved_checkpoint is None:
+            continue
+        checked_checkpoint_count += 1
+        if verify_checksums and entry.checkpoint_sha256 is not None:
+            observed_sha256 = _sha256_file(resolved_checkpoint)
+            verified_checksum_count += 1
+            checks.append(
+                PromotionRegistryVerificationCheck(
+                    name="checkpoint_sha256",
+                    passed=observed_sha256 == entry.checkpoint_sha256,
+                    entry_sequence=entry.sequence,
+                    observed=observed_sha256,
+                    expected=entry.checkpoint_sha256,
+                    message="promotion checkpoint checksum matches registry metadata",
+                )
+            )
+        elif require_checksums:
+            checks.append(
+                PromotionRegistryVerificationCheck(
+                    name="checkpoint_sha256_present",
+                    passed=False,
+                    entry_sequence=entry.sequence,
+                    observed=None,
+                    expected="sha256 metadata",
+                    message="promotion checkpoint checksum metadata is required",
+                )
+            )
+    return PromotionRegistryVerificationResult(
+        registry_path=registry.path,
+        entry_count=len(registry.entries),
+        checked_checkpoint_count=checked_checkpoint_count,
+        verified_checksum_count=verified_checksum_count,
+        checks=tuple(checks),
+    )
+
+
 def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
     entry = _mapping(payload)
     return PromotionRegistryEntry(
@@ -192,6 +308,32 @@ def _entry_from_payload(payload: Any) -> PromotionRegistryEntry:
         gate_result=_mapping(entry.get("gate_result", {})),
         source_checkpoint_path=_optional_str(entry.get("source_checkpoint_path")),
         checkpoint_sha256=_optional_str(entry.get("checkpoint_sha256")),
+    )
+
+
+def _sequence_check(registry: PromotionRegistry) -> PromotionRegistryVerificationCheck:
+    observed = tuple(entry.sequence for entry in registry.entries)
+    expected = tuple(range(1, len(registry.entries) + 1))
+    return PromotionRegistryVerificationCheck(
+        name="sequence_contiguous",
+        passed=observed == expected,
+        entry_sequence=None,
+        observed=",".join(str(sequence) for sequence in observed),
+        expected=",".join(str(sequence) for sequence in expected),
+        message="promotion registry sequences are contiguous and ordered",
+    )
+
+
+def _gate_result_passed_check(entry: PromotionRegistryEntry) -> PromotionRegistryVerificationCheck:
+    gate_result = _mapping(entry.gate_result)
+    observed = bool(gate_result.get("passed"))
+    return PromotionRegistryVerificationCheck(
+        name="gate_result_passed",
+        passed=observed,
+        entry_sequence=entry.sequence,
+        observed=observed,
+        expected=True,
+        message="promotion entry embeds a passing gate result",
     )
 
 
@@ -245,6 +387,13 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, manifest_path: Path) -> Pa
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
+    return None
+
+
+def _resolve_selection_checkpoint_path(checkpoint_path: str) -> Path | None:
+    raw_path = Path(checkpoint_path).expanduser()
+    if raw_path.exists() and raw_path.is_file():
+        return raw_path
     return None
 
 

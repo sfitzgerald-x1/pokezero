@@ -21,7 +21,7 @@ from .evaluation import (
     PromotionGateConfig,
     evaluate_promotion_gate,
 )
-from .promotion import load_promotion_registry, record_promotion
+from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
     DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
@@ -59,6 +59,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     promotions = subparsers.add_parser("promotions", help="Print a promotion registry summary.")
     promotions.add_argument("--registry", type=Path, required=True, help="Promotion registry JSON path.")
+    promotions.add_argument("--verify", action="store_true", help="Verify promoted checkpoint paths and stored checksums.")
+    promotions.add_argument("--skip-checksum", action="store_true", help="With --verify, skip checksum validation even when metadata exists.")
+    promotions.add_argument("--require-checksum", action="store_true", help="With --verify, fail entries that do not include checksum metadata.")
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
 
@@ -129,10 +132,24 @@ def _promote(args: argparse.Namespace) -> int:
 
 
 def _promotions(args: argparse.Namespace) -> int:
+    if args.skip_checksum and args.require_checksum:
+        raise ValueError("--skip-checksum cannot be combined with --require-checksum.")
     registry = load_promotion_registry(args.registry)
+    verification = (
+        verify_promotion_registry(
+            args.registry,
+            verify_checksums=not args.skip_checksum,
+            require_checksums=args.require_checksum,
+        )
+        if args.verify
+        else None
+    )
     if args.json:
-        print(json.dumps(registry.to_dict(), indent=2, sort_keys=True))
-        return 0
+        payload = registry.to_dict()
+        if verification is not None:
+            payload["verification"] = verification.to_dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if verification is None or verification.passed else 2
     print(f"registry: {registry.path}")
     print(f"promotions: {len(registry.entries)}")
     if registry.latest is not None:
@@ -147,7 +164,9 @@ def _promotions(args: argparse.Namespace) -> int:
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
                 f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}{source}"
             )
-    return 0
+    if verification is not None:
+        _print_registry_verification(verification)
+    return 0 if verification is None or verification.passed else 2
 
 
 def _audit(args: argparse.Namespace) -> int:
@@ -262,6 +281,21 @@ def _print_audit_result(result) -> None:
     for check in result.checks:
         check_status = "pass" if check.passed else "fail"
         print(f"- {check_status} {check.name}: observed={check.observed} threshold={check.threshold}")
+
+
+def _print_registry_verification(result) -> None:
+    status = "PASS" if result.passed else "FAIL"
+    print(f"verification_status: {status}")
+    print(f"checked_checkpoints: {result.checked_checkpoint_count}")
+    print(f"verified_checksums: {result.verified_checksum_count}")
+    print("verification_checks:")
+    for check in result.checks:
+        check_status = "pass" if check.passed else "fail"
+        entry = "-" if check.entry_sequence is None else str(check.entry_sequence)
+        print(
+            f"- {check_status} {check.name}: "
+            f"entry={entry} observed={check.observed} expected={check.expected}"
+        )
 
 
 def _print_gate_result(result) -> None:
