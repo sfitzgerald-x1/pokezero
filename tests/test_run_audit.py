@@ -1265,6 +1265,10 @@ class RunAuditTest(unittest.TestCase):
                         str(first_path),
                         str(second_path),
                         "--suggest-audit-calibration",
+                        "--calibration-margin",
+                        "0.20",
+                        "--calibration-aggregate-mode",
+                        "envelope",
                         "--json",
                     ]
                 )
@@ -1272,11 +1276,10 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["audit_calibration"]["run_count"], 2)
-        self.assertEqual(payload["audit_calibration"]["aggregate_mode"], "median")
+        self.assertEqual(payload["audit_calibration"]["aggregate_mode"], "envelope")
         self.assertEqual(payload["audit_calibration"]["source_type"], "linear_selfplay")
-        self.assertEqual(payload["audit_calibration"]["margin"], 0.10)
+        self.assertEqual(payload["audit_calibration"]["margin"], 0.20)
         self.assertIn("--min-latest-benchmark-games", payload["audit_calibration"]["suggested_cli_flags"])
-        self.assertEqual(payload["audit_calibration_excluded_errors"], [])
         self.assertIsNone(payload["audit_calibration_error"])
 
     def test_eval_cli_compare_calibration_excludes_bad_manifest_errors(self) -> None:
@@ -1311,8 +1314,33 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual([entry["label"] for entry in payload["entries"]], ["healthy-run"])
         self.assertEqual(payload["audit_calibration"]["manifest_path"], str(healthy_path))
-        self.assertEqual(payload["audit_calibration_excluded_errors"][0]["label"], "bad-run")
+        self.assertEqual(payload["errors"][0]["label"], "bad-run")
+        self.assertNotIn("audit_calibration_excluded_errors", payload)
         self.assertIsNone(payload["audit_calibration_error"])
+
+    def test_eval_cli_compare_calibration_reports_json_error_when_no_runs_are_valid(self) -> None:
+        bad_manifest = {
+            "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+            "run_dir": "bad-run",
+            "latest_checkpoint_path": None,
+            "iterations": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_path = Path(temp_dir) / "bad-run" / "manifest.json"
+            write_manifest(bad_path, bad_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(bad_path), "--suggest-audit-calibration", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["entries"], [])
+        self.assertEqual(payload["errors"][0]["label"], "bad-run")
+        self.assertIsNone(payload["audit_calibration"])
+        self.assertEqual(
+            payload["audit_calibration_error"],
+            "no valid compared runs were available for audit calibration",
+        )
 
     def test_eval_cli_compare_json_can_overlay_audit_profile_status(self) -> None:
         manifest = selfplay_manifest(
@@ -1476,6 +1504,27 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("suggested_audit_flags:", output)
         self.assertIn("--min-latest-benchmark-games", output)
         self.assertNotIn("calibration_excluded_errors:", output)
+
+    def test_eval_cli_compare_text_reports_unavailable_calibration_when_no_runs_are_valid(self) -> None:
+        bad_manifest = {
+            "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+            "run_dir": "bad-run",
+            "latest_checkpoint_path": None,
+            "iterations": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_path = Path(temp_dir) / "bad-run" / "manifest.json"
+            write_manifest(bad_path, bad_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(bad_path), "--suggest-audit-calibration"])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("audit_calibration_suggestion:", output)
+        self.assertIn("unavailable: no valid compared runs were available for audit calibration", output)
+        self.assertIn("calibration_excluded_errors:", output)
+        self.assertIn("bad-run", output)
 
     def test_eval_cli_compare_text_can_overlay_audit_profile_status(self) -> None:
         manifest = selfplay_manifest(

@@ -270,6 +270,8 @@ python -m pokezero.eval_cli compare \
   --suggest-audit-calibration
 ```
 
+The compare command still returns non-zero when any manifest cannot be loaded. In that case, inspect the reported errors before consuming a printed calibration suggestion from the remaining valid runs.
+
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
 ```bash

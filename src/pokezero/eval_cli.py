@@ -652,7 +652,6 @@ def _compare(args: argparse.Namespace) -> int:
         payload = result.to_dict()
         if args.suggest_audit_calibration:
             payload["audit_calibration"] = calibration.to_dict() if calibration is not None else None
-            payload["audit_calibration_excluded_errors"] = [error.to_dict() for error in result.errors]
             payload["audit_calibration_error"] = calibration_error
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
