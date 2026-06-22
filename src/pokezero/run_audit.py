@@ -414,6 +414,79 @@ class RunAuditCalibrationResult:
         }
 
 
+@dataclass(frozen=True)
+class MultiRunAuditCalibrationResult:
+    paths: tuple[Path, ...]
+    source_type: str
+    run_count: int
+    iteration_count: int
+    benchmark_iteration_count: int
+    margin: float
+    calibrations: tuple[RunAuditCalibrationResult, ...]
+    require_benchmark: bool
+    min_latest_benchmark_win_rate: float | None
+    min_latest_benchmark_games: int
+    max_latest_collection_capped_rate: float | None
+    max_latest_benchmark_capped_rate: float | None
+    max_latest_average_decision_rounds: float | None
+    max_latest_benchmark_average_decision_rounds: float | None
+    max_benchmark_win_rate_drop: float | None
+    max_consecutive_promotion_failures: int
+    require_benchmark_opponent_coverage: bool
+    notes: tuple[str, ...] = ()
+
+    def suggested_config(self) -> dict[str, float | int | bool | None]:
+        return {
+            "min_latest_benchmark_win_rate": self.min_latest_benchmark_win_rate,
+            "min_latest_benchmark_games": self.min_latest_benchmark_games,
+            "max_latest_collection_capped_rate": self.max_latest_collection_capped_rate,
+            "max_latest_benchmark_capped_rate": self.max_latest_benchmark_capped_rate,
+            "max_latest_average_decision_rounds": self.max_latest_average_decision_rounds,
+            "max_latest_benchmark_average_decision_rounds": self.max_latest_benchmark_average_decision_rounds,
+            "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
+            "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
+            "require_benchmark": self.require_benchmark,
+            "require_benchmark_opponent_coverage": self.require_benchmark_opponent_coverage,
+        }
+
+    def suggested_cli_flags(self) -> tuple[str, ...]:
+        flags: list[str] = []
+        for field_name, flag_name in (
+            ("min_latest_benchmark_win_rate", "--min-latest-benchmark-win-rate"),
+            ("min_latest_benchmark_games", "--min-latest-benchmark-games"),
+            ("max_latest_collection_capped_rate", "--max-latest-collection-capped-rate"),
+            ("max_latest_benchmark_capped_rate", "--max-latest-benchmark-capped-rate"),
+            ("max_latest_average_decision_rounds", "--max-latest-average-decision-rounds"),
+            ("max_latest_benchmark_average_decision_rounds", "--max-latest-benchmark-average-decision-rounds"),
+            ("max_benchmark_win_rate_drop", "--max-benchmark-win-rate-drop"),
+            ("max_consecutive_promotion_failures", "--max-consecutive-promotion-failures"),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                    continue
+                flags.extend((flag_name, str(value)))
+        if not self.require_benchmark:
+            flags.append("--allow-missing-benchmark")
+        if not self.require_benchmark_opponent_coverage:
+            flags.append("--allow-missing-benchmark-opponents")
+        return tuple(flags)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "paths": [str(path) for path in self.paths],
+            "source_type": self.source_type,
+            "run_count": self.run_count,
+            "iteration_count": self.iteration_count,
+            "benchmark_iteration_count": self.benchmark_iteration_count,
+            "margin": self.margin,
+            "suggested_config": self.suggested_config(),
+            "suggested_cli_flags": list(self.suggested_cli_flags()),
+            "notes": list(self.notes),
+            "sources": [calibration.to_dict() for calibration in self.calibrations],
+        }
+
+
 class RunAuditFailure(RuntimeError):
     def __init__(self, result: RunAuditResult) -> None:
         self.result = result
@@ -607,6 +680,67 @@ def calibrate_run_audit(
             _max_consecutive_promotion_failures(result.iterations),
         ),
         require_benchmark_opponent_coverage=bool(benchmark_iterations),
+        notes=tuple(notes),
+    )
+
+
+def calibrate_run_audits(
+    paths: Iterable[Path],
+    *,
+    margin: float = DEFAULT_AUDIT_CALIBRATION_MARGIN,
+) -> MultiRunAuditCalibrationResult:
+    selected_paths = tuple(paths)
+    if not selected_paths:
+        raise ValueError("at least one run path is required.")
+    calibrations = tuple(calibrate_run_audit(path, margin=margin) for path in selected_paths)
+    source_types = tuple(dict.fromkeys(calibration.source_type for calibration in calibrations))
+    notes = [
+        (
+            "Aggregated from multiple audit calibrations; thresholds are chosen "
+            "to keep every supplied pilot run passable with the requested margin."
+        )
+    ]
+    if not all(calibration.require_benchmark for calibration in calibrations):
+        notes.append("At least one supplied run has no benchmark iterations; aggregate allows missing benchmarks.")
+    if not all(calibration.require_benchmark_opponent_coverage for calibration in calibrations):
+        notes.append(
+            "At least one supplied run has no benchmark opponent coverage; "
+            "aggregate allows missing benchmark opponents."
+        )
+    return MultiRunAuditCalibrationResult(
+        paths=tuple(calibration.manifest_path for calibration in calibrations),
+        source_type=source_types[0] if len(source_types) == 1 else "mixed",
+        run_count=len(calibrations),
+        iteration_count=sum(calibration.iteration_count for calibration in calibrations),
+        benchmark_iteration_count=sum(calibration.benchmark_iteration_count for calibration in calibrations),
+        margin=margin,
+        calibrations=calibrations,
+        require_benchmark=all(calibration.require_benchmark for calibration in calibrations),
+        min_latest_benchmark_win_rate=_min_optional(
+            calibration.min_latest_benchmark_win_rate for calibration in calibrations
+        ),
+        min_latest_benchmark_games=min(calibration.min_latest_benchmark_games for calibration in calibrations),
+        max_latest_collection_capped_rate=_max_optional(
+            calibration.max_latest_collection_capped_rate for calibration in calibrations
+        ),
+        max_latest_benchmark_capped_rate=_max_optional(
+            calibration.max_latest_benchmark_capped_rate for calibration in calibrations
+        ),
+        max_latest_average_decision_rounds=_max_optional(
+            calibration.max_latest_average_decision_rounds for calibration in calibrations
+        ),
+        max_latest_benchmark_average_decision_rounds=_max_optional(
+            calibration.max_latest_benchmark_average_decision_rounds for calibration in calibrations
+        ),
+        max_benchmark_win_rate_drop=_max_optional(
+            calibration.max_benchmark_win_rate_drop for calibration in calibrations
+        ),
+        max_consecutive_promotion_failures=max(
+            calibration.max_consecutive_promotion_failures for calibration in calibrations
+        ),
+        require_benchmark_opponent_coverage=all(
+            calibration.require_benchmark_opponent_coverage for calibration in calibrations
+        ),
         notes=tuple(notes),
     )
 

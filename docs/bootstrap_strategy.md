@@ -67,7 +67,7 @@ Replay import remains valuable after a randbat replay source is identified. A no
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
 - Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
-- Use `python -m pokezero.eval_cli audit-calibrate <run-dir>` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
+- Use `python -m pokezero.eval_cli audit-calibrate <run-dir> [<run-dir> ...]` after pilot runs to derive starting audit thresholds from observed history before enforcing them on longer unattended experiments.
 - Extend the normalized replay-to-rollout importer with a raw Showdown replay converter after a useful Gen 3 randbat replay corpus is identified.
 
 ## Supported Command Shape
@@ -236,6 +236,12 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
 The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, optional collection and benchmark average decision-round upper bounds, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy. The average decision-round checks catch slow or stall-heavy runs; they do not by themselves detect degenerate-short games.
 
 By default, the audit also requires the latest benchmark to retain fixed baseline opponents, currently `random-legal` and `simple-legal`, once they have appeared in prior benchmark evidence. This prevents a run from looking healthy after silently dropping fixed baselines, while still allowing incumbent or historical checkpoint opponents to rotate. Use `--allow-missing-benchmark-opponents` only when intentionally changing the benchmark set.
+
+Use `audit-calibrate` on one or more pilot manifests to derive a starter audit config from observed CPU runs before enforcing stricter profiles. With one path, the command reports thresholds for that run. With multiple paths, it aggregates per-run calibrations into a single permissive floor/ceiling set intended to keep every supplied pilot run passable under the requested margin:
+
+```bash
+python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --margin 0.10
+```
 
 Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, or `--audit-require-latest-promotion`.
 

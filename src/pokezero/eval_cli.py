@@ -19,6 +19,7 @@ from .run_audit import (
     RunAuditConfig,
     audit_run,
     calibrate_run_audit,
+    calibrate_run_audits,
     compare_run_manifests_with_threshold,
 )
 
@@ -132,8 +133,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
 
-    audit_calibrate = subparsers.add_parser("audit-calibrate", help="Suggest audit thresholds from an observed self-play run.")
-    audit_calibrate.add_argument("path", type=Path, help="Self-play or neural self-play run directory or manifest.json path.")
+    audit_calibrate = subparsers.add_parser("audit-calibrate", help="Suggest audit thresholds from observed self-play runs.")
+    audit_calibrate.add_argument(
+        "paths",
+        type=Path,
+        nargs="+",
+        help="Self-play or neural self-play run directories or manifest.json paths.",
+    )
     audit_calibrate.add_argument(
         "--margin",
         type=float,
@@ -492,7 +498,11 @@ def _profiles(args: argparse.Namespace) -> int:
 
 
 def _audit_calibrate(args: argparse.Namespace) -> int:
-    result = calibrate_run_audit(args.path, margin=args.margin)
+    result = (
+        calibrate_run_audit(args.paths[0], margin=args.margin)
+        if len(args.paths) == 1
+        else calibrate_run_audits(args.paths, margin=args.margin)
+    )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
@@ -693,7 +703,13 @@ def _print_audit_result(result) -> None:
 
 def _print_audit_calibration(result) -> None:
     print(f"source: {result.source_type}")
-    print(f"manifest: {result.manifest_path}")
+    if hasattr(result, "manifest_path"):
+        print(f"manifest: {result.manifest_path}")
+    else:
+        print(f"runs: {result.run_count}")
+        print("manifests:")
+        for path in result.paths:
+            print(f"- {path}")
     print(f"iterations: {result.iteration_count}")
     print(f"benchmark_iterations: {result.benchmark_iteration_count}")
     print(f"margin: {result.margin:.3f}")
