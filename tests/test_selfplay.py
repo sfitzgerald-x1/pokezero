@@ -765,6 +765,39 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(len(run_manifest["iterations"]), 1)
         self.assertFalse((run_dir / "iteration-0002").exists())
 
+    def test_run_selfplay_iterations_post_iteration_audit_passes_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            result = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                post_iteration_audit_config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.0,
+                    min_latest_benchmark_games=0,
+                    max_latest_benchmark_capped_rate=1.0,
+                    max_benchmark_win_rate_drop=1.0,
+                    require_benchmark=True,
+                ),
+            )
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest_exists = (run_dir / "iteration-0002" / "manifest.json").exists()
+
+        self.assertEqual(len(result.iterations), 2)
+        self.assertEqual(len(run_manifest["iterations"]), 2)
+        self.assertTrue(second_manifest_exists)
+
     def test_run_selfplay_iterations_rejects_resume_config_mismatch_before_collecting(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -910,11 +943,31 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
         self.assertTrue(kwargs["post_iteration_audit_config"].require_latest_promotion)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.3)
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
         self.assertIn("latest_checkpoint", stdout.getvalue())
+
+    def test_selfplay_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = selfplay_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--audit-after-iteration",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-after-iteration requires --evaluation-games", stderr.getvalue())
 
     def test_selfplay_cli_report_prints_manifest_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

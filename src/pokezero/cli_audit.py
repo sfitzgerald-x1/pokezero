@@ -7,6 +7,12 @@ import argparse
 from .run_audit import RunAuditConfig
 
 
+DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
+    max_benchmark_win_rate_drop=0.15,
+    max_consecutive_promotion_failures=3,
+)
+
+
 def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--audit-after-iteration",
@@ -34,7 +40,7 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
 def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig | None:
     if not args.audit_after_iteration:
         return None
-    defaults = RunAuditConfig()
+    defaults = DEFAULT_POST_ITERATION_AUDIT_CONFIG
     return RunAuditConfig(
         min_latest_benchmark_win_rate=_arg_or_default(
             args.audit_min_latest_benchmark_win_rate,

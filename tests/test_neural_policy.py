@@ -330,6 +330,30 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["auto_promotion_config"].gate_config.min_benchmark_games, 0)
         self.assertEqual(kwargs["post_iteration_audit_config"].min_latest_benchmark_games, 2)
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
+        self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
+
+    def test_neural_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--initial-policy",
+                    "random-legal",
+                    "--audit-after-iteration",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-after-iteration requires --evaluation-games", stderr.getvalue())
 
     def test_neural_cli_help_lists_benchmark_command(self) -> None:
         stdout = io.StringIO()
