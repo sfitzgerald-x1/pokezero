@@ -586,7 +586,7 @@ def _print_run_comparison(result) -> None:
     print("")
     header = (
         f"{'run':<24} {'src':<15} {'iter':>4} {'bench_wr':>8} {'best_wr':>8} {'bench_g':>7} "
-        f"{'coll_cap':>8} {'bench_cap':>9} {'coll_gph':>8} {'bench_gph':>9} {'rss_mb':>8} "
+        f"{'coll_cap':>8} {'bench_cap':>9} {'coll_gph':>8} {'bench_gph':>9} {'rss_hi_mb':>9} "
         f"{'avg_dec':>8} {'bench_dec':>9} {'promo':>6} {'adv':>6} checkpoint"
     )
     print(header)
@@ -601,9 +601,9 @@ def _print_run_comparison(result) -> None:
             f"{entry.latest_benchmark_games:7d} "
             f"{_format_optional_float(entry.latest_collection_capped_rate):>8} "
             f"{_format_optional_float(entry.latest_benchmark_capped_rate):>9} "
-            f"{_format_optional_float(entry.latest_collection_games_per_hour):>8} "
-            f"{_format_optional_float(entry.latest_benchmark_games_per_hour):>9} "
-            f"{_format_optional_float(entry.latest_peak_rss_mb):>8} "
+            f"{_format_optional_whole_number(entry.latest_collection_games_per_hour):>8} "
+            f"{_format_optional_whole_number(entry.latest_benchmark_games_per_hour):>9} "
+            f"{_format_optional_one_decimal(entry.latest_process_peak_rss_mb):>9} "
             f"{_format_optional_float(entry.latest_average_decision_rounds):>8} "
             f"{_format_optional_float(entry.latest_benchmark_average_decision_rounds):>9} "
             f"{_format_optional_bool(entry.latest_promotion_recorded):>6} "
@@ -673,6 +673,18 @@ def _format_optional_float(value: object) -> str:
     if value is None:
         return "-"
     return f"{float(value):.3f}"
+
+
+def _format_optional_whole_number(value: object) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.0f}"
+
+
+def _format_optional_one_decimal(value: object) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.1f}"
 
 
 def _format_optional_bool(value: bool | None) -> str:

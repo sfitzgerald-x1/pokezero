@@ -235,7 +235,7 @@ class RunComparisonEntry:
     latest_benchmark_capped_rate: float | None
     latest_collection_peak_rss_mb: float | None
     latest_benchmark_peak_rss_mb: float | None
-    latest_peak_rss_mb: float | None
+    latest_process_peak_rss_mb: float | None
     latest_average_decision_rounds: float | None
     latest_benchmark_average_decision_rounds: float | None
     latest_promotion_recorded: bool | None
@@ -261,7 +261,7 @@ class RunComparisonEntry:
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
             "latest_collection_peak_rss_mb": self.latest_collection_peak_rss_mb,
             "latest_benchmark_peak_rss_mb": self.latest_benchmark_peak_rss_mb,
-            "latest_peak_rss_mb": self.latest_peak_rss_mb,
+            "latest_process_peak_rss_mb": self.latest_process_peak_rss_mb,
             "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
             "latest_promotion_recorded": self.latest_promotion_recorded,
@@ -584,7 +584,7 @@ def calibrate_run_audit(
 def _comparison_entry(path: Path) -> RunComparisonEntry:
     audit = audit_run(path, config=_permissive_audit_config())
     latest = audit.iterations[-1]
-    peak_rss_mb = _max_optional(
+    process_peak_rss_mb = _max_optional(
         (
             latest.collection_peak_rss_mb,
             latest.benchmark_peak_rss_mb,
@@ -608,7 +608,7 @@ def _comparison_entry(path: Path) -> RunComparisonEntry:
         latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
         latest_collection_peak_rss_mb=latest.collection_peak_rss_mb,
         latest_benchmark_peak_rss_mb=latest.benchmark_peak_rss_mb,
-        latest_peak_rss_mb=peak_rss_mb,
+        latest_process_peak_rss_mb=process_peak_rss_mb,
         latest_average_decision_rounds=audit.latest_average_decision_rounds,
         latest_benchmark_average_decision_rounds=audit.latest_benchmark_average_decision_rounds,
         latest_promotion_recorded=latest.promotion_recorded,
