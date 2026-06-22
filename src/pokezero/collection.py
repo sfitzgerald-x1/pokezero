@@ -110,6 +110,10 @@ class BenchmarkReport:
         return self.total_decision_rounds / self.elapsed_seconds if self.elapsed_seconds > 0 else 0.0
 
     @property
+    def average_decision_rounds(self) -> float:
+        return self.total_decision_rounds / self.total_games if self.total_games else 0.0
+
+    @property
     def head_to_head_results(self) -> tuple[BenchmarkHeadToHeadResult, ...]:
         return aggregate_benchmark_head_to_heads(self.matchups)
 
@@ -122,6 +126,7 @@ class BenchmarkReport:
             "elapsed_seconds": self.elapsed_seconds,
             "games_per_second": self.games_per_second,
             "decisions_per_second": self.decisions_per_second,
+            "average_decision_rounds": self.average_decision_rounds,
             "matchups": [result.to_dict() for result in self.matchups],
             "head_to_heads": [result.to_dict() for result in self.head_to_head_results],
         }

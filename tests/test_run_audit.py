@@ -40,6 +40,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_benchmark_win_rate, 0.70)
         self.assertEqual(result.best_benchmark_win_rate, 0.70)
         self.assertEqual(result.latest_average_decision_rounds, 10.0)
+        self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
@@ -182,6 +183,55 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(average_check.observed, 225.0)
         self.assertEqual(average_check.threshold, 200.0)
 
+    def test_audit_fails_latest_benchmark_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_benchmark_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn("latest_benchmark_average_decision_rounds", failed_check_names(result))
+        average_check = next(
+            check for check in result.checks if check.name == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertEqual(average_check.observed, 225.0)
+        self.assertEqual(average_check.threshold, 200.0)
+        self.assertIn("exceed", average_check.message)
+
+    def test_audit_derives_benchmark_average_decision_rounds_from_matchups(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        benchmark = manifest["iterations"][0]["benchmark"]
+        benchmark.pop("average_decision_rounds")
+        benchmark["matchups"] = [
+            {"metrics": {"games": 2, "average_decision_rounds": 40.0}},
+            {"metrics": {"games": 6, "average_decision_rounds": 20.0}},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(min_latest_benchmark_win_rate=0.50, min_latest_benchmark_games=20),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.latest_benchmark_average_decision_rounds, 25.0)
+
     def test_audit_supports_neural_selfplay_manifest_without_torch(self) -> None:
         manifest = neural_selfplay_manifest(
             iterations=(
@@ -227,6 +277,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertFalse(payload["passed"])
         self.assertEqual(payload["latest_average_decision_rounds"], 10.0)
+        self.assertEqual(payload["latest_benchmark_average_decision_rounds"], 12.0)
         self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(payload))
 
     def test_eval_cli_audit_average_decision_rounds_threshold_flag_fails(self) -> None:
@@ -259,6 +310,38 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(average_check["threshold"], 200.0)
         self.assertIn("exceed", average_check["message"])
 
+    def test_eval_cli_audit_benchmark_average_decision_rounds_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-benchmark-average-decision-rounds",
+                        "200",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_benchmark_average_decision_rounds", failed_check_names_from_payload(payload))
+        average_check = next(
+            check for check in payload["checks"] if check["name"] == "latest_benchmark_average_decision_rounds"
+        )
+        self.assertEqual(average_check["observed"], 225.0)
+        self.assertEqual(average_check["threshold"], 200.0)
+        self.assertIn("exceed", average_check["message"])
+
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
@@ -283,6 +366,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("status: PASS", stdout.getvalue())
         self.assertIn("latest_benchmark_win_rate: 0.650", stdout.getvalue())
         self.assertIn("latest_average_decision_rounds: 10.000", stdout.getvalue())
+        self.assertIn("latest_benchmark_average_decision_rounds: 12.000", stdout.getvalue())
 
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
@@ -371,6 +455,7 @@ def benchmark_payload(
         "format_id": "gen3randombattle",
         "max_decision_rounds": 250,
         "games_per_matchup": games_per_matchup,
+        "average_decision_rounds": 12.0,
         "head_to_heads": [
             benchmark_row(
                 policy_id=policy_id,

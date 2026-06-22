@@ -33,6 +33,7 @@ class RunAuditConfig:
     max_latest_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
     max_latest_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
     max_latest_average_decision_rounds: float | None = None
+    max_latest_benchmark_average_decision_rounds: float | None = None
     max_benchmark_win_rate_drop: float = DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
     max_consecutive_promotion_failures: int = DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES
     require_benchmark: bool = True
@@ -45,6 +46,11 @@ class RunAuditConfig:
             raise ValueError("max_consecutive_promotion_failures must be non-negative.")
         if self.max_latest_average_decision_rounds is not None and self.max_latest_average_decision_rounds < 0.0:
             raise ValueError("max_latest_average_decision_rounds must be non-negative.")
+        if (
+            self.max_latest_benchmark_average_decision_rounds is not None
+            and self.max_latest_benchmark_average_decision_rounds < 0.0
+        ):
+            raise ValueError("max_latest_benchmark_average_decision_rounds must be non-negative.")
         for field_name in (
             "min_latest_benchmark_win_rate",
             "max_latest_collection_capped_rate",
@@ -111,6 +117,7 @@ class RunAuditIterationSummary:
     benchmark_win_rate: float | None
     benchmark_games: int
     benchmark_capped_rate: float | None
+    benchmark_average_decision_rounds: float | None
     benchmark_opponents: tuple[RunAuditBenchmarkOpponent, ...]
     promotion_recorded: bool | None
     advancement_recorded: bool | None
@@ -127,6 +134,7 @@ class RunAuditIterationSummary:
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_games": self.benchmark_games,
             "benchmark_capped_rate": self.benchmark_capped_rate,
+            "benchmark_average_decision_rounds": self.benchmark_average_decision_rounds,
             "benchmark_opponents": [opponent.to_dict() for opponent in self.benchmark_opponents],
             "promotion_recorded": self.promotion_recorded,
             "advancement_recorded": self.advancement_recorded,
@@ -161,6 +169,7 @@ class RunAuditResult:
     latest_collection_capped_rate: float | None
     latest_average_decision_rounds: float | None
     latest_benchmark_capped_rate: float | None
+    latest_benchmark_average_decision_rounds: float | None
     benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
     checks: tuple[RunAuditCheck, ...]
@@ -185,6 +194,7 @@ class RunAuditResult:
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
             "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
             "passed": self.passed,
@@ -231,6 +241,7 @@ def audit_run(
         _latest_collection_capped_check(latest, config),
         *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
+        *_latest_benchmark_average_decision_rounds_checks(latest, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
         _latest_promotion_check(latest, config),
@@ -245,6 +256,7 @@ def audit_run(
         latest_collection_capped_rate=latest.collection_capped_rate,
         latest_average_decision_rounds=latest.average_decision_rounds,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
+        latest_benchmark_average_decision_rounds=latest.benchmark_average_decision_rounds,
         benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
         checks=checks,
@@ -292,6 +304,7 @@ def _iteration_summary(
         benchmark_win_rate=benchmark_summary.win_rate if benchmark_summary.games else None,
         benchmark_games=benchmark_summary.games,
         benchmark_capped_rate=benchmark_summary.capped_rate if benchmark_summary.games else None,
+        benchmark_average_decision_rounds=_benchmark_average_decision_rounds(benchmark),
         benchmark_opponents=tuple(
             RunAuditBenchmarkOpponent(
                 opponent_policy_id=opponent.opponent_policy_id,
@@ -417,6 +430,30 @@ def _latest_benchmark_checks(
     )
 
 
+def _latest_benchmark_average_decision_rounds_checks(
+    latest: RunAuditIterationSummary,
+    config: RunAuditConfig,
+) -> tuple[RunAuditCheck, ...]:
+    if config.max_latest_benchmark_average_decision_rounds is None:
+        return ()
+    observed = latest.benchmark_average_decision_rounds
+    if observed is None:
+        message = "latest benchmark average decision rounds are unavailable"
+    elif observed <= config.max_latest_benchmark_average_decision_rounds:
+        message = "latest benchmark average decision rounds are within limit"
+    else:
+        message = "latest benchmark average decision rounds exceed limit"
+    return (
+        RunAuditCheck(
+            name="latest_benchmark_average_decision_rounds",
+            passed=observed is not None and observed <= config.max_latest_benchmark_average_decision_rounds,
+            observed=observed,
+            threshold=config.max_latest_benchmark_average_decision_rounds,
+            message=message,
+        ),
+    )
+
+
 def _benchmark_regression_check(
     iterations: tuple[RunAuditIterationSummary, ...],
     regressions: tuple[RunAuditOpponentRegression, ...],
@@ -529,6 +566,27 @@ def _opponent_regressions(
             )
         )
     return tuple(regressions)
+
+
+def _benchmark_average_decision_rounds(benchmark: Mapping[str, Any] | None) -> float | None:
+    if benchmark is None:
+        return None
+    direct = benchmark.get("average_decision_rounds")
+    if direct is not None:
+        return float(direct)
+    total_games = 0
+    total_decision_rounds = 0.0
+    for result in tuple(_mapping(result) for result in _sequence(benchmark.get("matchups", ()))):
+        metrics = _mapping(result.get("metrics", {}))
+        games = int(metrics.get("games", 0))
+        average = metrics.get("average_decision_rounds")
+        if games <= 0 or average is None:
+            continue
+        total_games += games
+        total_decision_rounds += float(average) * games
+    if total_games <= 0:
+        return None
+    return total_decision_rounds / total_games
 
 
 def _optional_mapping(value: Any) -> Mapping[str, Any] | None:
