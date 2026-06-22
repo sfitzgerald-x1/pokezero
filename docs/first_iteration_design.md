@@ -34,14 +34,14 @@ Partially implemented:
 - A PyTorch-backed entity-token transformer scaffold exists behind the optional `neural` extra, including `neural:<checkpoint>` policy-spec loading, a neural benchmark CLI, and a first neural self-play iteration command that trains transformer checkpoints from accumulated rollout records with promotion-gated collector advancement, warm starts, resume support, and optional promotion-registry artifact management.
 - Evaluation exists against fixed baselines and promoted historical checkpoints, with configurable absolute-floor and incumbent-delta promotion gates plus a promotion registry; long-run experiment criteria are still informal.
 - CPU-only run audit CLI over linear and neural self-play manifests that checks latest benchmark health, capped-game rates, same-opponent benchmark regression from previous best, and trailing promotion failures. It can also enforce opt-in upper bounds on latest collection and benchmark average decision-round length, and suggest run-specific audit thresholds from observed manifest history.
-- Collection and benchmark metrics include best-effort process peak RSS reporting when the local platform exposes it.
+- Collection and benchmark metrics include best-effort process peak RSS high-water reporting when the local platform exposes it.
 - Optional post-iteration audit enforcement for linear and neural self-play runs, so long CPU experiments can stop after a bad manifest is written instead of continuing unattended.
 - Capped games are recorded and surfaced in reports; self-play CLI training now defaults them to a mild double-loss return.
 
 Known limitations:
 
 - Linear checkpoint compatibility now includes a source-derived fingerprint over the current linear feature extractor; upstream observation semantics, neural checkpoints, and broader checkpoint compatibility still rely mostly on versioned schema and config tags.
-- Parallel collection caches immutable linear models per collection call, and manifests now record best-effort process peak RSS. Larger checkpoints and high worker counts still need real-run memory profiling before long unattended runs.
+- Parallel collection caches immutable linear models per collection call, and manifests now record best-effort process peak RSS high-water marks. Larger checkpoints and high worker counts still need real-run memory profiling before long unattended runs.
 - Held-out validation metrics measure imitation fit against rollout labels, not policy strength. Benchmark win rate and capped-game rate remain the quality signals for promotion decisions.
 - Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions. Audit calibration can propose starting thresholds from run history, but useful long-run settings still need empirical validation on larger experiments.
 - The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves and safer switching. It is a bootstrap data source, not the intended long-term policy, and it still lacks hazards and deeper sequence planning.

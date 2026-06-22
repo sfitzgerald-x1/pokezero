@@ -346,6 +346,8 @@ def run_rollout_record(
 
 
 def current_peak_rss_mb() -> float | None:
+    # ru_maxrss is a process-lifetime high-water mark. It is useful for
+    # coarse run health, not per-game or per-matchup memory attribution.
     try:
         import resource
     except ImportError:
@@ -428,7 +430,7 @@ def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: floa
     accumulator = _MetricsAccumulator()
     for record in records:
         accumulator.add(record)
-    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds)
+    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds, peak_rss_mb=current_peak_rss_mb())
 
 
 def policy_from_spec(spec: str) -> Policy:
