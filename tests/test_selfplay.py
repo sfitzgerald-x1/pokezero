@@ -366,6 +366,117 @@ class SelfPlayTest(unittest.TestCase):
                 for row in iteration_manifest["benchmark"]["head_to_heads"]
             },
         )
+        self.assertEqual(iteration_manifest["benchmark_reference_policy_specs"], [f"linear:{bootstrap_path}"])
+
+    def test_run_selfplay_iterations_retains_static_linear_initial_benchmark_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=2,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+
+            second_manifest = json.loads((temp_path / "run" / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            benchmark = result.iterations[1].benchmark
+
+        self.assertIsNotNone(benchmark)
+        head_to_head_pairs = {
+            (row.first_policy_id, row.second_policy_id)
+            for row in (benchmark.head_to_head_results if benchmark is not None else ())
+        }
+        self.assertIn(("linear-selfplay-test-iter-0002", "linear-selfplay-test-iter-0001"), head_to_head_pairs)
+        self.assertIn(("linear-selfplay-test-iter-0002", "bootstrap-linear"), head_to_head_pairs)
+        self.assertEqual(
+            result.iterations[1].benchmark_reference_policy_specs,
+            (f"linear:{bootstrap_path}",),
+        )
+        self.assertEqual(second_manifest["benchmark_reference_policy_specs"], [f"linear:{bootstrap_path}"])
+        self.assertIn(
+            ("linear-selfplay-test-iter-0002", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in second_manifest["benchmark"]["head_to_heads"]
+            },
+        )
+
+    def test_run_selfplay_iterations_resume_preserves_static_benchmark_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            bootstrap_path = temp_path / "bootstrap-linear.json"
+            save_linear_model(
+                bootstrap_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="bootstrap-linear",
+                ),
+            )
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+            first = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                seed_start=20,
+                initial_policy_spec=f"linear:{bootstrap_path}",
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+            )
+
+            second = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=1,
+                resume=True,
+            )
+
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first.iterations[0].benchmark_reference_policy_specs, (f"linear:{bootstrap_path}",))
+        self.assertEqual(second.iterations[0].benchmark_reference_policy_specs, (f"linear:{bootstrap_path}",))
+        self.assertIn(
+            ("linear-selfplay-test-iter-0002", "bootstrap-linear"),
+            {
+                (row["first_policy_id"], row["second_policy_id"])
+                for row in second_manifest["benchmark"]["head_to_heads"]
+            },
+        )
 
     def test_run_selfplay_iterations_uses_promotion_registry_for_historical_opponents(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -914,6 +1025,8 @@ class SelfPlayTest(unittest.TestCase):
                         "/tmp/showdown",
                         "--opponent-policy",
                         "random-legal",
+                        "--benchmark-reference-policy",
+                        "linear:bootstrap.json",
                         "--workers",
                         "2",
                         "--opponent-action-loss-weight",
@@ -956,6 +1069,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertTrue(kwargs["resume"])
         self.assertEqual(kwargs["games_per_iteration"], 2)
         self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
+        self.assertEqual(kwargs["benchmark_reference_policy_specs"], ("linear:bootstrap.json",))
         self.assertEqual(kwargs["evaluation_games"], 3)
         self.assertEqual(kwargs["worker_count"], 2)
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
