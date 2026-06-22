@@ -1244,6 +1244,76 @@ class RunAuditTest(unittest.TestCase):
         self.assertIsNone(payload["entries"][0]["audit_passed"])
         self.assertEqual(payload["entries"][0]["audit_failed_checks"], [])
 
+    def test_eval_cli_compare_json_can_suggest_audit_calibration(self) -> None:
+        first_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        second_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=35, losses=15, capped_games=1),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_path = temp_path / "pilot-a" / "manifest.json"
+            second_path = temp_path / "pilot-b" / "manifest.json"
+            write_manifest(first_path, first_manifest)
+            write_manifest(second_path, second_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(first_path),
+                        str(second_path),
+                        "--suggest-audit-calibration",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["audit_calibration"]["run_count"], 2)
+        self.assertEqual(payload["audit_calibration"]["aggregate_mode"], "median")
+        self.assertEqual(payload["audit_calibration"]["source_type"], "linear_selfplay")
+        self.assertEqual(payload["audit_calibration"]["margin"], 0.10)
+        self.assertIn("--min-latest-benchmark-games", payload["audit_calibration"]["suggested_cli_flags"])
+        self.assertEqual(payload["audit_calibration_excluded_errors"], [])
+        self.assertIsNone(payload["audit_calibration_error"])
+
+    def test_eval_cli_compare_calibration_excludes_bad_manifest_errors(self) -> None:
+        healthy_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        bad_manifest = {
+            "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
+            "run_dir": "bad-run",
+            "latest_checkpoint_path": None,
+            "iterations": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            healthy_path = temp_path / "healthy-run" / "manifest.json"
+            bad_path = temp_path / "bad-run" / "manifest.json"
+            write_manifest(healthy_path, healthy_manifest)
+            write_manifest(bad_path, bad_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(healthy_path),
+                        str(bad_path),
+                        "--suggest-audit-calibration",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual([entry["label"] for entry in payload["entries"]], ["healthy-run"])
+        self.assertEqual(payload["audit_calibration"]["manifest_path"], str(healthy_path))
+        self.assertEqual(payload["audit_calibration_excluded_errors"][0]["label"], "bad-run")
+        self.assertIsNone(payload["audit_calibration_error"])
+
     def test_eval_cli_compare_json_can_overlay_audit_profile_status(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
@@ -1388,6 +1458,24 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("44442", row)
         self.assertIn("11520", row)
         self.assertIn("16384.0", row)
+
+    def test_eval_cli_compare_text_can_suggest_audit_calibration(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["compare", str(manifest_path), "--suggest-audit-calibration"])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("audit_calibration_suggestion:", output)
+        self.assertIn("suggested_audit_flags:", output)
+        self.assertIn("--min-latest-benchmark-games", output)
+        self.assertNotIn("calibration_excluded_errors:", output)
 
     def test_eval_cli_compare_text_can_overlay_audit_profile_status(self) -> None:
         manifest = selfplay_manifest(

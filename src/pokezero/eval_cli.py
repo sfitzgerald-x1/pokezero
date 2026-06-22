@@ -187,6 +187,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --audit-profile, return non-zero when any compared run fails the selected audit profile.",
     )
+    compare.add_argument(
+        "--suggest-audit-calibration",
+        action="store_true",
+        help="Also suggest audit thresholds from the valid compared runs.",
+    )
+    compare.add_argument(
+        "--calibration-margin",
+        type=float,
+        default=DEFAULT_AUDIT_CALIBRATION_MARGIN,
+        help="Fractional safety margin applied to compare audit-calibration suggestions.",
+    )
+    compare.add_argument(
+        "--calibration-aggregate-mode",
+        choices=("median", "envelope"),
+        default="median",
+        help=(
+            "How multiple valid compared runs are combined when suggesting audit calibration. "
+            "median resists noisy pilots; envelope keeps every valid pilot passable."
+        ),
+    )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
@@ -612,10 +632,42 @@ def _compare(args: argparse.Namespace) -> int:
         audit_config=audit_profile.audit_config if audit_profile is not None else None,
         audit_profile=audit_profile.name if audit_profile is not None else None,
     )
+    calibration = None
+    calibration_error = None
+    if args.suggest_audit_calibration:
+        calibration_paths = tuple(entry.manifest_path for entry in result.entries)
+        if calibration_paths:
+            calibration = (
+                calibrate_run_audit(calibration_paths[0], margin=args.calibration_margin)
+                if len(calibration_paths) == 1
+                else calibrate_run_audits(
+                    calibration_paths,
+                    margin=args.calibration_margin,
+                    aggregate_mode=args.calibration_aggregate_mode,
+                )
+            )
+        else:
+            calibration_error = "no valid compared runs were available for audit calibration"
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        payload = result.to_dict()
+        if args.suggest_audit_calibration:
+            payload["audit_calibration"] = calibration.to_dict() if calibration is not None else None
+            payload["audit_calibration_excluded_errors"] = [error.to_dict() for error in result.errors]
+            payload["audit_calibration_error"] = calibration_error
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
+        if args.suggest_audit_calibration:
+            print("")
+            print("audit_calibration_suggestion:")
+            if calibration is None:
+                print(f"unavailable: {calibration_error}")
+            else:
+                _print_audit_calibration(calibration)
+            if result.errors:
+                print("calibration_excluded_errors:")
+                for error in result.errors:
+                    print(f"- {error.label}: {error.error}")
     return 2 if result.errors or (args.fail_on_audit and result.audit_failed) else 0
 
 
