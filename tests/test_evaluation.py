@@ -14,6 +14,7 @@ from pokezero.eval_cli import main as eval_cli_main
 from pokezero.eval_cli import build_arg_parser as build_eval_arg_parser
 from pokezero.evaluation import PromotionGateConfig, evaluate_promotion_gate
 from pokezero.neural_selfplay import NEURAL_SELFPLAY_RUN_SCHEMA_VERSION
+from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 from pokezero.selfplay_cli import build_arg_parser as build_selfplay_arg_parser
 import pokezero.source_metadata as source_metadata
@@ -529,6 +530,141 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("--write-config 'runs/local smoke/smoke-audit-config.json'", output)
         self.assertIn("./.venv/bin/python -m pokezero.eval_cli audit 'runs/local smoke/selfplay'", output)
         self.assertIn("--audit-config 'runs/local smoke/smoke-audit-config.json'", output)
+
+    def test_eval_cli_audit_config_report_can_require_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            manifest_path = temp_path / "run" / "manifest.json"
+            write_json(
+                config_path,
+                run_audit_config_payload(
+                    smoke_test_audit_config(),
+                    source={"available": True, "branch": "main", "head": "abc123", "dirty": False},
+                    calibration={"source_type": SELFPLAY_RUN_SCHEMA_VERSION, "run_count": 1},
+                ),
+            )
+            write_manifest(manifest_path, selfplay_manifest())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                no_preflight_exit = eval_cli_main(
+                    ["audit-config-report", str(config_path), "--json", "--require-preflight"]
+                )
+            no_preflight_payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                preflight_exit = eval_cli_main(
+                    ["audit-config-report", str(config_path), str(manifest_path), "--json", "--require-preflight"]
+                )
+            preflight_payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(no_preflight_exit, 2)
+        self.assertFalse(no_preflight_payload["passed"])
+        self.assertTrue(no_preflight_payload["preflight_required"])
+        self.assertIn(
+            "preflight_audit_requested",
+            failed_check_names_from_payload(no_preflight_payload),
+        )
+        self.assertEqual(preflight_exit, 0)
+        self.assertTrue(preflight_payload["passed"])
+        self.assertTrue(preflight_payload["preflight_requested"])
+        self.assertTrue(preflight_payload["preflight_passed"])
+        self.assertEqual(len(preflight_payload["preflight_runs"]), 1)
+        self.assertEqual(preflight_payload["preflight_runs"][0]["manifest_path"], str(manifest_path))
+
+    def test_eval_cli_audit_config_report_require_preflight_handles_empty_glob(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            write_json(config_path, run_audit_config_payload(smoke_test_audit_config()))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                json_exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--require-preflight",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                text_exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        "--manifest-glob",
+                        str(temp_path / "missing-*" / "manifest.json"),
+                        "--require-preflight",
+                    ]
+                )
+            text_output = stdout.getvalue()
+
+        self.assertEqual(json_exit_code, 2)
+        self.assertEqual(text_exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertTrue(payload["preflight_required"])
+        self.assertFalse(payload["preflight_requested"])
+        self.assertIn("--manifest-glob matched no paths", payload["preflight_expansion_error"])
+        self.assertIn("preflight: required_missing", text_output)
+        self.assertIn("preflight_error: --manifest-glob matched no paths", text_output)
+        self.assertIn("preflight_audit_requested", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_config_report_require_preflight_counts_missing_literal_path_as_failed_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            missing_manifest_path = temp_path / "missing-run" / "manifest.json"
+            write_json(config_path, run_audit_config_payload(smoke_test_audit_config()))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit-config-report",
+                        str(config_path),
+                        str(missing_manifest_path),
+                        "--require-preflight",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["preflight_required"])
+        self.assertTrue(payload["preflight_requested"])
+        self.assertFalse(payload["preflight_passed"])
+        self.assertNotIn("preflight_audit_requested", failed_check_names_from_payload(payload))
+        self.assertIn("preflight_audit_passed", failed_check_names_from_payload(payload))
+        self.assertEqual(payload["preflight_runs"][0]["failed_checks"], ["manifest_error"])
+
+    def test_eval_cli_audit_config_report_require_preflight_fails_failed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "audit-config.json"
+            manifest_path = temp_path / "run" / "manifest.json"
+            write_json(config_path, run_audit_config_payload(smoke_test_audit_config()))
+            manifest = selfplay_manifest()
+            manifest["iterations"][0]["benchmark"] = benchmark_payload(
+                policy_id="linear-selfplay-test-iter-0001",
+                wins=1,
+                losses=19,
+                capped_games=0,
+            )
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["audit-config-report", str(config_path), str(manifest_path), "--json", "--require-preflight"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertTrue(payload["preflight_requested"])
+        self.assertFalse(payload["preflight_passed"])
+        self.assertIn("preflight_audit_passed", failed_check_names_from_payload(payload))
+        self.assertIn("latest_benchmark_win_rate", payload["preflight_runs"][0]["failed_checks"])
 
     def test_eval_cli_cpu_smoke_plan_prints_json_recipe(self) -> None:
         source = {
@@ -2825,6 +2961,17 @@ def failed_check_names(result) -> set[str]:
 
 def failed_check_names_from_payload(payload: dict) -> set[str]:
     return {check["name"] for check in payload["checks"] if not check["passed"]}
+
+
+def smoke_test_audit_config() -> RunAuditConfig:
+    return RunAuditConfig(
+        min_latest_benchmark_win_rate=0.50,
+        min_latest_benchmark_games=1,
+        max_latest_collection_capped_rate=1.0,
+        max_latest_benchmark_capped_rate=1.0,
+        max_benchmark_win_rate_drop=1.0,
+        require_benchmark_opponent_coverage=False,
+    )
 
 
 def cpu_smoke_summary(*, status: str, failed_step_index: int | None = None) -> dict:
