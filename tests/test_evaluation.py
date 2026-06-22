@@ -4265,6 +4265,7 @@ if __name__ == "__main__":
         self.assertEqual(payload["samples"][0]["derived_run_report_source"], "persisted")
         self.assertTrue(payload["samples"][0]["runtime_audit_available"])
         self.assertEqual(payload["samples"][0]["runtime_audit_source"], "profile")
+        self.assertEqual(payload["samples"][0]["runtime_audit_resolved_source"], "profile")
         self.assertEqual(payload["samples"][0]["runtime_audit_recorded_evaluation_games"], 11)
         self.assertEqual(
             payload["samples"][0]["runtime_audit_command_flags"],
@@ -4315,17 +4316,26 @@ if __name__ == "__main__":
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root), "--json"])
             payload = json.loads(stdout.getvalue())
+            with patch("sys.stdout", new_callable=io.StringIO) as text_stdout:
+                text_exit_code = eval_cli_main(["cpu-long-run-calibrate", str(run_root)])
 
         sample = payload["samples"][0]
         self.assertEqual(exit_code, 0)
+        self.assertEqual(text_exit_code, 0)
         self.assertFalse(sample["runtime_audit_available"])
         self.assertEqual(sample["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(sample["runtime_audit_resolved_source"], "pilot-audit-config")
         self.assertEqual(sample["runtime_audit_config_path"], str(missing_config_path))
         self.assertEqual(sample["runtime_audit_recorded_evaluation_games"], 9)
         self.assertEqual(
             sample["runtime_audit_command_flags"],
             ["--evaluation-games", "9", "--audit-after-iteration", "--audit-config", str(missing_config_path)],
         )
+        text_output = text_stdout.getvalue()
+        self.assertIn("runtime_audit_samples:", text_output)
+        self.assertIn("available=no", text_output)
+        self.assertIn(f"config={missing_config_path}", text_output)
+        self.assertIn("--evaluation-games 9 --audit-after-iteration --audit-config", text_output)
 
     def test_eval_cli_cpu_long_run_calibrate_reads_benchmark_games_from_older_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

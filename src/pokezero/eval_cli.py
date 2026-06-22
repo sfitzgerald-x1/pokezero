@@ -3800,7 +3800,8 @@ def _cpu_long_run_calibration_sample(
         "status": status,
         "derived_run_report_source": report_source,
         "runtime_audit": runtime_audit,
-        "runtime_audit_source": runtime_audit.get("source"),
+        "runtime_audit_source": _cpu_long_run_sample_raw_runtime_audit_source(summary),
+        "runtime_audit_resolved_source": runtime_audit.get("source"),
         "runtime_audit_available": runtime_audit.get("available"),
         "runtime_audit_profile": runtime_audit.get("audit_profile"),
         "runtime_audit_config_path": runtime_audit.get("audit_config_path"),
@@ -3828,6 +3829,13 @@ def _cpu_long_run_calibration_sample(
     }
     sample["suggested_config"] = _cpu_long_run_sample_suggested_config(sample, margin=margin)
     return sample
+
+
+def _cpu_long_run_sample_raw_runtime_audit_source(summary: Mapping[str, object]) -> object:
+    recipe = summary.get("recipe")
+    if not isinstance(recipe, Mapping):
+        return None
+    return recipe.get("runtime_audit_source")
 
 
 def _cpu_long_run_summary_run_dir(summary: Mapping[str, object]) -> object:
@@ -4148,7 +4156,7 @@ def _print_cpu_long_run_calibration(payload: Mapping[str, object]) -> None:
             print(
                 f"- {sample.get('label')}: "
                 f"available={_format_optional_bool(sample.get('runtime_audit_available'))} "
-                f"source={_format_summary_value(sample.get('runtime_audit_source'))} "
+                f"source={_format_summary_value(sample.get('runtime_audit_resolved_source'))} "
                 f"profile={_format_summary_value(sample.get('runtime_audit_profile'))} "
                 f"config={_format_summary_value(sample.get('runtime_audit_config_path'))} "
                 f"recorded_eval={_format_summary_value(sample.get('runtime_audit_recorded_evaluation_games'))} "
