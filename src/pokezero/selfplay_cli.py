@@ -300,6 +300,9 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("note: benchmark win rate is the strength signal; fit metrics measure imitation of rollout labels.")
     if _validation_paths_changed(iterations):
         print("warning: validation rollout paths changed across iterations; fit metrics are not directly comparable.")
+    invocation_configs = _manifest_invocation_configs(manifest, iterations)
+    if invocation_configs:
+        _print_invocation_report(invocation_configs)
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
@@ -332,6 +335,42 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
         )
 
 
+def _manifest_invocation_configs(
+    manifest: Mapping[str, Any],
+    iterations: tuple[Mapping[str, Any], ...],
+) -> tuple[Mapping[str, Any], ...]:
+    configs = manifest.get("invocation_configs")
+    if configs is not None:
+        return tuple(_mapping(config) for config in _sequence(configs))
+    configs_by_fingerprint: dict[str, Mapping[str, Any]] = {}
+    for iteration in iterations:
+        config = iteration.get("invocation_config")
+        if config is None:
+            continue
+        mapped = _mapping(config)
+        configs_by_fingerprint.setdefault(json.dumps(mapped, sort_keys=True), mapped)
+    return tuple(configs_by_fingerprint.values())
+
+
+def _print_invocation_report(invocation_configs: tuple[Mapping[str, Any], ...]) -> None:
+    print(f"invocations: {len(invocation_configs)}")
+    for index, config in enumerate(invocation_configs, start=1):
+        pool = _mapping(config.get("opponent_pool", {}))
+        promoted_specs = tuple(str(spec) for spec in _sequence(pool.get("promoted_checkpoint_policy_specs", ())))
+        print(
+            f"  invocation={index} "
+            f"resume={_format_bool(config.get('resume'))} "
+            f"first_iter={_format_manifest_value(config.get('first_iteration'))} "
+            f"requested_iters={_format_manifest_value(config.get('iterations_requested'))} "
+            f"games_per_iter={_format_manifest_value(config.get('games_per_iteration'))} "
+            f"workers={_format_manifest_value(config.get('worker_count'))} "
+            f"first_seed={_format_manifest_value(config.get('first_iteration_seed_start'))} "
+            f"pool_registry={_format_manifest_value(pool.get('promotion_pool_registry_path'))} "
+            f"required_pool={_format_manifest_value(pool.get('required_promoted_opponent_pool_size'))} "
+            f"promoted_available={len(promoted_specs)}"
+        )
+
+
 def _manifest_promotion_status(iteration: Mapping[str, Any]) -> str:
     promotion = iteration.get("promotion")
     if promotion is None:
@@ -355,6 +394,20 @@ def _validation_paths_changed(iterations: tuple[Mapping[str, Any], ...]) -> bool
         for iteration in iterations
     }
     return len(seen) > 1
+
+
+def _format_bool(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "-"
+
+
+def _format_manifest_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    return str(value)
 
 
 def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:

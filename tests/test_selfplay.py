@@ -1446,6 +1446,10 @@ class SelfPlayTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
+        self.assertIn("invocations: 1", output)
+        self.assertIn("pool_registry=promotions.json", output)
+        self.assertIn("required_pool=1", output)
+        self.assertIn("promoted_available=2", output)
         self.assertIn("latest_checkpoint:", output)
         self.assertIn("linear-policy.json", output)
         self.assertIn("0.600", output)
@@ -1570,6 +1574,39 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
     checkpoint_path = run_dir / "iteration-0001" / "linear-policy.json"
     iteration_dir = run_dir / "iteration-0001"
     iteration_dir.mkdir(parents=True, exist_ok=True)
+    invocation_config = {
+        "resume": False,
+        "first_iteration": 1,
+        "iterations_requested": 1,
+        "games_per_iteration": 3,
+        "seed_start_argument": 20,
+        "first_iteration_seed_start": 20,
+        "initial_policy_spec": "random-legal",
+        "evaluation_games": 10,
+        "evaluation_seed_start": 1000,
+        "worker_count": 2,
+        "validation_rollout_paths": [],
+        "benchmark_reference_policy_specs": [],
+        "opponent_pool": {
+            "fixed_opponent_policy_specs": ["random-legal"],
+            "max_historical_opponents": 3,
+            "promotion_registry_path": "promotions.json",
+            "promotion_pool_registry_path": "promotions.json",
+            "required_promoted_opponent_pool_size": 1,
+            "promoted_checkpoint_policy_specs": [
+                "linear:runs/promoted-a/linear-policy.json",
+                "linear:runs/promoted-b/linear-policy.json",
+            ],
+        },
+        "auto_promotion": {
+            "enabled": False,
+            "registry_path": None,
+            "artifact_dir": None,
+            "label_prefix": None,
+            "notes": None,
+            "allow_duplicate": False,
+        },
+    }
     iteration_manifest = {
         "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
         "iteration": 1,
@@ -1579,6 +1616,8 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
         "checkpoint_policy_spec": f"linear:{checkpoint_path}",
         "current_policy_spec": "random-legal",
         "opponent_policy_specs": ["random-legal"],
+        "opponent_pool_config": invocation_config["opponent_pool"],
+        "invocation_config": invocation_config,
         "training_rollout_paths": [str(iteration_dir / "training-rollouts.jsonl")],
         "validation_rollout_paths": [],
         "seed_start": 20,
@@ -1650,6 +1689,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
             {
                 "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
                 "run_dir": str(run_dir),
+                "invocation_configs": [invocation_config],
                 "latest_checkpoint_path": str(checkpoint_path),
                 "iterations": [iteration_manifest],
             },
