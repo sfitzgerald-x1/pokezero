@@ -1635,6 +1635,36 @@ class PromotionGateTest(unittest.TestCase):
         run.assert_not_called()
         self.assertIn(f"showdown-root does not exist: {missing_root}", stderr.getvalue())
 
+    def test_eval_cli_cpu_smoke_run_rejects_non_fresh_run_root_before_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "smoke"
+            run_root.mkdir(parents=True)
+            sentinel = run_root / "existing-artifact.txt"
+            sentinel.write_text("keep me", encoding="utf-8")
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run") as run,
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep me")
+
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+        self.assertIn("cpu-smoke-run run-root is not empty; choose a fresh run-root", stderr.getvalue())
+
     def test_eval_cli_cpu_smoke_report_prints_passed_summary_from_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "run"
@@ -2549,6 +2579,36 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 1)
         run.assert_not_called()
         self.assertIn(f"showdown-root does not exist: {missing_root}", stderr.getvalue())
+
+    def test_eval_cli_cpu_pilot_run_rejects_non_fresh_run_root_before_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+            run_root.mkdir(parents=True)
+            sentinel = run_root / "cpu-pilot-suite-summary.json"
+            sentinel.write_text('{"status": "passed"}', encoding="utf-8")
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run") as run,
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), '{"status": "passed"}')
+
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+        self.assertIn("cpu-pilot-run summary already exists; choose a fresh run-root", stderr.getvalue())
 
     def test_eval_cli_cpu_pilot_plan_rejects_seed_band_overlap(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
