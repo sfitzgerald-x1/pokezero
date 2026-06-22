@@ -243,7 +243,12 @@ Use `audit-calibrate` on one or more pilot manifests to derive a starter audit c
 ```bash
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --margin 0.10
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --aggregate-mode envelope
+python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b \
+  --require-run-count 2 \
+  --require-benchmark-iterations 4
 ```
+
+Use `--require-run-count` and `--require-benchmark-iterations` before copying calibration output into long unattended runs. The command still prints the suggested thresholds when a requirement fails, but exits non-zero and reports the sufficiency failure so thin pilot evidence is not silently accepted.
 
 Use `--audit-after-iteration` on `selfplay_cli iterate` or `neural_cli iterate` to enforce a per-iteration version of that same audit after each completed iteration. The run writes the latest manifest first, then stops before starting the next iteration if any audit check fails. The per-iteration CLI defaults are intentionally looser than the standalone end-of-run audit for noisy early experiments: benchmark win-rate drop tolerance defaults to `0.15`, and consecutive promotion failures default to `3`. Prefix audit thresholds with `--audit-`, for example `--audit-min-latest-benchmark-games 50`, `--audit-max-latest-average-decision-rounds 200`, `--audit-max-latest-benchmark-average-decision-rounds 200`, `--audit-max-latest-process-peak-rss-mb 8192`, or `--audit-require-latest-promotion`.
 
@@ -271,6 +276,8 @@ python -m pokezero.eval_cli compare \
 ```
 
 The compare command still returns non-zero when any manifest cannot be loaded. In that case, inspect the reported errors before consuming a printed calibration suggestion from the remaining valid runs.
+
+For compare-time calibration, use `--calibration-require-run-count` and `--calibration-require-benchmark-iterations` to make the comparison fail when too few valid compared runs or benchmark iterations contributed to the suggested thresholds.
 
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
