@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import glob
 import json
 from pathlib import Path
 import shutil
@@ -228,8 +229,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit_calibrate.add_argument(
         "paths",
         type=Path,
-        nargs="+",
+        nargs="*",
         help="Self-play or neural self-play run directories or manifest.json paths.",
+    )
+    audit_calibrate.add_argument(
+        "--manifest-glob",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern for run directories or manifest.json files to include in calibration. "
+            "May be repeated and is expanded in sorted order."
+        ),
     )
     audit_calibrate.add_argument(
         "--margin",
@@ -321,7 +331,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     smoke_report.set_defaults(func=_cpu_smoke_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
-    compare.add_argument("paths", type=Path, nargs="+", help="Self-play or neural self-play run directories or manifest.json paths.")
+    compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
+    compare.add_argument(
+        "--manifest-glob",
+        action="append",
+        default=None,
+        help=(
+            "Glob pattern for run directories or manifest.json files to include in comparison. "
+            "May be repeated and is expanded in sorted order."
+        ),
+    )
     compare.add_argument(
         "--min-benchmark-games",
         type=int,
@@ -1664,15 +1683,16 @@ def _profiles(args: argparse.Namespace) -> int:
 def _audit_calibrate(args: argparse.Namespace) -> int:
     if args.fail_on_profile and args.compare_profile is None:
         raise ValueError("--fail-on-profile requires --compare-profile.")
+    paths = _expanded_manifest_paths(args.paths, args.manifest_glob)
     result = (
-        calibrate_run_audit(args.paths[0], margin=args.margin)
-        if len(args.paths) == 1
-        else calibrate_run_audits(args.paths, margin=args.margin, aggregate_mode=args.aggregate_mode)
+        calibrate_run_audit(paths[0], margin=args.margin)
+        if len(paths) == 1
+        else calibrate_run_audits(paths, margin=args.margin, aggregate_mode=args.aggregate_mode)
     )
     profile_audit = None
     if args.compare_profile is not None:
         profile = evaluation_profile(args.compare_profile)
-        profile_audit = _profile_audit_payload(args.paths, profile_name=profile.name, config=profile.audit_config)
+        profile_audit = _profile_audit_payload(paths, profile_name=profile.name, config=profile.audit_config)
     sufficiency_requested = (
         args.require_run_count > 0
         or args.require_benchmark_iterations > 0
@@ -1718,6 +1738,26 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         if wrote_config_path is not None:
             print(f"written_config: {wrote_config_path}")
     return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
+
+
+def _expanded_manifest_paths(paths: Iterable[Path], manifest_globs: Iterable[str] | None) -> tuple[Path, ...]:
+    expanded: list[Path] = list(paths)
+    for pattern in manifest_globs or ():
+        matches = tuple(Path(match) for match in sorted(glob.glob(pattern, recursive=True)))
+        if not matches:
+            raise ValueError(f"--manifest-glob matched no paths: {pattern}")
+        expanded.extend(matches)
+    if not expanded:
+        raise ValueError("provide at least one path or --manifest-glob.")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in expanded:
+        key = str(path.expanduser().resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return tuple(deduped)
 
 
 def _audit_calibration_config_payload(result) -> dict[str, object]:
@@ -2160,8 +2200,9 @@ def _compare(args: argparse.Namespace) -> int:
         if args.audit_config is not None
         else audit_profile.name if audit_profile is not None else None
     )
+    paths = _expanded_manifest_paths(args.paths, args.manifest_glob)
     result = compare_run_manifests_with_threshold(
-        args.paths,
+        paths,
         min_benchmark_games=args.min_benchmark_games,
         audit_config=audit_config,
         audit_profile=audit_label,

@@ -287,6 +287,7 @@ Use `audit-calibrate` on one or more pilot manifests to derive a starter audit c
 
 ```bash
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --margin 0.10
+python -m pokezero.eval_cli audit-calibrate --manifest-glob 'runs/pilot-*/manifest.json' --margin 0.10
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --compare-profile long-run
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b --aggregate-mode envelope
 python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b \
@@ -295,7 +296,7 @@ python -m pokezero.eval_cli audit-calibrate runs/pilot-a runs/pilot-b \
   --require-min-benchmark-games 50
 ```
 
-Use `--compare-profile smoke`, `--compare-profile default`, or `--compare-profile long-run` to report whether each pilot manifest would pass a named audit profile before copying thresholds into unattended runs; this per-run profile comparison is independent of the calibration aggregate mode. Add `--fail-on-profile` when that profile comparison should be enforceable in a shell preflight. Use `--require-run-count`, `--require-benchmark-iterations`, and `--require-min-benchmark-games` before copying calibration output into long unattended runs. The command still prints the suggested thresholds when a requirement fails, but exits non-zero and reports the sufficiency failure so thin pilot evidence is not silently accepted. Requiring benchmark iterations also fails if any contributing run had no benchmark iterations, because that aggregate would otherwise allow missing benchmarks.
+Use `--manifest-glob` when pilot runs are stored under a shared root and should be discovered in sorted order instead of manually enumerated. The flag may be repeated and can be mixed with explicit paths; duplicate resolved paths are ignored. Use `--compare-profile smoke`, `--compare-profile default`, or `--compare-profile long-run` to report whether each pilot manifest would pass a named audit profile before copying thresholds into unattended runs; this per-run profile comparison is independent of the calibration aggregate mode. Add `--fail-on-profile` when that profile comparison should be enforceable in a shell preflight. Use `--require-run-count`, `--require-benchmark-iterations`, and `--require-min-benchmark-games` before copying calibration output into long unattended runs. The command still prints the suggested thresholds when a requirement fails, but exits non-zero and reports the sufficiency failure so thin pilot evidence is not silently accepted. Requiring benchmark iterations also fails if any contributing run had no benchmark iterations, because that aggregate would otherwise allow missing benchmarks.
 
 Write calibrated thresholds into a reusable audit config after the sufficiency checks pass:
 
@@ -319,6 +320,7 @@ python -m pokezero.eval_cli compare \
   runs/cold-selfplay \
   runs/bootstrap-selfplay \
   runs/neural-selfplay
+python -m pokezero.eval_cli compare --manifest-glob 'runs/pilot-*/manifest.json'
 ```
 
 The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, collection and benchmark games-per-hour, latest process peak RSS high-water when recorded, average decision-round length, latest promotion or advancement state, latest checkpoint paths, and recorded source provenance. The RSS value is a platform process high-water mark, not phase-isolated memory attribution, and resumed runs may reset the process counter. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
