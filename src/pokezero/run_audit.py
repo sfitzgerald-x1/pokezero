@@ -32,6 +32,7 @@ class RunAuditConfig:
     min_latest_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
     max_latest_collection_capped_rate: float = DEFAULT_MAX_COLLECTION_CAPPED_RATE
     max_latest_benchmark_capped_rate: float = DEFAULT_MAX_BENCHMARK_CAPPED_RATE
+    max_latest_average_decision_rounds: float | None = None
     max_benchmark_win_rate_drop: float = DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP
     max_consecutive_promotion_failures: int = DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES
     require_benchmark: bool = True
@@ -42,6 +43,8 @@ class RunAuditConfig:
             raise ValueError("min_latest_benchmark_games must be non-negative.")
         if self.max_consecutive_promotion_failures < 0:
             raise ValueError("max_consecutive_promotion_failures must be non-negative.")
+        if self.max_latest_average_decision_rounds is not None and self.max_latest_average_decision_rounds < 0.0:
+            raise ValueError("max_latest_average_decision_rounds must be non-negative.")
         for field_name in (
             "min_latest_benchmark_win_rate",
             "max_latest_collection_capped_rate",
@@ -104,6 +107,7 @@ class RunAuditIterationSummary:
     checkpoint_path: str | None
     collection_games: int
     collection_capped_rate: float | None
+    average_decision_rounds: float | None
     benchmark_win_rate: float | None
     benchmark_games: int
     benchmark_capped_rate: float | None
@@ -119,6 +123,7 @@ class RunAuditIterationSummary:
             "checkpoint_path": self.checkpoint_path,
             "collection_games": self.collection_games,
             "collection_capped_rate": self.collection_capped_rate,
+            "average_decision_rounds": self.average_decision_rounds,
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_games": self.benchmark_games,
             "benchmark_capped_rate": self.benchmark_capped_rate,
@@ -154,6 +159,7 @@ class RunAuditResult:
     best_benchmark_win_rate: float | None
     latest_benchmark_win_rate: float | None
     latest_collection_capped_rate: float | None
+    latest_average_decision_rounds: float | None
     latest_benchmark_capped_rate: float | None
     benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
@@ -177,6 +183,7 @@ class RunAuditResult:
             "best_benchmark_win_rate": self.best_benchmark_win_rate,
             "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
+            "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
@@ -222,6 +229,7 @@ def audit_run(
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
     checks = (
         _latest_collection_capped_check(latest, config),
+        *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
@@ -235,6 +243,7 @@ def audit_run(
         best_benchmark_win_rate=best_benchmark_win_rate,
         latest_benchmark_win_rate=latest.benchmark_win_rate,
         latest_collection_capped_rate=latest.collection_capped_rate,
+        latest_average_decision_rounds=latest.average_decision_rounds,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
         benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
@@ -279,6 +288,7 @@ def _iteration_summary(
         checkpoint_path=_optional_str(iteration.get("checkpoint_path")),
         collection_games=collection_games,
         collection_capped_rate=_capped_rate(collection_metrics),
+        average_decision_rounds=_optional_float(collection_metrics.get("average_decision_rounds")),
         benchmark_win_rate=benchmark_summary.win_rate if benchmark_summary.games else None,
         benchmark_games=benchmark_summary.games,
         benchmark_capped_rate=benchmark_summary.capped_rate if benchmark_summary.games else None,
@@ -334,6 +344,30 @@ def _latest_collection_capped_check(
             "latest collection capped-game rate is within limit"
             if observed is not None
             else "latest collection capped-game rate is unavailable"
+        ),
+    )
+
+
+def _latest_average_decision_rounds_checks(
+    latest: RunAuditIterationSummary,
+    config: RunAuditConfig,
+) -> tuple[RunAuditCheck, ...]:
+    if config.max_latest_average_decision_rounds is None:
+        return ()
+    observed = latest.average_decision_rounds
+    if observed is None:
+        message = "latest collection average decision rounds are unavailable"
+    elif observed <= config.max_latest_average_decision_rounds:
+        message = "latest collection average decision rounds are within limit"
+    else:
+        message = "latest collection average decision rounds exceed limit"
+    return (
+        RunAuditCheck(
+            name="latest_average_decision_rounds",
+            passed=observed is not None and observed <= config.max_latest_average_decision_rounds,
+            observed=observed,
+            threshold=config.max_latest_average_decision_rounds,
+            message=message,
         ),
     )
 
@@ -507,3 +541,9 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)

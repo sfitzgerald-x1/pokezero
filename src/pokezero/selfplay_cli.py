@@ -278,7 +278,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'p1w':>4} {'p2w':>4} {'ties':>4} "
-        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'fit':>5} {'fit_loss':>10} {'fit_acc':>8} {'opp_acc':>8} checkpoint"
+        f"{'bench_wr':>8} {'promo':>8} {'dec/s':>8} {'avg_dec':>8} "
+        f"{'fit':>5} {'fit_loss':>10} {'fit_acc':>8} {'opp_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -296,6 +297,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(_benchmark_win_rate(iteration)):>8} "
             f"{_manifest_promotion_status(iteration):>8} "
             f"{float(metrics.get('decisions_per_second', 0.0)):8.3f} "
+            f"{_format_optional_float(metrics.get('average_decision_rounds')):>8} "
             f"{fit_source:>5} "
             f"{_format_optional_float(fit_metrics.get('loss') if fit_metrics else None, digits=6):>10} "
             f"{_format_optional_float(fit_metrics.get('accuracy') if fit_metrics else None, digits=4):>8} "

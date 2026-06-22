@@ -39,6 +39,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_iteration, 2)
         self.assertEqual(result.latest_benchmark_win_rate, 0.70)
         self.assertEqual(result.best_benchmark_win_rate, 0.70)
+        self.assertEqual(result.latest_average_decision_rounds, 10.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
@@ -157,6 +158,30 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("latest_benchmark_capped_rate", failed)
         self.assertIn("consecutive_promotion_failures", failed)
 
+    def test_audit_fails_latest_average_decision_rounds_threshold(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_average_decision_rounds=200.0,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertIn("latest_average_decision_rounds", failed_check_names(result))
+        average_check = next(check for check in result.checks if check.name == "latest_average_decision_rounds")
+        self.assertEqual(average_check.observed, 225.0)
+        self.assertEqual(average_check.threshold, 200.0)
+
     def test_audit_supports_neural_selfplay_manifest_without_torch(self) -> None:
         manifest = neural_selfplay_manifest(
             iterations=(
@@ -201,7 +226,38 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertFalse(payload["passed"])
+        self.assertEqual(payload["latest_average_decision_rounds"], 10.0)
         self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_average_decision_rounds_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-average-decision-rounds",
+                        "200",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_average_decision_rounds", failed_check_names_from_payload(payload))
+        average_check = next(check for check in payload["checks"] if check["name"] == "latest_average_decision_rounds")
+        self.assertEqual(average_check["observed"], 225.0)
+        self.assertEqual(average_check["threshold"], 200.0)
+        self.assertIn("exceed", average_check["message"])
 
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(
@@ -226,6 +282,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("status: PASS", stdout.getvalue())
         self.assertIn("latest_benchmark_win_rate: 0.650", stdout.getvalue())
+        self.assertIn("latest_average_decision_rounds: 10.000", stdout.getvalue())
 
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
@@ -350,6 +407,7 @@ def collection_metrics(*, games: int, capped_games: int) -> dict:
         "elapsed_seconds": 1.0,
         "total_decision_rounds": games,
         "total_simulator_turns": games,
+        "average_decision_rounds": 10.0,
         "p1_wins": games - capped_games,
         "p2_wins": 0,
         "ties": 0,
