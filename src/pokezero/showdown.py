@@ -84,6 +84,7 @@ class ShowdownReplayState:
     requests: Mapping[str, Mapping[str, Any]]
     public_active: Mapping[str, ShowdownPokemon]
     public_revealed: Mapping[str, tuple[ShowdownPokemon, ...]]
+    side_conditions: Mapping[str, tuple[str, ...]]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     winner: Optional[str] = None
@@ -127,6 +128,8 @@ class PlayerRelativeBattleState:
     request_kind: str
     self_team: tuple[ShowdownPokemon, ...]
     opponent_team: tuple[ShowdownPokemon, ...]
+    self_side_conditions: tuple[str, ...]
+    opponent_side_conditions: tuple[str, ...]
     belief_view: PlayerBeliefView
     legal_action_mask: tuple[bool, ...]
     recent_events: tuple[PlayerRelativePublicEvent, ...]
@@ -148,6 +151,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     requests: dict[str, Mapping[str, Any]] = {}
     public_active: dict[str, ShowdownPokemon] = {}
     public_revealed: dict[str, list[ShowdownPokemon]] = {}
+    side_conditions: dict[str, set[str]] = {"p1": set(), "p2": set()}
     public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
     winner: Optional[str] = None
@@ -187,6 +191,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
+        _update_side_conditions(parts, side_conditions)
         public_events.append(_public_event_from_line(line))
         public_lines.append(line)
 
@@ -196,6 +201,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         requests=requests,
         public_active=public_active,
         public_revealed={slot: tuple(pokemon) for slot, pokemon in public_revealed.items()},
+        side_conditions={slot: tuple(sorted(conditions)) for slot, conditions in side_conditions.items()},
         public_events=tuple(public_events),
         public_lines=tuple(public_lines),
         winner=winner,
@@ -271,6 +277,8 @@ def normalize_for_player(
         request_kind=_request_kind(request),
         self_team=self_team,
         opponent_team=opponent_team,
+        self_side_conditions=tuple(replay.side_conditions.get(showdown_slot, ())),
+        opponent_side_conditions=tuple(replay.side_conditions.get(opponent_slot, ())),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -389,6 +397,22 @@ def _pokemon_from_public_line(parts: Sequence[str]) -> ShowdownPokemon | None:
     )
 
 
+def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, set[str]]) -> None:
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type not in {"-sidestart", "-sideend"} or len(parts) < 4:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in side_conditions:
+        return
+    condition = _normalize_identifier(parts[3])
+    if not condition:
+        return
+    if event_type == "-sidestart":
+        side_conditions[slot].add(condition)
+    else:
+        side_conditions[slot].discard(condition)
+
+
 def _public_event_from_line(line: str) -> ShowdownPublicEvent:
     parts = line.split("|")
     event_type = parts[1] if len(parts) > 1 and parts[1] else "unknown"
@@ -423,6 +447,8 @@ def _public_event_from_line(line: str) -> ShowdownPublicEvent:
         "-damage",
         "-heal",
         "-item",
+        "-sideend",
+        "-sidestart",
         "-status",
         "-unboost",
         "faint",
@@ -652,6 +678,8 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "request_kind": state.request_kind,
         "showdown_slot": state.perspective.showdown_slot,
         "opponent_showdown_slot": state.perspective.opponent_showdown_slot,
+        "self_side_conditions": list(state.self_side_conditions),
+        "opponent_side_conditions": list(state.opponent_side_conditions),
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],

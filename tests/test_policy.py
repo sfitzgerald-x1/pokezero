@@ -242,6 +242,64 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertIn("team status cure", decision.metadata["teacher_reason"])
         self.assertEqual(decision.metadata["teacher_score"], 50.0)
 
+    def test_scripted_teacher_values_rapid_spin_when_own_side_has_hazards(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                "self_side_conditions": ["spikes"],
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "rapidspin", "move_name": "Rapid Spin"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIn("clears hazards=1", decision.metadata["teacher_reason"])
+
+    def test_scripted_teacher_does_not_value_rapid_spin_without_hazards(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                "self_side_conditions": [],
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "tackle", "move_name": "Tackle"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "rapidspin", "move_name": "Rapid Spin"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+
+    def test_scripted_teacher_avoids_rapid_spin_when_current_opponent_blocks_it(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "self_side_conditions": ["spikes"],
+                "opponent_active": {"species": "Dusclops", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "flamethrower", "move_name": "Flamethrower"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "rapidspin", "move_name": "Rapid Spin"},
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+
     def test_scripted_teacher_penalizes_statused_switch_targets(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
@@ -359,6 +417,15 @@ def teacher_dex():
                     "accuracy": 100,
                     "priority": 0,
                 },
+                "rapidspin": {
+                    "id": "rapidspin",
+                    "name": "Rapid Spin",
+                    "type": "Normal",
+                    "category": "Physical",
+                    "basePower": 20,
+                    "accuracy": 100,
+                    "priority": 0,
+                },
                 "healbell": {
                     "id": "healbell",
                     "name": "Heal Bell",
@@ -375,11 +442,13 @@ def teacher_dex():
                 "golem": {"id": "golem", "name": "Golem", "types": ["Rock", "Ground"], "baseStats": {}},
                 "starmie": {"id": "starmie", "name": "Starmie", "types": ["Water", "Psychic"], "baseStats": {}},
                 "snorlax": {"id": "snorlax", "name": "Snorlax", "types": ["Normal"], "baseStats": {}},
+                "dusclops": {"id": "dusclops", "name": "Dusclops", "types": ["Ghost"], "baseStats": {}},
             },
             "typeChart": {
                 "flying": {"Rock": 1, "Ground": 3},
                 "fire": {"Rock": 1, "Ground": 1, "Fire": 2, "Water": 1},
                 "psychic": {"Ghost": 1},
+                "ghost": {"Normal": 3, "Ghost": 2},
                 "rock": {"Fire": 2, "Water": 1},
                 "ground": {"Water": 1},
                 "water": {"Fire": 2, "Rock": 2, "Ground": 2},
