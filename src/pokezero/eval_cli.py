@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import shlex
 import subprocess
 import sys
@@ -36,6 +37,7 @@ from .source_metadata import collect_source_metadata
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
+PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -128,6 +130,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "With --opponent-pool-size, print a non-destructive retention preview that marks "
             "selected, current, stale, and manual-review promotion entries."
+        ),
+    )
+    promotions.add_argument(
+        "--apply-retention-plan",
+        action="store_true",
+        help=(
+            "With --retention-plan, preview archiving verified cleanup candidates. This is a dry run "
+            "unless --retention-apply-confirm archive is also passed."
+        ),
+    )
+    promotions.add_argument(
+        "--retention-apply-confirm",
+        choices=("archive",),
+        default=None,
+        help=(
+            "Actually apply --apply-retention-plan by moving cleanup candidates into the retention "
+            "archive and updating registry checkpoint paths. Omit for dry-run output."
+        ),
+    )
+    promotions.add_argument(
+        "--retention-archive-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Archive directory for --apply-retention-plan. Defaults to a timestamped directory under "
+            "<registry-dir>/retention-archive."
         ),
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
@@ -479,6 +507,14 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--write-opponent-pool requires --opponent-pool-size.")
     if args.retention_plan and args.opponent_pool_size is None:
         raise ValueError("--retention-plan requires --opponent-pool-size.")
+    if args.apply_retention_plan and not args.retention_plan:
+        raise ValueError("--apply-retention-plan requires --retention-plan.")
+    if args.apply_retention_plan and not (args.verify and args.verify_loadable):
+        raise ValueError("--apply-retention-plan requires --verify --verify-loadable.")
+    if args.retention_apply_confirm is not None and not args.apply_retention_plan:
+        raise ValueError("--retention-apply-confirm requires --apply-retention-plan.")
+    if args.retention_archive_dir is not None and not args.apply_retention_plan:
+        raise ValueError("--retention-archive-dir requires --apply-retention-plan.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
     if (
@@ -590,6 +626,16 @@ def _promotions(args: argparse.Namespace) -> int:
         if args.retention_plan and opponent_pool is not None
         else None
     )
+    retention_apply = (
+        _promotion_retention_apply_payload(
+            registry_path=registry.path,
+            retention_plan=retention_plan,
+            archive_dir=args.retention_archive_dir,
+            confirm_archive=args.retention_apply_confirm == "archive",
+        )
+        if args.apply_retention_plan and retention_plan is not None
+        else None
+    )
     if args.write_opponent_pool is not None and opponent_pool_snapshot is not None:
         _write_json_payload(args.write_opponent_pool, opponent_pool_snapshot)
     if args.json:
@@ -625,6 +671,8 @@ def _promotions(args: argparse.Namespace) -> int:
                 payload["opponent_pool_snapshot_path"] = str(args.write_opponent_pool)
         if retention_plan is not None:
             payload["retention_plan"] = retention_plan
+        if retention_apply is not None:
+            payload["retention_apply"] = retention_apply
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -660,6 +708,8 @@ def _promotions(args: argparse.Namespace) -> int:
         _print_promotion_lifecycle_summary(lifecycle_summary)
     if retention_plan is not None:
         _print_promotion_retention_plan(retention_plan)
+    if retention_apply is not None:
+        _print_promotion_retention_apply(retention_apply)
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
@@ -948,6 +998,249 @@ def _print_promotion_retention_plan(plan: Mapping[str, object]) -> None:
             f"reason={entry['recommendation_reason']} pool={entry['opponent_pool_status']} "
             f"selected={selected_as} verification={entry['verification_status']} "
             f"checkpoint={entry['checkpoint_path'] or '-'}"
+        )
+
+
+def _promotion_retention_apply_payload(
+    *,
+    registry_path: Path,
+    retention_plan: Mapping[str, object],
+    archive_dir: Path | None,
+    confirm_archive: bool,
+) -> dict[str, object]:
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    batch_id = _retention_archive_batch_id(generated_at)
+    resolved_archive_dir = (
+        archive_dir.expanduser().resolve(strict=False)
+        if archive_dir is not None
+        else registry_path.parent / "retention-archive" / batch_id
+    )
+    dry_run = not confirm_archive
+    entries = [
+        _promotion_retention_apply_entry(
+            entry,
+            registry_path=registry_path,
+            archive_dir=resolved_archive_dir,
+            dry_run=dry_run,
+        )
+        for entry in _retention_plan_entries(retention_plan)
+    ]
+    if not dry_run:
+        _apply_retention_archive_entries(
+            registry_path=registry_path,
+            entries=entries,
+            generated_at=generated_at,
+        )
+    status_counts = _count_plan_values(entries, "apply_status")
+    return {
+        "schema_version": PROMOTION_RETENTION_APPLY_SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "registry_path": str(registry_path),
+        "retention_plan_schema_version": retention_plan.get("schema_version"),
+        "dry_run": dry_run,
+        "confirmation": "archive" if confirm_archive else None,
+        "archive_dir": str(resolved_archive_dir),
+        "registry_updates_checkpoint_paths": confirm_archive,
+        "summary": {
+            "total_plan_entries": len(entries),
+            "cleanup_candidate_count": sum(
+                1 for entry in entries if entry["recommended_action"] == "cleanup_candidate"
+            ),
+            "archive_candidate_count": sum(1 for entry in entries if entry["apply_action"] == "archive"),
+            "applied_count": int(status_counts.get("applied", 0)),
+            "planned_count": int(status_counts.get("planned", 0)),
+            "skipped_count": int(status_counts.get("skipped", 0)),
+            "apply_status_counts": status_counts,
+        },
+        "entries": entries,
+    }
+
+
+def _retention_plan_entries(retention_plan: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    entries = retention_plan.get("entries", ())
+    if not isinstance(entries, list):
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, Mapping))
+
+
+def _promotion_retention_apply_entry(
+    entry: Mapping[str, object],
+    *,
+    registry_path: Path,
+    archive_dir: Path,
+    dry_run: bool,
+) -> dict[str, object]:
+    base = {
+        "sequence": entry.get("sequence"),
+        "policy_id": entry.get("policy_id"),
+        "label": entry.get("label"),
+        "checkpoint_path": entry.get("checkpoint_path"),
+        "source_checkpoint_path": entry.get("source_checkpoint_path"),
+        "recommended_action": entry.get("recommended_action"),
+        "recommendation_reason": entry.get("recommendation_reason"),
+    }
+    if entry.get("recommended_action") != "cleanup_candidate":
+        return {
+            **base,
+            "apply_action": "skip",
+            "apply_status": "skipped",
+            "apply_reason": "not_cleanup_candidate",
+            "resolved_checkpoint_path": None,
+            "archive_path": None,
+        }
+    if not _retention_entry_is_managed_artifact(entry):
+        return {
+            **base,
+            "apply_action": "skip",
+            "apply_status": "skipped",
+            "apply_reason": "not_managed_artifact_copy",
+            "resolved_checkpoint_path": None,
+            "archive_path": None,
+        }
+    resolved_checkpoint = _resolve_retention_checkpoint_path(entry.get("checkpoint_path"), registry_path=registry_path)
+    if resolved_checkpoint is None:
+        return {
+            **base,
+            "apply_action": "skip",
+            "apply_status": "skipped",
+            "apply_reason": "checkpoint_unresolved",
+            "resolved_checkpoint_path": None,
+            "archive_path": None,
+        }
+    archive_path = archive_dir / f"{int(entry['sequence']):06d}-{resolved_checkpoint.name}"
+    return {
+        **base,
+        "apply_action": "archive",
+        "apply_status": "planned" if dry_run else "pending",
+        "apply_reason": "dry_run" if dry_run else "confirmed_archive",
+        "resolved_checkpoint_path": str(resolved_checkpoint),
+        "archive_path": str(archive_path),
+    }
+
+
+def _retention_entry_is_managed_artifact(entry: Mapping[str, object]) -> bool:
+    checkpoint_path = entry.get("checkpoint_path")
+    source_checkpoint_path = entry.get("source_checkpoint_path")
+    return (
+        isinstance(checkpoint_path, str)
+        and bool(checkpoint_path)
+        and isinstance(source_checkpoint_path, str)
+        and bool(source_checkpoint_path)
+        and checkpoint_path != source_checkpoint_path
+    )
+
+
+def _resolve_retention_checkpoint_path(value: object, *, registry_path: Path) -> Path | None:
+    if not isinstance(value, str) or not value:
+        return None
+    raw_path = Path(value).expanduser()
+    candidates = (raw_path,) if raw_path.is_absolute() else (registry_path.parent / raw_path, raw_path)
+    for candidate in _dedupe_cli_paths(candidates):
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve(strict=False)
+    return None
+
+
+def _dedupe_cli_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return tuple(deduped)
+
+
+def _apply_retention_archive_entries(
+    *,
+    registry_path: Path,
+    entries: list[dict[str, object]],
+    generated_at: str,
+) -> None:
+    archive_entries = [entry for entry in entries if entry["apply_action"] == "archive"]
+    if not archive_entries:
+        return
+    updates: dict[int, str] = {}
+    archive_root: Path | None = None
+    for entry in archive_entries:
+        source_path = Path(str(entry["resolved_checkpoint_path"]))
+        archive_path = Path(str(entry["archive_path"]))
+        if archive_root is None:
+            archive_root = archive_path.parent
+            archive_root.mkdir(parents=True, exist_ok=True)
+        if archive_path.exists():
+            entry["apply_status"] = "skipped"
+            entry["apply_reason"] = "archive_path_exists"
+            continue
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source_path), str(archive_path))
+        entry["apply_status"] = "applied"
+        entry["apply_reason"] = "archived"
+        updates[int(entry["sequence"])] = str(archive_path)
+    if updates:
+        _rewrite_retention_archived_checkpoint_paths(
+            registry_path=registry_path,
+            checkpoint_path_updates=updates,
+            generated_at=generated_at,
+        )
+
+
+def _rewrite_retention_archived_checkpoint_paths(
+    *,
+    registry_path: Path,
+    checkpoint_path_updates: Mapping[int, str],
+    generated_at: str,
+) -> None:
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    entries = payload.get("entries", ())
+    if not isinstance(entries, list):
+        raise ValueError("promotion registry entries must be a JSON array.")
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        sequence = int(entry["sequence"])
+        if sequence not in checkpoint_path_updates:
+            continue
+        previous_checkpoint_path = entry.get("checkpoint_path")
+        entry["checkpoint_path"] = checkpoint_path_updates[sequence]
+        entry["retention_archived_from_checkpoint_path"] = previous_checkpoint_path
+        entry["retention_archived_at"] = generated_at
+    _write_json_payload(registry_path, payload)
+
+
+def _retention_archive_batch_id(generated_at: str) -> str:
+    return (
+        generated_at.replace(":", "")
+        .replace("-", "")
+        .replace(".", "")
+        .replace("+0000", "Z")
+    )
+
+
+def _print_promotion_retention_apply(apply_payload: Mapping[str, object]) -> None:
+    summary = apply_payload["summary"] if isinstance(apply_payload["summary"], Mapping) else {}
+    print("retention_apply:")
+    print(f"- schema_version: {apply_payload['schema_version']}")
+    print(f"- dry_run: {apply_payload['dry_run']}")
+    print(f"- confirmation: {apply_payload['confirmation'] or '-'}")
+    print(f"- archive_dir: {apply_payload['archive_dir']}")
+    print(f"- registry_updates_checkpoint_paths: {apply_payload['registry_updates_checkpoint_paths']}")
+    print(f"- archive_candidate_count: {summary.get('archive_candidate_count', 0)}")
+    print(f"- applied_count: {summary.get('applied_count', 0)}")
+    print(f"- planned_count: {summary.get('planned_count', 0)}")
+    print(f"- skipped_count: {summary.get('skipped_count', 0)}")
+    print("retention_apply_entries:")
+    entries = apply_payload["entries"] if isinstance(apply_payload["entries"], list) else []
+    if not entries:
+        print("- none")
+        return
+    for entry in entries:
+        print(
+            f"- {entry['sequence']}: action={entry['apply_action']} status={entry['apply_status']} "
+            f"reason={entry['apply_reason']} checkpoint={entry['checkpoint_path'] or '-'} "
+            f"archive={entry['archive_path'] or '-'}"
         )
 
 

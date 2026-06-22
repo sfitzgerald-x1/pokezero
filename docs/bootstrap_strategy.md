@@ -425,7 +425,37 @@ By default, the preview assumes the latest promoted checkpoint is the current co
 
 When an opponent pool is previewed, each entry also includes an `opponent_pool_status` such as `selected`, `unselectable`, `excluded_current_policy`, or `available_outside_requested_size`. Add `--lifecycle` to include compact counts for latest, selected opponent-pool, unhealthy selected opponent-pool, selection-eligible, unselectable, excluded-current, stale-available, entry-level failed-verification, and registry-level failed-verification entries. The lifecycle block also records whether an opponent pool was requested, so `--lifecycle` without `--opponent-pool-size` is distinguishable from a clean pool preflight. Use these statuses and lifecycle counts to diagnose why a required pool is undersized before starting a long run.
 
-Add `--retention-plan` with `--opponent-pool-size` to print a non-destructive cleanup preview. The plan marks selected opponent-pool entries, the assumed current collector, and the latest promotion as `retain`; stale entries outside the requested opponent-pool window are marked `verify_before_cleanup` until full verification has passed. A stale entry becomes `cleanup_candidate` only when per-entry verification is `pass` and registry-level verification has no structural failures. Broken stale entries, structurally broken registries, and partially verified stale entries are marked for review or further verification rather than cleanup. This command does not delete or move checkpoints; it is an operator planning aid for managed artifact directories that grow over long CPU experiments.
+Add `--retention-plan` with `--opponent-pool-size` to print a non-destructive cleanup preview. The plan marks selected opponent-pool entries, the assumed current collector, and the latest promotion as `retain`; stale entries outside the requested opponent-pool window are marked `verify_before_cleanup` until full verification has passed. A stale entry becomes `cleanup_candidate` only when per-entry verification is `pass` and registry-level verification has no structural failures. Broken stale entries, structurally broken registries, and partially verified stale entries are marked for review or further verification rather than cleanup.
+
+To act on verified cleanup candidates, add `--apply-retention-plan`. This still defaults to a dry run and reports what would be archived:
+
+```bash
+python -m pokezero.eval_cli promotions \
+  --registry runs/promotions.json \
+  --opponent-pool-size 3 \
+  --retention-plan \
+  --apply-retention-plan \
+  --verify \
+  --verify-loadable \
+  --verify-opponent-pool-only
+```
+
+Apply the archive only after inspecting the dry-run output:
+
+```bash
+python -m pokezero.eval_cli promotions \
+  --registry runs/promotions.json \
+  --opponent-pool-size 3 \
+  --retention-plan \
+  --apply-retention-plan \
+  --retention-apply-confirm archive \
+  --retention-archive-dir runs/retention-archive \
+  --verify \
+  --verify-loadable \
+  --verify-opponent-pool-only
+```
+
+The apply command only moves entries already marked `cleanup_candidate`, only for managed promoted artifact copies, and leaves source run checkpoints untouched. It archives the stale artifact and rewrites that promotion entry's checkpoint path to the archive location so registry verification and historical auditability continue to work. It is not a permanent deletion policy; remove or compact archive directories separately only after deciding those checkpoints are no longer needed.
 
 Use `--write-opponent-pool` to save a compact, versioned snapshot of the selected policy specs, selected promotion entries, current-policy exclusion, size requirement, and verification/preflight status. The snapshot is written even when the preflight exits non-zero, so failed long-run launch checks leave behind the exact pool state that was rejected. Snapshots include `generated_at`, so compare `policy_specs` and selected entries rather than whole-file equality when checking whether the selected pool changed.
 
