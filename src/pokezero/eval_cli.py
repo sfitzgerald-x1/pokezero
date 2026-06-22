@@ -567,6 +567,7 @@ def _promotions(args: argparse.Namespace) -> int:
             current_policy_spec=preview_current_policy_spec,
             requested_size=args.opponent_pool_size,
             verification=verification,
+            registry_level_verification_passed=opponent_pool_registry_level_verified,
         )
         if args.retention_plan and opponent_pool is not None
         else None
@@ -799,11 +800,13 @@ def _promotion_retention_plan_payload(
     current_policy_spec: str | None,
     requested_size: int | None,
     verification,
+    registry_level_verification_passed: bool | None,
 ) -> dict[str, object]:
     entries = [
         _promotion_retention_plan_entry(
             status,
             verification_enabled=verification is not None,
+            registry_level_verification_passed=registry_level_verification_passed,
         )
         for status in entry_statuses
     ]
@@ -819,6 +822,7 @@ def _promotion_retention_plan_payload(
         "selected_opponent_pool_size": len(opponent_pool),
         "available_opponent_pool_size": len(available_opponent_pool) if available_opponent_pool is not None else None,
         "verification_enabled": verification is not None,
+        "registry_level_verification_passed": registry_level_verification_passed,
         "summary": {
             "total_entries": len(entries),
             "retain_count": int(action_counts.get("retain", 0)),
@@ -835,10 +839,12 @@ def _promotion_retention_plan_entry(
     status: Mapping[str, object],
     *,
     verification_enabled: bool,
+    registry_level_verification_passed: bool | None,
 ) -> dict[str, object]:
     action, reason = _promotion_retention_recommendation(
         status,
         verification_enabled=verification_enabled,
+        registry_level_verification_passed=registry_level_verification_passed,
     )
     return {
         "sequence": status["sequence"],
@@ -868,21 +874,26 @@ def _promotion_retention_recommendation(
     status: Mapping[str, object],
     *,
     verification_enabled: bool,
+    registry_level_verification_passed: bool | None,
 ) -> tuple[str, str]:
     selected_as = set(status["selected_as"] if isinstance(status["selected_as"], list) else ())
+    if status["failed_checks"]:
+        return "manual_review", "verification_failed"
+    if status["opponent_pool_status"] == "unselectable":
+        return "manual_review", "missing_selection_checkpoint"
     if "latest" in selected_as:
         return "retain", "latest_promotion"
     if "opponent_pool" in selected_as:
         return "retain", "selected_opponent_pool"
     if status["opponent_pool_status"] == "excluded_current_policy":
         return "retain", "current_policy_exclusion"
-    if status["opponent_pool_status"] == "unselectable":
-        return "manual_review", "missing_selection_checkpoint"
-    if status["failed_checks"]:
-        return "manual_review", "verification_failed"
     if status["opponent_pool_status"] == "available_outside_requested_size":
         if not verification_enabled:
             return "verify_before_cleanup", "stale_outside_requested_pool_unverified"
+        if registry_level_verification_passed is not True:
+            return "manual_review", "registry_verification_failed"
+        if status["verification_status"] != "pass":
+            return "verify_before_cleanup", "stale_outside_requested_pool_partially_verified"
         return "cleanup_candidate", "stale_outside_requested_pool"
     return "retain", "not_stale"
 
@@ -902,6 +913,7 @@ def _print_promotion_retention_plan(plan: Mapping[str, object]) -> None:
     print(f"- verification_enabled: {plan['verification_enabled']}")
     print(f"- selected_opponent_pool_size: {plan['selected_opponent_pool_size']}")
     print(f"- available_opponent_pool_size: {plan['available_opponent_pool_size']}")
+    print(f"- registry_level_verification: {_verification_bool_label(plan['registry_level_verification_passed'])}")
     print(f"- retain_count: {summary.get('retain_count', 0)}")
     print(f"- verify_before_cleanup_count: {summary.get('verify_before_cleanup_count', 0)}")
     print(f"- cleanup_candidate_count: {summary.get('cleanup_candidate_count', 0)}")
