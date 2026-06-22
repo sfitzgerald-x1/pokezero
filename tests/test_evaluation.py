@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -621,6 +622,51 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIsNone(metadata["head"])
         self.assertIsNone(metadata["dirty"])
         self.assertIn("git unavailable", metadata["error"])
+
+    def test_git_source_metadata_collects_branch_head_and_dirty_state(self) -> None:
+        def fake_git_output(_cwd: Path, *args: str) -> str:
+            outputs = {
+                ("rev-parse", "--show-toplevel"): "/repo",
+                ("rev-parse", "HEAD"): "abc123",
+                ("branch", "--show-current"): "main",
+                ("status", "--porcelain"): "?? uv.lock\n",
+            }
+            return outputs[args]
+
+        with patch("pokezero.eval_cli._git_output", side_effect=fake_git_output):
+            metadata = _git_source_metadata(Path("/repo"))
+
+        self.assertTrue(metadata["available"])
+        self.assertEqual(metadata["repo_root"], "/repo")
+        self.assertEqual(metadata["branch"], "main")
+        self.assertEqual(metadata["head"], "abc123")
+        self.assertTrue(metadata["dirty"])
+
+    def test_git_source_metadata_maps_detached_head_branch_to_none(self) -> None:
+        def fake_git_output(_cwd: Path, *args: str) -> str:
+            outputs = {
+                ("rev-parse", "--show-toplevel"): "/repo",
+                ("rev-parse", "HEAD"): "abc123",
+                ("branch", "--show-current"): "",
+                ("status", "--porcelain"): "",
+            }
+            return outputs[args]
+
+        with patch("pokezero.eval_cli._git_output", side_effect=fake_git_output):
+            metadata = _git_source_metadata(Path("/repo"))
+
+        self.assertTrue(metadata["available"])
+        self.assertIsNone(metadata["branch"])
+        self.assertFalse(metadata["dirty"])
+
+    def test_git_source_metadata_is_optional_on_timeout(self) -> None:
+        timeout = subprocess.TimeoutExpired(cmd=("git", "status", "--porcelain"), timeout=5)
+        with patch("pokezero.eval_cli._git_output", side_effect=timeout):
+            metadata = _git_source_metadata(Path("/repo"))
+
+        self.assertFalse(metadata["available"])
+        self.assertIsNone(metadata["head"])
+        self.assertIn("TimeoutExpired", metadata["error"])
 
     def test_eval_cli_cpu_smoke_plan_rejects_non_positive_counts(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
