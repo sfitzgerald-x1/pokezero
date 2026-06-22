@@ -3199,7 +3199,7 @@ def _cpu_pilot_audit_config_calibration_report(
         return report
     try:
         payload = _load_audit_config_report_payload(Path(str(audit_config_path)))
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, TypeError, ValueError, KeyError) as exc:
         report["read_error"] = str(exc)
         report["calibration_requirements_passed"] = False
         return report
