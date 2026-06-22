@@ -3021,9 +3021,11 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_long_run_summary(args.path)
     status = str(summary.get("status", "unknown"))
     exit_status = 0 if status == "passed" else 2
+    run_report = _cpu_long_run_derived_run_report(summary)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
+        payload["derived_run_report"] = run_report
         print(json.dumps(payload, indent=2, sort_keys=True))
         return exit_status
 
@@ -3040,11 +3042,13 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
         print(f"pilot_summary: {_format_summary_value(recipe.get('pilot_summary_path'))}")
         print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
         print(f"run_dir: {_format_summary_value(recipe.get('run_dir'))}")
+        print(f"runtime_audit_source: {_format_summary_value(recipe.get('runtime_audit_source'))}")
         reasons = recipe.get("long_run_ready_reasons")
         if isinstance(reasons, list) and reasons:
             print("long_run_ready_reasons:")
             for reason in reasons:
                 print(f"- {reason}")
+    _print_cpu_long_run_derived_run_report(run_report)
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -3071,6 +3075,136 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
     return exit_status
+
+
+def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str, object]:
+    recipe = summary.get("recipe")
+    if not isinstance(recipe, Mapping):
+        return {
+            "available": False,
+            "manifest_available": False,
+            "error": "recipe_unavailable",
+        }
+
+    run_dir_value = recipe.get("run_dir")
+    if run_dir_value is None:
+        return {
+            "available": False,
+            "manifest_available": False,
+            "error": "run_dir_unavailable",
+        }
+
+    run_dir = Path(str(run_dir_value))
+    manifest_path = run_dir / "manifest.json"
+    report: dict[str, object] = {
+        "available": False,
+        "run_dir": str(run_dir),
+        "manifest_path": str(manifest_path),
+        "manifest_available": manifest_path.exists(),
+        "audit_source": _cpu_long_run_report_audit_source(recipe),
+        "audit_config_path": _cpu_long_run_report_runtime_audit_config_path(recipe),
+        "audit_profile": _cpu_long_run_report_runtime_audit_profile(recipe),
+    }
+    if not manifest_path.exists():
+        report["error"] = "manifest_not_found"
+        return report
+
+    try:
+        audit_config = _cpu_long_run_report_audit_config(recipe)
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        report["error"] = str(exc)
+        return report
+
+    try:
+        audit_result = audit_run(manifest_path, config=audit_config)
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        report["error"] = str(exc)
+        return report
+
+    failed_checks = [check.name for check in audit_result.checks if not check.passed]
+    report.update(
+        {
+            "available": True,
+            "error": None,
+            "schema_version": audit_result.schema_version,
+            "source_type": audit_result.source_type,
+            "latest_iteration": audit_result.latest_iteration,
+            "audit_passed": audit_result.passed,
+            "failed_checks": failed_checks,
+            "latest_benchmark_win_rate": audit_result.latest_benchmark_win_rate,
+            "best_benchmark_win_rate": audit_result.best_benchmark_win_rate,
+            "latest_collection_capped_rate": audit_result.latest_collection_capped_rate,
+            "latest_benchmark_capped_rate": audit_result.latest_benchmark_capped_rate,
+            "latest_average_decision_rounds": audit_result.latest_average_decision_rounds,
+            "latest_benchmark_average_decision_rounds": audit_result.latest_benchmark_average_decision_rounds,
+            "latest_process_peak_rss_mb": audit_result.latest_process_peak_rss_mb,
+            "missing_latest_benchmark_opponents": list(audit_result.missing_latest_benchmark_opponents),
+            "consecutive_promotion_failures": audit_result.consecutive_promotion_failures,
+            "checks": [check.to_dict() for check in audit_result.checks],
+        }
+    )
+    return report
+
+
+def _cpu_long_run_report_audit_config(recipe: Mapping[str, object]) -> RunAuditConfig:
+    audit_source = _cpu_long_run_report_audit_source(recipe)
+    if audit_source == "profile":
+        profile_name = _cpu_long_run_report_runtime_audit_profile(recipe)
+        if profile_name is None:
+            raise ValueError("runtime audit profile is unavailable.")
+        return evaluation_profile(profile_name).audit_config
+
+    audit_config_path = _cpu_long_run_report_runtime_audit_config_path(recipe)
+    if audit_config_path is None:
+        raise ValueError("runtime audit config path is unavailable.")
+    return load_run_audit_config(Path(audit_config_path))
+
+
+def _cpu_long_run_report_audit_source(recipe: Mapping[str, object]) -> str:
+    source = recipe.get("runtime_audit_source")
+    return str(source) if source is not None else "pilot-audit-config"
+
+
+def _cpu_long_run_report_runtime_audit_config_path(recipe: Mapping[str, object]) -> str | None:
+    if _cpu_long_run_report_audit_source(recipe) == "profile":
+        return None
+    value = recipe.get("runtime_audit_config_path") or recipe.get("audit_config_path")
+    return None if value is None else str(value)
+
+
+def _cpu_long_run_report_runtime_audit_profile(recipe: Mapping[str, object]) -> str | None:
+    value = recipe.get("runtime_audit_profile") or recipe.get("profile")
+    return None if value is None else str(value)
+
+
+def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None:
+    print("derived_run_report:")
+    print(f"manifest: {_format_summary_value(report.get('manifest_path'))}")
+    print(f"manifest_available: {_format_optional_bool(report.get('manifest_available'))}")
+    print(f"audit_source: {_format_summary_value(report.get('audit_source'))}")
+    if report.get("audit_profile") is not None:
+        print(f"audit_profile: {_format_summary_value(report.get('audit_profile'))}")
+    if report.get("audit_config_path") is not None and report.get("audit_source") != "profile":
+        print(f"audit_config_path: {_format_summary_value(report.get('audit_config_path'))}")
+    print(f"audit_passed: {_format_optional_bool(report.get('audit_passed'))}")
+    print(f"latest_iteration: {_format_summary_value(report.get('latest_iteration'))}")
+    print(f"latest_benchmark_win_rate: {_format_optional_float(report.get('latest_benchmark_win_rate'))}")
+    print(f"best_benchmark_win_rate: {_format_optional_float(report.get('best_benchmark_win_rate'))}")
+    print(f"latest_collection_capped_rate: {_format_optional_float(report.get('latest_collection_capped_rate'))}")
+    print(f"latest_benchmark_capped_rate: {_format_optional_float(report.get('latest_benchmark_capped_rate'))}")
+    print(f"latest_average_decision_rounds: {_format_optional_float(report.get('latest_average_decision_rounds'))}")
+    print(
+        "latest_benchmark_average_decision_rounds: "
+        f"{_format_optional_float(report.get('latest_benchmark_average_decision_rounds'))}"
+    )
+    print(f"latest_process_peak_rss_mb: {_format_optional_one_decimal(report.get('latest_process_peak_rss_mb'))}")
+    failed_checks = report.get("failed_checks")
+    if isinstance(failed_checks, list) and failed_checks:
+        print("failed_checks:")
+        for check in failed_checks:
+            print(f"- {check}")
+    if report.get("error") is not None:
+        print(f"error: {report['error']}")
 
 
 def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
