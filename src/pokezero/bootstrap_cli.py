@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -18,6 +19,8 @@ from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
+
+TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION = "pokezero.teacher_benchmark_preflight.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -82,6 +85,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Baseline policy spec. May be repeated. Defaults to simple-legal and random-legal.",
+    )
+    teacher_benchmark.add_argument("--out", type=Path, default=None, help="Optional JSON report path for the benchmark preflight payload.")
+    teacher_benchmark.add_argument(
+        "--min-teacher-win-rate",
+        type=float,
+        default=None,
+        help="Fail unless the teacher reaches this win rate against every baseline head-to-head.",
+    )
+    teacher_benchmark.add_argument(
+        "--max-capped-rate",
+        type=float,
+        default=None,
+        help="Fail unless every teacher benchmark head-to-head has capped-game rate at or below this value.",
+    )
+    teacher_benchmark.add_argument(
+        "--fail-on-degraded-decisions",
+        action="store_true",
+        help="Fail if the teacher used unknown-move or fallback decisions during the benchmark.",
     )
     teacher_benchmark.add_argument("--json", action="store_true", help="Print the benchmark report as JSON.")
     teacher_benchmark.set_defaults(func=_teacher_benchmark)
@@ -150,6 +171,8 @@ def _teacher(args: argparse.Namespace) -> int:
 
 
 def _teacher_benchmark(args: argparse.Namespace) -> int:
+    _validate_optional_rate(args.min_teacher_win_rate, "--min-teacher-win-rate")
+    _validate_optional_rate(args.max_capped_rate, "--max-capped-rate")
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -172,11 +195,179 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         games=args.games,
         seed_start=args.seed_start,
     )
+    teacher_policy_id = _teacher_policy_id_from_spec(args.teacher_policy) or _teacher_policy_id_from_benchmark(result)
+    checks = _teacher_benchmark_checks(
+        result,
+        teacher_policy_id=teacher_policy_id,
+        min_teacher_win_rate=args.min_teacher_win_rate,
+        max_capped_rate=args.max_capped_rate,
+        fail_on_degraded_decisions=args.fail_on_degraded_decisions,
+    )
+    passed = all(bool(check["passed"]) for check in checks)
+    payload = _teacher_benchmark_payload(
+        result,
+        teacher_policy_id=teacher_policy_id,
+        checks=checks,
+        passed=passed,
+    )
+    if args.out is not None:
+        _write_json(args.out, payload)
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        _print_teacher_benchmark_result(result)
-    return 0
+        _print_teacher_benchmark_result(result, checks=checks, passed=passed)
+        if args.out is not None:
+            print(f"report: {args.out}")
+    return 0 if passed else 2
+
+
+def _validate_optional_rate(value: float | None, flag_name: str) -> None:
+    if value is None:
+        return
+    if not math.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError(f"{flag_name} must be between 0 and 1.")
+
+
+def _teacher_policy_id_from_spec(spec: str) -> str | None:
+    policy_body = spec.strip().partition("?")[0].strip()
+    lowered = policy_body.lower()
+    if lowered in {"random-legal", "simple-legal", "scripted-teacher"}:
+        return lowered
+    if lowered.startswith("linear:"):
+        checkpoint = policy_body[len("linear:") :].strip()
+        if not checkpoint:
+            return None
+        try:
+            payload = json.loads(Path(checkpoint).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        policy_id = payload.get("policy_id")
+        if isinstance(policy_id, str) and policy_id.strip():
+            return policy_id
+    return None
+
+
+def _teacher_policy_id_from_benchmark(result) -> str:
+    if result.benchmark.matchups:
+        return result.benchmark.matchups[0].p1_policy_id
+    if result.benchmark.head_to_head_results:
+        return result.benchmark.head_to_head_results[0].first_policy_id
+    return "unknown-teacher"
+
+
+def _teacher_benchmark_checks(
+    result,
+    *,
+    teacher_policy_id: str,
+    min_teacher_win_rate: float | None,
+    max_capped_rate: float | None,
+    fail_on_degraded_decisions: bool,
+) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    matched_head_to_heads = 0
+    for row in result.benchmark.head_to_head_results:
+        if row.first_policy_id == teacher_policy_id:
+            teacher_win_rate = row.first_policy_win_rate
+            opponent_policy_id = row.second_policy_id
+        elif row.second_policy_id == teacher_policy_id:
+            teacher_win_rate = row.second_policy_win_rate
+            opponent_policy_id = row.first_policy_id
+        else:
+            continue
+        matched_head_to_heads += 1
+        capped_rate = row.capped_games / row.games if row.games else 0.0
+        if min_teacher_win_rate is not None:
+            checks.append(
+                _preflight_check(
+                    name=f"teacher_win_rate:{opponent_policy_id}",
+                    passed=teacher_win_rate >= min_teacher_win_rate,
+                    observed=teacher_win_rate,
+                    threshold=min_teacher_win_rate,
+                    message=(
+                        f"teacher win rate vs {opponent_policy_id} "
+                        f"observed={teacher_win_rate:.3f} required>={min_teacher_win_rate:.3f}"
+                    ),
+                )
+            )
+        if max_capped_rate is not None:
+            checks.append(
+                _preflight_check(
+                    name=f"capped_rate:{opponent_policy_id}",
+                    passed=capped_rate <= max_capped_rate,
+                    observed=capped_rate,
+                    threshold=max_capped_rate,
+                    message=(
+                        f"capped rate vs {opponent_policy_id} "
+                        f"observed={capped_rate:.3f} required<={max_capped_rate:.3f}"
+                    ),
+                )
+            )
+    if (min_teacher_win_rate is not None or max_capped_rate is not None) and matched_head_to_heads == 0:
+        checks.append(
+            _preflight_check(
+                name="teacher_head_to_head_present",
+                passed=False,
+                observed=0,
+                threshold=1,
+                message=f"teacher policy {teacher_policy_id} did not appear in any benchmark head-to-head row",
+            )
+        )
+    if fail_on_degraded_decisions:
+        unknown_moves = int(result.teacher_decision_summary.get("unknown_move_decisions", 0))
+        fallbacks = int(result.teacher_decision_summary.get("fallback_decisions", 0))
+        degraded = unknown_moves + fallbacks
+        checks.append(
+            _preflight_check(
+                name="teacher_degraded_decisions",
+                passed=degraded == 0,
+                observed=degraded,
+                threshold=0,
+                message=(
+                    "teacher degraded decisions "
+                    f"{degraded} == 0 (unknown_moves={unknown_moves}, fallbacks={fallbacks})"
+                ),
+            )
+        )
+    return checks
+
+
+def _preflight_check(
+    *,
+    name: str,
+    passed: bool,
+    observed: float | int,
+    threshold: float | int,
+    message: str,
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "passed": passed,
+        "observed": observed,
+        "threshold": threshold,
+        "message": message,
+    }
+
+
+def _teacher_benchmark_payload(
+    result,
+    *,
+    teacher_policy_id: str,
+    checks: list[dict[str, object]],
+    passed: bool,
+) -> dict[str, object]:
+    payload = result.to_dict()
+    payload["schema_version"] = TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION
+    payload["teacher_policy_id"] = teacher_policy_id
+    payload["passed"] = passed
+    payload["checks"] = checks
+    return payload
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def _print_teacher_summary(result) -> None:
@@ -232,7 +423,7 @@ def _print_teacher_summary(result) -> None:
     print(f"manifest: {result.manifest_path}")
 
 
-def _print_teacher_benchmark_result(result) -> None:
+def _print_teacher_benchmark_result(result, *, checks: list[dict[str, object]], passed: bool) -> None:
     report = result.benchmark
     print(f"format: {report.format_id}")
     print(f"games_per_matchup: {report.games_per_matchup}")
@@ -254,6 +445,13 @@ def _print_teacher_benchmark_result(result) -> None:
         f"unknown_moves={summary.get('unknown_move_decisions', 0)} "
         f"fallbacks={summary.get('fallback_decisions', 0)}"
     )
+    if checks:
+        print(f"preflight: {'PASS' if passed else 'FAIL'}")
+        for check in checks:
+            print(
+                f"- {'PASS' if check['passed'] else 'FAIL'} {check['name']}: "
+                f"{check['message']}"
+            )
     fallback_reasons = summary.get("fallback_reasons") or {}
     if fallback_reasons:
         print("teacher_fallback_reasons:")
