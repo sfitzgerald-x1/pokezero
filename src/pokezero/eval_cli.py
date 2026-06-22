@@ -264,6 +264,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return non-zero unless at least one supplied manifest was audited and all supplied manifests passed.",
     )
+    audit_config_report.add_argument(
+        "--require-calibration-run-count",
+        type=int,
+        default=0,
+        help="Return non-zero unless calibration metadata includes at least this many source runs.",
+    )
+    audit_config_report.add_argument(
+        "--require-calibration-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Return non-zero unless calibration metadata includes at least this many benchmarked iterations.",
+    )
+    audit_config_report.add_argument(
+        "--require-calibration-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Return non-zero unless calibration metadata's minimum benchmark games meets this floor.",
+    )
     audit_config_report.add_argument("--json", action="store_true", help="Print the config report as JSON.")
     audit_config_report.set_defaults(func=_audit_config_report)
 
@@ -1791,6 +1809,7 @@ def _audit(args: argparse.Namespace) -> int:
 
 
 def _audit_config_report(args: argparse.Namespace) -> int:
+    _validate_audit_config_report_args(args)
     config_payload = _load_audit_config_report_payload(args.audit_config)
     preflight_expansion_error = None
     try:
@@ -1820,6 +1839,9 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         require_calibration=args.require_calibration,
         require_preflight=args.require_preflight,
         preflight_expansion_error=preflight_expansion_error,
+        require_calibration_run_count=args.require_calibration_run_count,
+        require_calibration_benchmark_iterations=args.require_calibration_benchmark_iterations,
+        require_calibration_min_benchmark_games=args.require_calibration_min_benchmark_games,
     )
     passed = all(bool(check["passed"]) for check in checks)
     report = {
@@ -1833,6 +1855,11 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         "preflight_expansion_error": preflight_expansion_error,
         "preflight_passed": preflight_passed,
         "preflight_runs": list(preflight_runs),
+        "calibration_requirements": {
+            "run_count": args.require_calibration_run_count,
+            "benchmark_iterations": args.require_calibration_benchmark_iterations,
+            "min_benchmark_games": args.require_calibration_min_benchmark_games,
+        },
         "checks": checks,
         "passed": passed,
     }
@@ -1896,6 +1923,9 @@ def _audit_config_report_checks(
     require_calibration: bool,
     require_preflight: bool,
     preflight_expansion_error: str | None,
+    require_calibration_run_count: int,
+    require_calibration_benchmark_iterations: int,
+    require_calibration_min_benchmark_games: int,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = [
         {
@@ -1928,6 +1958,14 @@ def _audit_config_report_checks(
                 "message": "calibration metadata is required",
             }
         )
+    checks.extend(
+        _audit_config_calibration_requirement_checks(
+            config_payload.get("calibration"),
+            require_run_count=require_calibration_run_count,
+            require_benchmark_iterations=require_calibration_benchmark_iterations,
+            require_min_benchmark_games=require_calibration_min_benchmark_games,
+        )
+    )
     if require_preflight:
         checks.append(
             {
@@ -1953,6 +1991,66 @@ def _audit_config_report_checks(
             }
         )
     return checks
+
+
+def _validate_audit_config_report_args(args: argparse.Namespace) -> None:
+    if args.require_calibration_run_count < 0:
+        raise ValueError("require-calibration-run-count must be non-negative.")
+    if args.require_calibration_benchmark_iterations < 0:
+        raise ValueError("require-calibration-benchmark-iterations must be non-negative.")
+    if args.require_calibration_min_benchmark_games < 0:
+        raise ValueError("require-calibration-min-benchmark-games must be non-negative.")
+
+
+def _audit_config_calibration_requirement_checks(
+    calibration: object,
+    *,
+    require_run_count: int,
+    require_benchmark_iterations: int,
+    require_min_benchmark_games: int,
+) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    if require_run_count > 0:
+        observed = _optional_int_from_mapping(calibration, "run_count")
+        checks.append(
+            {
+                "name": "calibration_run_count",
+                "passed": observed is not None and observed >= require_run_count,
+                "observed": observed,
+                "threshold": require_run_count,
+                "message": "calibration run count must meet the requested floor",
+            }
+        )
+    if require_benchmark_iterations > 0:
+        observed = _optional_int_from_mapping(calibration, "benchmark_iteration_count")
+        checks.append(
+            {
+                "name": "calibration_benchmark_iterations",
+                "passed": observed is not None and observed >= require_benchmark_iterations,
+                "observed": observed,
+                "threshold": require_benchmark_iterations,
+                "message": "calibration benchmark iteration count must meet the requested floor",
+            }
+        )
+    if require_min_benchmark_games > 0:
+        observed = _optional_int_from_mapping(calibration, "min_latest_benchmark_games")
+        checks.append(
+            {
+                "name": "calibration_min_benchmark_games",
+                "passed": observed is not None and observed >= require_min_benchmark_games,
+                "observed": observed,
+                "threshold": require_min_benchmark_games,
+                "message": "calibration minimum benchmark games must meet the requested floor",
+            }
+        )
+    return checks
+
+
+def _optional_int_from_mapping(value: object, key: str) -> int | None:
+    if not isinstance(value, Mapping):
+        return None
+    observed = value.get(key)
+    return observed if isinstance(observed, int) and not isinstance(observed, bool) else None
 
 
 def _print_audit_config_report(report: Mapping[str, object]) -> None:
@@ -2173,6 +2271,7 @@ def _audit_calibration_config_payload(result) -> dict[str, object]:
             "run_count": getattr(result, "run_count", 1),
             "iteration_count": result.iteration_count,
             "benchmark_iteration_count": result.benchmark_iteration_count,
+            "min_latest_benchmark_games": result.min_latest_benchmark_games,
             "aggregate_mode": getattr(result, "aggregate_mode", None),
             "paths": [str(path) for path in calibration_paths],
             "notes": list(getattr(result, "notes", ())),
