@@ -121,11 +121,21 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
+            source = {
+                "available": True,
+                "repo_root": "/repo",
+                "branch": "scott/source-test",
+                "head": "abc123",
+                "dirty": False,
+            }
 
-            with patched_neural_selfplay_dependencies(
-                collected=collected,
-                trained_paths=trained_paths,
-                trained_initial_models=trained_initial_models,
+            with (
+                patched_neural_selfplay_dependencies(
+                    collected=collected,
+                    trained_paths=trained_paths,
+                    trained_initial_models=trained_initial_models,
+                ),
+                patch("pokezero.neural_selfplay.collect_source_metadata", return_value=source),
             ):
                 result = run_neural_selfplay_iterations(
                     run_dir=run_dir,
@@ -147,7 +157,11 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertEqual(len(result.iterations), 2)
         self.assertEqual(run_manifest["schema_version"], NEURAL_SELFPLAY_RUN_SCHEMA_VERSION)
+        self.assertEqual(run_manifest["source"], source)
         self.assertEqual(first_manifest["checkpoint_policy_spec"], f"neural:{run_dir / 'iteration-0001' / 'transformer-policy.pt'}")
+        self.assertEqual(first_manifest["source"], source)
+        self.assertEqual(first_manifest["invocation_config"]["source"], source)
+        self.assertEqual(run_manifest["invocation_configs"][0]["source"], source)
         self.assertEqual(first_manifest["advancement"]["reason"], "beat_incumbent")
         self.assertEqual(first_manifest["next_current_policy_spec"], first_manifest["checkpoint_policy_spec"])
         self.assertEqual(second_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])

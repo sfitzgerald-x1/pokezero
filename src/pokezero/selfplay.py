@@ -37,6 +37,7 @@ from .opponents import opponent_pool_policy_specs, require_historical_opponent_p
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
+from .source_metadata import collect_source_metadata
 from .trajectory import BattleTrajectory
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class SelfPlayIterationResult:
     promotion: "PromotionRecordResult | None" = None
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
+    source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def checkpoint_policy_spec(self) -> str:
@@ -86,6 +88,7 @@ class SelfPlayIterationResult:
         return {
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "iteration": self.iteration,
+            "source": dict(self.source),
             "rollout_path": str(self.rollout_path),
             "training_rollout_path": str(self.training_rollout_path),
             "checkpoint_path": str(self.checkpoint_path),
@@ -113,6 +116,7 @@ class SelfPlayRunResult:
     prior_iteration_manifests: tuple[Mapping[str, Any], ...] = ()
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     prior_invocation_configs: tuple[Mapping[str, Any], ...] = ()
+    source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def latest_checkpoint_path(self) -> Path | None:
@@ -132,6 +136,7 @@ class SelfPlayRunResult:
         return {
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
+            "source": dict(self.source),
             "invocation_configs": invocation_configs,
             "iterations": iteration_manifests,
             "latest_checkpoint_path": str(self.latest_checkpoint_path) if self.latest_checkpoint_path else None,
@@ -147,6 +152,7 @@ def load_selfplay_run_manifest(run_dir: Path) -> Mapping[str, Any]:
         return {
             "schema_version": SELFPLAY_RUN_SCHEMA_VERSION,
             "run_dir": str(run_dir),
+            "source": dict(iteration_manifests[-1].get("source", {})),
             "iterations": list(iteration_manifests),
             "latest_checkpoint_path": str(iteration_manifests[-1].get("checkpoint_path")),
         }
@@ -206,6 +212,7 @@ def run_selfplay_iterations(
     promotion_pool_registry_path = promotion_registry_path or (
         auto_promotion_config.registry_path if auto_promotion_config is not None else None
     )
+    source_metadata = collect_source_metadata(Path.cwd())
     promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
 
     checkpoint_history: list[str] = []
@@ -285,6 +292,7 @@ def run_selfplay_iterations(
         "worker_count": worker_count,
         "validation_rollout_paths": [str(path) for path in validation_paths],
         "benchmark_reference_policy_specs": list(benchmark_references),
+        "source": source_metadata,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -370,6 +378,7 @@ def run_selfplay_iterations(
             benchmark=benchmark,
             opponent_pool_config=opponent_pool_manifest_config,
             invocation_config=invocation_config,
+            source=source_metadata,
         )
         _write_json(manifest_path, result.to_manifest_dict())
         results.append(result)
@@ -384,6 +393,7 @@ def run_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
                 invocation_config=invocation_config,
                 prior_invocation_configs=prior_invocation_configs,
+                source=source_metadata,
             ).to_dict(),
         )
         if auto_promotion_config is not None:
@@ -408,6 +418,7 @@ def run_selfplay_iterations(
                 prior_iteration_manifests=tuple(prior_iteration_manifests),
                 invocation_config=invocation_config,
                 prior_invocation_configs=prior_invocation_configs,
+                source=source_metadata,
             ).to_dict(),
         )
         _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
@@ -418,6 +429,7 @@ def run_selfplay_iterations(
         prior_iteration_manifests=tuple(prior_iteration_manifests),
         invocation_config=invocation_config,
         prior_invocation_configs=prior_invocation_configs,
+        source=source_metadata,
     )
     _write_json(run_dir / "manifest.json", run_result.to_dict())
     return run_result

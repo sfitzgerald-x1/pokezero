@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import tempfile
@@ -25,6 +25,7 @@ from .linear_policy import LinearSoftmaxPolicy, LinearTrainingConfig, LinearTrai
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
+from .source_metadata import collect_source_metadata
 
 
 TEACHER_BOOTSTRAP_SCHEMA_VERSION = "pokezero.teacher_bootstrap.v1"
@@ -60,11 +61,13 @@ class TeacherBootstrapResult:
     training: LinearTrainingResult
     teacher_decision_summary: Mapping[str, Any]
     benchmark: BenchmarkReport | None = None
+    source: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": TEACHER_BOOTSTRAP_SCHEMA_VERSION,
             "run_dir": str(self.run_dir),
+            "source": dict(self.source),
             "full_train_rollout_path": str(self.full_train_rollout_path),
             "train_rollout_path": str(self.train_rollout_path),
             "full_validation_rollout_path": str(self.full_validation_rollout_path),
@@ -132,6 +135,7 @@ def run_teacher_bootstrap(
     )
     if not opponents:
         raise ValueError("at least one opponent policy spec is required.")
+    source_metadata = collect_source_metadata(Path.cwd())
     _validate_seed_ranges(
         (
             ("train", seed_start, train_games),
@@ -230,6 +234,7 @@ def run_teacher_bootstrap(
         training=training,
         teacher_decision_summary=teacher_decision_summary,
         benchmark=benchmark,
+        source=source_metadata,
     )
     _write_json(manifest_path, result.to_dict())
     return result

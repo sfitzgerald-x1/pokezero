@@ -76,25 +76,33 @@ class TeacherBootstrapTest(unittest.TestCase):
     def test_run_teacher_bootstrap_writes_manifest_checkpoint_and_current_only_training_data(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
+            source = {
+                "available": True,
+                "repo_root": "/repo",
+                "branch": "scott/source-test",
+                "head": "abc123",
+                "dirty": False,
+            }
 
-            result = run_teacher_bootstrap(
-                run_dir=run_dir,
-                env_factory=OneTurnEnv,
-                rollout_config=RolloutConfig(max_decision_rounds=5),
-                training_config=LinearTrainingConfig(
-                    feature_count=32,
-                    epochs=1,
-                    shuffle_buffer_size=0,
-                    policy_id="linear-bootstrap-test",
-                ),
-                train_games=2,
-                validation_games=1,
-                teacher_policy_spec="simple-legal",
-                opponent_policy_specs=("random-legal",),
-                seed_start=10,
-                validation_seed_start=100,
-                benchmark_games=0,
-            )
+            with patch("pokezero.bootstrap.collect_source_metadata", return_value=source):
+                result = run_teacher_bootstrap(
+                    run_dir=run_dir,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-bootstrap-test",
+                    ),
+                    train_games=2,
+                    validation_games=1,
+                    teacher_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                    seed_start=10,
+                    validation_seed_start=100,
+                    benchmark_games=0,
+                )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             full_train_records = read_rollout_records(result.full_train_rollout_path)
@@ -105,6 +113,7 @@ class TeacherBootstrapTest(unittest.TestCase):
 
         self.assertTrue(checkpoint_exists)
         self.assertEqual(manifest["schema_version"], TEACHER_BOOTSTRAP_SCHEMA_VERSION)
+        self.assertEqual(manifest["source"], source)
         self.assertEqual(manifest["checkpoint_policy_spec"], f"linear:{result.checkpoint_path}")
         self.assertEqual(manifest["teacher_policy_spec"], "simple-legal")
         self.assertEqual(manifest["opponent_policy_specs"], ["random-legal"])
