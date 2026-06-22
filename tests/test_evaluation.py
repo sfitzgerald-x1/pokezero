@@ -501,6 +501,8 @@ class PromotionGateTest(unittest.TestCase):
                     "cpu-smoke-plan",
                     "--run-root",
                     "runs/local smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
                     "--showdown-root",
                     "/tmp/showdown root",
                     "--workers",
@@ -511,7 +513,7 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("cpu_smoke_plan:", output)
-        self.assertIn("python -m pokezero.bootstrap_cli teacher", output)
+        self.assertIn("./.venv/bin/python -m pokezero.bootstrap_cli teacher", output)
         self.assertIn("--run-dir 'runs/local smoke/teacher-bootstrap'", output)
         self.assertIn("--showdown-root '/tmp/showdown root'", output)
         self.assertIn("python -m pokezero.selfplay_cli iterate", output)
@@ -527,6 +529,8 @@ class PromotionGateTest(unittest.TestCase):
                     "cpu-smoke-plan",
                     "--run-root",
                     "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
                     "--showdown-root",
                     "/tmp/showdown",
                     "--json",
@@ -536,6 +540,7 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["run_root"], "runs/smoke")
+        self.assertEqual(payload["python_binary"], "./.venv/bin/python")
         self.assertEqual(payload["showdown_root"], "/tmp/showdown")
         self.assertEqual([step["name"] for step in payload["steps"]], [
             "bootstrap teacher checkpoint",
@@ -554,6 +559,8 @@ class PromotionGateTest(unittest.TestCase):
                     "cpu-smoke-plan",
                     "--run-root",
                     "runs/smoke",
+                    "--python-binary",
+                    "./.venv/bin/python",
                     "--showdown-root",
                     "/tmp/showdown",
                     "--json",
@@ -569,7 +576,7 @@ class PromotionGateTest(unittest.TestCase):
         }
         for step in payload["steps"]:
             argv = step["argv"]
-            self.assertEqual(argv[:2], ["python", "-m"])
+            self.assertEqual(argv[:2], ["./.venv/bin/python", "-m"])
             parser = parsers[argv[2]]
             with self.subTest(step=step["name"]):
                 parser.parse_args(argv[3:])

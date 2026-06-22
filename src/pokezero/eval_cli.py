@@ -213,6 +213,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     smoke_plan.add_argument("--run-root", type=Path, default=Path("runs/cpu-smoke"), help="Root directory used by the printed recipe.")
     smoke_plan.add_argument(
+        "--python-binary",
+        default=sys.executable,
+        help="Python executable used by the printed recipe. Defaults to the interpreter running this command.",
+    )
+    smoke_plan.add_argument(
         "--showdown-root",
         default="/path/to/pokemon-showdown",
         help="Built Pokemon Showdown checkout root used by the printed recipe.",
@@ -946,12 +951,13 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     selfplay_dir = run_root / "selfplay"
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
+    python_binary = str(args.python_binary)
     showdown_root = str(args.showdown_root)
     steps = (
         (
             "bootstrap teacher checkpoint",
             [
-                "python",
+                python_binary,
                 "-m",
                 "pokezero.bootstrap_cli",
                 "teacher",
@@ -980,7 +986,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         (
             "run smoke self-play iteration loop",
             [
-                "python",
+                python_binary,
                 "-m",
                 "pokezero.selfplay_cli",
                 "iterate",
@@ -1021,7 +1027,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         (
             "inspect self-play report",
             [
-                "python",
+                python_binary,
                 "-m",
                 "pokezero.selfplay_cli",
                 "report",
@@ -1032,7 +1038,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         (
             "audit smoke run",
             [
-                "python",
+                python_binary,
                 "-m",
                 "pokezero.eval_cli",
                 "audit",
@@ -1044,7 +1050,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         (
             "calibrate and compare smoke profile",
             [
-                "python",
+                python_binary,
                 "-m",
                 "pokezero.eval_cli",
                 "audit-calibrate",
@@ -1059,6 +1065,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "purpose": "tiny CPU-only bootstrap/self-play plumbing validation",
         "warning": "smoke-profile thresholds validate command flow, not policy strength",
         "run_root": str(run_root),
+        "python_binary": python_binary,
         "showdown_root": showdown_root,
         "steps": [
             {

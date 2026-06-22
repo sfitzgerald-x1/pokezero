@@ -77,10 +77,11 @@ Print a tiny CPU smoke-run recipe before spending time on larger experiments:
 ```bash
 python -m pokezero.eval_cli cpu-smoke-plan \
   --run-root runs/cpu-smoke \
+  --python-binary ./.venv/bin/python \
   --showdown-root /path/to/pokemon-showdown
 ```
 
-The printed recipe chains the existing teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile commands with intentionally small counts. It is a plumbing validation aid, not strength evidence. Use `--json` when another script should consume the recipe.
+The printed recipe chains the existing teacher bootstrap, linear self-play, report, smoke audit, and audit-calibration/profile commands with intentionally small counts. It is a plumbing validation aid, not strength evidence. By default the recipe uses the Python interpreter running `cpu-smoke-plan`; pass `--python-binary` when another interpreter or virtualenv should run the printed commands. Use `--json` when another script should consume the recipe.
 
 Import normalized replay decisions into standard rollout JSONL:
 
