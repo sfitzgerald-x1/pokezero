@@ -2178,13 +2178,14 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_smoke_summary(args.path)
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe") if isinstance(summary.get("recipe"), Mapping) else {}
-    teacher_branch_preflight = _cpu_smoke_teacher_branch_preflight_report(recipe)
+    teacher_branch_preflight = _cpu_smoke_teacher_branch_preflight_report(recipe, summary_path=summary_path)
+    exit_status = _cpu_smoke_report_exit_status(status, teacher_branch_preflight)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
         payload["teacher_branch_preflight_report"] = teacher_branch_preflight
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if status == "passed" else 2
+        return exit_status
     print("cpu_smoke_report:")
     print(f"summary: {summary_path}")
     print(f"status: {_status_label(status)}")
@@ -2217,15 +2218,29 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
                 f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
-    return 0 if status == "passed" else 2
+    return exit_status
 
 
-def _cpu_smoke_teacher_branch_preflight_report(recipe: Mapping[str, object]) -> dict[str, object]:
+def _cpu_smoke_report_exit_status(status: str, teacher_branch_preflight: Mapping[str, object]) -> int:
+    if status != "passed":
+        return 2
+    if teacher_branch_preflight.get("requested") is True and teacher_branch_preflight.get("passed") is not True:
+        return 2
+    return 0
+
+
+def _cpu_smoke_teacher_branch_preflight_report(
+    recipe: Mapping[str, object],
+    *,
+    summary_path: Path,
+) -> dict[str, object]:
     requested = recipe.get("teacher_branch_preflight_requested") is True
     path_value = recipe.get("teacher_branch_preflight_output_path")
+    recorded_path = None if path_value is None else str(path_value)
     report: dict[str, object] = {
         "requested": requested,
-        "path": None if path_value is None else str(path_value),
+        "path": recorded_path,
+        "recorded_path": recorded_path,
         "available": False,
         "passed": None,
         "schema_version": None,
@@ -2240,10 +2255,11 @@ def _cpu_smoke_teacher_branch_preflight_report(recipe: Mapping[str, object]) -> 
     if path_value is None:
         report["error"] = "teacher_branch_preflight_output_path missing from recipe"
         return report
-    path = Path(str(path_value))
+    path = _resolve_cpu_smoke_preflight_artifact_path(Path(str(path_value)), summary_path=summary_path)
     if not path.exists():
         report["error"] = "teacher branch preflight artifact not found"
         return report
+    report["path"] = str(path)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -2282,6 +2298,15 @@ def _cpu_smoke_teacher_branch_preflight_report(recipe: Mapping[str, object]) -> 
             )
     report["failed_checks"] = failed_checks
     return report
+
+
+def _resolve_cpu_smoke_preflight_artifact_path(recorded_path: Path, *, summary_path: Path) -> Path:
+    if recorded_path.exists():
+        return recorded_path
+    sibling_path = summary_path.parent / "teacher-branch-preflight.json"
+    if sibling_path.exists():
+        return sibling_path
+    return recorded_path
 
 
 def _print_cpu_smoke_teacher_branch_preflight_report(report: Mapping[str, object]) -> None:

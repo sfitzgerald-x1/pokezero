@@ -88,7 +88,7 @@ Inspect that wrapper summary later:
 ./.venv/bin/python -m pokezero.eval_cli cpu-smoke-report runs/cpu-smoke
 ```
 
-The report command accepts either the run root or the summary JSON path. It exits `0` for a recorded passed run, exits `2` for recorded failed, running, or unknown statuses, and exits `1` when the summary cannot be read or has an unsupported schema. Shell automation can use any non-zero exit as a wrapper-level health check failure, or distinguish `1` as "no valid summary was available" versus `2` as "a valid summary recorded a non-passing run." When teacher branch gates were requested, the report also summarizes `RUN_ROOT/teacher-branch-preflight.json`, including artifact availability, pass/fail state, failed branch checks, and observed teacher branch counts.
+The report command accepts either the run root or the summary JSON path. It exits `0` for a recorded passed run with all requested preflight evidence readable, exits `2` for recorded failed, running, unknown, or missing requested preflight-artifact states, and exits `1` when the summary cannot be read or has an unsupported schema. Shell automation can use any non-zero exit as a wrapper-level health check failure, or distinguish `1` as "no valid summary was available" versus `2` as "a valid summary recorded a non-passing run or incomplete requested preflight evidence." When teacher branch gates were requested, the report also summarizes `RUN_ROOT/teacher-branch-preflight.json`, including artifact availability, pass/fail state, failed branch checks, and observed teacher branch counts.
 
 Inspect the generated commands without running them:
 

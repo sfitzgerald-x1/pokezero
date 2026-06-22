@@ -905,6 +905,9 @@ class PromotionGateTest(unittest.TestCase):
                 )
             summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
             preflight_artifact = json.loads((run_root / "teacher-branch-preflight.json").read_text(encoding="utf-8"))
+            with patch("sys.stdout", new_callable=io.StringIO) as report_stdout:
+                report_exit_code = eval_cli_main(["cpu-smoke-report", str(run_root)])
+            report_output = report_stdout.getvalue()
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_count, 7)
@@ -934,6 +937,9 @@ class PromotionGateTest(unittest.TestCase):
             3,
         )
         self.assertIn("running_step: 1/7 benchmark scripted teacher branch coverage", stdout.getvalue())
+        self.assertEqual(report_exit_code, 0)
+        self.assertIn("teacher_branch_preflight: PASS", report_output)
+        self.assertIn("- status_pressure: 3", report_output)
 
     def test_eval_cli_cpu_smoke_run_stops_on_failed_teacher_branch_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1395,12 +1401,48 @@ class PromotionGateTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
 
         report = payload["teacher_branch_preflight_report"]
-        self.assertEqual(exit_code, 0)
+        self.assertEqual(exit_code, 2)
         self.assertTrue(report["requested"])
         self.assertFalse(report["available"])
         self.assertIsNone(report["passed"])
         self.assertEqual(report["path"], str(preflight_path))
         self.assertEqual(report["error"], "teacher branch preflight artifact not found")
+
+    def test_eval_cli_cpu_smoke_report_finds_relocated_teacher_branch_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_root = Path(temp_dir) / "original" / "run"
+            relocated_root = Path(temp_dir) / "archive" / "run"
+            original_preflight_path = original_root / "teacher-branch-preflight.json"
+            relocated_preflight_path = relocated_root / "teacher-branch-preflight.json"
+            summary = cpu_smoke_summary(status="passed")
+            summary["recipe"].update(
+                {
+                    "teacher_branch_preflight_requested": True,
+                    "teacher_branch_preflight_output_path": str(original_preflight_path),
+                }
+            )
+            write_json(
+                relocated_preflight_path,
+                {
+                    "schema_version": "pokezero.teacher_benchmark.v1",
+                    "passed": True,
+                    "checks": [],
+                    "teacher_decision_summary": {"teacher_branch_counts": {"status_pressure": 4}},
+                },
+            )
+            write_json(relocated_root / "cpu-smoke-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-smoke-report", str(relocated_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        report = payload["teacher_branch_preflight_report"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["available"])
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["recorded_path"], str(original_preflight_path))
+        self.assertEqual(report["path"], str(relocated_preflight_path))
+        self.assertEqual(report["teacher_branch_counts"], {"status_pressure": 4})
 
     def test_eval_cli_cpu_smoke_report_rejects_wrong_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
