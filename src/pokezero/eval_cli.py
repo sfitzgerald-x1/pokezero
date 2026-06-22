@@ -61,6 +61,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     promotions.add_argument("--require-checksum", action="store_true", help="With --verify, fail entries that do not include checksum metadata.")
     promotions.add_argument("--verify-loadable", action="store_true", help="With --verify, load each promoted policy spec through the normal policy selection path.")
     promotions.add_argument(
+        "--verify-opponent-pool-only",
+        action="store_true",
+        help=(
+            "With --verify and --opponent-pool-size, make the command exit status depend on "
+            "the selected opponent pool instead of stale entries outside that preview."
+        ),
+    )
+    promotions.add_argument(
         "--opponent-pool-size",
         type=int,
         default=None,
@@ -309,6 +317,10 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--skip-checksum cannot be combined with --require-checksum.")
     if args.verify_loadable and not args.verify:
         raise ValueError("--verify-loadable requires --verify.")
+    if args.verify_opponent_pool_only and not args.verify:
+        raise ValueError("--verify-opponent-pool-only requires --verify.")
+    if args.verify_opponent_pool_only and args.opponent_pool_size is None:
+        raise ValueError("--verify-opponent-pool-only requires --opponent-pool-size.")
     if args.current_policy_spec is not None and args.opponent_pool_size is None:
         raise ValueError("--current-policy-spec requires --opponent-pool-size.")
     if args.require_opponent_pool_size is not None and args.opponent_pool_size is None:
@@ -357,13 +369,23 @@ def _promotions(args: argparse.Namespace) -> int:
         opponent_pool=opponent_pool,
         current_policy_spec=preview_current_policy_spec,
     )
+    opponent_pool_verified = _opponent_pool_verification_passed(
+        entry_statuses,
+        verification=verification,
+        opponent_pool=opponent_pool,
+    )
     if args.json:
         payload = registry.to_dict()
         payload["entry_statuses"] = entry_statuses
         if opponent_pool is not None:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
             payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
-            payload["opponent_pool_verified"] = verification.passed if verification is not None else None
+            payload["opponent_pool_verified"] = opponent_pool_verified
+            payload["opponent_pool_verification_exit_scope"] = (
+                None
+                if verification is None
+                else "opponent_pool" if args.verify_opponent_pool_only else "registry"
+            )
             payload["opponent_pool_requested_size"] = args.opponent_pool_size
             payload["opponent_pool_selected_size"] = len(opponent_pool)
             payload["opponent_pool_available_size"] = (
@@ -381,6 +403,8 @@ def _promotions(args: argparse.Namespace) -> int:
             verification=verification,
             opponent_pool=opponent_pool,
             required_opponent_pool_size=args.require_opponent_pool_size,
+            opponent_pool_verified=opponent_pool_verified,
+            verify_opponent_pool_only=args.verify_opponent_pool_only,
         )
     print(f"registry: {registry.path}")
     print(f"promotions: {len(registry.entries)}")
@@ -420,6 +444,12 @@ def _promotions(args: argparse.Namespace) -> int:
             )
             print(f"opponent_pool_required_size: {args.require_opponent_pool_size}")
             print(f"opponent_pool_requirement: {pool_status}")
+        if opponent_pool_verified is not None:
+            print(f"opponent_pool_verification: {'PASS' if opponent_pool_verified else 'FAIL'}")
+            print(
+                "opponent_pool_verification_exit_scope: "
+                f"{'opponent_pool' if args.verify_opponent_pool_only else 'registry'}"
+            )
         print("opponent_pool_policy_specs:")
         for spec in opponent_pool:
             print(f"- {spec}")
@@ -431,6 +461,8 @@ def _promotions(args: argparse.Namespace) -> int:
         verification=verification,
         opponent_pool=opponent_pool,
         required_opponent_pool_size=args.require_opponent_pool_size,
+        opponent_pool_verified=opponent_pool_verified,
+        verify_opponent_pool_only=args.verify_opponent_pool_only,
     )
 
 
@@ -439,8 +471,13 @@ def _promotions_exit_code(
     verification,
     opponent_pool,
     required_opponent_pool_size: int | None,
+    opponent_pool_verified: bool | None,
+    verify_opponent_pool_only: bool,
 ) -> int:
-    if verification is not None and not verification.passed:
+    if verify_opponent_pool_only:
+        if opponent_pool_verified is False:
+            return 2
+    elif verification is not None and not verification.passed:
         return 2
     if not _opponent_pool_requirement_passed(opponent_pool, required_size=required_opponent_pool_size):
         return 2
@@ -453,6 +490,25 @@ def _opponent_pool_requirement_passed(
     required_size: int | None,
 ) -> bool:
     return required_size is None or (opponent_pool is not None and len(opponent_pool) >= required_size)
+
+
+def _opponent_pool_verification_passed(
+    entry_statuses: list[dict[str, object]],
+    *,
+    verification,
+    opponent_pool,
+) -> bool | None:
+    if verification is None or opponent_pool is None:
+        return None
+    selected_statuses = tuple(
+        status
+        for status in entry_statuses
+        if "opponent_pool" in status["selected_as"]
+    )
+    return len(selected_statuses) == len(opponent_pool) and all(
+        not status["failed_checks"]
+        for status in selected_statuses
+    )
 
 
 def _promotion_entry_statuses(
