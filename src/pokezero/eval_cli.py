@@ -471,6 +471,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     _add_cpu_long_run_arguments(long_run_run, include_json=False, include_summary_path=True)
     long_run_run.set_defaults(func=_cpu_long_run_run)
 
+    long_run_report = subparsers.add_parser(
+        "cpu-long-run-report",
+        help="Inspect a CPU long-run wrapper summary.",
+    )
+    long_run_report.add_argument(
+        "path",
+        type=Path,
+        help="Long-run run directory or cpu-long-run-run-summary.json path.",
+    )
+    long_run_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    long_run_report.set_defaults(func=_cpu_long_run_report)
+
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
     compare.add_argument(
@@ -2985,6 +2997,62 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
     )
 
 
+def _cpu_long_run_report(args: argparse.Namespace) -> int:
+    summary_path, summary = _load_cpu_long_run_summary(args.path)
+    status = str(summary.get("status", "unknown"))
+    exit_status = 0 if status == "passed" else 2
+    if args.json:
+        payload = dict(summary)
+        payload["summary_source_path"] = str(summary_path)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return exit_status
+
+    recipe = summary.get("recipe")
+    print("cpu_long_run_report:")
+    print(f"summary: {summary_path}")
+    print(f"status: {_status_label(status)}")
+    print(f"started_at: {_format_summary_value(summary.get('started_at'))}")
+    print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
+    print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
+    print(f"failed_reason: {_format_summary_value(summary.get('failed_reason'))}")
+    if isinstance(recipe, Mapping):
+        print(f"long_run_ready: {_format_optional_bool(recipe.get('long_run_ready'))}")
+        print(f"pilot_summary: {_format_summary_value(recipe.get('pilot_summary_path'))}")
+        print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
+        print(f"run_dir: {_format_summary_value(recipe.get('run_dir'))}")
+        reasons = recipe.get("long_run_ready_reasons")
+        if isinstance(reasons, list) and reasons:
+            print("long_run_ready_reasons:")
+            for reason in reasons:
+                print(f"- {reason}")
+    failed_step = summary.get("failed_step")
+    if isinstance(failed_step, dict):
+        print(
+            "failed_step: "
+            f"{failed_step.get('index')} {failed_step.get('name')} "
+            f"returncode={_format_summary_value(failed_step.get('returncode'))}"
+        )
+        if failed_step.get("error_type") is not None:
+            print(
+                "failed_step_error: "
+                f"{failed_step.get('error_type')}: {_format_summary_value(failed_step.get('error_message'))}"
+            )
+    else:
+        print("failed_step: -")
+    steps = summary.get("steps")
+    if isinstance(steps, list):
+        print("steps:")
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            print(
+                f"- {step.get('index')}: {_status_label(str(step.get('status', 'unknown')))} "
+                f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
+                f"duration={_format_summary_value(step.get('duration_seconds'))}"
+            )
+    return exit_status
+
+
 def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
     _validate_cpu_long_run_plan_args(args)
     summary_path, summary = _load_cpu_pilot_summary(args.pilot_path)
@@ -3937,6 +4005,25 @@ def _load_cpu_pilot_summary(path: Path) -> tuple[Path, dict[str, object]]:
         raise ValueError(
             "Unsupported cpu pilot summary schema: "
             f"{payload.get('schema_version')!r}; expected {CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION!r}."
+        )
+    return summary_path, payload
+
+
+def _load_cpu_long_run_summary(path: Path) -> tuple[Path, dict[str, object]]:
+    summary_path = (
+        path / "cpu-long-run-run-summary.json"
+        if path.is_dir() or (not path.exists() and path.suffix != ".json")
+        else path
+    )
+    if not summary_path.exists():
+        raise FileNotFoundError(f"cpu long-run summary not found: {summary_path}")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"cpu long-run summary must be a JSON object: {summary_path}")
+    if payload.get("schema_version") != CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported cpu long-run summary schema: "
+            f"{payload.get('schema_version')!r}; expected {CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION!r}."
         )
     return summary_path, payload
 

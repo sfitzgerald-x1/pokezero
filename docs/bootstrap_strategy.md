@@ -172,6 +172,14 @@ Use the paired execution wrapper when the validated plan should actually launch 
 
 `cpu-long-run-run` builds the same readiness-checked plan, writes `RUN_DIR/cpu-long-run-run-summary.json` by default, and only invokes the self-play command when the plan is ready. If readiness checks fail, it exits non-zero without launching self-play and still writes a failed summary containing the rejected plan and reasons. If the self-play process itself fails, the wrapper propagates that exit code and records the failed step.
 
+Inspect the long-run wrapper summary without reading raw JSON:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-long-run-report runs/linear-long-run
+```
+
+The report accepts either the run directory or the summary JSON path. It exits `0` only for a recorded passed wrapper run, exits `2` for valid failed, running, or unknown wrapper summaries, and exits `1` when the summary cannot be read or has an unsupported schema. Use `--json` when automation needs the full summary payload plus the resolved summary path.
+
 Import normalized replay decisions into standard rollout JSONL:
 
 ```bash
