@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shlex
 import subprocess
 import sys
+import time
 from typing import Iterable
 
 from .evaluation import (
@@ -25,6 +27,9 @@ from .run_audit import (
     calibrate_run_audits,
     compare_run_manifests_with_threshold,
 )
+
+
+CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -221,6 +226,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Execute the tiny CPU-only bootstrap/self-play validation recipe sequentially.",
     )
     _add_cpu_smoke_arguments(smoke_run)
+    smoke_run.add_argument(
+        "--summary-path",
+        type=Path,
+        default=None,
+        help="Where to write the smoke-run summary JSON. Defaults to RUN_ROOT/cpu-smoke-run-summary.json.",
+    )
     smoke_run.set_defaults(func=_cpu_smoke_run)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -945,20 +956,83 @@ def _cpu_smoke_plan(args: argparse.Namespace) -> int:
 def _cpu_smoke_run(args: argparse.Namespace) -> int:
     _validate_cpu_smoke_args(args, validate_showdown_root=True)
     recipe = _cpu_smoke_recipe(args)
+    summary_path = args.summary_path if args.summary_path is not None else args.run_root / "cpu-smoke-run-summary.json"
+    run_started_at = _utc_timestamp()
+    run_started_monotonic = time.perf_counter()
+    step_summaries: list[dict[str, object]] = []
+    summary: dict[str, object] = {
+        "schema_version": CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION,
+        "status": "running",
+        "summary_path": str(summary_path),
+        "started_at": run_started_at,
+        "ended_at": None,
+        "duration_seconds": None,
+        "recipe": recipe,
+        "steps": step_summaries,
+        "failed_step": None,
+    }
+    _write_json_payload(summary_path, summary)
+    summary_update_failed = False
     print("cpu_smoke_run:")
     print("purpose: tiny CPU-only bootstrap/self-play plumbing validation")
     print("note: smoke-profile thresholds validate command flow, not policy strength.")
     print("note: use a fresh --run-root; this command does not delete existing artifacts.")
+    print(f"summary: {summary_path}")
     for index, step in enumerate(recipe["steps"], start=1):
         print(f"running_step: {index}/{len(recipe['steps'])} {step['name']}", flush=True)
         print(_shell_join(step["argv"]), flush=True)
+        step_started_monotonic = time.perf_counter()
+        step_summary: dict[str, object] = {
+            "index": index,
+            "name": step["name"],
+            "argv": step["argv"],
+            "command": step["command"],
+            "status": "running",
+            "started_at": _utc_timestamp(),
+            "ended_at": None,
+            "duration_seconds": None,
+            "returncode": None,
+        }
+        step_summaries.append(step_summary)
+        summary_update_failed = _write_cpu_smoke_summary_update(
+            summary_path,
+            summary,
+            previous_failure=summary_update_failed,
+        )
         completed = subprocess.run(step["argv"])
+        step_summary["ended_at"] = _utc_timestamp()
+        step_summary["duration_seconds"] = round(time.perf_counter() - step_started_monotonic, 6)
+        step_summary["returncode"] = int(completed.returncode)
         if completed.returncode != 0:
+            step_summary["status"] = "failed"
+            summary["status"] = "failed"
+            summary["failed_step"] = {
+                "index": index,
+                "name": step["name"],
+                "returncode": int(completed.returncode),
+            }
+            summary["ended_at"] = _utc_timestamp()
+            summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            summary_update_failed = _write_cpu_smoke_summary_update(
+                summary_path,
+                summary,
+                previous_failure=summary_update_failed,
+            )
             print(
                 f"error: cpu smoke step {index} failed with exit code {completed.returncode}: {step['name']}",
                 file=sys.stderr,
             )
             return int(completed.returncode)
+        step_summary["status"] = "passed"
+        summary_update_failed = _write_cpu_smoke_summary_update(
+            summary_path,
+            summary,
+            previous_failure=summary_update_failed,
+        )
+    summary["status"] = "passed"
+    summary["ended_at"] = _utc_timestamp()
+    summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+    _write_cpu_smoke_summary_update(summary_path, summary, previous_failure=summary_update_failed)
     print("cpu_smoke_run: PASS")
     return 0
 
@@ -1118,6 +1192,33 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
 
 def _shell_join(argv: list[str]) -> str:
     return " ".join(shlex.quote(part) for part in argv)
+
+
+def _write_json_payload(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _write_cpu_smoke_summary_update(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    previous_failure: bool,
+) -> bool:
+    if previous_failure:
+        return True
+    try:
+        _write_json_payload(path, payload)
+    except OSError as exc:
+        print(f"warning: failed to update cpu smoke summary {path}: {exc}", file=sys.stderr)
+        return True
+    return False
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _compare(args: argparse.Namespace) -> int:

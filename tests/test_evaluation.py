@@ -609,7 +609,10 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("workers must be positive", stderr.getvalue())
 
     def test_eval_cli_cpu_smoke_run_executes_recipe_steps(self) -> None:
-        with tempfile.TemporaryDirectory() as showdown_root:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            showdown_root = Path(temp_dir) / "showdown"
+            showdown_root.mkdir()
+            run_root = Path(temp_dir) / "runs" / "smoke"
             with (
                 patch(
                     "pokezero.eval_cli.subprocess.run",
@@ -621,13 +624,14 @@ class PromotionGateTest(unittest.TestCase):
                     [
                         "cpu-smoke-run",
                         "--run-root",
-                        "runs/smoke",
+                        str(run_root),
                         "--python-binary",
                         "./.venv/bin/python",
                         "--showdown-root",
-                        showdown_root,
+                        str(showdown_root),
                     ]
                 )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_count, 5)
@@ -640,9 +644,124 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("cpu_smoke_run:", output)
         self.assertIn("running_step: 1/5 bootstrap teacher checkpoint", output)
         self.assertIn("cpu_smoke_run: PASS", output)
+        self.assertEqual(summary["schema_version"], "pokezero.cpu_smoke_run_summary.v1")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["failed_step"], None)
+        self.assertEqual(summary["recipe"]["run_root"], str(run_root))
+        self.assertEqual(len(summary["steps"]), 5)
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed"] * 5)
+        self.assertEqual([step["returncode"] for step in summary["steps"]], [0] * 5)
+        self.assertIn("started_at", summary)
+        self.assertIn("ended_at", summary)
+        self.assertIsInstance(summary["duration_seconds"], float)
+
+    def test_eval_cli_cpu_smoke_run_honors_custom_summary_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "smoke"
+            summary_path = temp_path / "custom" / "nested" / "summary.json"
+            with (
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                ),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--summary-path",
+                        str(summary_path),
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            default_summary_exists = (run_root / "cpu-smoke-run-summary.json").exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(summary["summary_path"], str(summary_path))
+        self.assertEqual(summary["status"], "passed")
+        self.assertFalse(default_summary_exists)
+
+    def test_eval_cli_cpu_smoke_run_writes_running_step_before_subprocess(self) -> None:
+        observed_statuses = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "smoke"
+            summary_path = run_root / "cpu-smoke-run-summary.json"
+
+            def fake_run(_argv):
+                payload = json.loads(summary_path.read_text(encoding="utf-8"))
+                observed_statuses.append(payload["steps"][-1]["status"])
+                return SimpleNamespace(returncode=0)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=fake_run),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(observed_statuses, ["running"] * 5)
+
+    def test_eval_cli_cpu_smoke_run_warns_and_continues_after_summary_update_failure(self) -> None:
+        write_count = 0
+
+        def flaky_write(_path, _payload):
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise OSError("disk full")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "smoke"
+            with (
+                patch("pokezero.eval_cli._write_json_payload", side_effect=flaky_write),
+                patch(
+                    "pokezero.eval_cli.subprocess.run",
+                    side_effect=[SimpleNamespace(returncode=0) for _ in range(5)],
+                ) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual(write_count, 2)
+        self.assertIn("warning: failed to update cpu smoke summary", stderr.getvalue())
 
     def test_eval_cli_cpu_smoke_run_stops_on_failed_step(self) -> None:
-        with tempfile.TemporaryDirectory() as showdown_root:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            showdown_root = Path(temp_dir) / "showdown"
+            showdown_root.mkdir()
+            run_root = Path(temp_dir) / "runs" / "smoke"
             with (
                 patch(
                     "pokezero.eval_cli.subprocess.run",
@@ -655,17 +774,26 @@ class PromotionGateTest(unittest.TestCase):
                     [
                         "cpu-smoke-run",
                         "--run-root",
-                        "runs/smoke",
+                        str(run_root),
                         "--python-binary",
                         "./.venv/bin/python",
                         "--showdown-root",
-                        showdown_root,
+                        str(showdown_root),
                     ]
                 )
+            summary = json.loads((run_root / "cpu-smoke-run-summary.json").read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 7)
         self.assertEqual(run.call_count, 2)
         self.assertIn("cpu smoke step 2 failed with exit code 7", stderr.getvalue())
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(
+            summary["failed_step"],
+            {"index": 2, "name": "run smoke self-play iteration loop", "returncode": 7},
+        )
+        self.assertEqual(len(summary["steps"]), 2)
+        self.assertEqual([step["status"] for step in summary["steps"]], ["passed", "failed"])
+        self.assertEqual([step["returncode"] for step in summary["steps"]], [0, 7])
 
     def test_eval_cli_cpu_smoke_run_rejects_missing_explicit_showdown_root(self) -> None:
         missing_root = "/tmp/pokezero-missing-showdown-root"
