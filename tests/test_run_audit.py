@@ -601,6 +601,10 @@ class RunAuditTest(unittest.TestCase):
                 selfplay_iteration(iteration=2, wins=40, losses=10, capped_games=1, promotion_recorded=True),
             )
         )
+        linear_manifest["iterations"][1]["collection_metrics"]["games_per_second"] = 2.5
+        linear_manifest["iterations"][1]["collection_metrics"]["peak_rss_mb"] = 512.25
+        linear_manifest["iterations"][1]["benchmark"]["games_per_second"] = 1.25
+        linear_manifest["iterations"][1]["benchmark"]["peak_rss_mb"] = 640.5
         neural_manifest = neural_selfplay_manifest(
             iterations=(
                 neural_iteration(iteration=1, wins=30, losses=20, capped_games=0),
@@ -628,8 +632,27 @@ class RunAuditTest(unittest.TestCase):
             result.best_historical_benchmark_entry.label if result.best_historical_benchmark_entry else None,
             "linear-run",
         )
+        self.assertEqual(result.entries[0].latest_collection_games_per_hour, 9000.0)
+        self.assertEqual(result.entries[0].latest_benchmark_games_per_hour, 4500.0)
+        self.assertEqual(result.entries[0].latest_collection_peak_rss_mb, 512.25)
+        self.assertEqual(result.entries[0].latest_benchmark_peak_rss_mb, 640.5)
+        self.assertEqual(result.entries[0].latest_process_peak_rss_mb, 640.5)
         self.assertTrue(result.entries[0].latest_promotion_recorded)
         self.assertTrue(result.entries[1].latest_advancement_recorded)
+
+    def test_compare_run_manifests_derives_benchmark_throughput_from_elapsed_seconds(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        manifest["iterations"][0]["benchmark"]["total_games"] = 50
+        manifest["iterations"][0]["benchmark"]["elapsed_seconds"] = 10.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = compare_run_manifests((manifest_path,))
+
+        self.assertEqual(result.entries[0].latest_benchmark_games_per_hour, 18000.0)
 
     def test_compare_run_manifests_best_labels_require_minimum_benchmark_games(self) -> None:
         solid_manifest = selfplay_manifest(
@@ -938,6 +961,8 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual([entry["label"] for entry in payload["entries"]], ["linear-run", "neural-run"])
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.8)
+        self.assertEqual(payload["entries"][0]["latest_collection_games_per_hour"], 36000.0)
+        self.assertIn("latest_process_peak_rss_mb", payload["entries"][0])
 
     def test_eval_cli_compare_returns_nonzero_but_prints_json_when_a_manifest_fails(self) -> None:
         healthy_manifest = selfplay_manifest(
@@ -968,6 +993,10 @@ class RunAuditTest(unittest.TestCase):
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
         )
+        manifest["iterations"][0]["collection_metrics"]["games_per_second"] = 12.345
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 8192.0
+        manifest["iterations"][0]["benchmark"]["games_per_second"] = 3.2
+        manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 16384.0
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
             write_manifest(manifest_path, manifest)
@@ -980,6 +1009,13 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("min_benchmark_games_for_best: 50", stdout.getvalue())
         self.assertIn("linear-run", stdout.getvalue())
         self.assertIn("bench_wr", stdout.getvalue())
+        self.assertIn("coll_gph", stdout.getvalue())
+        self.assertIn("bench_gph", stdout.getvalue())
+        self.assertIn("rss_hi_mb", stdout.getvalue())
+        row = next(line for line in stdout.getvalue().splitlines() if line.startswith("linear-run"))
+        self.assertIn("44442", row)
+        self.assertIn("11520", row)
+        self.assertIn("16384.0", row)
 
 
 def selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:

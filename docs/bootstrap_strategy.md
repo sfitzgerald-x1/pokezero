@@ -248,7 +248,7 @@ python -m pokezero.eval_cli compare \
   runs/neural-selfplay
 ```
 
-The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
+The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, collection and benchmark games-per-hour, latest process peak RSS high-water when recorded, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. The RSS value is a platform process high-water mark, not phase-isolated memory attribution, and resumed runs may reset the process counter. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
 
 Gate a candidate before promotion:
 
