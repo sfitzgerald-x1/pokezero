@@ -104,6 +104,123 @@ class RunAuditTest(unittest.TestCase):
             [("random-legal", 0.0)],
         )
 
+    def test_audit_fails_when_latest_benchmark_drops_prior_opponent(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ("simple-legal",))
+        self.assertIn("latest_benchmark_opponent_coverage", failed_check_names(result))
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertEqual(coverage_check.observed, "simple-legal")
+
+    def test_audit_allows_missing_prior_benchmark_opponent_when_disabled(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_benchmark_win_rate_drop=0.05,
+                    require_benchmark_opponent_coverage=False,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ("simple-legal",))
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+        self.assertEqual(coverage_check.observed, "optional")
+
+    def test_audit_allows_rotating_incumbent_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                        ("linear-selfplay-test-iter-0001", 12, 8, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=3,
+                    rows=(
+                        ("random-legal", 19, 1, 0),
+                        ("simple-legal", 15, 5, 0),
+                        ("linear-selfplay-test-iter-0002", 12, 8, 0),
+                    ),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=60,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.missing_latest_benchmark_opponents, ())
+        coverage_check = next(check for check in result.checks if check.name == "latest_benchmark_opponent_coverage")
+        self.assertTrue(coverage_check.passed)
+
     def test_audit_fails_when_latest_benchmark_disappears_after_prior_evidence(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
@@ -548,6 +665,83 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["latest_average_decision_rounds"], 10.0)
         self.assertEqual(payload["latest_benchmark_average_decision_rounds"], 12.0)
         self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_reports_missing_benchmark_opponents(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["missing_latest_benchmark_opponents"], ["simple-legal"])
+        self.assertIn("latest_benchmark_opponent_coverage", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_allows_missing_benchmark_opponents_flag(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(
+                        ("random-legal", 18, 2, 0),
+                        ("simple-legal", 14, 6, 0),
+                    ),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(("random-legal", 19, 1, 0),),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--allow-missing-benchmark-opponents",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["missing_latest_benchmark_opponents"], ["simple-legal"])
+        self.assertNotIn("latest_benchmark_opponent_coverage", failed_check_names_from_payload(payload))
 
     def test_eval_cli_audit_average_decision_rounds_threshold_flag_fails(self) -> None:
         manifest = selfplay_manifest(

@@ -98,6 +98,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
     )
     audit.add_argument("--allow-missing-benchmark", action="store_true", help="Do not fail solely because the latest benchmark is missing.")
+    audit.add_argument(
+        "--allow-missing-benchmark-opponents",
+        action="store_true",
+        help="Do not fail when the latest benchmark omits opponents that appeared in every prior benchmark.",
+    )
     audit.add_argument("--require-latest-promotion", action="store_true", help="Fail unless the latest iteration recorded a promotion.")
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
@@ -252,6 +257,7 @@ def _audit(args: argparse.Namespace) -> int:
             max_consecutive_promotion_failures=args.max_consecutive_promotion_failures,
             require_benchmark=not args.allow_missing_benchmark,
             require_latest_promotion=args.require_latest_promotion,
+            require_benchmark_opponent_coverage=not args.allow_missing_benchmark_opponents,
         ),
     )
     if args.json:
@@ -361,6 +367,10 @@ def _print_audit_result(result) -> None:
         "latest_benchmark_average_decision_rounds: "
         f"{_format_optional_float(result.latest_benchmark_average_decision_rounds)}"
     )
+    if result.missing_latest_benchmark_opponents:
+        print("missing_latest_benchmark_opponents:")
+        for opponent in result.missing_latest_benchmark_opponents:
+            print(f"- {opponent}")
     print(f"consecutive_promotion_failures: {result.consecutive_promotion_failures}")
     if result.benchmark_regressions:
         print("benchmark_regressions:")
