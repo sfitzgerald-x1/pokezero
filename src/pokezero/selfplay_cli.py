@@ -75,7 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Fail before rollout collection unless at least this many promoted historical opponents "
-            "are selectable from --promotion-registry after current-policy exclusion."
+            "are selectable from the promotion registry after current-policy exclusion. "
+            "Cannot exceed --max-historical-opponents."
         ),
     )
     iterate.add_argument(

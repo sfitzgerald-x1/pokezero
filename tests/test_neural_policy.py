@@ -24,6 +24,7 @@ from pokezero.neural_policy import (
     train_transformer_policy,
     training_batch_to_torch,
 )
+from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, CATEGORY_ID_BUCKETS, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -104,6 +105,23 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.skipTest("PyTorch is installed in this environment.")
         with self.assertRaisesRegex(TorchUnavailableError, "pip install -e"):
             require_torch()
+
+    def test_neural_promoted_opponent_pool_guard_does_not_require_torch(self) -> None:
+        require_neural_promoted_opponent_pool(
+            ("neural:a.pt", "neural:b.pt"),
+            promotion_pool_registry_path=Path("promotions.json"),
+            current_policy_spec="neural:b.pt",
+            max_historical_opponents=2,
+            required_size=1,
+        )
+        with self.assertRaisesRegex(ValueError, "promoted opponent pool has 1 selectable opponents.*required 2"):
+            require_neural_promoted_opponent_pool(
+                ("neural:a.pt", "neural:b.pt"),
+                promotion_pool_registry_path=Path("promotions.json"),
+                current_policy_spec="neural:b.pt",
+                max_historical_opponents=2,
+                required_size=2,
+            )
 
     def test_tensor_conversion_fails_loudly_without_neural_extra(self) -> None:
         if torch_available():
