@@ -216,7 +216,7 @@ python -m pokezero.eval_cli profiles
 python -m pokezero.eval_cli audit runs/bootstrap-selfplay --profile long-run
 ```
 
-Profiles provide defaults only. Explicit threshold flags still override the profile value, so use `--profile smoke` for plumbing checks, `--profile default` for current guardrails, and `--profile long-run` for stricter CPU run checks that require more benchmark games.
+Profiles provide defaults only. Explicit threshold flags and boolean requirement flags such as `--require-benchmark` or `--allow-missing-benchmark` still override profile values. Use `--profile smoke` for plumbing checks, `--profile default` for current guardrails, and `--profile long-run` for stricter provisional CPU run checks.
 
 Gate a candidate before promotion:
 
@@ -228,7 +228,7 @@ python -m pokezero.eval_cli gate runs/bootstrap-selfplay \
   --max-benchmark-capped-rate 0.10
 ```
 
-The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs.
+The gate is a configurable guardrail, not a final research threshold. It requires benchmark evidence by default, checks each candidate-vs-opponent benchmark row independently, enforces a minimum game count per opponent, checks collection and benchmark capped-game rates, and checks bootstrap teacher-degradation counters when present. Use `--json` for automation and `--allow-missing-benchmark` only for smoke runs; use `--require-benchmark` to tighten a permissive profile.
 
 The same gate can use a named profile:
 

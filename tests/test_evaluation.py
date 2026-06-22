@@ -488,6 +488,8 @@ class PromotionGateTest(unittest.TestCase):
         )
         long_run = next(profile for profile in payload["profiles"] if profile["name"] == "long-run")
         self.assertEqual(long_run["gate"]["min_benchmark_games"], 100)
+        self.assertGreater(long_run["gate"]["min_benchmark_win_rate"], 0.55)
+        self.assertLess(long_run["gate"]["max_benchmark_capped_rate"], 0.10)
 
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
@@ -502,6 +504,56 @@ class PromotionGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["passed"])
+
+    def test_eval_cli_gate_smoke_profile_can_still_require_benchmark(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["benchmark"] = None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "gate",
+                        str(manifest_path),
+                        "--profile",
+                        "smoke",
+                        "--require-benchmark",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("benchmark_available", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_gate_smoke_profile_relaxes_numeric_thresholds(self) -> None:
+        manifest = selfplay_manifest()
+        manifest["iterations"][0]["collection_metrics"] = collection_metrics(games=10, capped_games=8)
+        manifest["iterations"][0]["benchmark"] = benchmark_payload(
+            policy_id="linear-selfplay-test-iter-0001",
+            wins=1,
+            losses=19,
+            capped_games=12,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as default_stdout:
+                default_exit = eval_cli_main(["gate", str(manifest_path), "--json"])
+            default_payload = json.loads(default_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as smoke_stdout:
+                smoke_exit = eval_cli_main(["gate", str(manifest_path), "--profile", "smoke", "--json"])
+            smoke_payload = json.loads(smoke_stdout.getvalue())
+
+        self.assertEqual(default_exit, 2)
+        self.assertIn("benchmark_win_rate:random-legal", failed_check_names_from_payload(default_payload))
+        self.assertIn("collection_capped_rate", failed_check_names_from_payload(default_payload))
+        self.assertEqual(smoke_exit, 0)
+        self.assertTrue(smoke_payload["passed"])
 
     def test_eval_cli_gate_long_run_profile_can_be_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -521,6 +573,8 @@ class PromotionGateTest(unittest.TestCase):
                         "long-run",
                         "--min-benchmark-games",
                         "20",
+                        "--min-benchmark-win-rate",
+                        "0.55",
                         "--json",
                     ]
                 )

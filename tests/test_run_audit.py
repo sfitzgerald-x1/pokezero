@@ -242,6 +242,94 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["passed"])
 
+    def test_eval_cli_audit_smoke_profile_can_still_require_benchmark(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, benchmark=False),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--profile",
+                        "smoke",
+                        "--require-benchmark",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_benchmark_available", failed_check_names_from_payload(payload))
+
+    def test_eval_cli_audit_smoke_profile_relaxes_numeric_thresholds(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, wins=1, losses=19, capped_games=12),
+            )
+        )
+        manifest["iterations"][0]["collection_metrics"] = collection_metrics(games=10, capped_games=8)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as default_stdout:
+                default_exit = eval_cli_main(["audit", str(manifest_path), "--json"])
+            default_payload = json.loads(default_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as smoke_stdout:
+                smoke_exit = eval_cli_main(["audit", str(manifest_path), "--profile", "smoke", "--json"])
+            smoke_payload = json.loads(smoke_stdout.getvalue())
+
+        self.assertEqual(default_exit, 2)
+        self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(default_payload))
+        self.assertIn("latest_collection_capped_rate", failed_check_names_from_payload(default_payload))
+        self.assertEqual(smoke_exit, 0)
+        self.assertTrue(smoke_payload["passed"])
+
+    def test_eval_cli_audit_latest_promotion_requirement_can_be_required_or_allowed(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, promotion_recorded=False),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as require_stdout:
+                require_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--require-latest-promotion",
+                        "--json",
+                    ]
+                )
+            require_payload = json.loads(require_stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as allow_stdout:
+                allow_exit = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--allow-missing-latest-promotion",
+                        "--json",
+                    ]
+                )
+            allow_payload = json.loads(allow_stdout.getvalue())
+
+        self.assertEqual(require_exit, 2)
+        self.assertIn("latest_promotion_recorded", failed_check_names_from_payload(require_payload))
+        self.assertEqual(allow_exit, 0)
+        self.assertTrue(allow_payload["passed"])
+
     def test_eval_cli_audit_long_run_profile_can_be_overridden(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
@@ -263,6 +351,8 @@ class RunAuditTest(unittest.TestCase):
                         "long-run",
                         "--min-latest-benchmark-games",
                         "20",
+                        "--min-latest-benchmark-win-rate",
+                        "0.55",
                         "--json",
                     ]
                 )

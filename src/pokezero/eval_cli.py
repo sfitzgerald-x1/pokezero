@@ -74,8 +74,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
     )
-    audit.add_argument("--allow-missing-benchmark", action="store_true", default=None, help="Do not fail solely because the latest benchmark is missing.")
-    audit.add_argument("--require-latest-promotion", action="store_true", default=None, help="Fail unless the latest iteration recorded a promotion.")
+    _add_benchmark_requirement_arguments(
+        audit,
+        missing_help="Do not fail solely because the latest benchmark is missing.",
+    )
+    latest_promotion_group = audit.add_mutually_exclusive_group()
+    latest_promotion_group.add_argument(
+        "--require-latest-promotion",
+        dest="require_latest_promotion",
+        action="store_true",
+        default=None,
+        help="Fail unless the latest iteration recorded a promotion.",
+    )
+    latest_promotion_group.add_argument(
+        "--allow-missing-latest-promotion",
+        dest="require_latest_promotion",
+        action="store_false",
+        default=None,
+        help="Do not fail solely because the latest iteration did not record a promotion.",
+    )
     audit.add_argument("--json", action="store_true", help="Print the audit result as JSON.")
     audit.set_defaults(func=_audit)
     return parser
@@ -186,10 +203,25 @@ def _profiles(args: argparse.Namespace) -> int:
     print("profiles:")
     for profile in profiles:
         print(f"- {profile.name}: {profile.description}")
-        print(f"  gate_min_benchmark_win_rate: {profile.gate_config.min_benchmark_win_rate:.3f}")
-        print(f"  gate_min_benchmark_games: {profile.gate_config.min_benchmark_games}")
-        print(f"  audit_min_latest_benchmark_win_rate: {profile.audit_config.min_latest_benchmark_win_rate:.3f}")
-        print(f"  audit_min_latest_benchmark_games: {profile.audit_config.min_latest_benchmark_games}")
+        print(
+            "  gate: "
+            f"min_win_rate={profile.gate_config.min_benchmark_win_rate:.3f} "
+            f"min_games={profile.gate_config.min_benchmark_games} "
+            f"max_collection_capped={profile.gate_config.max_collection_capped_rate:.3f} "
+            f"max_benchmark_capped={profile.gate_config.max_benchmark_capped_rate:.3f} "
+            f"require_benchmark={profile.gate_config.require_benchmark}"
+        )
+        print(
+            "  audit: "
+            f"min_latest_win_rate={profile.audit_config.min_latest_benchmark_win_rate:.3f} "
+            f"min_latest_games={profile.audit_config.min_latest_benchmark_games} "
+            f"max_latest_collection_capped={profile.audit_config.max_latest_collection_capped_rate:.3f} "
+            f"max_latest_benchmark_capped={profile.audit_config.max_latest_benchmark_capped_rate:.3f} "
+            f"max_win_rate_drop={profile.audit_config.max_benchmark_win_rate_drop:.3f} "
+            f"max_promotion_failures={profile.audit_config.max_consecutive_promotion_failures} "
+            f"require_benchmark={profile.audit_config.require_benchmark} "
+            f"require_latest_promotion={profile.audit_config.require_latest_promotion}"
+        )
     return 0
 
 
@@ -232,7 +264,28 @@ def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Require direct benchmark evidence against this incumbent policy id and gate the candidate win rate against it.",
     )
-    parser.add_argument("--allow-missing-benchmark", action="store_true", default=None, help="Do not fail solely because benchmark evidence is missing.")
+    _add_benchmark_requirement_arguments(
+        parser,
+        missing_help="Do not fail solely because benchmark evidence is missing.",
+    )
+
+
+def _add_benchmark_requirement_arguments(parser: argparse.ArgumentParser, *, missing_help: str) -> None:
+    benchmark_group = parser.add_mutually_exclusive_group()
+    benchmark_group.add_argument(
+        "--require-benchmark",
+        dest="require_benchmark",
+        action="store_true",
+        default=None,
+        help="Fail when required benchmark evidence is missing.",
+    )
+    benchmark_group.add_argument(
+        "--allow-missing-benchmark",
+        dest="require_benchmark",
+        action="store_false",
+        default=None,
+        help=missing_help,
+    )
 
 
 def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
@@ -256,7 +309,7 @@ def _gate_config_from_args(args: argparse.Namespace) -> PromotionGateConfig:
             profile_config.min_incumbent_win_rate_lower_bound,
         ),
         incumbent_confidence_z=_arg_or_default(args.incumbent_confidence_z, profile_config.incumbent_confidence_z),
-        require_benchmark=profile_config.require_benchmark if args.allow_missing_benchmark is None else False,
+        require_benchmark=_arg_or_default(args.require_benchmark, profile_config.require_benchmark),
         required_benchmark_opponents=tuple(args.benchmark_opponent or ()),
         opponent_min_win_rates=_parse_opponent_win_rates(tuple(args.opponent_win_rate or ())),
         incumbent_policy_id=incumbent_policy_id,
@@ -290,11 +343,10 @@ def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
             args.max_consecutive_promotion_failures,
             profile_config.max_consecutive_promotion_failures,
         ),
-        require_benchmark=profile_config.require_benchmark if args.allow_missing_benchmark is None else False,
-        require_latest_promotion=(
-            profile_config.require_latest_promotion
-            if args.require_latest_promotion is None
-            else True
+        require_benchmark=_arg_or_default(args.require_benchmark, profile_config.require_benchmark),
+        require_latest_promotion=_arg_or_default(
+            args.require_latest_promotion,
+            profile_config.require_latest_promotion,
         ),
     )
 

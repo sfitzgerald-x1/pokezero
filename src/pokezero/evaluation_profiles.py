@@ -6,18 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from .evaluation import (
-    DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
     DEFAULT_MAX_COLLECTION_CAPPED_RATE,
-    DEFAULT_MAX_INCUMBENT_CAPPED_RATE,
     DEFAULT_MAX_TEACHER_DEGRADATION_RATE,
-    DEFAULT_MIN_BENCHMARK_WIN_RATE,
     DEFAULT_MIN_INCUMBENT_GAMES,
-    DEFAULT_MIN_INCUMBENT_WIN_RATE,
     DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
     PromotionGateConfig,
 )
 from .run_audit import (
-    DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
     DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
     RunAuditConfig,
 )
@@ -99,25 +94,25 @@ DEFAULT_EVALUATION_PROFILE = EvaluationProfile(
 
 LONG_RUN_EVALUATION_PROFILE = EvaluationProfile(
     name="long-run",
-    description="Stricter CPU long-run guardrails for benchmarked self-play experiments.",
+    description="Stricter provisional CPU long-run guardrails for benchmarked self-play experiments.",
     gate_config=PromotionGateConfig(
-        min_benchmark_win_rate=DEFAULT_MIN_BENCHMARK_WIN_RATE,
-        min_incumbent_win_rate=DEFAULT_MIN_INCUMBENT_WIN_RATE,
+        min_benchmark_win_rate=0.60,
+        min_incumbent_win_rate=0.57,
         min_benchmark_games=100,
         min_incumbent_games=DEFAULT_MIN_INCUMBENT_GAMES,
         max_collection_capped_rate=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
-        max_benchmark_capped_rate=DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
-        max_incumbent_capped_rate=DEFAULT_MAX_INCUMBENT_CAPPED_RATE,
+        max_benchmark_capped_rate=0.05,
+        max_incumbent_capped_rate=0.05,
         max_teacher_degradation_rate=DEFAULT_MAX_TEACHER_DEGRADATION_RATE,
         min_incumbent_win_rate_lower_bound=DEFAULT_MIN_INCUMBENT_WIN_RATE_LOWER_BOUND,
         require_benchmark=True,
     ),
     audit_config=RunAuditConfig(
-        min_latest_benchmark_win_rate=DEFAULT_MIN_BENCHMARK_WIN_RATE,
+        min_latest_benchmark_win_rate=0.60,
         min_latest_benchmark_games=100,
         max_latest_collection_capped_rate=DEFAULT_MAX_COLLECTION_CAPPED_RATE,
-        max_latest_benchmark_capped_rate=DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
-        max_benchmark_win_rate_drop=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
+        max_latest_benchmark_capped_rate=0.05,
+        max_benchmark_win_rate_drop=0.03,
         max_consecutive_promotion_failures=DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
         require_benchmark=True,
         require_latest_promotion=False,
