@@ -25,6 +25,7 @@ from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP = 0.05
 DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES = 1
 DEFAULT_AUDIT_CALIBRATION_MARGIN = 0.10
+DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 _THRESHOLD_EPSILON = 1e-12
 
 
@@ -40,6 +41,7 @@ class RunAuditConfig:
     max_consecutive_promotion_failures: int = DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES
     require_benchmark: bool = True
     require_latest_promotion: bool = False
+    require_benchmark_opponent_coverage: bool = True
 
     def __post_init__(self) -> None:
         if self.min_latest_benchmark_games < 0:
@@ -172,6 +174,7 @@ class RunAuditResult:
     latest_average_decision_rounds: float | None
     latest_benchmark_capped_rate: float | None
     latest_benchmark_average_decision_rounds: float | None
+    missing_latest_benchmark_opponents: tuple[str, ...]
     benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
     checks: tuple[RunAuditCheck, ...]
@@ -197,6 +200,7 @@ class RunAuditResult:
             "latest_average_decision_rounds": self.latest_average_decision_rounds,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
             "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "missing_latest_benchmark_opponents": list(self.missing_latest_benchmark_opponents),
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
             "passed": self.passed,
@@ -317,6 +321,7 @@ class RunAuditCalibrationResult:
     max_latest_benchmark_average_decision_rounds: float | None
     max_benchmark_win_rate_drop: float | None
     max_consecutive_promotion_failures: int
+    require_benchmark_opponent_coverage: bool
     notes: tuple[str, ...] = ()
 
     def suggested_config(self) -> dict[str, float | int | bool | None]:
@@ -330,6 +335,7 @@ class RunAuditCalibrationResult:
             "max_benchmark_win_rate_drop": self.max_benchmark_win_rate_drop,
             "max_consecutive_promotion_failures": self.max_consecutive_promotion_failures,
             "require_benchmark": self.require_benchmark,
+            "require_benchmark_opponent_coverage": self.require_benchmark_opponent_coverage,
         }
 
     def suggested_cli_flags(self) -> tuple[str, ...]:
@@ -351,6 +357,8 @@ class RunAuditCalibrationResult:
                 flags.extend((flag_name, str(value)))
         if not self.require_benchmark:
             flags.append("--allow-missing-benchmark")
+        if not self.require_benchmark_opponent_coverage:
+            flags.append("--allow-missing-benchmark-opponents")
         return tuple(flags)
 
     def to_dict(self) -> dict[str, Any]:
@@ -401,12 +409,14 @@ def audit_run(
     )
     best_benchmark_win_rate = max(benchmark_values) if benchmark_values else None
     benchmark_regressions = _opponent_regressions(iterations)
+    missing_latest_benchmark_opponents = _missing_latest_benchmark_opponents(iterations)
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
     checks = (
         _latest_collection_capped_check(latest, config),
         *_latest_average_decision_rounds_checks(latest, config),
         *_latest_benchmark_checks(latest, config),
         *_latest_benchmark_average_decision_rounds_checks(latest, config),
+        _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
         _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
         _latest_promotion_check(latest, config),
@@ -422,6 +432,7 @@ def audit_run(
         latest_average_decision_rounds=latest.average_decision_rounds,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
         latest_benchmark_average_decision_rounds=latest.benchmark_average_decision_rounds,
+        missing_latest_benchmark_opponents=missing_latest_benchmark_opponents,
         benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
         checks=checks,
@@ -547,6 +558,7 @@ def calibrate_run_audit(
             DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES,
             _max_consecutive_promotion_failures(result.iterations),
         ),
+        require_benchmark_opponent_coverage=bool(benchmark_iterations),
         notes=tuple(notes),
     )
 
@@ -843,6 +855,44 @@ def _benchmark_regression_check(
     )
 
 
+def _benchmark_opponent_coverage_check(
+    latest: RunAuditIterationSummary,
+    missing_opponents: tuple[str, ...],
+    config: RunAuditConfig,
+) -> RunAuditCheck:
+    if latest.benchmark_games <= 0:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=not config.require_benchmark,
+            observed=None,
+            threshold="required" if config.require_benchmark else "optional",
+            message="latest benchmark evidence is unavailable for opponent coverage",
+        )
+    if not config.require_benchmark_opponent_coverage:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=True,
+            observed="optional",
+            threshold="required_baseline_opponents",
+            message="latest fixed-baseline benchmark opponent coverage is optional for this audit",
+        )
+    if missing_opponents:
+        return RunAuditCheck(
+            name="latest_benchmark_opponent_coverage",
+            passed=False,
+            observed=", ".join(missing_opponents),
+            threshold="required_baseline_opponents",
+            message="latest benchmark is missing fixed baseline opponents that appeared in prior benchmark evidence",
+        )
+    return RunAuditCheck(
+        name="latest_benchmark_opponent_coverage",
+        passed=True,
+        observed=None,
+        threshold="required_baseline_opponents",
+        message="latest benchmark includes required fixed baseline opponents",
+    )
+
+
 def _promotion_failure_check(
     consecutive_promotion_failures: int,
     config: RunAuditConfig,
@@ -914,6 +964,27 @@ def _opponent_regressions(
             )
         )
     return tuple(regressions)
+
+
+def _missing_latest_benchmark_opponents(
+    iterations: tuple[RunAuditIterationSummary, ...],
+) -> tuple[str, ...]:
+    if len(iterations) < 2:
+        return ()
+    if iterations[-1].benchmark_games <= 0:
+        return ()
+    prior_opponents = {
+        opponent.opponent_policy_id
+        for iteration in iterations[:-1]
+        if iteration.benchmark_games > 0
+        for opponent in iteration.benchmark_opponents
+    }
+    required_prior_opponents = set(DEFAULT_REQUIRED_BENCHMARK_OPPONENTS) & prior_opponents
+    latest_opponents = {
+        opponent.opponent_policy_id
+        for opponent in iterations[-1].benchmark_opponents
+    }
+    return tuple(sorted(required_prior_opponents - latest_opponents))
 
 
 def _benchmark_average_decision_rounds(benchmark: Mapping[str, Any] | None) -> float | None:

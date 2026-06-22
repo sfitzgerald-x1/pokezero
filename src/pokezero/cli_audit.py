@@ -33,6 +33,14 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
         help="With --audit-after-iteration, do not fail solely because the latest benchmark is missing.",
     )
     parser.add_argument(
+        "--audit-allow-missing-benchmark-opponents",
+        action="store_true",
+        help=(
+            "With --audit-after-iteration, do not fail when the latest benchmark omits "
+            "fixed baseline opponents seen in prior benchmark evidence."
+        ),
+    )
+    parser.add_argument(
         "--audit-require-latest-promotion",
         action="store_true",
         help="With --audit-after-iteration, fail unless the latest iteration recorded a promotion.",
@@ -78,6 +86,7 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
         ),
         require_benchmark=not args.audit_allow_missing_benchmark,
         require_latest_promotion=bool(args.audit_require_latest_promotion),
+        require_benchmark_opponent_coverage=not args.audit_allow_missing_benchmark_opponents,
     )
 
 
