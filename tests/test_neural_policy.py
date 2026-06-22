@@ -150,6 +150,29 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_iterate_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "1",
+                    "--initial-policy",
+                    "random-legal",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
     def test_neural_cli_benchmark_wires_fixed_baseline_matchups(self) -> None:
         class FakePolicy:
             policy_id = "neural-smoke"
@@ -202,6 +225,84 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
 
+    def test_neural_cli_iterate_wires_arguments(self) -> None:
+        fake_epoch = type(
+            "FakeEpoch",
+            (),
+            {"loss": 0.25, "policy_accuracy": 0.75},
+        )()
+        fake_iteration = type(
+            "FakeIteration",
+            (),
+            {
+                "iteration": 1,
+                "metrics": type("FakeMetrics", (), {"games": 2})(),
+                "checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "training": type("FakeTraining", (), {"final_metrics": fake_epoch})(),
+                "benchmark": None,
+            },
+        )()
+        fake_result = type(
+            "FakeResult",
+            (),
+            {
+                "run_dir": Path("run"),
+                "iterations": (fake_iteration,),
+                "latest_checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "to_dict": lambda self: {"ok": True},
+            },
+        )()
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run,
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--workers",
+                    "3",
+                    "--resume",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--initial-policy",
+                    "simple-legal",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--evaluation-games",
+                    "4",
+                    "--epochs",
+                    "2",
+                    "--batch-size",
+                    "8",
+                    "--policy-id",
+                    "entity-cli",
+                    "--json",
+                ]
+            )
+
+        kwargs = run.call_args.kwargs
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
+        self.assertEqual(kwargs["iterations"], 1)
+        self.assertTrue(kwargs["resume"])
+        self.assertEqual(kwargs["games_per_iteration"], 2)
+        self.assertEqual(kwargs["initial_policy_spec"], "simple-legal")
+        self.assertEqual(kwargs["fixed_opponent_policy_specs"], ("random-legal",))
+        self.assertEqual(kwargs["evaluation_games"], 4)
+        self.assertEqual(kwargs["worker_count"], 3)
+        self.assertEqual(kwargs["training_config"].epochs, 2)
+        self.assertEqual(kwargs["training_config"].batch_size, 8)
+        self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
+        self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
+
     def test_neural_cli_help_lists_benchmark_command(self) -> None:
         stdout = io.StringIO()
 
@@ -210,6 +311,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("benchmark", stdout.getvalue())
+        self.assertIn("iterate", stdout.getvalue())
 
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():
@@ -247,8 +349,33 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             restored_model, restored_result = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
             policy = TransformerSoftmaxPolicy(model=restored_model, result=restored_result, device="cpu")
             decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
+            _, continued_result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig(
+                    policy_id="neural-smoke-continued",
+                    window_size=2,
+                    categorical_vocab_size=32,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=1,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+                initial_model=restored_model,
+            )
 
         self.assertEqual(result.final_metrics.examples, 2)
+        self.assertEqual(continued_result.model_config.policy_id, "neural-smoke-continued")
         self.assertIn(decision.action_index, {0, 1})
         self.assertEqual(policy.policy_id, "neural-smoke")
 

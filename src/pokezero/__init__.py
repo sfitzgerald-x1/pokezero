@@ -112,6 +112,14 @@ from .neural_policy import (
     train_transformer_policy,
     training_batch_to_torch,
 )
+from .neural_selfplay import (
+    NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
+    NeuralAdvancementDecision,
+    NeuralSelfPlayIterationResult,
+    NeuralSelfPlayRunResult,
+    load_neural_selfplay_run_manifest,
+    run_neural_selfplay_iterations,
+)
 from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
 from .policy import ScriptedTeacherPolicy
 from .promotion import (
@@ -175,7 +183,11 @@ __all__ = [
     "MoveInfo",
     "NEURAL_INSTALL_MESSAGE",
     "NEURAL_POLICY_SCHEMA_VERSION",
+    "NEURAL_SELFPLAY_RUN_SCHEMA_VERSION",
     "NEURAL_TRAINING_SCHEMA_VERSION",
+    "NeuralAdvancementDecision",
+    "NeuralSelfPlayIterationResult",
+    "NeuralSelfPlayRunResult",
     "ObservationSpec",
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
@@ -245,6 +257,7 @@ __all__ = [
     "is_move_action",
     "is_switch_action",
     "load_linear_model",
+    "load_neural_selfplay_run_manifest",
     "load_promotion_registry",
     "load_selfplay_run_manifest",
     "load_showdown_dex",
@@ -268,6 +281,7 @@ __all__ = [
     "require_torch",
     "rollout_record_from_dict",
     "rollout_record_to_dict",
+    "run_neural_selfplay_iterations",
     "run_selfplay_iterations",
     "run_teacher_bootstrap",
     "save_linear_model",
