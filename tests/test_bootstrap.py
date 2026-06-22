@@ -24,6 +24,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.rollout import RolloutConfig
+from pokezero.teacher_scenarios import TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION
 
 
 def observation(mask: tuple[bool, ...]) -> PokeZeroObservationV0:
@@ -911,6 +912,97 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertIn("3x Spikes: hazard pressure layers=0/3", output)
         self.assertIn(f"report: {report_path}", output)
         self.assertTrue(report_exists)
+
+    def test_bootstrap_cli_teacher_scenario_preflight_prints_json_and_writes_report(self) -> None:
+        fake_payload = {
+            "schema_version": TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION,
+            "passed": True,
+            "scenario_count": 1,
+            "passed_count": 1,
+            "failed_count": 0,
+            "teacher_branch_counts": {"spikes_available": 1},
+            "scenarios": [
+                {
+                    "id": "spikes-available",
+                    "description": "sets Spikes",
+                    "passed": True,
+                    "expected": {"teacher_branch": "spikes_available"},
+                    "observed": {"action_index": 1, "teacher_branch": "spikes_available"},
+                    "failed_fields": [],
+                    "error": None,
+                }
+            ],
+        }
+        sentinel_policy = object()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "teacher-scenarios.json"
+            with patch("pokezero.bootstrap_cli.policy_from_spec", return_value=sentinel_policy) as policy_from_spec:
+                with patch(
+                    "pokezero.bootstrap_cli.run_teacher_scenario_preflight",
+                    return_value=fake_payload,
+                ) as run_preflight:
+                    with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                        exit_code = bootstrap_cli_main(
+                            [
+                                "teacher-scenario-preflight",
+                                "--showdown-root",
+                                "/tmp/showdown",
+                                "--teacher-policy",
+                                "scripted-teacher?allow_fallback=true",
+                                "--scenario",
+                                "spikes-available",
+                                "--seed",
+                                "11",
+                                "--out",
+                                str(report_path),
+                                "--json",
+                            ]
+                        )
+            payload = json.loads(stdout.getvalue())
+            report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
+        self.assertIn(expected_showdown_root, policy_from_spec.call_args.args[0])
+        self.assertEqual(run_preflight.call_args.kwargs["policy"], sentinel_policy)
+        self.assertEqual(run_preflight.call_args.kwargs["scenario_ids"], ("spikes-available",))
+        self.assertEqual(run_preflight.call_args.kwargs["rng_seed"], 11)
+        self.assertEqual(payload, fake_payload)
+        self.assertEqual(report_payload, fake_payload)
+
+    def test_bootstrap_cli_teacher_scenario_preflight_returns_two_on_failed_scenario(self) -> None:
+        fake_payload = {
+            "schema_version": TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION,
+            "passed": False,
+            "scenario_count": 1,
+            "passed_count": 0,
+            "failed_count": 1,
+            "teacher_branch_counts": {"fallback": 1},
+            "scenarios": [
+                {
+                    "id": "damaging-super-effective",
+                    "description": "prefers damage",
+                    "passed": False,
+                    "expected": {"teacher_branch": "damaging_move"},
+                    "observed": {"action_index": 0, "teacher_branch": "fallback"},
+                    "failed_fields": ["teacher_branch"],
+                    "error": None,
+                }
+            ],
+        }
+
+        with patch("pokezero.bootstrap_cli.policy_from_spec", return_value=object()):
+            with patch("pokezero.bootstrap_cli.run_teacher_scenario_preflight", return_value=fake_payload):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = bootstrap_cli_main(["teacher-scenario-preflight"])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("teacher_scenario_preflight: FAIL", output)
+        self.assertIn("failed=1", output)
+        self.assertIn("FAIL damaging-super-effective", output)
+        self.assertIn("failed_fields: teacher_branch", output)
 
     def test_bootstrap_cli_teacher_benchmark_rejects_invalid_thresholds(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:

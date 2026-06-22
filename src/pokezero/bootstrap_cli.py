@@ -16,11 +16,16 @@ from .bootstrap import (
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
-from .collection import policy_spec_with_showdown_root
+from .collection import policy_from_spec, policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .policy import SCRIPTED_TEACHER_BRANCHES
 from .rollout import RolloutConfig
+from .teacher_scenarios import (
+    TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION,
+    run_teacher_scenario_preflight,
+    teacher_scenario_ids,
+)
 
 TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION = "pokezero.teacher_benchmark_preflight.v1"
 
@@ -127,6 +132,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     teacher_benchmark.add_argument("--json", action="store_true", help="Print the benchmark report as JSON.")
     teacher_benchmark.set_defaults(func=_teacher_benchmark)
+
+    teacher_scenario_preflight = subparsers.add_parser(
+        "teacher-scenario-preflight",
+        help="Run deterministic scripted-teacher fixture scenarios without launching Showdown games.",
+    )
+    teacher_scenario_preflight.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    teacher_scenario_preflight.add_argument("--teacher-policy", default="scripted-teacher", help="Teacher policy spec.")
+    teacher_scenario_preflight.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        choices=teacher_scenario_ids(),
+        help="Scenario id to run. May be repeated. Defaults to all curated scenarios.",
+    )
+    teacher_scenario_preflight.add_argument("--seed", type=int, default=1, help="Base deterministic RNG seed for scenario decisions.")
+    teacher_scenario_preflight.add_argument("--out", type=Path, default=None, help="Optional JSON report path for the scenario preflight payload.")
+    teacher_scenario_preflight.add_argument("--json", action="store_true", help="Print the scenario preflight report as JSON.")
+    teacher_scenario_preflight.set_defaults(func=_teacher_scenario_preflight)
     return parser
 
 
@@ -246,6 +269,26 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         if args.out is not None:
             print(f"report: {args.out}")
     return 0 if passed else 2
+
+
+def _teacher_scenario_preflight(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(showdown_root=args.showdown_root, node_binary="node")
+    policy_showdown_root = env_config.resolved_showdown_root()
+    teacher_policy_spec = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
+    payload = run_teacher_scenario_preflight(
+        policy=policy_from_spec(teacher_policy_spec),
+        scenario_ids=tuple(args.scenario or ()),
+        rng_seed=args.seed,
+    )
+    if args.out is not None:
+        _write_json(args.out, payload)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_teacher_scenario_preflight(payload)
+        if args.out is not None:
+            print(f"report: {args.out}")
+    return 0 if payload.get("passed") is True else 2
 
 
 def _validate_optional_rate(value: float | None, flag_name: str) -> None:
@@ -566,6 +609,43 @@ def _print_teacher_benchmark_result(result, *, checks: list[dict[str, object]], 
         print("teacher_fallback_reasons:")
         for reason, count in sorted(fallback_reasons.items()):
             print(f"- {reason}: {count}")
+
+
+def _print_teacher_scenario_preflight(payload: Mapping[str, object]) -> None:
+    print(f"schema_version: {TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION}")
+    print(f"teacher_scenario_preflight: {'PASS' if payload.get('passed') is True else 'FAIL'}")
+    print(
+        "scenarios: "
+        f"total={payload.get('scenario_count', 0)} "
+        f"passed={payload.get('passed_count', 0)} "
+        f"failed={payload.get('failed_count', 0)}"
+    )
+    counts = payload.get("teacher_branch_counts")
+    if isinstance(counts, Mapping) and counts:
+        print("teacher_branch_counts:")
+        for branch, count in sorted(counts.items(), key=lambda item: str(item[0])):
+            print(f"- {branch}: {count}")
+    scenarios = payload.get("scenarios")
+    if not isinstance(scenarios, list):
+        return
+    for scenario in scenarios:
+        if not isinstance(scenario, Mapping):
+            continue
+        observed = scenario.get("observed")
+        observed_branch = "-"
+        observed_action = "-"
+        if isinstance(observed, Mapping):
+            observed_branch = str(observed.get("teacher_branch") or "-")
+            observed_action = str(observed.get("action_index") if observed.get("action_index") is not None else "-")
+        print(
+            f"- {'PASS' if scenario.get('passed') is True else 'FAIL'} {scenario.get('id')}: "
+            f"action={observed_action} branch={observed_branch}"
+        )
+        if scenario.get("error"):
+            print(f"  error: {scenario.get('error')}")
+        failed_fields = scenario.get("failed_fields")
+        if isinstance(failed_fields, list) and failed_fields:
+            print(f"  failed_fields: {', '.join(str(field) for field in failed_fields)}")
 
 
 def _print_teacher_top_branches(summary: Mapping[str, object]) -> None:
