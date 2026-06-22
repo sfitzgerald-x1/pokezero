@@ -1432,6 +1432,104 @@ class SelfPlayTest(unittest.TestCase):
         self.assertTrue(audit_config.require_latest_promotion)
         self.assertTrue(audit_config.require_benchmark_opponent_coverage)
 
+    def test_selfplay_cli_iterate_profile_boolean_overrides(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+        )
+        fake_epoch = SimpleNamespace(loss=0.25, accuracy=0.75)
+        fake_iteration = SimpleNamespace(
+            iteration=1,
+            metrics=fake_metrics,
+            training=SimpleNamespace(final_metrics=fake_epoch),
+            checkpoint_path=Path("run/iteration-0001/linear-policy.json"),
+        )
+        fake_result = SimpleNamespace(
+            run_dir=Path("run"),
+            iterations=(fake_iteration,),
+            latest_checkpoint_path=Path("run/iteration-0001/linear-policy.json"),
+        )
+        with (
+            patch("pokezero.selfplay_cli.run_selfplay_iterations", return_value=fake_result) as run,
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            exit_code = selfplay_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--evaluation-games",
+                    "1",
+                    "--audit-after-iteration",
+                    "--audit-profile",
+                    "smoke",
+                    "--audit-require-benchmark",
+                    "--audit-require-benchmark-opponents",
+                    "--audit-allow-missing-latest-promotion",
+                ]
+            )
+
+        audit_config = run.call_args.kwargs["post_iteration_audit_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(audit_config.min_latest_benchmark_games, 0)
+        self.assertEqual(audit_config.max_benchmark_win_rate_drop, 1.0)
+        self.assertTrue(audit_config.require_benchmark)
+        self.assertTrue(audit_config.require_benchmark_opponent_coverage)
+        self.assertFalse(audit_config.require_latest_promotion)
+
+    def test_selfplay_cli_iterate_rejects_audit_profile_with_too_few_evaluation_games(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = selfplay_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--evaluation-games",
+                    "3",
+                    "--audit-after-iteration",
+                    "--audit-profile",
+                    "long-run",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("requires enough --evaluation-games", stderr.getvalue())
+
+    def test_selfplay_cli_iterate_rejects_conflicting_post_iteration_audit_booleans(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaises(SystemExit) as raised:
+                selfplay_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--audit-after-iteration",
+                        "--audit-require-benchmark",
+                        "--audit-allow-missing-benchmark",
+                    ]
+                )
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("not allowed with argument", stderr.getvalue())
+
     def test_selfplay_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
             exit_code = selfplay_cli_main(

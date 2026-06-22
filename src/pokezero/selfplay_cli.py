@@ -8,7 +8,11 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
-from .cli_audit import add_post_iteration_audit_arguments, post_iteration_audit_config_from_args
+from .cli_audit import (
+    add_post_iteration_audit_arguments,
+    post_iteration_audit_config_from_args,
+    validate_post_iteration_audit_evaluation_games,
+)
 from .collection import policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -166,15 +170,10 @@ def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
-    if (
-        post_iteration_audit_config is not None
-        and post_iteration_audit_config.require_benchmark
-        and args.evaluation_games <= 0
-    ):
-        raise ValueError(
-            "--audit-after-iteration requires --evaluation-games > 0 unless "
-            "--audit-allow-missing-benchmark is set."
-        )
+    validate_post_iteration_audit_evaluation_games(
+        post_iteration_audit_config,
+        evaluation_games=args.evaluation_games,
+    )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,

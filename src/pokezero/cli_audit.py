@@ -12,6 +12,7 @@ DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
     max_benchmark_win_rate_drop=0.15,
     max_consecutive_promotion_failures=3,
 )
+MIN_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 
 
 def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
@@ -150,6 +151,28 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
             defaults.require_benchmark_opponent_coverage,
         ),
     )
+
+
+def validate_post_iteration_audit_evaluation_games(
+    config: RunAuditConfig | None,
+    *,
+    evaluation_games: int,
+) -> None:
+    if config is None or not config.require_benchmark:
+        return
+    if evaluation_games <= 0:
+        raise ValueError(
+            "--audit-after-iteration requires --evaluation-games > 0 unless "
+            "--audit-allow-missing-benchmark is set."
+        )
+    minimum_benchmark_games = evaluation_games * MIN_POST_ITERATION_BENCHMARK_MATCHUPS
+    if minimum_benchmark_games < config.min_latest_benchmark_games:
+        raise ValueError(
+            "--audit-after-iteration requires enough --evaluation-games to satisfy "
+            f"the audit benchmark-game floor: at least {config.min_latest_benchmark_games} "
+            f"aggregate benchmark games are required, but {evaluation_games} "
+            f"evaluation games only guarantees {minimum_benchmark_games}."
+        )
 
 
 def _arg_or_default(value, default):

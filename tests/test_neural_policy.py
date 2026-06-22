@@ -452,6 +452,32 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("--audit-after-iteration requires --evaluation-games", stderr.getvalue())
 
+    def test_neural_cli_iterate_rejects_audit_profile_with_too_few_evaluation_games(self) -> None:
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--initial-policy",
+                    "random-legal",
+                    "--evaluation-games",
+                    "3",
+                    "--audit-after-iteration",
+                    "--audit-profile",
+                    "long-run",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("requires enough --evaluation-games", stderr.getvalue())
+
     def test_neural_cli_help_lists_benchmark_command(self) -> None:
         stdout = io.StringIO()
 
