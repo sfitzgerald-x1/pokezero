@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, TextIO
 from urllib.parse import parse_qsl, urlencode
@@ -114,6 +115,15 @@ class BenchmarkReport:
         return self.total_decision_rounds / self.total_games if self.total_games else 0.0
 
     @property
+    def peak_rss_mb(self) -> float | None:
+        values = tuple(
+            result.metrics.peak_rss_mb
+            for result in self.matchups
+            if result.metrics.peak_rss_mb is not None
+        )
+        return max(values) if values else None
+
+    @property
     def head_to_head_results(self) -> tuple[BenchmarkHeadToHeadResult, ...]:
         return aggregate_benchmark_head_to_heads(self.matchups)
 
@@ -127,6 +137,7 @@ class BenchmarkReport:
             "games_per_second": self.games_per_second,
             "decisions_per_second": self.decisions_per_second,
             "average_decision_rounds": self.average_decision_rounds,
+            **({"peak_rss_mb": self.peak_rss_mb} if self.peak_rss_mb is not None else {}),
             "matchups": [result.to_dict() for result in self.matchups],
             "head_to_heads": [result.to_dict() for result in self.head_to_head_results],
         }
@@ -154,6 +165,7 @@ class CollectionMetrics:
     p2_wins: int
     ties: int
     capped_games: int
+    peak_rss_mb: float | None = None
 
     @property
     def games_per_second(self) -> float:
@@ -185,6 +197,7 @@ class CollectionMetrics:
             "decisions_per_second": self.decisions_per_second,
             "average_decision_rounds": self.average_decision_rounds,
             "average_simulator_turns": self.average_simulator_turns,
+            **({"peak_rss_mb": self.peak_rss_mb} if self.peak_rss_mb is not None else {}),
         }
 
 
@@ -224,7 +237,7 @@ def collect_rollouts(
             write_path.unlink(missing_ok=True)
         raise
     elapsed = perf_counter() - collection_start
-    return accumulator.to_metrics(elapsed_seconds=elapsed)
+    return accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb())
 
 
 def benchmark_rollouts(
@@ -266,7 +279,7 @@ def benchmark_rollouts(
                 p1_policy_id=matchup.p1_policy.policy_id,
                 p2_policy_id=matchup.p2_policy.policy_id,
                 seed_start=seed_start,
-                metrics=accumulator.to_metrics(elapsed_seconds=elapsed),
+                metrics=accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()),
             )
         )
 
@@ -330,6 +343,22 @@ def run_rollout_record(
             close()
     elapsed = perf_counter() - start
     return record_from_result(result, policies=policies, elapsed_seconds=elapsed)
+
+
+def current_peak_rss_mb() -> float | None:
+    # ru_maxrss is a process-lifetime high-water mark. It is useful for
+    # coarse run health, not per-game or per-matchup memory attribution.
+    try:
+        import resource
+    except ImportError:
+        return None
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    rss = float(getattr(usage, "ru_maxrss", 0.0))
+    if rss <= 0.0:
+        return None
+    if sys.platform == "darwin":
+        return rss / (1024.0 * 1024.0)
+    return rss / 1024.0
 
 
 def record_from_result(
@@ -401,7 +430,7 @@ def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: floa
     accumulator = _MetricsAccumulator()
     for record in records:
         accumulator.add(record)
-    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds)
+    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds, peak_rss_mb=current_peak_rss_mb())
 
 
 def policy_from_spec(spec: str) -> Policy:
@@ -626,7 +655,7 @@ class _MetricsAccumulator:
         if record.terminal.capped:
             self.capped_games += 1
 
-    def to_metrics(self, *, elapsed_seconds: float) -> CollectionMetrics:
+    def to_metrics(self, *, elapsed_seconds: float, peak_rss_mb: float | None = None) -> CollectionMetrics:
         return CollectionMetrics(
             games=self.games,
             elapsed_seconds=elapsed_seconds,
@@ -636,6 +665,7 @@ class _MetricsAccumulator:
             p2_wins=self.p2_wins,
             ties=self.ties,
             capped_games=self.capped_games,
+            peak_rss_mb=peak_rss_mb,
         )
 
 

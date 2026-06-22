@@ -95,20 +95,22 @@ class SelfPlayTest(unittest.TestCase):
             output_path = Path(temp_dir) / "rollouts.jsonl"
             training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
 
-            metrics = collect_selfplay_rollouts(
-                output_path=output_path,
-                training_output_path=training_output_path,
-                games=2,
-                env_factory=OneTurnEnv,
-                rollout_config=RolloutConfig(max_decision_rounds=5),
-                seed_start=10,
-                current_policy_spec="simple-legal",
-                opponent_policy_specs=("random-legal",),
-            )
+            with patch("pokezero.collection.current_peak_rss_mb", return_value=88.0):
+                metrics = collect_selfplay_rollouts(
+                    output_path=output_path,
+                    training_output_path=training_output_path,
+                    games=2,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    seed_start=10,
+                    current_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                )
 
             records = read_rollout_records(output_path)
             training_records = read_rollout_records(training_output_path)
         self.assertEqual(metrics.games, 2)
+        self.assertEqual(metrics.peak_rss_mb, 88.0)
         self.assertEqual(records[0].policy_ids, {"p1": "simple-legal", "p2": "random-legal"})
         self.assertEqual(records[1].policy_ids, {"p1": "random-legal", "p2": "simple-legal"})
         self.assertEqual(training_records[0].policy_ids, {"p1": "simple-legal"})
@@ -1008,7 +1010,9 @@ class SelfPlayTest(unittest.TestCase):
         self.assertIn("0.125000", output)
         self.assertIn("0.8750", output)
         self.assertIn("avg_dec", output)
+        self.assertIn("peak_mb", output)
         self.assertIn("2.000", output)
+        self.assertIn("77.500", output)
         self.assertIn(" val ", output)
         self.assertIn("fit metrics measure imitation", output)
         self.assertNotIn("0.250000", output)
@@ -1150,6 +1154,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True) -> None:
             "decisions_per_second": 3.0,
             "average_decision_rounds": 2.0,
             "average_simulator_turns": 1.67,
+            "peak_rss_mb": 77.5,
         },
         "training": {
             "config": {},
