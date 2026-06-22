@@ -3594,6 +3594,8 @@ if __name__ == "__main__":
         self.assertIn("long_run_ready: yes", output)
         self.assertIn("failed_reason: -", output)
         self.assertIn("derived_run_report_source: computed", output)
+        self.assertIn("runtime_audit:", output)
+        self.assertIn("available: no", output)
         self.assertIn("failed_step: -", output)
         self.assertIn("- 1: PASS run guarded CPU self-play long run returncode=0", output)
         self.assertIn("derived_run_report:", output)
@@ -3619,9 +3621,19 @@ if __name__ == "__main__":
             payload = json.loads(stdout.getvalue())
 
         report = payload["derived_run_report"]
+        runtime_audit = payload["runtime_audit"]
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["derived_audit_required"])
         self.assertTrue(payload["derived_audit_requirement_passed"])
+        self.assertTrue(runtime_audit["available"])
+        self.assertEqual(runtime_audit["source"], "profile")
+        self.assertEqual(runtime_audit["audit_profile"], "smoke")
+        self.assertIsNone(runtime_audit["audit_config_path"])
+        self.assertEqual(runtime_audit["minimum_evaluation_games"], 0)
+        self.assertEqual(
+            runtime_audit["post_iteration_command_flags"],
+            ["--audit-after-iteration", "--audit-profile", "smoke"],
+        )
         self.assertTrue(report["available"])
         self.assertTrue(report["manifest_available"])
         self.assertEqual(report["manifest_path"], str(run_root / "manifest.json"))
@@ -3671,9 +3683,24 @@ if __name__ == "__main__":
             payload = json.loads(stdout.getvalue())
 
         report = payload["derived_run_report"]
+        runtime_audit = payload["runtime_audit"]
         self.assertEqual(exit_code, 2)
         self.assertTrue(payload["derived_audit_required"])
         self.assertFalse(payload["derived_audit_requirement_passed"])
+        self.assertTrue(runtime_audit["available"])
+        self.assertEqual(runtime_audit["source"], "pilot-audit-config")
+        self.assertEqual(runtime_audit["audit_config_path"], str(audit_config_path))
+        self.assertEqual(runtime_audit["minimum_evaluation_games"], 1)
+        self.assertEqual(
+            runtime_audit["post_iteration_command_flags"],
+            [
+                "--evaluation-games",
+                "1",
+                "--audit-after-iteration",
+                "--audit-config",
+                str(audit_config_path),
+            ],
+        )
         self.assertTrue(report["available"])
         self.assertEqual(report["audit_source"], "pilot-audit-config")
         self.assertEqual(report["audit_config_path"], str(audit_config_path))
