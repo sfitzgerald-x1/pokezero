@@ -250,6 +250,8 @@ python -m pokezero.eval_cli compare \
 
 The comparison report reads existing manifests and surfaces latest and best benchmark win rate, capped-game rates, collection and benchmark games-per-hour, latest process peak RSS high-water when recorded, average decision-round length, latest promotion or advancement state, and latest checkpoint paths. The RSS value is a platform process high-water mark, not phase-isolated memory attribution, and resumed runs may reset the process counter. Best-run labels require at least `--min-benchmark-games` benchmark games by default, and malformed or not-yet-started manifests are reported as row-level errors without hiding healthy runs. Use it to decide which run deserves deeper audit or benchmark expansion; do not treat validation fit as a strength signal.
 
+Add `--audit-profile smoke`, `--audit-profile default`, or `--audit-profile long-run` to include per-run audit pass/fail status and failed audit checks in the same comparison output. When an audit profile is supplied, best-run labels ignore audit-failing rows so a run is not highlighted as best while failing the selected health profile. The compare command remains read-only and does not run new games; audit failures are shown as row health signals unless `--fail-on-audit` is supplied or a manifest itself cannot be loaded.
+
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
 ```bash

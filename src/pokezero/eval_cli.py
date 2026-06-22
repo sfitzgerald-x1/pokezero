@@ -151,6 +151,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MIN_BENCHMARK_GAMES,
         help="Minimum benchmark games required for a run to be eligible for best-run labels.",
     )
+    compare.add_argument(
+        "--audit-profile",
+        choices=profile_choices,
+        default=None,
+        help="Also evaluate each compared run against this named audit profile and include pass/fail status.",
+    )
+    compare.add_argument(
+        "--fail-on-audit",
+        action="store_true",
+        help="With --audit-profile, return non-zero when any compared run fails the selected audit profile.",
+    )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
@@ -490,12 +501,20 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
 
 
 def _compare(args: argparse.Namespace) -> int:
-    result = compare_run_manifests_with_threshold(args.paths, min_benchmark_games=args.min_benchmark_games)
+    if args.fail_on_audit and args.audit_profile is None:
+        raise ValueError("--fail-on-audit requires --audit-profile.")
+    audit_profile = evaluation_profile(args.audit_profile) if args.audit_profile is not None else None
+    result = compare_run_manifests_with_threshold(
+        args.paths,
+        min_benchmark_games=args.min_benchmark_games,
+        audit_config=audit_profile.audit_config if audit_profile is not None else None,
+        audit_profile=audit_profile.name if audit_profile is not None else None,
+    )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
-    return 2 if result.errors else 0
+    return 2 if result.errors or (args.fail_on_audit and result.audit_failed) else 0
 
 
 def _add_gate_arguments(parser: argparse.ArgumentParser) -> None:
@@ -700,13 +719,16 @@ def _print_run_comparison(result) -> None:
     print(f"runs: {len(result.entries)}")
     print(f"errors: {len(result.errors)}")
     print(f"min_benchmark_games_for_best: {result.min_benchmark_games}")
+    if result.audit_profile is not None:
+        print(f"audit_profile: {result.audit_profile}")
     latest = result.best_latest_benchmark_entry
     historical = result.best_historical_benchmark_entry
     print(f"best_latest_benchmark: {latest.label if latest is not None else '-'}")
     print(f"best_historical_benchmark: {historical.label if historical is not None else '-'}")
     print("")
+    audit_header = f"{'audit':>6} " if result.audit_profile is not None else ""
     header = (
-        f"{'run':<24} {'src':<15} {'iter':>4} {'bench_wr':>8} {'best_wr':>8} {'bench_g':>7} "
+        f"{'run':<24} {'src':<15} {'iter':>4} {audit_header}{'bench_wr':>8} {'best_wr':>8} {'bench_g':>7} "
         f"{'coll_cap':>8} {'bench_cap':>9} {'coll_gph':>8} {'bench_gph':>9} {'rss_hi_mb':>9} "
         f"{'avg_dec':>8} {'bench_dec':>9} {'promo':>6} {'adv':>6} checkpoint"
     )
@@ -717,6 +739,7 @@ def _print_run_comparison(result) -> None:
             f"{entry.label:<24.24} "
             f"{entry.source_type:<15.15} "
             f"{(entry.latest_iteration if entry.latest_iteration is not None else 0):4d} "
+            f"{(f'{_format_optional_bool(entry.audit_passed):>6} ') if result.audit_profile is not None else ''}"
             f"{_format_optional_float(entry.latest_benchmark_win_rate):>8} "
             f"{_format_optional_float(entry.best_benchmark_win_rate):>8} "
             f"{entry.latest_benchmark_games:7d} "
@@ -736,6 +759,14 @@ def _print_run_comparison(result) -> None:
         print("errors:")
         for error in result.errors:
             print(f"- {error.label}: {error.error}")
+    if result.audit_profile is not None:
+        failed_entries = tuple(entry for entry in result.entries if entry.audit_passed is False)
+        if failed_entries:
+            print("")
+            print("audit_failures:")
+            for entry in failed_entries:
+                failed = ", ".join(entry.audit_failed_checks) if entry.audit_failed_checks else "unknown"
+                print(f"- {entry.label}: {failed}")
 
 
 def _print_registry_verification(result) -> None:
