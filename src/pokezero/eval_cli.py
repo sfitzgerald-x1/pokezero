@@ -751,6 +751,11 @@ def _add_cpu_smoke_arguments(
     parser.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
     parser.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
     parser.add_argument(
+        "--teacher-scenario-preflight",
+        action="store_true",
+        help="Insert a deterministic scripted-teacher scenario preflight step before rollout collection.",
+    )
+    parser.add_argument(
         "--teacher-branch-preflight-games",
         type=int,
         default=2,
@@ -2777,11 +2782,13 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_smoke_summary(args.path)
     status = str(summary.get("status", "unknown"))
     recipe = summary.get("recipe") if isinstance(summary.get("recipe"), Mapping) else {}
+    teacher_scenario_preflight = _cpu_smoke_teacher_scenario_preflight_report(recipe, summary_path=summary_path)
     teacher_branch_preflight = _cpu_smoke_teacher_branch_preflight_report(recipe, summary_path=summary_path)
-    exit_status = _cpu_smoke_report_exit_status(status, teacher_branch_preflight)
+    exit_status = _cpu_smoke_report_exit_status(status, teacher_scenario_preflight, teacher_branch_preflight)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
+        payload["teacher_scenario_preflight_report"] = teacher_scenario_preflight
         payload["teacher_branch_preflight_report"] = teacher_branch_preflight
         print(json.dumps(payload, indent=2, sort_keys=True))
         return exit_status
@@ -2797,6 +2804,7 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
         print(f"source_branch: {_format_summary_value(source.get('branch'))}")
         print(f"source_head: {_format_summary_value(source.get('head'))}")
         print(f"source_dirty: {_format_summary_value(source.get('dirty'))}")
+    _print_cpu_smoke_teacher_scenario_preflight_report(teacher_scenario_preflight)
     _print_cpu_smoke_teacher_branch_preflight_report(teacher_branch_preflight)
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
@@ -2820,12 +2828,93 @@ def _cpu_smoke_report(args: argparse.Namespace) -> int:
     return exit_status
 
 
-def _cpu_smoke_report_exit_status(status: str, teacher_branch_preflight: Mapping[str, object]) -> int:
+def _cpu_smoke_report_exit_status(
+    status: str,
+    teacher_scenario_preflight: Mapping[str, object],
+    teacher_branch_preflight: Mapping[str, object],
+) -> int:
     if status != "passed":
+        return 2
+    if teacher_scenario_preflight.get("requested") is True and teacher_scenario_preflight.get("passed") is not True:
         return 2
     if teacher_branch_preflight.get("requested") is True and teacher_branch_preflight.get("passed") is not True:
         return 2
     return 0
+
+
+def _cpu_smoke_teacher_scenario_preflight_report(
+    recipe: Mapping[str, object],
+    *,
+    summary_path: Path,
+) -> dict[str, object]:
+    requested = recipe.get("teacher_scenario_preflight_requested") is True
+    path_value = recipe.get("teacher_scenario_preflight_output_path")
+    recorded_path = None if path_value is None else str(path_value)
+    report: dict[str, object] = {
+        "requested": requested,
+        "path": recorded_path,
+        "recorded_path": recorded_path,
+        "available": False,
+        "passed": None,
+        "schema_version": None,
+        "scenario_count": None,
+        "passed_count": None,
+        "failed_count": None,
+        "teacher_branch_counts": {},
+        "failed_scenarios": [],
+        "error": None,
+    }
+    if not requested:
+        return report
+    if path_value is None:
+        report["error"] = "teacher_scenario_preflight_output_path missing from recipe"
+        return report
+    path = _resolve_cpu_smoke_preflight_artifact_path(
+        Path(str(path_value)),
+        summary_path=summary_path,
+        fallback_name="teacher-scenario-preflight.json",
+    )
+    if not path.exists():
+        report["error"] = "teacher scenario preflight artifact not found"
+        return report
+    report["path"] = str(path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        report["error"] = f"failed to read teacher scenario preflight artifact: {exc}"
+        return report
+    if not isinstance(payload, dict):
+        report["error"] = "teacher scenario preflight artifact must be a JSON object"
+        return report
+    report["available"] = True
+    report["passed"] = payload.get("passed") if isinstance(payload.get("passed"), bool) else None
+    schema_version = payload.get("schema_version")
+    report["schema_version"] = schema_version if isinstance(schema_version, str) else None
+    for field_name in ("scenario_count", "passed_count", "failed_count"):
+        value = payload.get(field_name)
+        report[field_name] = value if isinstance(value, int) else None
+    counts = payload.get("teacher_branch_counts")
+    if isinstance(counts, Mapping):
+        report["teacher_branch_counts"] = {
+            str(branch): count
+            for branch, count in sorted(counts.items(), key=lambda item: str(item[0]))
+            if isinstance(count, int)
+        }
+    scenarios = payload.get("scenarios")
+    failed_scenarios: list[dict[str, object]] = []
+    if isinstance(scenarios, list):
+        for scenario in scenarios:
+            if not isinstance(scenario, Mapping) or scenario.get("passed") is True:
+                continue
+            failed_scenarios.append(
+                {
+                    key: value
+                    for key, value in scenario.items()
+                    if key in {"id", "description", "failed_fields", "error", "passed"}
+                }
+            )
+    report["failed_scenarios"] = failed_scenarios
+    return report
 
 
 def _cpu_smoke_teacher_branch_preflight_report(
@@ -2854,7 +2943,11 @@ def _cpu_smoke_teacher_branch_preflight_report(
     if path_value is None:
         report["error"] = "teacher_branch_preflight_output_path missing from recipe"
         return report
-    path = _resolve_cpu_smoke_preflight_artifact_path(Path(str(path_value)), summary_path=summary_path)
+    path = _resolve_cpu_smoke_preflight_artifact_path(
+        Path(str(path_value)),
+        summary_path=summary_path,
+        fallback_name="teacher-branch-preflight.json",
+    )
     if not path.exists():
         report["error"] = "teacher branch preflight artifact not found"
         return report
@@ -2899,13 +2992,58 @@ def _cpu_smoke_teacher_branch_preflight_report(
     return report
 
 
-def _resolve_cpu_smoke_preflight_artifact_path(recorded_path: Path, *, summary_path: Path) -> Path:
+def _resolve_cpu_smoke_preflight_artifact_path(
+    recorded_path: Path,
+    *,
+    summary_path: Path,
+    fallback_name: str,
+) -> Path:
     if recorded_path.exists():
         return recorded_path
-    sibling_path = summary_path.parent / "teacher-branch-preflight.json"
+    sibling_path = summary_path.parent / fallback_name
     if sibling_path.exists():
         return sibling_path
     return recorded_path
+
+
+def _print_cpu_smoke_teacher_scenario_preflight_report(report: Mapping[str, object]) -> None:
+    if report.get("requested") is not True:
+        print("teacher_scenario_preflight: not_requested")
+        return
+    status = "UNKNOWN"
+    if report.get("available") is not True:
+        status = "MISSING"
+    elif report.get("passed") is True:
+        status = "PASS"
+    elif report.get("passed") is False:
+        status = "FAIL"
+    print(f"teacher_scenario_preflight: {status}")
+    print(f"teacher_scenario_preflight_path: {_format_summary_value(report.get('path'))}")
+    print(
+        "teacher_scenario_counts: "
+        f"total={_format_summary_value(report.get('scenario_count'))} "
+        f"passed={_format_summary_value(report.get('passed_count'))} "
+        f"failed={_format_summary_value(report.get('failed_count'))}"
+    )
+    error = report.get("error")
+    if error:
+        print(f"teacher_scenario_preflight_error: {error}")
+    counts = report.get("teacher_branch_counts")
+    if isinstance(counts, Mapping) and counts:
+        print("teacher_scenario_branch_counts:")
+        for branch, count in sorted(counts.items(), key=lambda item: str(item[0])):
+            print(f"- {branch}: {count}")
+    failed_scenarios = report.get("failed_scenarios")
+    if isinstance(failed_scenarios, list) and failed_scenarios:
+        print("teacher_scenario_failed:")
+        for scenario in failed_scenarios:
+            if not isinstance(scenario, Mapping):
+                continue
+            scenario_id = _format_summary_value(scenario.get("id"))
+            failed_fields = scenario.get("failed_fields")
+            fields = ", ".join(str(field) for field in failed_fields) if isinstance(failed_fields, list) else "-"
+            error_value = _format_summary_value(scenario.get("error"))
+            print(f"- {scenario_id}: failed_fields={fields} error={error_value}")
 
 
 def _print_cpu_smoke_teacher_branch_preflight_report(report: Mapping[str, object]) -> None:
@@ -4687,6 +4825,18 @@ def _cpu_pilot_smoke_report(
         pilots.append(pilot)
     available_count = sum(1 for pilot in pilots if pilot.get("summary_available") is True)
     passed_count = sum(1 for pilot in pilots if pilot.get("status") == "passed")
+    scenario_preflight_requested_count = sum(
+        1
+        for pilot in pilots
+        if isinstance(pilot.get("teacher_scenario_preflight"), Mapping)
+        and pilot["teacher_scenario_preflight"].get("requested") is True
+    )
+    scenario_preflight_passed_count = sum(
+        1
+        for pilot in pilots
+        if isinstance(pilot.get("teacher_scenario_preflight"), Mapping)
+        and pilot["teacher_scenario_preflight"].get("passed") is True
+    )
     preflight_requested_count = sum(
         1
         for pilot in pilots
@@ -4719,6 +4869,9 @@ def _cpu_pilot_smoke_report(
         "summary_missing_count": len(pilots) - available_count,
         "summary_passed_count": passed_count,
         "summary_non_passed_count": len(pilots) - passed_count,
+        "teacher_scenario_preflight_requested_count": scenario_preflight_requested_count,
+        "teacher_scenario_preflight_passed_count": scenario_preflight_passed_count,
+        "teacher_scenario_preflight_non_passed_count": scenario_preflight_requested_count - scenario_preflight_passed_count,
         "teacher_branch_preflight_requested_count": preflight_requested_count,
         "teacher_branch_preflight_passed_count": preflight_passed_count,
         "teacher_branch_preflight_non_passed_count": preflight_requested_count - preflight_passed_count,
@@ -4741,6 +4894,10 @@ def _cpu_pilot_smoke_not_ready_reasons(pilots: list[Mapping[str, object]]) -> li
         for pilot in pilots
     ):
         reasons.append("pilot_smoke_summary_not_passed")
+    if any(_cpu_pilot_scenario_preflight_unavailable(pilot) for pilot in pilots):
+        reasons.append("teacher_scenario_preflight_unavailable")
+    if any(_cpu_pilot_scenario_preflight_requested_but_not_passed(pilot) for pilot in pilots):
+        reasons.append("teacher_scenario_preflight_not_passed")
     if any(
         pilot.get("summary_available") is True
         and pilot.get("teacher_branch_preflight") is None
@@ -4750,6 +4907,21 @@ def _cpu_pilot_smoke_not_ready_reasons(pilots: list[Mapping[str, object]]) -> li
     if any(_cpu_pilot_preflight_requested_but_not_passed(pilot) for pilot in pilots):
         reasons.append("teacher_branch_preflight_not_passed")
     return reasons
+
+
+def _cpu_pilot_scenario_preflight_requested_but_not_passed(pilot: Mapping[str, object]) -> bool:
+    preflight = pilot.get("teacher_scenario_preflight")
+    return (
+        isinstance(preflight, Mapping)
+        and preflight.get("requested") is True
+        and preflight.get("available") is True
+        and preflight.get("passed") is not True
+    )
+
+
+def _cpu_pilot_scenario_preflight_unavailable(pilot: Mapping[str, object]) -> bool:
+    preflight = pilot.get("teacher_scenario_preflight")
+    return isinstance(preflight, Mapping) and preflight.get("requested") is True and preflight.get("available") is not True
 
 
 def _cpu_pilot_preflight_requested_but_not_passed(pilot: Mapping[str, object]) -> bool:
@@ -4790,6 +4962,7 @@ def _cpu_pilot_smoke_step_report(step: Mapping[str, object], *, summary_path: Pa
         "status": None,
         "duration_seconds": None,
         "error": None,
+        "teacher_scenario_preflight": None,
         "teacher_branch_preflight": None,
     }
     if smoke_summary_path is None:
@@ -4806,6 +4979,10 @@ def _cpu_pilot_smoke_step_report(step: Mapping[str, object], *, summary_path: Pa
     report["duration_seconds"] = smoke_summary.get("duration_seconds")
     smoke_recipe = smoke_summary.get("recipe")
     if isinstance(smoke_recipe, Mapping):
+        report["teacher_scenario_preflight"] = _cpu_smoke_teacher_scenario_preflight_report(
+            smoke_recipe,
+            summary_path=loaded_summary_path,
+        )
         report["teacher_branch_preflight"] = _cpu_smoke_teacher_branch_preflight_report(
             smoke_recipe,
             summary_path=loaded_summary_path,
@@ -4868,6 +5045,11 @@ def _print_cpu_pilot_smoke_report(report: Mapping[str, object]) -> None:
         f"passed={_format_summary_value(report.get('summary_passed_count'))}"
     )
     print(
+        "pilot_teacher_scenario_preflight: "
+        f"requested={_format_summary_value(report.get('teacher_scenario_preflight_requested_count'))} "
+        f"passed={_format_summary_value(report.get('teacher_scenario_preflight_passed_count'))}"
+    )
+    print(
         "pilot_teacher_branch_preflight: "
         f"requested={_format_summary_value(report.get('teacher_branch_preflight_requested_count'))} "
         f"passed={_format_summary_value(report.get('teacher_branch_preflight_passed_count'))}"
@@ -4884,13 +5066,18 @@ def _print_cpu_pilot_smoke_report(report: Mapping[str, object]) -> None:
     for pilot in pilots:
         if not isinstance(pilot, Mapping):
             continue
+        scenario_preflight = pilot.get("teacher_scenario_preflight")
+        scenario_preflight_status = "-"
+        if isinstance(scenario_preflight, Mapping):
+            scenario_preflight_status = _cpu_smoke_preflight_status_label(scenario_preflight)
         preflight = pilot.get("teacher_branch_preflight")
         preflight_status = "-"
         if isinstance(preflight, Mapping):
             preflight_status = _cpu_smoke_preflight_status_label(preflight)
         print(
             f"- {pilot.get('index')}: {_status_label(str(pilot.get('status') or 'missing'))} "
-            f"{pilot.get('name')} preflight={preflight_status} "
+            f"{pilot.get('name')} scenario_preflight={scenario_preflight_status} "
+            f"branch_preflight={preflight_status} "
             f"summary={_format_summary_value(pilot.get('summary_path'))}"
         )
     _print_cpu_pilot_preflight_failed_checks(pilots)
@@ -5175,6 +5362,7 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
         "replay_output_path": str(replay_output_path),
         "benchmark_iterations_required": benchmark_iterations_required,
         "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
+        "teacher_scenario_preflight_requested": args.teacher_scenario_preflight,
         "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
         "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
         "required_teacher_branches": list(args.require_teacher_branch or ()),
@@ -5229,6 +5417,8 @@ def _cpu_pilot_smoke_run_argv(args: argparse.Namespace, *, pilot_root: Path, see
         str(pilot_root / "smoke-audit-config.json"),
     ]
     argv.extend(_teacher_branch_gate_args(args))
+    if args.teacher_scenario_preflight:
+        argv.append("--teacher-scenario-preflight")
     if args.showdown_root is not None:
         argv.extend(["--showdown-root", str(args.showdown_root)])
     return argv
@@ -5363,6 +5553,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     promotion_registry = run_root / "promotions.json"
     promotion_artifact_dir = run_root / "promoted-checkpoints"
     audit_config_path = args.audit_config_path if args.audit_config_path is not None else run_root / "smoke-audit-config.json"
+    teacher_scenario_preflight_output_path = run_root / "teacher-scenario-preflight.json"
     teacher_branch_preflight_output_path = run_root / "teacher-branch-preflight.json"
     python_binary = args.python_binary
     showdown_root = None if args.showdown_root is None else str(args.showdown_root)
@@ -5374,6 +5565,25 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     selfplay_seed_start = seed_start + (4 * CPU_SMOKE_SEED_BAND_SPACING)
     evaluation_seed_start = seed_start + (5 * CPU_SMOKE_SEED_BAND_SPACING)
     steps = (
+        *(
+            (
+                (
+                    "preflight scripted teacher scenarios",
+                    [
+                        python_binary,
+                        "-m",
+                        "pokezero.bootstrap_cli",
+                        "teacher-scenario-preflight",
+                        *showdown_root_args,
+                        "--seed",
+                        str(preflight_seed_start),
+                        "--json",
+                    ],
+                ),
+            )
+            if args.teacher_scenario_preflight
+            else ()
+        ),
         *(
             (
                 (
@@ -5548,6 +5758,10 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
         "showdown_root": showdown_root,
         "seed_start": seed_start,
         "audit_config_path": str(audit_config_path),
+        "teacher_scenario_preflight_requested": args.teacher_scenario_preflight,
+        "teacher_scenario_preflight_output_path": (
+            str(teacher_scenario_preflight_output_path) if args.teacher_scenario_preflight else None
+        ),
         "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
         "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
         "teacher_branch_preflight_output_path": (
@@ -5560,6 +5774,11 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
                 "name": name,
                 "argv": argv,
                 "command": _shell_join(argv),
+                **(
+                    {"output_json_path": str(teacher_scenario_preflight_output_path)}
+                    if name == "preflight scripted teacher scenarios"
+                    else {}
+                ),
                 **(
                     {"output_json_path": str(teacher_branch_preflight_output_path)}
                     if name == "benchmark scripted teacher branch coverage"

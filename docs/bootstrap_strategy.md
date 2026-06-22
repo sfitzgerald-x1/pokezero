@@ -116,11 +116,12 @@ After deterministic scenarios pass, add sampled teacher branch gates to the smok
 ./.venv/bin/python -m pokezero.eval_cli cpu-smoke-run \
   --run-root runs/cpu-smoke \
   --showdown-root /path/to/pokemon-showdown \
+  --teacher-scenario-preflight \
   --require-teacher-branch status_pressure \
   --min-teacher-branch-count status_pressure=1
 ```
 
-These flags insert a `teacher-benchmark` branch-coverage step before the teacher bootstrap step. `cpu-pilot-run` accepts the same flags and passes them through to each seeded smoke pilot. The benchmark gate is intentionally stochastic and rollout-backed; the scenario preflight is deterministic and branch-specific.
+`--teacher-scenario-preflight` inserts the deterministic scenario check as the first smoke step and writes `RUN_ROOT/teacher-scenario-preflight.json`. The branch-gate flags insert a later `teacher-benchmark` branch-coverage step before the teacher bootstrap step. `cpu-pilot-run` accepts the same flags and passes them through to each seeded smoke pilot. The benchmark gate is intentionally stochastic and rollout-backed; the scenario preflight is deterministic and branch-specific.
 
 Run a slightly broader CPU pilot suite when a single smoke run is not enough evidence to tune audit thresholds:
 
