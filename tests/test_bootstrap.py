@@ -123,6 +123,8 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(manifest["teacher_decision_summary"]["total_decisions"], 3)
         self.assertEqual(manifest["teacher_decision_summary"]["unknown_move_decisions"], 0)
         self.assertEqual(manifest["teacher_decision_summary"]["fallback_decisions"], 0)
+        self.assertEqual(manifest["teacher_decision_summary"]["teacher_reason_counts"], {})
+        self.assertEqual(manifest["teacher_decision_summary"]["top_teacher_reasons"], [])
         self.assertIsNotNone(manifest["training"]["validation_metrics"])
         self.assertGreater(manifest["training"]["validation_metrics"]["examples"], 0)
         self.assertEqual(manifest["training"]["model"]["feature_fingerprint"], linear_feature_fingerprint())
@@ -260,6 +262,11 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
         self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
         self.assertEqual(result.teacher_decision_summary["fallback_reasons"]["dex unavailable"], 2)
+        self.assertEqual(result.teacher_decision_summary["teacher_reason_counts"]["dex unavailable"], 2)
+        self.assertEqual(
+            result.teacher_decision_summary["top_teacher_reasons"],
+            [{"reason": "dex unavailable", "count": 2}],
+        )
 
     def test_benchmark_teacher_policy_rejects_non_positive_games(self) -> None:
         with self.assertRaisesRegex(ValueError, "games must be positive"):
@@ -486,6 +493,10 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_reason_counts": {"Flamethrower: bp=95 type=Fire eff=2 stab=1.5": 4},
+                "top_teacher_reasons": [
+                    {"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}
+                ],
             },
         )
 
@@ -526,6 +537,10 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(payload["benchmark"]["total_games"], 2)
         self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
         self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)
+        self.assertEqual(
+            payload["teacher_decision_summary"]["top_teacher_reasons"],
+            [{"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}],
+        )
 
     def test_bootstrap_cli_teacher_benchmark_can_fail_preflight_and_write_report(self) -> None:
         fake_metrics = CollectionMetrics(
@@ -560,6 +575,11 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 1,
                 "fallback_decisions": 1,
                 "fallback_reasons": {"fallback": 1},
+                "teacher_reason_counts": {"fallback": 1, "unknown move": 1},
+                "top_teacher_reasons": [
+                    {"reason": "fallback", "count": 1},
+                    {"reason": "unknown move", "count": 1},
+                ],
             },
         )
 
@@ -635,6 +655,10 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_reason_counts": {"Spikes: hazard pressure layers=0/3": 3},
+                "top_teacher_reasons": [
+                    {"reason": "Spikes: hazard pressure layers=0/3", "count": 3}
+                ],
             },
         )
 
@@ -663,6 +687,8 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("preflight: PASS", output)
         self.assertIn("PASS teacher_win_rate:random-legal", output)
+        self.assertIn("teacher_top_reasons:", output)
+        self.assertIn("3x Spikes: hazard pressure layers=0/3", output)
         self.assertIn(f"report: {report_path}", output)
         self.assertTrue(report_exists)
 
@@ -735,6 +761,8 @@ class TeacherBootstrapTest(unittest.TestCase):
                 "unknown_move_decisions": 0,
                 "fallback_decisions": 0,
                 "fallback_reasons": {},
+                "teacher_reason_counts": {},
+                "top_teacher_reasons": [],
             },
         )
 
