@@ -15,7 +15,7 @@ from pokezero.bootstrap import (
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
-from pokezero.bootstrap_cli import main as bootstrap_cli_main
+from pokezero.bootstrap_cli import TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION, main as bootstrap_cli_main
 from pokezero.collection import BenchmarkMatchupResult, BenchmarkReport, CollectionMetrics, read_rollout_records
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
@@ -511,6 +511,165 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(len(kwargs["baseline_policy_specs"]), 1)
         self.assertEqual(kwargs["baseline_policy_specs"][0], "random-legal")
         payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["schema_version"], TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["checks"], [])
         self.assertEqual(payload["benchmark"]["total_games"], 2)
         self.assertEqual(payload["benchmark"]["head_to_heads"][0]["first_policy_id"], "scripted-teacher")
         self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)
+
+    def test_bootstrap_cli_teacher_benchmark_can_fail_preflight_and_write_report(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=1,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher vs random-legal",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 1,
+                "fallback_decisions": 1,
+                "fallback_reasons": {"fallback": 1},
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "teacher-benchmark.json"
+            with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--baseline-policy",
+                            "random-legal",
+                            "--min-teacher-win-rate",
+                            "0.75",
+                            "--max-capped-rate",
+                            "0.25",
+                            "--fail-on-degraded-decisions",
+                            "--out",
+                            str(report_path),
+                            "--json",
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+            report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["passed"])
+        self.assertEqual(report_payload, payload)
+        failed_checks = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertEqual(
+            failed_checks,
+            {
+                "teacher_win_rate:random-legal",
+                "capped_rate:random-legal",
+                "teacher_degraded_decisions",
+            },
+        )
+
+    def test_bootstrap_cli_teacher_benchmark_text_prints_preflight_status_and_report_path(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=2,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher vs random-legal",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="random-legal",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "teacher-benchmark.json"
+            with patch("pokezero.bootstrap_cli.benchmark_teacher_policy", return_value=fake_result):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--baseline-policy",
+                            "random-legal",
+                            "--min-teacher-win-rate",
+                            "0.75",
+                            "--out",
+                            str(report_path),
+                        ]
+                    )
+            output = stdout.getvalue()
+            report_exists = report_path.exists()
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("preflight: PASS", output)
+        self.assertIn("PASS teacher_win_rate:random-legal", output)
+        self.assertIn(f"report: {report_path}", output)
+        self.assertTrue(report_exists)
+
+    def test_bootstrap_cli_teacher_benchmark_rejects_invalid_thresholds(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = bootstrap_cli_main(
+                [
+                    "teacher-benchmark",
+                    "--games",
+                    "2",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--min-teacher-win-rate",
+                    "1.5",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--min-teacher-win-rate must be between 0 and 1", stderr.getvalue())

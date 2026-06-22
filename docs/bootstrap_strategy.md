@@ -129,10 +129,14 @@ Quickly benchmark the scripted teacher itself against fixed baselines before run
 ```bash
 python -m pokezero.bootstrap_cli teacher-benchmark \
   --games 50 \
-  --showdown-root /path/to/pokemon-showdown
+  --showdown-root /path/to/pokemon-showdown \
+  --min-teacher-win-rate 0.55 \
+  --max-capped-rate 0.10 \
+  --fail-on-degraded-decisions \
+  --out runs/scripted-teacher-benchmark.json
 ```
 
-Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters alongside win rates, but it does not train a checkpoint or write a manifest.
+Use this as a cheap quality check after changing scripted-teacher heuristics. It reports teacher fallback and unknown-move counters alongside win rates, but it does not train a checkpoint or write a manifest. Optional threshold flags make it usable as a CPU preflight gate: it exits `2` when any requested win-rate, capped-rate, or degraded-decision check fails, while still writing the JSON report requested by `--out`.
 
 Default teacher bootstrap collection includes three opponent families:
 
