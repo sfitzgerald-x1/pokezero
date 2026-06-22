@@ -2662,7 +2662,7 @@ def _cpu_pilot_smoke_report(
     teacher_branch_counts: dict[str, int] = {}
     for pilot in pilots:
         preflight = pilot.get("teacher_branch_preflight")
-        if not isinstance(preflight, Mapping):
+        if not isinstance(preflight, Mapping) or preflight.get("passed") is not True:
             continue
         counts = preflight.get("teacher_branch_counts")
         if not isinstance(counts, Mapping):
@@ -2812,6 +2812,34 @@ def _print_cpu_pilot_smoke_report(report: Mapping[str, object]) -> None:
             f"{pilot.get('name')} preflight={preflight_status} "
             f"summary={_format_summary_value(pilot.get('summary_path'))}"
         )
+    _print_cpu_pilot_preflight_failed_checks(pilots)
+
+
+def _print_cpu_pilot_preflight_failed_checks(pilots: list[object]) -> None:
+    lines: list[str] = []
+    for pilot in pilots:
+        if not isinstance(pilot, Mapping):
+            continue
+        preflight = pilot.get("teacher_branch_preflight")
+        if not isinstance(preflight, Mapping):
+            continue
+        failed_checks = preflight.get("failed_checks")
+        if not isinstance(failed_checks, list):
+            continue
+        for check in failed_checks:
+            if not isinstance(check, Mapping):
+                continue
+            lines.append(
+                f"- pilot {pilot.get('index')} {_format_summary_value(check.get('name'))}: "
+                f"observed={_format_summary_value(check.get('observed'))} "
+                f"threshold={_format_summary_value(check.get('threshold'))} "
+                f"message={_format_summary_value(check.get('message'))}"
+            )
+    if not lines:
+        return
+    print("pilot_teacher_branch_failed_checks:")
+    for line in lines:
+        print(line)
 
 
 def _cpu_smoke_preflight_status_label(report: Mapping[str, object]) -> str:

@@ -2186,6 +2186,100 @@ if __name__ == "__main__":
         self.assertEqual(smoke_report["pilots"][1]["summary_path"], str(pilot_2_root / "cpu-smoke-run-summary.json"))
         self.assertTrue(smoke_report["pilots"][1]["teacher_branch_preflight"]["passed"])
 
+    def test_eval_cli_cpu_pilot_report_marks_unhealthy_smoke_preflights(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "pilots"
+            summary_path = run_root / "cpu-pilot-suite-summary.json"
+            summary = cpu_pilot_summary(status="passed")
+            pilot_1_root = run_root / "pilot-0001"
+            pilot_2_root = run_root / "pilot-0002"
+            pilot_3_root = run_root / "pilot-0003"
+            summary["recipe"]["pilot_count"] = 3
+            summary["steps"] = [
+                {
+                    "index": 1,
+                    "name": "run CPU smoke pilot 1",
+                    "status": "passed",
+                    "returncode": 0,
+                    "argv": [
+                        "./.venv/bin/python",
+                        "-m",
+                        "pokezero.eval_cli",
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(pilot_1_root),
+                    ],
+                },
+                {
+                    "index": 2,
+                    "name": "run CPU smoke pilot 2",
+                    "status": "passed",
+                    "returncode": 0,
+                    "argv": [
+                        "./.venv/bin/python",
+                        "-m",
+                        "pokezero.eval_cli",
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(pilot_2_root),
+                    ],
+                },
+                {
+                    "index": 3,
+                    "name": "run CPU smoke pilot 3",
+                    "status": "passed",
+                    "returncode": 0,
+                    "argv": [
+                        "./.venv/bin/python",
+                        "-m",
+                        "pokezero.eval_cli",
+                        "cpu-smoke-run",
+                        "--run-root",
+                        str(pilot_3_root),
+                    ],
+                },
+            ]
+            write_json(summary_path, summary)
+            write_pilot_smoke_with_preflight(
+                pilot_1_root,
+                branch_counts={"status_pressure": 0},
+                passed=False,
+            )
+            write_pilot_smoke_with_preflight(
+                pilot_2_root,
+                branch_counts={"status_pressure": 2},
+                write_artifact=False,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-pilot-report", str(run_root)])
+            text_output = stdout.getvalue()
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                json_exit_code = eval_cli_main(["cpu-pilot-report", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json_exit_code, 0)
+        self.assertIn("pilot_smoke_summaries: 2/3 available passed=2", text_output)
+        self.assertIn("pilot_teacher_branch_preflight: requested=2 passed=0", text_output)
+        self.assertIn("preflight=FAIL", text_output)
+        self.assertIn("preflight=MISSING", text_output)
+        self.assertIn("pilot_teacher_branch_failed_checks:", text_output)
+        self.assertIn("- pilot 1 teacher_branch_present:status_pressure: observed=0 threshold=1", text_output)
+        self.assertNotIn("pilot_teacher_branch_counts:", text_output)
+
+        smoke_report = payload["pilot_smoke_report"]
+        self.assertEqual(smoke_report["summary_available_count"], 2)
+        self.assertEqual(smoke_report["summary_missing_count"], 1)
+        self.assertEqual(smoke_report["summary_non_passed_count"], 1)
+        self.assertEqual(smoke_report["teacher_branch_preflight_requested_count"], 2)
+        self.assertEqual(smoke_report["teacher_branch_preflight_passed_count"], 0)
+        self.assertEqual(smoke_report["teacher_branch_preflight_non_passed_count"], 2)
+        self.assertEqual(smoke_report["teacher_branch_counts"], {})
+        self.assertEqual(smoke_report["pilots"][0]["teacher_branch_preflight"]["passed"], False)
+        self.assertEqual(smoke_report["pilots"][1]["teacher_branch_preflight"]["available"], False)
+        self.assertFalse(smoke_report["pilots"][2]["summary_available"])
+
     def test_eval_cli_cpu_pilot_report_marks_missing_artifacts_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "pilots"
@@ -2662,7 +2756,13 @@ def cpu_smoke_summary(*, status: str, failed_step_index: int | None = None) -> d
     }
 
 
-def write_pilot_smoke_with_preflight(run_root: Path, *, branch_counts: dict[str, int]) -> None:
+def write_pilot_smoke_with_preflight(
+    run_root: Path,
+    *,
+    branch_counts: dict[str, int],
+    passed: bool = True,
+    write_artifact: bool = True,
+) -> None:
     preflight_path = run_root / "teacher-branch-preflight.json"
     summary = cpu_smoke_summary(status="passed")
     summary["recipe"].update(
@@ -2674,16 +2774,18 @@ def write_pilot_smoke_with_preflight(run_root: Path, *, branch_counts: dict[str,
         }
     )
     write_json(run_root / "cpu-smoke-run-summary.json", summary)
+    if not write_artifact:
+        return
     write_json(
         preflight_path,
         {
             "schema_version": "pokezero.teacher_benchmark_preflight.v1",
-            "passed": True,
+            "passed": passed,
             "checks": [
                 {
                     "name": "teacher_branch_present:status_pressure",
-                    "passed": True,
-                    "message": "status_pressure observed.",
+                    "passed": passed,
+                    "message": "status_pressure observed." if passed else "status_pressure was not observed.",
                     "observed": branch_counts.get("status_pressure", 0),
                     "threshold": 1,
                 }
