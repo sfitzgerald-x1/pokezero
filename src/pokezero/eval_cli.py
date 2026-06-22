@@ -364,6 +364,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "used at least this many games."
         ),
     )
+    compare.add_argument(
+        "--write-audit-config",
+        type=Path,
+        default=None,
+        help=(
+            "With --suggest-audit-calibration and sufficiency requirements, write the suggested "
+            "audit config to this versioned JSON path."
+        ),
+    )
     compare.add_argument("--json", action="store_true", help="Print the comparison result as JSON.")
     compare.set_defaults(func=_compare)
     return parser
@@ -1373,26 +1382,7 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
             raise ValueError("--write-config requires calibration sufficiency checks to pass.")
         if profile_failed:
             raise ValueError("--write-config requires the selected profile audit to pass.")
-        config = run_audit_config_from_dict(result.suggested_config())
-        calibration_paths = (
-            tuple(result.paths)
-            if hasattr(result, "paths")
-            else (result.manifest_path,)
-        )
-        config_payload = run_audit_config_payload(
-            config,
-            source=collect_source_metadata(),
-            calibration={
-                "margin": result.margin,
-                "source_type": result.source_type,
-                "run_count": getattr(result, "run_count", 1),
-                "iteration_count": result.iteration_count,
-                "benchmark_iteration_count": result.benchmark_iteration_count,
-                "aggregate_mode": getattr(result, "aggregate_mode", None),
-                "paths": [str(path) for path in calibration_paths],
-                "notes": list(getattr(result, "notes", ())),
-            },
-        )
+        config_payload = _audit_calibration_config_payload(result)
         _write_json_payload(args.write_config, config_payload)
         wrote_config_path = args.write_config
     if args.json:
@@ -1414,6 +1404,29 @@ def _audit_calibrate(args: argparse.Namespace) -> int:
         if wrote_config_path is not None:
             print(f"written_config: {wrote_config_path}")
     return 2 if sufficiency_errors or (args.fail_on_profile and profile_failed) else 0
+
+
+def _audit_calibration_config_payload(result) -> dict[str, object]:
+    config = run_audit_config_from_dict(result.suggested_config())
+    calibration_paths = (
+        tuple(result.paths)
+        if hasattr(result, "paths")
+        else (result.manifest_path,)
+    )
+    return run_audit_config_payload(
+        config,
+        source=collect_source_metadata(),
+        calibration={
+            "margin": result.margin,
+            "source_type": result.source_type,
+            "run_count": getattr(result, "run_count", 1),
+            "iteration_count": result.iteration_count,
+            "benchmark_iteration_count": result.benchmark_iteration_count,
+            "aggregate_mode": getattr(result, "aggregate_mode", None),
+            "paths": [str(path) for path in calibration_paths],
+            "notes": list(getattr(result, "notes", ())),
+        },
+    )
 
 
 def _cpu_smoke_plan(args: argparse.Namespace) -> int:
@@ -1820,6 +1833,8 @@ def _compare(args: argparse.Namespace) -> int:
         )
     ):
         raise ValueError("calibration sufficiency requirements require --suggest-audit-calibration.")
+    if args.write_audit_config is not None and not args.suggest_audit_calibration:
+        raise ValueError("--write-audit-config requires --suggest-audit-calibration.")
     audit_profile = evaluation_profile(args.audit_profile) if args.audit_profile is not None else None
     audit_config = (
         load_run_audit_config(args.audit_config)
@@ -1868,6 +1883,26 @@ def _compare(args: argparse.Namespace) -> int:
         if args.suggest_audit_calibration
         else ()
     )
+    wrote_audit_config_path = None
+    audit_config_write_error = None
+    if args.write_audit_config is not None:
+        if not calibration_sufficiency_requested:
+            raise ValueError(
+                "--write-audit-config requires at least one calibration sufficiency requirement "
+                "(--calibration-require-run-count, --calibration-require-benchmark-iterations, "
+                "or --calibration-require-min-benchmark-games)."
+            )
+        if calibration_sufficiency_errors:
+            raise ValueError("--write-audit-config requires calibration sufficiency checks to pass.")
+        if result.errors:
+            audit_config_write_error = "--write-audit-config requires every compared manifest to load successfully."
+        elif args.fail_on_audit and result.audit_failed:
+            audit_config_write_error = "--write-audit-config requires the selected audit to pass."
+        elif calibration is None:
+            audit_config_write_error = "--write-audit-config requires audit calibration to be available."
+        else:
+            _write_json_payload(args.write_audit_config, _audit_calibration_config_payload(calibration))
+            wrote_audit_config_path = args.write_audit_config
     if args.json:
         payload = result.to_dict()
         if args.suggest_audit_calibration:
@@ -1876,6 +1911,10 @@ def _compare(args: argparse.Namespace) -> int:
             if calibration_sufficiency_requested:
                 payload["audit_calibration_sufficient"] = not calibration_sufficiency_errors
                 payload["audit_calibration_sufficiency_errors"] = list(calibration_sufficiency_errors)
+            if wrote_audit_config_path is not None:
+                payload["written_audit_config_path"] = str(wrote_audit_config_path)
+            if audit_config_write_error is not None:
+                payload["audit_config_write_error"] = audit_config_write_error
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_run_comparison(result)
@@ -1892,6 +1931,10 @@ def _compare(args: argparse.Namespace) -> int:
                 print("calibration_excluded_errors:")
                 for error in result.errors:
                     print(f"- {error.label}: {error.error}")
+            if wrote_audit_config_path is not None:
+                print(f"written_audit_config: {wrote_audit_config_path}")
+            if audit_config_write_error is not None:
+                print(f"audit_config_write_error: {audit_config_write_error}")
     return 2 if result.errors or (args.fail_on_audit and result.audit_failed) or calibration_sufficiency_errors else 0
 
 

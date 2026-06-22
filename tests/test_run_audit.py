@@ -2195,6 +2195,51 @@ class RunAuditTest(unittest.TestCase):
         self.assertTrue(payload["audit_calibration_sufficient"])
         self.assertEqual(payload["audit_calibration_sufficiency_errors"], [])
 
+    def test_eval_cli_compare_can_write_suggested_audit_config(self) -> None:
+        first_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        second_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=35, losses=15, capped_games=1),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_path = temp_path / "pilot-a" / "manifest.json"
+            second_path = temp_path / "pilot-b" / "manifest.json"
+            config_path = temp_path / "audit-configs" / "pilot.json"
+            write_manifest(first_path, first_manifest)
+            write_manifest(second_path, second_manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(first_path),
+                        str(second_path),
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "2",
+                        "--calibration-require-benchmark-iterations",
+                        "2",
+                        "--calibration-require-min-benchmark-games",
+                        "50",
+                        "--write-audit-config",
+                        str(config_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            written_payload = json.loads(config_path.read_text(encoding="utf-8"))
+            loaded_config = load_run_audit_config(config_path)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["written_audit_config_path"], str(config_path))
+        self.assertEqual(written_payload["schema_version"], RUN_AUDIT_CONFIG_SCHEMA_VERSION)
+        self.assertEqual(written_payload["calibration"]["run_count"], 2)
+        self.assertEqual(written_payload["calibration"]["benchmark_iteration_count"], 2)
+        self.assertEqual(written_payload["calibration"]["paths"], [str(first_path), str(second_path)])
+        self.assertEqual(loaded_config.min_latest_benchmark_games, 50)
+
     def test_eval_cli_compare_calibration_requirement_failure_returns_nonzero_with_suggestions(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
@@ -2223,6 +2268,163 @@ class RunAuditTest(unittest.TestCase):
             payload["audit_calibration_sufficiency_errors"],
             ["calibration_run_count 1 is below required 2"],
         )
+
+    def test_eval_cli_compare_rejects_write_audit_config_without_suggestions(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "linear-run" / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(["compare", str(manifest_path), "--write-audit-config", str(config_path)])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--write-audit-config requires --suggest-audit-calibration", stderr.getvalue())
+        self.assertFalse(config_path.exists())
+
+    def test_eval_cli_compare_rejects_write_audit_config_without_sufficiency_requirements(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "linear-run" / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--suggest-audit-calibration",
+                        "--write-audit-config",
+                        str(config_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--write-audit-config requires at least one calibration sufficiency requirement", stderr.getvalue())
+        self.assertFalse(config_path.exists())
+
+    def test_eval_cli_compare_rejects_write_audit_config_when_sufficiency_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            manifest_path = temp_path / "linear-run" / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(manifest_path),
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "2",
+                        "--write-audit-config",
+                        str(config_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--write-audit-config requires calibration sufficiency checks to pass", stderr.getvalue())
+        self.assertFalse(config_path.exists())
+
+    def test_eval_cli_compare_rejects_write_audit_config_when_any_compared_manifest_fails(self) -> None:
+        healthy_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            healthy_path = temp_path / "healthy" / "manifest.json"
+            bad_path = temp_path / "bad" / "manifest.json"
+            config_path = temp_path / "audit-config.json"
+            write_manifest(healthy_path, healthy_manifest)
+            write_manifest(bad_path, {"schema_version": "unknown"})
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(healthy_path),
+                        str(bad_path),
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "1",
+                        "--write-audit-config",
+                        str(config_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn(
+            "--write-audit-config requires every compared manifest to load successfully",
+            payload["audit_config_write_error"],
+        )
+        self.assertFalse(config_path.exists())
+
+    def test_eval_cli_compare_skips_write_audit_config_when_selected_audit_fails(self) -> None:
+        first_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=40, losses=10, capped_games=0),)
+        )
+        second_manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=35, losses=15, capped_games=1),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_path = temp_path / "pilot-a" / "manifest.json"
+            second_path = temp_path / "pilot-b" / "manifest.json"
+            strict_config_path = temp_path / "strict-audit-config.json"
+            output_config_path = temp_path / "audit-config.json"
+            write_manifest(first_path, first_manifest)
+            write_manifest(second_path, second_manifest)
+            write_manifest(
+                strict_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_win_rate=0.99,
+                        min_latest_benchmark_games=20,
+                        require_benchmark=True,
+                    )
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "compare",
+                        str(first_path),
+                        str(second_path),
+                        "--audit-config",
+                        str(strict_config_path),
+                        "--fail-on-audit",
+                        "--suggest-audit-calibration",
+                        "--calibration-require-run-count",
+                        "2",
+                        "--write-audit-config",
+                        str(output_config_path),
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(payload["audit_failed"])
+        self.assertEqual(
+            payload["audit_config_write_error"],
+            "--write-audit-config requires the selected audit to pass.",
+        )
+        self.assertFalse(output_config_path.exists())
 
     def test_eval_cli_compare_rejects_calibration_requirements_without_suggestions(self) -> None:
         manifest = selfplay_manifest(
