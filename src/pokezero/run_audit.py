@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
@@ -205,6 +205,102 @@ class RunAuditResult:
 
 
 @dataclass(frozen=True)
+class RunComparisonEntry:
+    label: str
+    manifest_path: Path
+    source_type: str
+    iteration_count: int
+    latest_iteration: int | None
+    latest_policy_id: str | None
+    latest_checkpoint_path: str | None
+    latest_benchmark_win_rate: float | None
+    best_benchmark_win_rate: float | None
+    best_benchmark_games: int
+    latest_benchmark_games: int
+    latest_collection_capped_rate: float | None
+    latest_benchmark_capped_rate: float | None
+    latest_average_decision_rounds: float | None
+    latest_benchmark_average_decision_rounds: float | None
+    latest_promotion_recorded: bool | None
+    latest_advancement_recorded: bool | None
+    latest_advancement_reason: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "manifest_path": str(self.manifest_path),
+            "source_type": self.source_type,
+            "iteration_count": self.iteration_count,
+            "latest_iteration": self.latest_iteration,
+            "latest_policy_id": self.latest_policy_id,
+            "latest_checkpoint_path": self.latest_checkpoint_path,
+            "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
+            "best_benchmark_win_rate": self.best_benchmark_win_rate,
+            "best_benchmark_games": self.best_benchmark_games,
+            "latest_benchmark_games": self.latest_benchmark_games,
+            "latest_collection_capped_rate": self.latest_collection_capped_rate,
+            "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "latest_average_decision_rounds": self.latest_average_decision_rounds,
+            "latest_benchmark_average_decision_rounds": self.latest_benchmark_average_decision_rounds,
+            "latest_promotion_recorded": self.latest_promotion_recorded,
+            "latest_advancement_recorded": self.latest_advancement_recorded,
+            "latest_advancement_reason": self.latest_advancement_reason,
+        }
+
+
+@dataclass(frozen=True)
+class RunComparisonError:
+    label: str
+    path: str
+    error: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "path": self.path,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class RunComparisonResult:
+    entries: tuple[RunComparisonEntry, ...]
+    errors: tuple[RunComparisonError, ...] = ()
+    min_benchmark_games: int = DEFAULT_MIN_BENCHMARK_GAMES
+
+    @property
+    def best_latest_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.latest_benchmark_games >= self.min_benchmark_games),
+            "latest_benchmark_win_rate",
+        )
+
+    @property
+    def best_historical_benchmark_entry(self) -> RunComparisonEntry | None:
+        return _best_entry_by_optional_value(
+            tuple(entry for entry in self.entries if entry.best_benchmark_games >= self.min_benchmark_games),
+            "best_benchmark_win_rate",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entries": [entry.to_dict() for entry in self.entries],
+            "errors": [error.to_dict() for error in self.errors],
+            "min_benchmark_games": self.min_benchmark_games,
+            "best_latest_benchmark_label": (
+                self.best_latest_benchmark_entry.label
+                if self.best_latest_benchmark_entry is not None
+                else None
+            ),
+            "best_historical_benchmark_label": (
+                self.best_historical_benchmark_entry.label
+                if self.best_historical_benchmark_entry is not None
+                else None
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class RunAuditCalibrationResult:
     manifest_path: Path
     schema_version: str
@@ -343,6 +439,40 @@ def enforce_run_audit(
     return result
 
 
+def compare_run_manifests(paths: Iterable[Path]) -> RunComparisonResult:
+    return compare_run_manifests_with_threshold(paths, min_benchmark_games=DEFAULT_MIN_BENCHMARK_GAMES)
+
+
+def compare_run_manifests_with_threshold(
+    paths: Iterable[Path],
+    *,
+    min_benchmark_games: int,
+) -> RunComparisonResult:
+    if min_benchmark_games < 0:
+        raise ValueError("min_benchmark_games must be non-negative.")
+    selected_paths = tuple(paths)
+    if not selected_paths:
+        raise ValueError("at least one run path is required.")
+    entries: list[RunComparisonEntry] = []
+    errors: list[RunComparisonError] = []
+    for path in selected_paths:
+        try:
+            entries.append(_comparison_entry(path))
+        except Exception as exc:
+            errors.append(
+                RunComparisonError(
+                    label=_comparison_error_label(path),
+                    path=str(path),
+                    error=str(exc),
+                )
+            )
+    return RunComparisonResult(
+        entries=tuple(entries),
+        errors=tuple(errors),
+        min_benchmark_games=min_benchmark_games,
+    )
+
+
 def calibrate_run_audit(
     path: Path,
     *,
@@ -419,6 +549,70 @@ def calibrate_run_audit(
         ),
         notes=tuple(notes),
     )
+
+
+def _comparison_entry(path: Path) -> RunComparisonEntry:
+    audit = audit_run(path, config=_permissive_audit_config())
+    latest = audit.iterations[-1]
+    return RunComparisonEntry(
+        label=_comparison_label(audit.manifest_path),
+        manifest_path=audit.manifest_path,
+        source_type=audit.source_type,
+        iteration_count=len(audit.iterations),
+        latest_iteration=audit.latest_iteration,
+        latest_policy_id=latest.policy_id,
+        latest_checkpoint_path=latest.checkpoint_path,
+        latest_benchmark_win_rate=audit.latest_benchmark_win_rate,
+        best_benchmark_win_rate=audit.best_benchmark_win_rate,
+        best_benchmark_games=_best_benchmark_games(audit.iterations),
+        latest_benchmark_games=latest.benchmark_games,
+        latest_collection_capped_rate=audit.latest_collection_capped_rate,
+        latest_benchmark_capped_rate=audit.latest_benchmark_capped_rate,
+        latest_average_decision_rounds=audit.latest_average_decision_rounds,
+        latest_benchmark_average_decision_rounds=audit.latest_benchmark_average_decision_rounds,
+        latest_promotion_recorded=latest.promotion_recorded,
+        latest_advancement_recorded=latest.advancement_recorded,
+        latest_advancement_reason=latest.advancement_reason,
+    )
+
+
+def _comparison_label(manifest_path: Path) -> str:
+    parent = manifest_path.parent
+    if parent.name:
+        return parent.name
+    return manifest_path.name
+
+
+def _comparison_error_label(path: Path) -> str:
+    candidate = path.expanduser()
+    if candidate.name == "manifest.json" and candidate.parent.name:
+        return candidate.parent.name
+    return candidate.name or str(candidate)
+
+
+def _best_benchmark_games(iterations: tuple[RunAuditIterationSummary, ...]) -> int:
+    benchmark_iterations = tuple(
+        iteration
+        for iteration in iterations
+        if iteration.benchmark_win_rate is not None and iteration.benchmark_games > 0
+    )
+    if not benchmark_iterations:
+        return 0
+    best = max(
+        benchmark_iterations,
+        key=lambda iteration: (float(iteration.benchmark_win_rate or 0.0), iteration.benchmark_games),
+    )
+    return best.benchmark_games
+
+
+def _best_entry_by_optional_value(
+    entries: tuple[RunComparisonEntry, ...],
+    field_name: str,
+) -> RunComparisonEntry | None:
+    present = tuple(entry for entry in entries if getattr(entry, field_name) is not None)
+    if not present:
+        return None
+    return max(present, key=lambda entry: float(getattr(entry, field_name)))
 
 
 def _source_type(schema_version: str) -> str:
