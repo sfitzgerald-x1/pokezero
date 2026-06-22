@@ -414,8 +414,7 @@ def _spikes_score(action_index: int, move, metadata: Mapping[str, Any]) -> _Acti
     )
     if known_layers >= 3:
         return _ActionScore(action_index, "move", 10.0, f"{move.name}: opponent Spikes already maxed")
-    score = 62.0 - (8.0 * known_layers)
-    return _ActionScore(action_index, "move", score, f"{move.name}: hazard pressure layers={known_layers}/3")
+    return _ActionScore(action_index, "move", 62.0, f"{move.name}: hazard pressure layers={known_layers}/3")
 
 
 def _switch_score(

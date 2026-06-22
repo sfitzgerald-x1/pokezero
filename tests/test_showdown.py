@@ -176,6 +176,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             *fixture_lines("p2_seat_replay.txt")[:5],
             "|-sidestart|p1: HumanFriend|Spikes",
             "|-sidestart|p1: HumanFriend|Spikes",
+            "|-sidestart|p1: HumanFriend|Toxic Spikes",
+            "|-sidestart|p1: HumanFriend|Toxic Spikes",
+            "|-sidestart|p1: HumanFriend|Toxic Spikes",
             "|-sidestart|p2: PokeZeroBot|Spikes",
             "|-sidestart|p2: PokeZeroBot|move: Stealth Rock",
             *fixture_lines("p2_seat_replay.txt")[5:],
@@ -186,11 +189,11 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         observation = observation_from_player_state(state)
 
         self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
-        self.assertEqual(state.opponent_side_conditions, ("spikes",))
+        self.assertEqual(state.opponent_side_conditions, ("spikes", "toxicspikes"))
         self.assertEqual(state.self_side_condition_counts, {"spikes": 1, "stealthrock": 1})
-        self.assertEqual(state.opponent_side_condition_counts, {"spikes": 2})
+        self.assertEqual(state.opponent_side_condition_counts, {"spikes": 2, "toxicspikes": 2})
         self.assertEqual(observation.metadata["self_side_condition_counts"], {"spikes": 1, "stealthrock": 1})
-        self.assertEqual(observation.metadata["opponent_side_condition_counts"], {"spikes": 2})
+        self.assertEqual(observation.metadata["opponent_side_condition_counts"], {"spikes": 2, "toxicspikes": 2})
 
     def test_observation_encodes_player_relative_content(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
