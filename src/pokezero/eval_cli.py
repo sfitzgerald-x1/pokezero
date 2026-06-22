@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from .cli_audit import (
     MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
@@ -2712,6 +2712,7 @@ def _run_recipe_with_summary(
     failure_label: str,
     summary_label: str,
     extra_summary_fields: Mapping[str, object] | None = None,
+    finalize_summary: Callable[[dict[str, object]], None] | None = None,
 ) -> int:
     run_started_monotonic = time.perf_counter()
     step_summaries: list[dict[str, object]] = []
@@ -2793,6 +2794,8 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_exception"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            if finalize_summary is not None:
+                finalize_summary(summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2822,6 +2825,8 @@ def _run_recipe_with_summary(
                 summary["failed_reason"] = "step_failed"
             summary["ended_at"] = _utc_timestamp()
             summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+            if finalize_summary is not None:
+                finalize_summary(summary)
             _write_run_summary_update(
                 summary_path,
                 summary,
@@ -2845,6 +2850,8 @@ def _run_recipe_with_summary(
     summary["status"] = "passed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - run_started_monotonic, 6)
+    if finalize_summary is not None:
+        finalize_summary(summary)
     _write_run_summary_update(
         summary_path,
         summary,
@@ -3022,6 +3029,7 @@ def _cpu_long_run_run(args: argparse.Namespace) -> int:
             "failed_reason": None,
             "long_run_ready_reasons": [],
         },
+        finalize_summary=_finalize_cpu_long_run_summary,
     )
 
 
@@ -3097,6 +3105,10 @@ def _cpu_long_run_report(args: argparse.Namespace) -> int:
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
     return exit_status
+
+
+def _finalize_cpu_long_run_summary(summary: dict[str, object]) -> None:
+    summary["derived_run_report"] = _cpu_long_run_derived_run_report(summary)
 
 
 def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str, object]:

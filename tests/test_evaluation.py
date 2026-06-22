@@ -3172,6 +3172,49 @@ if __name__ == "__main__":
         self.assertIsNone(summary["failed_step"])
         self.assertIsNone(summary["failed_reason"])
         self.assertEqual(summary["long_run_ready_reasons"], [])
+        self.assertEqual(summary["derived_run_report"]["error"], "manifest_not_found")
+
+    def test_eval_cli_cpu_long_run_run_persists_nested_run_audit_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, checkpoint_path, validation_path = write_ready_cpu_long_run_pilot(temp_path)
+            long_run_dir = temp_path / "long-run"
+            summary_path = long_run_dir / "cpu-long-run-run-summary.json"
+
+            def run_and_write_manifest(argv: list[str]) -> subprocess.CompletedProcess:
+                run_dir = Path(argv[argv.index("--run-dir") + 1])
+                write_manifest(run_dir / "manifest.json", selfplay_manifest())
+                return subprocess.CompletedProcess(args=argv, returncode=0)
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run", side_effect=run_and_write_manifest),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-run",
+                        str(pilot_root),
+                        "--run-dir",
+                        str(long_run_dir),
+                        "--initial-policy",
+                        f"linear:{checkpoint_path}",
+                        "--validation-data",
+                        str(validation_path),
+                        "--evaluation-games",
+                        "200",
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        report = summary["derived_run_report"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(report["available"])
+        self.assertTrue(report["manifest_available"])
+        self.assertEqual(report["manifest_path"], str(long_run_dir / "manifest.json"))
+        self.assertEqual(report["audit_source"], "pilot-audit-config")
+        self.assertTrue(report["audit_passed"])
+        self.assertEqual(report["latest_iteration"], 1)
+        self.assertEqual(report["latest_benchmark_win_rate"], 0.65)
 
     def test_eval_cli_cpu_long_run_run_writes_failed_summary_without_launch_when_plan_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3286,6 +3329,7 @@ if __name__ == "__main__":
         self.assertEqual(failed_summary["steps"][0]["status"], "failed")
         self.assertEqual(failed_summary["steps"][0]["returncode"], None)
         self.assertEqual(failed_summary["steps"][0]["error_type"], "FileNotFoundError")
+        self.assertEqual(failed_summary["derived_run_report"]["error"], "manifest_not_found")
 
     def test_eval_cli_cpu_long_run_report_prints_passed_summary_from_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

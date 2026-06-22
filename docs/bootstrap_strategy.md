@@ -170,7 +170,7 @@ Use the paired execution wrapper when the validated plan should actually launch 
   --require-calibration-min-benchmark-games 50
 ```
 
-`cpu-long-run-run` builds the same readiness-checked plan, writes `RUN_DIR/cpu-long-run-run-summary.json` by default, and only invokes the self-play command when the plan is ready. If readiness checks fail, it exits non-zero without launching self-play and still writes a failed summary containing the rejected plan and reasons. If the self-play process itself fails, the wrapper propagates that exit code and records the failed step.
+`cpu-long-run-run` builds the same readiness-checked plan, writes `RUN_DIR/cpu-long-run-run-summary.json` by default, and only invokes the self-play command when the plan is ready. On terminal outcomes it also records a best-effort `derived_run_report` in the wrapper summary, using the nested self-play manifest and the recorded runtime audit source when those artifacts are available. If readiness checks fail, it exits non-zero without launching self-play and still writes a failed summary containing the rejected plan and reasons. If the self-play process itself fails, the wrapper propagates that exit code and records the failed step.
 
 The launcher defaults to `--profile long-run`, which intentionally requires enough evaluation games for the stricter promotion gate and uses the calibrated pilot audit config at runtime. Use `--profile smoke` only for cheap local rehearsal of the wrapper path; non-`long-run` profiles still require the pilot audit artifact for launch readiness, but run self-play with `--audit-profile <profile>` instead of the calibrated long-run audit config. Smoke-profile runs validate command wiring, not long-run policy quality.
 
