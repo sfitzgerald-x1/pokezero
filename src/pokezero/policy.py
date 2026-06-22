@@ -21,6 +21,7 @@ _STATUS_CURE_WEIGHTS = {
     "slp": 2.0,
     "frz": 2.0,
 }
+_SIDE_HAZARDS = {"spikes", "stealthrock", "toxicspikes"}
 
 
 @dataclass(frozen=True)
@@ -300,9 +301,23 @@ def _move_score(
     self_types = _metadata_species_types(metadata.get("self_active"), dex)
     opponent_types = _metadata_species_types(metadata.get("opponent_active"), dex)
     hp_fraction = _metadata_hp_fraction(metadata.get("self_active"), default=1.0)
+    move_id = normalize_id(move.id or move.name)
+    if move_id == "rapidspin":
+        return _rapid_spin_score(action_index, move, metadata, dex, self_types, opponent_types, hp_fraction)
     if move.gen3_category == "Status" or move.base_power <= 0:
         return _status_move_score(action_index, move, metadata, hp_fraction, team_status_cure_score=team_status_cure_score)
 
+    return _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
+
+
+def _damaging_move_score(
+    action_index: int,
+    move,
+    dex: ShowdownDex,
+    self_types: tuple[str, ...],
+    opponent_types: tuple[str, ...],
+    hp_fraction: float,
+) -> _ActionScore:
     effectiveness = dex.effectiveness(move.type, opponent_types)
     if effectiveness == 0.0:
         return _ActionScore(action_index, "move", 0.0, f"{move.name} has no effect")
@@ -354,9 +369,30 @@ def _status_move_score(
                 f"{move.name}: team status cure weight={status_weight:g}",
             )
         return _ActionScore(action_index, "move", 10.0, f"{move.name}: no team status")
-    if move_id in {"rapidspin"}:
-        return _ActionScore(action_index, "move", 10.0, f"{move.name}: hazard state unknown")
     return _ActionScore(action_index, "move", 10.0, f"{move.name}: low-impact status")
+
+
+def _rapid_spin_score(
+    action_index: int,
+    move,
+    metadata: Mapping[str, Any],
+    dex: ShowdownDex,
+    self_types: tuple[str, ...],
+    opponent_types: tuple[str, ...],
+    hp_fraction: float,
+) -> _ActionScore:
+    hazard_count = _side_hazard_count(metadata.get("self_side_conditions"))
+    if dex.effectiveness(move.type, opponent_types) == 0.0:
+        return _ActionScore(action_index, "move", 4.0, f"{move.name}: blocked by Ghost")
+    if hazard_count <= 0:
+        damage_score = _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
+        return _ActionScore(
+            action_index,
+            "move",
+            damage_score.score,
+            f"{move.name}: no side hazards; {damage_score.reason}",
+        )
+    return _ActionScore(action_index, "move", min(76.0, 58.0 + (10.0 * hazard_count)), f"{move.name}: clears hazards={hazard_count}")
 
 
 def _switch_score(
@@ -441,6 +477,12 @@ def _team_status_cure_weight(raw_team: Any) -> float:
         if _has_status(pokemon):
             total += _STATUS_CURE_WEIGHTS.get(_metadata_status(pokemon).lower(), 1.0)
     return total
+
+
+def _side_hazard_count(raw_conditions: Any) -> int:
+    if not isinstance(raw_conditions, Sequence) or isinstance(raw_conditions, (str, bytes)):
+        return 0
+    return sum(1 for condition in raw_conditions if normalize_id(str(condition)) in _SIDE_HAZARDS)
 
 
 def _has_status(raw_pokemon: Any) -> bool:
