@@ -27,6 +27,7 @@ from .run_audit import (
     calibrate_run_audits,
     compare_run_manifests_with_threshold,
 )
+from .source_metadata import collect_source_metadata
 
 
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
@@ -1486,7 +1487,7 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
     return {
         "purpose": "tiny CPU-only bootstrap/self-play plumbing validation",
         "warning": "smoke-profile thresholds validate command flow, not policy strength",
-        "source": _git_source_metadata(Path.cwd()),
+        "source": collect_source_metadata(),
         "run_root": str(run_root),
         "python_binary": python_binary,
         "showdown_root": showdown_root,
@@ -1499,49 +1500,6 @@ def _cpu_smoke_recipe(args: argparse.Namespace) -> dict[str, object]:
             for name, argv in steps
         ],
     }
-
-
-def _git_source_metadata(cwd: Path) -> dict[str, object]:
-    try:
-        repo_root = _git_output(cwd, "rev-parse", "--show-toplevel")
-        head = _git_output(cwd, "rev-parse", "HEAD")
-        branch = _git_output(cwd, "branch", "--show-current")
-        status = _git_output(cwd, "status", "--porcelain")
-    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        return {
-            "available": False,
-            "repo_root": None,
-            "branch": None,
-            "head": None,
-            "dirty": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    return {
-        "available": True,
-        "repo_root": repo_root,
-        "branch": branch or None,
-        "head": head,
-        "dirty": bool(status.strip()),
-    }
-
-
-def _git_output(cwd: Path, *args: str) -> str:
-    process = subprocess.Popen(
-        ("git", *args),
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    try:
-        stdout, _stderr = process.communicate(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate()
-        raise
-    if process.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed with exit code {process.returncode}")
-    return stdout.strip()
 
 
 def _shell_join(argv: list[str]) -> str:

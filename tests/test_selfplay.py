@@ -25,6 +25,7 @@ from pokezero.selfplay import (
     SelfPlayPromotionConfig,
     _promoted_checkpoint_specs,
     collect_selfplay_rollouts,
+    load_selfplay_run_manifest,
     run_selfplay_iterations,
 )
 from pokezero.selfplay_cli import main as selfplay_cli_main
@@ -223,22 +224,30 @@ class SelfPlayTest(unittest.TestCase):
     def test_run_selfplay_iterations_writes_checkpoint_and_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
+            source = {
+                "available": True,
+                "repo_root": "/repo",
+                "branch": "scott/source-test",
+                "head": "abc123",
+                "dirty": True,
+            }
 
-            result = run_selfplay_iterations(
-                run_dir=run_dir,
-                iterations=3,
-                games_per_iteration=2,
-                env_factory=OneTurnEnv,
-                rollout_config=RolloutConfig(max_decision_rounds=5),
-                training_config=LinearTrainingConfig(
-                    feature_count=32,
-                    epochs=1,
-                    shuffle_buffer_size=0,
-                    policy_id="linear-selfplay-test",
-                ),
-                seed_start=20,
-                fixed_opponent_policy_specs=("random-legal",),
-            )
+            with patch("pokezero.selfplay.collect_source_metadata", return_value=source):
+                result = run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=3,
+                    games_per_iteration=2,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
 
             run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
@@ -247,7 +256,11 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(len(result.iterations), 3)
         self.assertTrue(checkpoint_exists)
         self.assertEqual(run_manifest["schema_version"], "pokezero.selfplay_run.v1")
+        self.assertEqual(run_manifest["source"], source)
         self.assertEqual(iteration_manifest["iteration"], 1)
+        self.assertEqual(iteration_manifest["source"], source)
+        self.assertEqual(iteration_manifest["invocation_config"]["source"], source)
+        self.assertEqual(run_manifest["invocation_configs"][0]["source"], source)
         self.assertEqual(iteration_manifest["collection_metrics"]["games"], 2)
         self.assertEqual(iteration_manifest["training"]["model"]["policy_id"], "linear-selfplay-test-iter-0001")
         self.assertEqual(iteration_manifest["training"]["model"]["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
@@ -259,6 +272,32 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["worker_count"], 1)
         self.assertIn(result.iterations[0].checkpoint_policy_spec, result.iterations[2].opponent_policy_specs)
         self.assertEqual(len(result.iterations[2].training_rollout_paths), 3)
+
+    def test_load_selfplay_run_manifest_reconstructs_source_from_iteration_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            source = {"available": True, "repo_root": "/repo", "branch": "main", "head": "abc123", "dirty": False}
+            with patch("pokezero.selfplay.collect_source_metadata", return_value=source):
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
+            (run_dir / "manifest.json").unlink()
+
+            manifest = json.loads(json.dumps(load_selfplay_run_manifest(run_dir)))
+
+        self.assertEqual(manifest["source"], source)
 
     def test_run_selfplay_iterations_records_validation_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
