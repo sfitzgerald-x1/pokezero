@@ -44,6 +44,7 @@ from .source_metadata import collect_source_metadata
 CPU_SMOKE_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_smoke_run_summary.v1"
 CPU_PILOT_SUITE_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_pilot_suite_summary.v1"
 CPU_LONG_RUN_PLAN_SCHEMA_VERSION = "pokezero.cpu_long_run_plan.v1"
+CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.cpu_long_run_summary.v1"
 CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
@@ -460,97 +461,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "cpu-long-run-plan",
         help="Print a guarded self-play long-run command from a ready CPU pilot-suite summary.",
     )
-    long_run_plan.add_argument(
-        "pilot_path",
-        type=Path,
-        help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
-    )
-    long_run_plan.add_argument("--run-dir", type=Path, required=True, help="Output directory for the long self-play run.")
-    long_run_plan.add_argument(
-        "--initial-policy",
-        required=True,
-        help="Initial policy spec for the long run, for example linear:runs/bootstrap/linear-bootstrap.json.",
-    )
-    long_run_plan.add_argument(
-        "--validation-data",
-        type=Path,
-        action="append",
-        default=None,
-        help="Held-out rollout JSONL passed through to selfplay_cli. May be repeated.",
-    )
-    long_run_plan.add_argument(
-        "--python-binary",
-        default=sys.executable,
-        help="Python executable used in the emitted command. Defaults to the interpreter running this command.",
-    )
-    long_run_plan.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
-    long_run_plan.add_argument("--iterations", type=int, default=20, help="Self-play iterations for the long run.")
-    long_run_plan.add_argument("--games-per-iteration", type=int, default=100, help="Rollout games per long-run iteration.")
-    long_run_plan.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
-    long_run_plan.add_argument("--evaluation-games", type=int, default=200, help="Benchmark games per matchup after each iteration.")
-    long_run_plan.add_argument("--seed-start", type=int, default=10_000_000, help="First deterministic self-play seed.")
-    long_run_plan.add_argument(
-        "--evaluation-seed-start",
-        type=int,
-        default=20_000_000,
-        help="First deterministic evaluation seed.",
-    )
-    long_run_plan.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
-    long_run_plan.add_argument("--feature-count", type=int, default=131_072, help="Hashed linear feature bucket count.")
-    long_run_plan.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
-    long_run_plan.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
-    long_run_plan.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
-    long_run_plan.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
-    long_run_plan.add_argument(
-        "--require-promoted-opponent-pool-size",
-        type=int,
-        default=None,
-        help="Pass through to selfplay_cli to require a minimum promoted historical opponent pool before collection.",
-    )
-    long_run_plan.add_argument("--policy-id", default="linear-long-run", help="Policy id prefix stored in checkpoints.")
-    long_run_plan.add_argument(
-        "--promotion-registry",
-        type=Path,
-        default=None,
-        help="Promotion registry path. Defaults to RUN_DIR/promotions.json.",
-    )
-    long_run_plan.add_argument(
-        "--promotion-artifact-dir",
-        type=Path,
-        default=None,
-        help="Promotion artifact directory. Defaults to RUN_DIR/promoted-checkpoints.",
-    )
-    long_run_plan.add_argument(
-        "--promotion-label-prefix",
-        default="long-run",
-        help="Label prefix for auto-promotion entries.",
-    )
-    long_run_plan.add_argument("--promotion-notes", default=None, help="Optional notes stored on each auto-promotion entry.")
-    long_run_plan.add_argument(
-        "--require-smoke-ready",
-        action="store_true",
-        help="Also require nested smoke pilot summaries and requested preflights to be ready.",
-    )
-    long_run_plan.add_argument(
-        "--require-calibration-run-count",
-        type=int,
-        default=0,
-        help="Require the generated audit config to record at least this many source runs.",
-    )
-    long_run_plan.add_argument(
-        "--require-calibration-benchmark-iterations",
-        type=int,
-        default=0,
-        help="Require the generated audit config to record at least this many benchmarked iterations.",
-    )
-    long_run_plan.add_argument(
-        "--require-calibration-min-benchmark-games",
-        type=int,
-        default=0,
-        help="Require the generated audit config's calibrated benchmark-game floor to meet this value.",
-    )
-    long_run_plan.add_argument("--json", action="store_true", help="Print the long-run plan as JSON.")
+    _add_cpu_long_run_arguments(long_run_plan, include_json=True, include_summary_path=False)
     long_run_plan.set_defaults(func=_cpu_long_run_plan)
+
+    long_run_run = subparsers.add_parser(
+        "cpu-long-run-run",
+        help="Execute a guarded self-play long-run command from a ready CPU pilot-suite summary.",
+    )
+    _add_cpu_long_run_arguments(long_run_run, include_json=False, include_summary_path=True)
+    long_run_run.set_defaults(func=_cpu_long_run_run)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
     compare.add_argument("paths", type=Path, nargs="*", help="Self-play or neural self-play run directories or manifest.json paths.")
@@ -742,6 +661,112 @@ def _add_cpu_pilot_arguments(parser: argparse.ArgumentParser) -> None:
         default=1,
         help="Minimum benchmark games each calibrated pilot iteration must include.",
     )
+
+
+def _add_cpu_long_run_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_json: bool,
+    include_summary_path: bool,
+) -> None:
+    parser.add_argument(
+        "pilot_path",
+        type=Path,
+        help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
+    )
+    parser.add_argument("--run-dir", type=Path, required=True, help="Output directory for the long self-play run.")
+    parser.add_argument(
+        "--initial-policy",
+        required=True,
+        help="Initial policy spec for the long run, for example linear:runs/bootstrap/linear-bootstrap.json.",
+    )
+    parser.add_argument(
+        "--validation-data",
+        type=Path,
+        action="append",
+        default=None,
+        help="Held-out rollout JSONL passed through to selfplay_cli. May be repeated.",
+    )
+    parser.add_argument(
+        "--python-binary",
+        default=sys.executable,
+        help="Python executable used in the emitted command. Defaults to the interpreter running this command.",
+    )
+    parser.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    parser.add_argument("--iterations", type=int, default=20, help="Self-play iterations for the long run.")
+    parser.add_argument("--games-per-iteration", type=int, default=100, help="Rollout games per long-run iteration.")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
+    parser.add_argument("--evaluation-games", type=int, default=200, help="Benchmark games per matchup after each iteration.")
+    parser.add_argument("--seed-start", type=int, default=10_000_000, help="First deterministic self-play seed.")
+    parser.add_argument(
+        "--evaluation-seed-start",
+        type=int,
+        default=20_000_000,
+        help="First deterministic evaluation seed.",
+    )
+    parser.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    parser.add_argument("--feature-count", type=int, default=131_072, help="Hashed linear feature bucket count.")
+    parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    parser.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
+    parser.add_argument("--learning-rate", type=float, default=0.05, help="SGD learning rate.")
+    parser.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
+    parser.add_argument(
+        "--require-promoted-opponent-pool-size",
+        type=int,
+        default=None,
+        help="Pass through to selfplay_cli to require a minimum promoted historical opponent pool before collection.",
+    )
+    parser.add_argument("--policy-id", default="linear-long-run", help="Policy id prefix stored in checkpoints.")
+    parser.add_argument(
+        "--promotion-registry",
+        type=Path,
+        default=None,
+        help="Promotion registry path. Defaults to RUN_DIR/promotions.json.",
+    )
+    parser.add_argument(
+        "--promotion-artifact-dir",
+        type=Path,
+        default=None,
+        help="Promotion artifact directory. Defaults to RUN_DIR/promoted-checkpoints.",
+    )
+    parser.add_argument(
+        "--promotion-label-prefix",
+        default="long-run",
+        help="Label prefix for auto-promotion entries.",
+    )
+    parser.add_argument("--promotion-notes", default=None, help="Optional notes stored on each auto-promotion entry.")
+    parser.add_argument(
+        "--require-smoke-ready",
+        action="store_true",
+        help="Also require nested smoke pilot summaries and requested preflights to be ready.",
+    )
+    parser.add_argument(
+        "--require-calibration-run-count",
+        type=int,
+        default=0,
+        help="Require the generated audit config to record at least this many source runs.",
+    )
+    parser.add_argument(
+        "--require-calibration-benchmark-iterations",
+        type=int,
+        default=0,
+        help="Require the generated audit config to record at least this many benchmarked iterations.",
+    )
+    parser.add_argument(
+        "--require-calibration-min-benchmark-games",
+        type=int,
+        default=0,
+        help="Require the generated audit config's calibrated benchmark-game floor to meet this value.",
+    )
+    if include_summary_path:
+        parser.add_argument(
+            "--summary-path",
+            type=Path,
+            default=None,
+            help="Where to write the long-run wrapper summary. Defaults to RUN_DIR/cpu-long-run-run-summary.json.",
+        )
+    if include_json:
+        parser.add_argument("--json", action="store_true", help="Print the long-run plan as JSON.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2888,6 +2913,39 @@ def _cpu_pilot_report_exit_code(
 
 
 def _cpu_long_run_plan(args: argparse.Namespace) -> int:
+    payload = _cpu_long_run_plan_payload(args)
+    ready = bool(payload.get("long_run_ready"))
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if ready else 2
+    _print_cpu_long_run_plan(payload)
+    return 0 if ready else 2
+
+
+def _cpu_long_run_run(args: argparse.Namespace) -> int:
+    payload = _cpu_long_run_plan_payload(args)
+    summary_path = args.summary_path if args.summary_path is not None else args.run_dir / "cpu-long-run-run-summary.json"
+    if payload.get("long_run_ready") is not True:
+        _write_cpu_long_run_not_ready_summary(summary_path, payload)
+        _print_cpu_long_run_plan(payload)
+        print(f"error: CPU long run is not ready; summary written to {summary_path}", file=sys.stderr)
+        return 2
+    return _run_recipe_with_summary(
+        recipe=payload,
+        summary_path=summary_path,
+        schema_version=CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION,
+        command_name="cpu_long_run_run",
+        purpose="guarded CPU self-play long-run execution",
+        notes=(
+            "executes the validated cpu-long-run-plan command.",
+            "use a fresh --run-dir; this command does not delete existing artifacts.",
+        ),
+        failure_label="cpu long run",
+        summary_label="cpu long run",
+    )
+
+
+def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
     _validate_cpu_long_run_plan_args(args)
     summary_path, summary = _load_cpu_pilot_summary(args.pilot_path)
     status = str(summary.get("status", "unknown"))
@@ -2968,11 +3026,26 @@ def _cpu_long_run_plan(args: argparse.Namespace) -> int:
             for step in steps
         ],
     }
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if ready else 2
-    _print_cpu_long_run_plan(payload)
-    return 0 if ready else 2
+    return payload
+
+
+def _write_cpu_long_run_not_ready_summary(summary_path: Path, payload: Mapping[str, object]) -> None:
+    timestamp = _utc_timestamp()
+    summary: dict[str, object] = {
+        "schema_version": CPU_LONG_RUN_SUMMARY_SCHEMA_VERSION,
+        "status": "failed",
+        "summary_path": str(summary_path),
+        "started_at": timestamp,
+        "ended_at": timestamp,
+        "duration_seconds": 0.0,
+        "source": payload.get("source"),
+        "recipe": dict(payload),
+        "steps": [],
+        "failed_step": None,
+        "failed_reason": "long_run_not_ready",
+        "long_run_ready_reasons": list(payload.get("long_run_ready_reasons") or ()),
+    }
+    _write_json_payload(summary_path, summary)
 
 
 def _validate_cpu_long_run_plan_args(args: argparse.Namespace) -> None:
