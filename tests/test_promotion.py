@@ -10,6 +10,7 @@ from unittest.mock import patch
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.linear_policy import LinearPolicyModel, save_linear_model
+from pokezero.opponents import historical_opponent_policy_specs
 from pokezero.promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
     NEURAL_SELFPLAY_SOURCE_TYPE,
@@ -132,14 +133,22 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(
             registry.opponent_pool_policy_specs(max_historical_opponents=2),
-            tuple(entry.checkpoint_policy_spec for entry in registry.entries[-2:]),
+            historical_opponent_policy_specs(
+                registry.checkpoint_policy_specs(),
+                current_policy_spec=None,
+                max_historical_opponents=2,
+            ),
         )
         self.assertEqual(
             registry.opponent_pool_policy_specs(
                 max_historical_opponents=2,
                 current_policy_spec=latest_spec,
             ),
-            tuple(entry.checkpoint_policy_spec for entry in registry.entries[-3:-1]),
+            historical_opponent_policy_specs(
+                registry.checkpoint_policy_specs(),
+                current_policy_spec=latest_spec,
+                max_historical_opponents=2,
+            ),
         )
         self.assertEqual(registry.opponent_pool_policy_specs(max_historical_opponents=0), ())
         with self.assertRaisesRegex(ValueError, "non-negative"):
@@ -391,7 +400,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(list_exit, 0)
         self.assertEqual(list_payload["entries"][0]["policy_id"], "linear-selfplay-test-iter-0001")
 
-    def test_eval_cli_promotions_json_includes_opponent_pool_preview(self) -> None:
+    def test_eval_cli_promotions_json_defaults_to_excluding_latest_promoted_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=3)
             registry = load_promotion_registry(registry_path)
@@ -405,8 +414,6 @@ class PromotionRegistryTest(unittest.TestCase):
                         str(registry_path),
                         "--opponent-pool-size",
                         "2",
-                        "--current-policy-spec",
-                        latest_spec or "",
                         "--json",
                     ]
                 )
@@ -415,8 +422,50 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(
             payload["opponent_pool_policy_specs"],
-            [entry.checkpoint_policy_spec for entry in registry.entries[:2]],
+            list(
+                historical_opponent_policy_specs(
+                    registry.checkpoint_policy_specs(),
+                    current_policy_spec=latest_spec,
+                    max_historical_opponents=2,
+                )
+            ),
         )
+        self.assertEqual(payload["opponent_pool_excluded_current_policy_spec"], latest_spec)
+        self.assertIsNone(payload["opponent_pool_verified"])
+
+    def test_eval_cli_promotions_json_can_override_current_policy_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=3)
+            registry = load_promotion_registry(registry_path)
+            middle_spec = registry.entries[1].checkpoint_policy_spec
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--current-policy-spec",
+                        middle_spec or "",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["opponent_pool_policy_specs"],
+            list(
+                historical_opponent_policy_specs(
+                    registry.checkpoint_policy_specs(),
+                    current_policy_spec=middle_spec,
+                    max_historical_opponents=2,
+                )
+            ),
+        )
+        self.assertEqual(payload["opponent_pool_excluded_current_policy_spec"], middle_spec)
 
     def test_eval_cli_promotions_text_prints_opponent_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -436,7 +485,9 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("opponent_pool_policy_specs:", stdout.getvalue())
-        self.assertIn(registry.entries[-1].checkpoint_policy_spec or "", stdout.getvalue())
+        self.assertIn(registry.entries[0].checkpoint_policy_spec or "", stdout.getvalue())
+        self.assertNotIn(f"- {registry.entries[-1].checkpoint_policy_spec}", stdout.getvalue())
+        self.assertIn("pass --verify", stdout.getvalue())
 
     def test_eval_cli_promotions_rejects_current_policy_without_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

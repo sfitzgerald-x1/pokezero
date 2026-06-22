@@ -69,12 +69,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--opponent-pool-size",
         type=int,
         default=None,
-        help="Preview the latest N promoted policy specs that self-play would use as historical opponents.",
+        help=(
+            "Preview the latest N promoted policy specs that self-play would use as historical opponents. "
+            "By default, excludes the latest promoted policy as the assumed current collector."
+        ),
     )
     promotions.add_argument(
         "--current-policy-spec",
         default=None,
-        help="Policy spec to exclude from --opponent-pool-size, matching self-play current-policy filtering.",
+        help="Policy spec to exclude from --opponent-pool-size instead of the latest promoted policy.",
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
@@ -166,10 +169,13 @@ def _promotions(args: argparse.Namespace) -> int:
     if args.current_policy_spec is not None and args.opponent_pool_size is None:
         raise ValueError("--current-policy-spec requires --opponent-pool-size.")
     registry = load_promotion_registry(args.registry)
+    preview_current_policy_spec = args.current_policy_spec
+    if preview_current_policy_spec is None and args.opponent_pool_size is not None and registry.latest is not None:
+        preview_current_policy_spec = registry.latest.checkpoint_policy_spec
     opponent_pool = (
         registry.opponent_pool_policy_specs(
             max_historical_opponents=args.opponent_pool_size,
-            current_policy_spec=args.current_policy_spec,
+            current_policy_spec=preview_current_policy_spec,
         )
         if args.opponent_pool_size is not None
         else None
@@ -188,6 +194,8 @@ def _promotions(args: argparse.Namespace) -> int:
         payload = registry.to_dict()
         if opponent_pool is not None:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
+            payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
+            payload["opponent_pool_verified"] = verification.passed if verification is not None else None
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -207,9 +215,12 @@ def _promotions(args: argparse.Namespace) -> int:
                 f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at}{label}{source}"
             )
     if opponent_pool is not None:
+        print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print("opponent_pool_policy_specs:")
         for spec in opponent_pool:
             print(f"- {spec}")
+        if verification is None:
+            print("note: pass --verify to confirm the previewed registry is selectable by runtime.")
     if verification is not None:
         _print_registry_verification(verification)
     return 0 if verification is None or verification.passed else 2

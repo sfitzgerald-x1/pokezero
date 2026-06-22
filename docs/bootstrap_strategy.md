@@ -272,7 +272,7 @@ python -m pokezero.eval_cli promotions \
   --opponent-pool-size 3
 ```
 
-Add `--current-policy-spec linear:/path/to/current.json` to exclude the current collector checkpoint from the preview, matching the self-play opponent-pool filter.
+By default, the preview assumes the latest promoted checkpoint is the current collector and excludes it from the historical opponent slice, matching the steady-state auto-promotion loop. Add `--current-policy-spec linear:/path/to/current.json` to preview a different current collector.
 
 Verify that recorded promoted checkpoints still resolve and match stored checksums before using the registry for a long run:
 

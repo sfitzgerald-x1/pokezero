@@ -31,6 +31,7 @@ from .neural_policy import (
     save_transformer_checkpoint,
     train_transformer_policy,
 )
+from .opponents import opponent_pool_policy_specs
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
@@ -650,12 +651,12 @@ def _opponent_pool(
     current_policy_spec: str,
     max_historical_opponents: int,
 ) -> tuple[str, ...]:
-    historical = [spec for spec in checkpoint_history if spec != current_policy_spec]
-    if max_historical_opponents:
-        historical = historical[-max_historical_opponents:]
-    else:
-        historical = []
-    return fixed_policy_specs + tuple(historical)
+    return opponent_pool_policy_specs(
+        fixed_policy_specs=fixed_policy_specs,
+        checkpoint_history=checkpoint_history,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+    )
 
 
 def _load_prior_iteration_manifests(
