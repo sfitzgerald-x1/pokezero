@@ -211,7 +211,7 @@ python -m pokezero.selfplay_cli iterate \
 
 With `--auto-promote`, each iteration evaluates the same promotion gate used by `eval_cli promote` after the benchmark is written. Passing checkpoints are recorded in `--promotion-registry`, copied into `--promotion-artifact-dir` when supplied, and become eligible historical opponents for later iterations in the same run. `--allow-missing-benchmark` bypasses the win-rate signal in this path too, so reserve it for smoke runs.
 
-When `--initial-policy` points at a linear checkpoint, self-play retains that checkpoint as a static benchmark reference across later iterations. This keeps the original bootstrap checkpoint visible after the incumbent benchmark rotates from bootstrap-vs-candidate to previous-iteration-vs-candidate. Use `--benchmark-reference-policy` to add any other fixed reference checkpoints that should remain in every iteration benchmark.
+When `--initial-policy` points at a linear checkpoint, self-play retains that checkpoint as a static benchmark reference across later iterations. This keeps the original bootstrap checkpoint visible after the incumbent benchmark rotates from bootstrap-vs-candidate to previous-iteration-vs-candidate. Use `--benchmark-reference-policy` to add any other fixed reference checkpoints that should remain in every iteration benchmark. These references are informational by default: they stay visible in benchmark reports, but they do not add promotion-gate floors unless explicitly named as required benchmark opponents.
 
 Inspect the run:
 

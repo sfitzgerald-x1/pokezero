@@ -234,7 +234,6 @@ def run_selfplay_iterations(
             (
                 *_default_benchmark_reference_policy_specs(
                     initial_policy_spec=initial_policy_spec,
-                    fixed_opponent_policy_specs=fixed_opponents,
                 ),
                 *explicit_benchmark_references,
             )
@@ -582,13 +581,8 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
 def _default_benchmark_reference_policy_specs(
     *,
     initial_policy_spec: str,
-    fixed_opponent_policy_specs: tuple[str, ...],
 ) -> tuple[str, ...]:
     if not _is_linear_policy_spec(initial_policy_spec):
-        return ()
-    fixed_policy_ids = {_policy_id_for_spec(spec) for spec in fixed_opponent_policy_specs}
-    initial_policy_id = _policy_id_for_spec(initial_policy_spec)
-    if initial_policy_id in fixed_policy_ids:
         return ()
     return (initial_policy_spec,)
 
@@ -606,10 +600,8 @@ def _benchmark_reference_policy_specs_from_manifest_history(
             return references
     first = manifests[0]
     initial_policy_spec = str(first.get("current_policy_spec", ""))
-    fixed_opponents = tuple(str(spec) for spec in _sequence(first.get("opponent_policy_specs", ())))
     return _default_benchmark_reference_policy_specs(
         initial_policy_spec=initial_policy_spec,
-        fixed_opponent_policy_specs=fixed_opponents,
     )
 
 
@@ -683,10 +675,6 @@ def _is_neural_policy_spec(policy_spec: str) -> bool:
 def _is_linear_policy_spec(policy_spec: str) -> bool:
     policy_body = policy_spec.strip().partition("?")[0].strip().lower()
     return policy_body.startswith("linear:")
-
-
-def _policy_id_for_spec(policy_spec: str) -> str:
-    return str(policy_from_spec(policy_spec).policy_id)
 
 
 def _load_prior_iteration_manifests(
