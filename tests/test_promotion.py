@@ -472,6 +472,32 @@ class PromotionRegistryTest(unittest.TestCase):
         )
         self.assertEqual(payload["opponent_pool_excluded_current_policy_spec"], middle_spec)
 
+    def test_eval_cli_promotions_json_marks_exact_duplicate_opponent_pool_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=3)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][0]["checkpoint_path"] = payload["entries"][1]["checkpoint_path"]
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "1",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["entry_statuses"][0]["selected_as"], [])
+        self.assertEqual(result["entry_statuses"][1]["selected_as"], ["opponent_pool"])
+        self.assertEqual(result["entry_statuses"][2]["selected_as"], ["latest"])
+
     def test_eval_cli_promotions_text_prints_opponent_pool_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry_path = write_registry_with_entries(Path(temp_dir), count=2)
@@ -497,6 +523,29 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("selected=opponent_pool", output)
         self.assertIn("selected=latest", output)
         self.assertIn("pass --verify", output)
+
+    def test_eval_cli_promotions_verify_json_marks_partial_status_for_unchecked_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=1)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--verify",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["entry_statuses"][0]["verification_status"], "partial")
+        self.assertEqual(payload["entry_statuses"][0]["checkpoint_path_present"], "pass")
+        self.assertEqual(payload["entry_statuses"][0]["checkpoint_exists"], "pass")
+        self.assertEqual(payload["entry_statuses"][0]["checksum"], "not_checked")
+        self.assertEqual(payload["entry_statuses"][0]["loadable"], "not_checked")
 
     def test_eval_cli_promotions_rejects_current_policy_without_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -661,6 +710,24 @@ class PromotionRegistryTest(unittest.TestCase):
 
         self.assertFalse(result.passed)
         self.assertIn("checkpoint_exists", failed_verification_check_names(result))
+
+    def test_eval_cli_promotions_verify_json_marks_missing_checkpoint_path_as_failed_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "promotions.json"
+            payload = promotion_registry_payload(checkpoint_path="checkpoint.json")
+            payload["entries"][0]["checkpoint_path"] = None
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["promotions", "--registry", str(registry_path), "--verify", "--json"])
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(result["entry_statuses"][0]["verification_status"], "fail")
+        self.assertEqual(result["entry_statuses"][0]["checkpoint_path_present"], "fail")
+        self.assertEqual(result["entry_statuses"][0]["checkpoint_exists"], "fail")
+        self.assertIn("checkpoint_path_present", result["entry_statuses"][0]["failed_checks"])
 
     def test_verify_promotion_registry_fails_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
