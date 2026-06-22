@@ -147,7 +147,6 @@ from .replay_import import (
     REPLAY_IMPORT_SCHEMA_VERSION,
     ReplayImportResult,
     import_replay_files,
-    normalized_replay_payload_from_rollout_record,
     rollout_record_from_normalized_replay,
 )
 from .run_audit import (
@@ -323,7 +322,6 @@ __all__ = [
     "load_transformer_policy",
     "move_action_candidates",
     "normalize_for_player",
-    "normalized_replay_payload_from_rollout_record",
     "observation_window_to_torch",
     "opponent_pool_policy_specs",
     "observation_from_player_state",

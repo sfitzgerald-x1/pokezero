@@ -16,10 +16,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     import_command = subparsers.add_parser(
         "import",
-        help="Convert normalized replay JSON files into rollout JSONL.",
+        help="Convert one-battle normalized replay JSON files into rollout JSONL.",
     )
-    import_command.add_argument("--input", type=Path, nargs="+", required=True, help="Normalized replay JSON file(s).")
-    import_command.add_argument("--output", type=Path, required=True, help="Rollout JSONL output path.")
+    import_command.add_argument(
+        "--input",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Normalized replay JSON file(s), one battle per file.",
+    )
+    import_command.add_argument("--output", type=Path, required=True, help="Rollout JSONL output path; overwritten unless --append is set.")
     import_command.add_argument("--append", action="store_true", help="Append to an existing rollout JSONL file.")
     import_command.add_argument("--json", action="store_true", help="Print import summary as JSON.")
     import_command.set_defaults(func=_import)

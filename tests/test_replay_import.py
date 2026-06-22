@@ -128,6 +128,40 @@ class ReplayImportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported normalized replay schema"):
             rollout_record_from_normalized_replay(payload)
 
+    def test_import_rejects_mismatched_observation_outer_shapes(self) -> None:
+        payload = normalized_replay_payload_from_rollout_record(rollout_record())
+        payload["steps"][0]["observation"]["attention_mask"] = payload["steps"][0]["observation"]["attention_mask"][:-1]
+
+        with self.assertRaisesRegex(ValueError, "attention_mask must contain"):
+            rollout_record_from_normalized_replay(payload)
+
+    def test_append_validates_all_inputs_before_writing_any_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            existing_input = temp_path / "existing.json"
+            good_input = temp_path / "good.json"
+            bad_input = temp_path / "bad.json"
+            output_path = temp_path / "rollouts.jsonl"
+            existing_input.write_text(
+                json.dumps(normalized_replay_payload_from_rollout_record(rollout_record())),
+                encoding="utf-8",
+            )
+            good_input.write_text(
+                json.dumps(normalized_replay_payload_from_rollout_record(rollout_record())),
+                encoding="utf-8",
+            )
+            bad_payload = normalized_replay_payload_from_rollout_record(rollout_record())
+            bad_payload["steps"][0]["action_index"] = 1
+            bad_input.write_text(json.dumps(bad_payload), encoding="utf-8")
+            import_replay_files((existing_input,), output_path=output_path)
+
+            with self.assertRaisesRegex(ValueError, "action_index must be legal"):
+                import_replay_files((good_input, bad_input), output_path=output_path, append=True)
+
+            records = read_rollout_records(output_path)
+
+        self.assertEqual(len(records), 1)
+
     def test_replay_import_cli_import_writes_json_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

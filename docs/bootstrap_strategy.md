@@ -56,7 +56,7 @@ Curated Gen 3 randbat replays may still be useful, but the corpus source is unre
 
 Keep Path A running as a baseline, but build Path B around the scripted Gen 3 randbat teacher. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
 
-Replay import remains valuable after a randbat replay source is identified. A normalized replay-to-rollout scaffold now exists and writes the same rollout JSONL schema used by self-play collection, but raw Showdown replay discovery, curation, and conversion are still unresolved. It should not block the first bootstrap iteration.
+Replay import remains valuable after a randbat replay source is identified. A normalized replay-to-rollout scaffold now exists and writes the same rollout JSONL schema used by self-play collection. This normalized shape deliberately sits below raw Showdown replay parsing: it expects player-relative observations and action indices that a future corpus-specific converter must reconstruct. Raw Showdown replay discovery, curation, and conversion are still unresolved, so replay import should not block the first bootstrap iteration.
 
 ## Near-Term Implementation Plan
 
@@ -80,7 +80,7 @@ python -m pokezero.replay_import_cli import \
   --output runs/replay-bootstrap/rollouts.jsonl
 ```
 
-The importer expects player-relative observations and fixed action indices in the normalized replay file. Raw Showdown replay conversion remains a separate corpus-specific step.
+The importer expects one battle per input file, with player-relative observations and fixed action indices already encoded in the normalized replay file. Raw Showdown replay conversion remains the harder corpus-specific step.
 
 Generate the initial scripted-teacher bootstrap checkpoint in one command:
 

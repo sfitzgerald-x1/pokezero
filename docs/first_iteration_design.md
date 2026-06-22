@@ -47,7 +47,7 @@ Known limitations:
 - Neural iteration can use the shared promotion registry/gate path, and run-level audits can flag obvious benchmark/capped-rate/promotion regressions. Audit calibration can propose starting thresholds from run history, but useful long-run settings still need empirical validation on larger experiments.
 - The scripted teacher uses local Showdown dex metadata plus first-pass context heuristics for utility moves and safer switching. It is a bootstrap data source, not the intended long-term policy, and it still lacks hazards and deeper sequence planning.
 - Current observation belief features are compact bucketed facts and counts, not full explicit masks. Detailed candidate variants and evidence logs remain sidecar-only to avoid bloating every trajectory record.
-- Replay import currently expects normalized player-relative replay JSON and writes standard rollout JSONL. Raw Showdown replay discovery, parsing, and curation for Gen 3 randbats remain unresolved.
+- Replay import currently expects normalized player-relative replay JSON, one battle per file, and writes standard rollout JSONL. Raw Showdown replay discovery, parsing, observation reconstruction, action-index mapping, and curation for Gen 3 randbats remain unresolved.
 
 Not implemented yet:
 

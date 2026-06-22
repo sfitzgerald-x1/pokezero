@@ -47,16 +47,13 @@ def import_replay_files(
         raise ValueError("at least one replay input path is required.")
 
     start = perf_counter()
+    records = tuple(rollout_record_from_normalized_replay(_read_json(path)) for path in paths)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path if append else _temporary_output_path(output_path)
-    records_written = 0
     try:
         with write_path.open("a" if append else "w", encoding="utf-8") as handle:
-            for path in paths:
-                payload = _read_json(path)
-                record = rollout_record_from_normalized_replay(payload)
+            for record in records:
                 write_rollout_record(handle, record)
-                records_written += 1
         if not append:
             write_path.replace(output_path)
     except Exception:
@@ -67,7 +64,7 @@ def import_replay_files(
     return ReplayImportResult(
         output_path=output_path,
         input_paths=paths,
-        records_written=records_written,
+        records_written=len(records),
         elapsed_seconds=perf_counter() - start,
         append=append,
     )
@@ -92,6 +89,7 @@ def rollout_record_from_normalized_replay(payload: Mapping[str, Any]) -> Rollout
         raise ValueError("normalized replay payload must include terminal state.")
     if not trajectory.steps:
         raise ValueError("normalized replay payload must include at least one trajectory step.")
+    _validate_observation_shapes(trajectory)
 
     policy_ids = _policy_ids(payload.get("policy_ids"), trajectory.players())
     decision_round_count = int(payload.get("decision_round_count", _decision_round_count(trajectory)))
@@ -173,6 +171,33 @@ def _temporary_output_path(path: Path) -> Path:
 
 def _decision_round_count(trajectory) -> int:
     return len({step.turn_index for step in trajectory.steps})
+
+
+def _validate_observation_shapes(trajectory) -> None:
+    for step_index, step in enumerate(trajectory.steps):
+        observation = step.observation
+        token_count = len(observation.token_type_ids)
+        _require_length(f"steps[{step_index}].observation.categorical_ids", observation.categorical_ids, token_count)
+        _require_length(f"steps[{step_index}].observation.numeric_features", observation.numeric_features, token_count)
+        _require_length(f"steps[{step_index}].observation.attention_mask", observation.attention_mask, token_count)
+        _require_rectangular_rows(f"steps[{step_index}].observation.categorical_ids", observation.categorical_ids)
+        _require_rectangular_rows(f"steps[{step_index}].observation.numeric_features", observation.numeric_features)
+
+
+def _require_length(name: str, values: Any, expected: int) -> None:
+    if len(values) != expected:
+        raise ValueError(f"{name} must contain {expected} values, got {len(values)}.")
+
+
+def _require_rectangular_rows(name: str, rows: Any) -> None:
+    width: int | None = None
+    for index, row in enumerate(rows):
+        row_width = len(row)
+        if width is None:
+            width = row_width
+            continue
+        if row_width != width:
+            raise ValueError(f"{name}[{index}] must contain {width} values, got {row_width}.")
 
 
 def _policy_ids(value: Any, players: tuple[str, ...]) -> dict[str, str]:
