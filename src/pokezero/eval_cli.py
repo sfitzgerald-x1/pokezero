@@ -3173,6 +3173,8 @@ def _cpu_long_run_report_runtime_audit_config_path(recipe: Mapping[str, object])
 
 
 def _cpu_long_run_report_runtime_audit_profile(recipe: Mapping[str, object]) -> str | None:
+    if _cpu_long_run_report_audit_source(recipe) != "profile":
+        return None
     value = recipe.get("runtime_audit_profile") or recipe.get("profile")
     return None if value is None else str(value)
 
