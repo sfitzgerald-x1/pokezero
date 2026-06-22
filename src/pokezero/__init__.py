@@ -124,6 +124,11 @@ from .neural_selfplay import (
     run_neural_selfplay_iterations,
 )
 from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
+from .opponents import (
+    DEFAULT_MAX_HISTORICAL_OPPONENTS,
+    historical_opponent_policy_specs,
+    opponent_pool_policy_specs,
+)
 from .policy import ScriptedTeacherPolicy
 from .promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
@@ -191,6 +196,7 @@ __all__ = [
     "DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP",
     "DEFAULT_MAX_COLLECTION_CAPPED_RATE",
     "DEFAULT_MAX_CONSECUTIVE_PROMOTION_FAILURES",
+    "DEFAULT_MAX_HISTORICAL_OPPONENTS",
     "DEFAULT_MAX_INCUMBENT_CAPPED_RATE",
     "DEFAULT_MAX_TEACHER_DEGRADATION_RATE",
     "DEFAULT_MIN_INCUMBENT_GAMES",
@@ -290,6 +296,7 @@ __all__ = [
     "evaluate_linear_policy",
     "evaluate_promotion_gate",
     "features_from_example",
+    "historical_opponent_policy_specs",
     "is_move_action",
     "is_switch_action",
     "linear_feature_fingerprint",
@@ -304,6 +311,7 @@ __all__ = [
     "move_action_candidates",
     "normalize_for_player",
     "observation_window_to_torch",
+    "opponent_pool_policy_specs",
     "observation_from_player_state",
     "parse_showdown_replay",
     "policy_factory_from_spec",
