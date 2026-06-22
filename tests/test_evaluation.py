@@ -5049,6 +5049,170 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 1)
         self.assertIn("Unsupported cpu pilot summary schema", stderr.getvalue())
 
+    def test_eval_cli_cpu_readiness_report_json_summarizes_ready_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root = temp_path / "pilots"
+            pilot_summary = cpu_pilot_summary(status="passed")
+            pilot_summary["recipe"]["audit_config_path"] = str(pilot_root / "pilot-audit-config.json")
+            pilot_summary["recipe"]["calibration_output_path"] = str(pilot_root / "pilot-calibration-compare.json")
+            pilot_summary["recipe"]["replay_output_path"] = str(pilot_root / "pilot-audit-replay.json")
+            pilot_summary["steps"][0]["argv"] = ["cpu-smoke-run", "--run-root", str(pilot_root / "pilot-0001")]
+            pilot_summary["steps"][1]["argv"] = ["cpu-smoke-run", "--run-root", str(pilot_root / "pilot-0002")]
+            write_json(pilot_root / "cpu-pilot-suite-summary.json", pilot_summary)
+            write_json(
+                pilot_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(pilot_root / "pilot-audit-config.json"),
+                },
+            )
+            write_json(pilot_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+            write_pilot_smoke_with_preflight(pilot_root / "pilot-0001", branch_counts={"status_pressure": 2})
+            write_pilot_smoke_with_preflight(pilot_root / "pilot-0002", branch_counts={"status_pressure": 3})
+
+            long_run_root = temp_path / "long-run"
+            long_summary = cpu_long_run_summary(status="passed")
+            long_summary["derived_run_report"] = long_run_derived_report(latest_benchmark_games=40)
+            write_json(long_run_root / "cpu-long-run-run-summary.json", long_summary)
+
+            registry_path = temp_path / "promotions.json"
+            first_checkpoint = temp_path / "promoted" / "first.json"
+            second_checkpoint = temp_path / "promoted" / "second.json"
+            first_checkpoint.parent.mkdir(parents=True)
+            first_checkpoint.write_text("{}", encoding="utf-8")
+            second_checkpoint.write_text("{}", encoding="utf-8")
+            write_json(
+                registry_path,
+                promotion_registry_payload(
+                    entries=[
+                        promotion_registry_entry(1, checkpoint_path=str(first_checkpoint), policy_id="linear-first"),
+                        promotion_registry_entry(2, checkpoint_path=str(second_checkpoint), policy_id="linear-second"),
+                    ],
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-readiness-report",
+                        "--pilot-summary",
+                        str(pilot_root),
+                        "--long-run-summary",
+                        str(long_run_root),
+                        "--promotion-registry",
+                        str(registry_path),
+                        "--require-ready",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["overall_ready"])
+        self.assertEqual(payload["error_count"], 0)
+        items = {item["name"]: item for item in payload["items"]}
+        self.assertTrue(items["pilot_suite_ready"]["passed"])
+        self.assertTrue(items["long_run_derived_audit_ready"]["passed"])
+        self.assertTrue(items["promoted_opponent_pool_ready"]["passed"])
+        self.assertEqual(
+            items["promoted_opponent_pool_ready"]["evidence"]["selected_policy_specs"],
+            [f"linear:{first_checkpoint.resolve(strict=False)}"],
+        )
+
+    def test_eval_cli_cpu_readiness_report_shows_missing_artifacts_without_failing_by_default(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(["cpu-readiness-report", "--json"])
+        payload = json.loads(stdout.getvalue())
+        with patch("sys.stdout", new_callable=io.StringIO):
+            required_exit_code = eval_cli_main(["cpu-readiness-report", "--require-ready"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(required_exit_code, 2)
+        self.assertFalse(payload["overall_ready"])
+        self.assertEqual(payload["error_count"], 0)
+        items = {item["name"]: item for item in payload["items"]}
+        self.assertEqual(items["pilot_suite_ready"]["reasons"], ["pilot_summary_not_provided"])
+        self.assertEqual(items["long_run_derived_audit_ready"]["reasons"], ["long_run_summary_not_provided"])
+        self.assertEqual(items["promoted_opponent_pool_ready"]["reasons"], ["promotion_registry_not_provided"])
+
+    def test_eval_cli_cpu_readiness_report_treats_missing_supplied_registry_as_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_registry = Path(temp_dir) / "missing-promotions.json"
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-readiness-report", "--promotion-registry", str(missing_registry), "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["error_count"], 1)
+        items = {item["name"]: item for item in payload["items"]}
+        self.assertEqual(items["promoted_opponent_pool_ready"]["reasons"], ["promotion_registry_unreadable"])
+        self.assertIn("does not exist", items["promoted_opponent_pool_ready"]["evidence"]["error"])
+
+    def test_eval_cli_cpu_readiness_report_enforces_pilot_calibration_requirements_without_duplicate_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "pilots"
+            summary = cpu_pilot_summary(status="failed", failed_step_index=2)
+            summary["recipe"]["audit_config_path"] = str(run_root / "pilot-audit-config.json")
+            summary["recipe"]["calibration_output_path"] = str(run_root / "pilot-calibration-compare.json")
+            summary["recipe"]["replay_output_path"] = str(run_root / "pilot-audit-replay.json")
+            write_json(run_root / "cpu-pilot-suite-summary.json", summary)
+            write_json(
+                run_root / "pilot-calibration-compare.json",
+                {
+                    "audit_calibration_sufficient": True,
+                    "written_audit_config_path": str(run_root / "pilot-audit-config.json"),
+                },
+            )
+            write_json(run_root / "pilot-audit-replay.json", {"audit_failed": False, "entries": []})
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-readiness-report",
+                        "--pilot-summary",
+                        str(run_root),
+                        "--require-calibration-run-count",
+                        "2",
+                        "--require-ready",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        items = {item["name"]: item for item in payload["items"]}
+        reasons = items["pilot_suite_ready"]["reasons"]
+        self.assertIn("suite_status_not_passed", reasons)
+        self.assertIn("audit_config_unavailable_for_calibration_requirements", reasons)
+        self.assertNotIn("pilot_suite_not_passed", reasons)
+        self.assertNotIn("audit_config_calibration_requirements_not_passed", reasons)
+
+    def test_eval_cli_cpu_readiness_report_surfaces_failed_long_run_derived_audit_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "long-run"
+            summary = cpu_long_run_summary(status="passed")
+            report = long_run_derived_report()
+            report["audit_passed"] = False
+            report["failed_checks"] = ["latest_benchmark_win_rate"]
+            summary["derived_run_report"] = report
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    ["cpu-readiness-report", "--long-run-summary", str(run_root), "--require-ready", "--json"]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        items = {item["name"]: item for item in payload["items"]}
+        self.assertEqual(
+            items["long_run_derived_audit_ready"]["reasons"],
+            ["derived_audit_failed:latest_benchmark_win_rate"],
+        )
+
     def test_eval_cli_gate_smoke_profile_allows_missing_benchmark(self) -> None:
         manifest = selfplay_manifest()
         manifest["iterations"][0]["benchmark"] = None
@@ -5620,6 +5784,28 @@ def long_run_derived_report(
                 "message": "latest benchmark has enough games",
             }
         ],
+    }
+
+
+def promotion_registry_payload(*, entries: list[dict]) -> dict:
+    return {
+        "schema_version": "pokezero.promotion_registry.v1",
+        "entries": entries,
+    }
+
+
+def promotion_registry_entry(sequence: int, *, checkpoint_path: str, policy_id: str) -> dict:
+    return {
+        "sequence": sequence,
+        "policy_id": policy_id,
+        "checkpoint_path": checkpoint_path,
+        "manifest_path": f"run-{sequence}/manifest.json",
+        "source_type": "pokezero.selfplay_run.v1",
+        "source_iteration": sequence,
+        "promoted_at": "2026-06-22T12:00:00+00:00",
+        "label": f"promotion-{sequence}",
+        "notes": None,
+        "gate_result": {"passed": True},
     }
 
 
