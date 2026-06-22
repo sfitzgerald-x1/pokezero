@@ -21,6 +21,7 @@ from .evaluation import (
     _mapping,
     _sequence,
 )
+from .opponents import historical_opponent_policy_specs
 from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
@@ -901,18 +902,50 @@ def _latest_collection_capped_check(
 
 def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> RunAuditCheck:
     requirements: list[tuple[int, int]] = []
-    for invocation_config in _manifest_invocation_configs(manifest):
+    failures: list[str] = []
+    iterations_by_number = {
+        int(iteration.get("iteration", 0)): iteration
+        for iteration in tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    }
+    for invocation_index, invocation_config in enumerate(_manifest_invocation_configs(manifest), start=1):
         opponent_pool = _optional_mapping(invocation_config.get("opponent_pool"))
         if opponent_pool is None:
             continue
         required_size = _optional_int(opponent_pool.get("required_promoted_opponent_pool_size"))
         if required_size is None or required_size <= 0:
             continue
+        pool_registry_path = _optional_str(opponent_pool.get("promotion_pool_registry_path"))
+        if not pool_registry_path:
+            failures.append(f"invocation_{invocation_index}:missing_promotion_pool_registry_path")
+        max_historical_opponents = _optional_int(opponent_pool.get("max_historical_opponents"))
+        if max_historical_opponents is None:
+            failures.append(f"invocation_{invocation_index}:missing_max_historical_opponents")
+            max_historical_opponents = 0
+        if required_size > max_historical_opponents:
+            failures.append(
+                f"invocation_{invocation_index}:required={required_size},max_historical={max_historical_opponents}"
+            )
         promoted_specs = tuple(
             str(spec)
             for spec in _sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
         )
-        requirements.append((len(promoted_specs), required_size))
+        first_iteration = _optional_int(invocation_config.get("first_iteration"))
+        first_iteration_payload = iterations_by_number.get(first_iteration or 0)
+        current_policy_spec = (
+            _optional_str(first_iteration_payload.get("current_policy_spec"))
+            if first_iteration_payload is not None
+            else _optional_str(invocation_config.get("initial_policy_spec"))
+        )
+        selectable_specs = historical_opponent_policy_specs(
+            promoted_specs,
+            current_policy_spec=current_policy_spec,
+            max_historical_opponents=max_historical_opponents,
+        )
+        requirements.append((len(selectable_specs), required_size))
+        if len(selectable_specs) < required_size:
+            failures.append(
+                f"invocation_{invocation_index}:selectable={len(selectable_specs)},required={required_size}"
+            )
     if not requirements:
         return RunAuditCheck(
             name="promoted_opponent_pool_requirement",
@@ -921,11 +954,6 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
             threshold="not_recorded",
             message="no promoted opponent pool requirement was recorded",
         )
-    failures = tuple(
-        f"invocation_{index}:available={available},required={required}"
-        for index, (available, required) in enumerate(requirements, start=1)
-        if available < required
-    )
     observed = min(available / required for available, required in requirements)
     return RunAuditCheck(
         name="promoted_opponent_pool_requirement",
