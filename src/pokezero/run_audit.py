@@ -355,13 +355,19 @@ def _latest_average_decision_rounds_checks(
     if config.max_latest_average_decision_rounds is None:
         return ()
     observed = latest.average_decision_rounds
+    if observed is None:
+        message = "latest collection average decision rounds are unavailable"
+    elif observed <= config.max_latest_average_decision_rounds:
+        message = "latest collection average decision rounds are within limit"
+    else:
+        message = "latest collection average decision rounds exceed limit"
     return (
         RunAuditCheck(
             name="latest_average_decision_rounds",
             passed=observed is not None and observed <= config.max_latest_average_decision_rounds,
             observed=observed,
             threshold=config.max_latest_average_decision_rounds,
-            message="latest collection average decision rounds are within limit",
+            message=message,
         ),
     )
 

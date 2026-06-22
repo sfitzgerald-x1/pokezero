@@ -229,6 +229,36 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["latest_average_decision_rounds"], 10.0)
         self.assertIn("latest_benchmark_win_rate", failed_check_names_from_payload(payload))
 
+    def test_eval_cli_audit_average_decision_rounds_threshold_flag_fails(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-average-decision-rounds",
+                        "200",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("latest_average_decision_rounds", failed_check_names_from_payload(payload))
+        average_check = next(check for check in payload["checks"] if check["name"] == "latest_average_decision_rounds")
+        self.assertEqual(average_check["observed"], 225.0)
+        self.assertEqual(average_check["threshold"], 200.0)
+        self.assertIn("exceed", average_check["message"])
+
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
