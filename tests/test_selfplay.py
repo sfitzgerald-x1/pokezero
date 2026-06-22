@@ -1447,9 +1447,20 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
         self.assertIn("invocations: 1", output)
+        self.assertIn("invocation=1", output)
+        self.assertIn("resume=no", output)
+        self.assertIn("first_iter=1", output)
+        self.assertIn("requested_iters=1", output)
+        self.assertIn("games_per_iter=3", output)
+        self.assertIn("workers=2", output)
+        self.assertIn("first_seed=20", output)
+        self.assertIn("initial=random-legal", output)
+        self.assertIn("eval_games=10", output)
+        self.assertIn("fixed_opponents=1", output)
         self.assertIn("pool_registry=promotions.json", output)
         self.assertIn("required_pool=1", output)
         self.assertIn("promoted_available=2", output)
+        self.assertIn("auto_promote=no", output)
         self.assertIn("latest_checkpoint:", output)
         self.assertIn("linear-policy.json", output)
         self.assertIn("0.600", output)
@@ -1487,7 +1498,34 @@ class SelfPlayTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("iterations: 1", output)
+        self.assertIn("invocations: 1", output)
+        self.assertIn("pool_registry=promotions.json", output)
         self.assertIn("linear-policy.json", output)
+
+    def test_selfplay_cli_report_prints_multiple_invocations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            second_invocation = dict(manifest["invocation_configs"][0])
+            second_invocation["resume"] = True
+            second_invocation["first_iteration"] = 2
+            second_invocation["iterations_requested"] = 2
+            second_invocation["seed_start_argument"] = 1
+            second_invocation["first_iteration_seed_start"] = 23
+            manifest["invocation_configs"].append(second_invocation)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = selfplay_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("invocations: 2", output)
+        self.assertIn("invocation=1 resume=no first_iter=1", output)
+        self.assertIn("invocation=2 resume=yes first_iter=2", output)
+        self.assertIn("first_seed=23", output)
 
     def test_selfplay_cli_report_warns_when_validation_paths_change(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

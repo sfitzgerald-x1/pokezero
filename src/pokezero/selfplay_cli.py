@@ -356,6 +356,8 @@ def _print_invocation_report(invocation_configs: tuple[Mapping[str, Any], ...]) 
     print(f"invocations: {len(invocation_configs)}")
     for index, config in enumerate(invocation_configs, start=1):
         pool = _mapping(config.get("opponent_pool", {}))
+        auto_promotion = _mapping(config.get("auto_promotion", {}))
+        fixed_specs = tuple(str(spec) for spec in _sequence(pool.get("fixed_opponent_policy_specs", ())))
         promoted_specs = tuple(str(spec) for spec in _sequence(pool.get("promoted_checkpoint_policy_specs", ())))
         print(
             f"  invocation={index} "
@@ -365,9 +367,13 @@ def _print_invocation_report(invocation_configs: tuple[Mapping[str, Any], ...]) 
             f"games_per_iter={_format_manifest_value(config.get('games_per_iteration'))} "
             f"workers={_format_manifest_value(config.get('worker_count'))} "
             f"first_seed={_format_manifest_value(config.get('first_iteration_seed_start'))} "
+            f"initial={_format_manifest_value(config.get('initial_policy_spec'))} "
+            f"eval_games={_format_manifest_value(config.get('evaluation_games'))} "
+            f"fixed_opponents={len(fixed_specs)} "
             f"pool_registry={_format_manifest_value(pool.get('promotion_pool_registry_path'))} "
             f"required_pool={_format_manifest_value(pool.get('required_promoted_opponent_pool_size'))} "
-            f"promoted_available={len(promoted_specs)}"
+            f"promoted_available={len(promoted_specs)} "
+            f"auto_promote={_format_bool(auto_promotion.get('enabled'))}"
         )
 
 
