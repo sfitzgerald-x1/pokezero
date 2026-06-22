@@ -137,6 +137,7 @@ from .run_audit import (
     RunAuditCheck,
     RunAuditConfig,
     RunAuditIterationSummary,
+    RunAuditOpponentRegression,
     RunAuditResult,
     audit_run,
 )
@@ -236,6 +237,7 @@ __all__ = [
     "RunAuditCheck",
     "RunAuditConfig",
     "RunAuditIterationSummary",
+    "RunAuditOpponentRegression",
     "RunAuditResult",
     "SELFPLAY_RUN_SCHEMA_VERSION",
     "SelfPlayIterationResult",

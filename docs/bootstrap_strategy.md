@@ -207,7 +207,7 @@ python -m pokezero.eval_cli audit runs/bootstrap-selfplay \
   --max-consecutive-promotion-failures 1
 ```
 
-The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, regression from the previous best benchmark, and repeated promotion failures before the run is treated as healthy.
+The audit command reads linear or neural self-play manifests and does not run new games. It is intended for long CPU experiments where the latest checkpoint should be checked for benchmark availability, capped-game health, same-opponent regression from the previous best benchmark against each shared opponent, and repeated promotion failures before the run is treated as healthy.
 
 Gate a candidate before promotion:
 

@@ -41,7 +41,7 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.best_benchmark_win_rate, 0.70)
         self.assertEqual(result.consecutive_promotion_failures, 0)
 
-    def test_audit_fails_latest_benchmark_regression_from_previous_best(self) -> None:
+    def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
                 selfplay_iteration(iteration=1, wins=18, losses=2, capped_games=0),
@@ -62,7 +62,69 @@ class RunAuditTest(unittest.TestCase):
             )
 
         self.assertFalse(result.passed)
-        self.assertIn("benchmark_win_rate_drop_from_best", failed_check_names(result))
+        self.assertIn("benchmark_win_rate_drop_by_opponent", failed_check_names(result))
+        self.assertEqual(result.benchmark_regressions[0].opponent_policy_id, "random-legal")
+        self.assertEqual(result.benchmark_regressions[0].drop, 0.25)
+
+    def test_audit_does_not_treat_harder_new_opponent_as_pooled_regression(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    rows=(("random-legal", 18, 2, 0),),
+                ),
+                selfplay_iteration(
+                    iteration=2,
+                    rows=(
+                        ("random-legal", 19, 1, 0),
+                        ("linear-selfplay-test-iter-0001", 11, 9, 0),
+                    ),
+                ),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=40,
+                    max_benchmark_win_rate_drop=0.05,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertAlmostEqual(result.latest_benchmark_win_rate or 0.0, 0.75)
+        self.assertEqual(
+            [(regression.opponent_policy_id, regression.drop) for regression in result.benchmark_regressions],
+            [("random-legal", 0.0)],
+        )
+
+    def test_audit_fails_when_latest_benchmark_disappears_after_prior_evidence(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),
+                selfplay_iteration(iteration=2, benchmark=False),
+            )
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    require_benchmark=False,
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        self.assertFalse(result.passed)
+        regression_check = next(check for check in result.checks if check.name == "benchmark_win_rate_drop_by_opponent")
+        self.assertEqual(regression_check.observed, "missing_latest_benchmark")
 
     def test_audit_fails_latest_capped_rate_and_trailing_promotion_failures(self) -> None:
         manifest = selfplay_manifest(
@@ -189,9 +251,11 @@ def neural_selfplay_manifest(*, iterations: tuple[dict, ...]) -> dict:
 def selfplay_iteration(
     *,
     iteration: int,
-    wins: int,
-    losses: int,
-    capped_games: int,
+    wins: int = 13,
+    losses: int = 7,
+    capped_games: int = 0,
+    rows: tuple[tuple[str, int, int, int], ...] | None = None,
+    benchmark: bool = True,
     promotion_recorded: bool | None = None,
 ) -> dict:
     policy_id = f"linear-selfplay-test-iter-{iteration:04d}"
@@ -201,7 +265,17 @@ def selfplay_iteration(
         "checkpoint_path": f"run/iteration-{iteration:04d}/linear-policy.json",
         "collection_metrics": collection_metrics(games=10, capped_games=0),
         "training": {"model": {"policy_id": policy_id}},
-        "benchmark": benchmark_payload(policy_id=policy_id, wins=wins, losses=losses, capped_games=capped_games),
+        "benchmark": (
+            benchmark_payload(
+                policy_id=policy_id,
+                wins=wins,
+                losses=losses,
+                capped_games=capped_games,
+                rows=rows,
+            )
+            if benchmark
+            else None
+        ),
     }
     if promotion_recorded is not None:
         payload["promotion"] = {"recorded": promotion_recorded}
@@ -225,27 +299,48 @@ def neural_iteration(*, iteration: int, wins: int, losses: int, capped_games: in
     }
 
 
-def benchmark_payload(*, policy_id: str, wins: int, losses: int, capped_games: int) -> dict:
-    games = wins + losses
+def benchmark_payload(
+    *,
+    policy_id: str,
+    wins: int,
+    losses: int,
+    capped_games: int,
+    rows: tuple[tuple[str, int, int, int], ...] | None = None,
+) -> dict:
+    if rows is None:
+        rows = (("random-legal", wins, losses, capped_games),)
+    games_per_matchup = max(row_wins + row_losses for _, row_wins, row_losses, _ in rows)
     return {
         "format_id": "gen3randombattle",
         "max_decision_rounds": 250,
-        "games_per_matchup": games,
+        "games_per_matchup": games_per_matchup,
         "head_to_heads": [
-            {
-                "label": f"{policy_id} vs random-legal",
-                "first_policy_id": policy_id,
-                "second_policy_id": "random-legal",
-                "games": games,
-                "first_policy_wins": wins,
-                "second_policy_wins": losses,
-                "ties": 0,
-                "capped_games": capped_games,
-                "first_policy_win_rate": wins / games,
-                "second_policy_win_rate": losses / games,
-            }
+            benchmark_row(
+                policy_id=policy_id,
+                opponent_id=opponent_id,
+                wins=row_wins,
+                losses=row_losses,
+                capped_games=row_capped_games,
+            )
+            for opponent_id, row_wins, row_losses, row_capped_games in rows
         ],
         "matchups": [],
+    }
+
+
+def benchmark_row(*, policy_id: str, opponent_id: str, wins: int, losses: int, capped_games: int) -> dict:
+    games = wins + losses
+    return {
+        "label": f"{policy_id} vs {opponent_id}",
+        "first_policy_id": policy_id,
+        "second_policy_id": opponent_id,
+        "games": games,
+        "first_policy_wins": wins,
+        "second_policy_wins": losses,
+        "ties": 0,
+        "capped_games": capped_games,
+        "first_policy_win_rate": wins / games,
+        "second_policy_win_rate": losses / games,
     }
 
 

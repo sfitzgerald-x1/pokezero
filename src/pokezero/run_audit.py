@@ -130,6 +130,22 @@ class RunAuditIterationSummary:
 
 
 @dataclass(frozen=True)
+class RunAuditOpponentRegression:
+    opponent_policy_id: str
+    latest_win_rate: float
+    best_previous_win_rate: float
+    drop: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "opponent_policy_id": self.opponent_policy_id,
+            "latest_win_rate": self.latest_win_rate,
+            "best_previous_win_rate": self.best_previous_win_rate,
+            "drop": self.drop,
+        }
+
+
+@dataclass(frozen=True)
 class RunAuditResult:
     manifest_path: Path
     schema_version: str
@@ -139,6 +155,7 @@ class RunAuditResult:
     latest_benchmark_win_rate: float | None
     latest_collection_capped_rate: float | None
     latest_benchmark_capped_rate: float | None
+    benchmark_regressions: tuple[RunAuditOpponentRegression, ...]
     consecutive_promotion_failures: int
     checks: tuple[RunAuditCheck, ...]
 
@@ -161,6 +178,7 @@ class RunAuditResult:
             "latest_benchmark_win_rate": self.latest_benchmark_win_rate,
             "latest_collection_capped_rate": self.latest_collection_capped_rate,
             "latest_benchmark_capped_rate": self.latest_benchmark_capped_rate,
+            "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
             "passed": self.passed,
             "checks": [check.to_dict() for check in self.checks],
@@ -190,22 +208,12 @@ def audit_run(
         if iteration.benchmark_win_rate is not None
     )
     best_benchmark_win_rate = max(benchmark_values) if benchmark_values else None
-    previous_benchmark_values = tuple(
-        iteration.benchmark_win_rate
-        for iteration in iterations[:-1]
-        if iteration.benchmark_win_rate is not None
-    )
-    best_previous_benchmark_win_rate = max(previous_benchmark_values) if previous_benchmark_values else None
-    benchmark_drop = (
-        max(0.0, best_previous_benchmark_win_rate - latest.benchmark_win_rate)
-        if best_previous_benchmark_win_rate is not None and latest.benchmark_win_rate is not None
-        else None
-    )
+    benchmark_regressions = _opponent_regressions(iterations)
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
     checks = (
         _latest_collection_capped_check(latest, config),
         *_latest_benchmark_checks(latest, config),
-        _benchmark_regression_check(benchmark_drop, config),
+        _benchmark_regression_check(iterations, benchmark_regressions, config),
         _promotion_failure_check(consecutive_promotion_failures, config),
         _latest_promotion_check(latest, config),
     )
@@ -218,6 +226,7 @@ def audit_run(
         latest_benchmark_win_rate=latest.benchmark_win_rate,
         latest_collection_capped_rate=latest.collection_capped_rate,
         latest_benchmark_capped_rate=latest.benchmark_capped_rate,
+        benchmark_regressions=benchmark_regressions,
         consecutive_promotion_failures=consecutive_promotion_failures,
         checks=checks,
     )
@@ -354,23 +363,43 @@ def _latest_benchmark_checks(
 
 
 def _benchmark_regression_check(
-    benchmark_drop: float | None,
+    iterations: tuple[RunAuditIterationSummary, ...],
+    regressions: tuple[RunAuditOpponentRegression, ...],
     config: RunAuditConfig,
 ) -> RunAuditCheck:
-    if benchmark_drop is None:
+    previous_benchmark_count = sum(1 for iteration in iterations[:-1] if iteration.benchmark_games > 0)
+    latest = iterations[-1]
+    if not previous_benchmark_count:
         return RunAuditCheck(
-            name="benchmark_win_rate_drop_from_best",
+            name="benchmark_win_rate_drop_by_opponent",
             passed=True,
             observed=None,
             threshold=config.max_benchmark_win_rate_drop,
-            message="no prior benchmark exists for regression comparison",
+            message="no prior benchmark exists for same-opponent regression comparison",
         )
+    if latest.benchmark_games <= 0:
+        return RunAuditCheck(
+            name="benchmark_win_rate_drop_by_opponent",
+            passed=False,
+            observed="missing_latest_benchmark",
+            threshold=config.max_benchmark_win_rate_drop,
+            message="latest benchmark is required for same-opponent regression comparison",
+        )
+    if not regressions:
+        return RunAuditCheck(
+            name="benchmark_win_rate_drop_by_opponent",
+            passed=False,
+            observed="no_shared_opponent",
+            threshold=config.max_benchmark_win_rate_drop,
+            message="latest benchmark has no opponent overlap with prior benchmark evidence",
+        )
+    max_drop = max(regression.drop for regression in regressions)
     return RunAuditCheck(
-        name="benchmark_win_rate_drop_from_best",
-        passed=benchmark_drop <= config.max_benchmark_win_rate_drop,
-        observed=benchmark_drop,
+        name="benchmark_win_rate_drop_by_opponent",
+        passed=max_drop <= config.max_benchmark_win_rate_drop,
+        observed=max_drop,
         threshold=config.max_benchmark_win_rate_drop,
-        message="latest benchmark win rate has not regressed too far from the previous best",
+        message="latest same-opponent benchmark win rates have not regressed too far from previous best",
     )
 
 
@@ -416,6 +445,35 @@ def _consecutive_promotion_failures(iterations: tuple[RunAuditIterationSummary, 
             continue
         break
     return failures
+
+
+def _opponent_regressions(
+    iterations: tuple[RunAuditIterationSummary, ...],
+) -> tuple[RunAuditOpponentRegression, ...]:
+    if len(iterations) < 2:
+        return ()
+    latest = iterations[-1]
+    previous_best: dict[str, float] = {}
+    for iteration in iterations[:-1]:
+        for opponent in iteration.benchmark_opponents:
+            previous_best[opponent.opponent_policy_id] = max(
+                opponent.win_rate,
+                previous_best.get(opponent.opponent_policy_id, 0.0),
+            )
+    regressions: list[RunAuditOpponentRegression] = []
+    for opponent in latest.benchmark_opponents:
+        best_previous = previous_best.get(opponent.opponent_policy_id)
+        if best_previous is None:
+            continue
+        regressions.append(
+            RunAuditOpponentRegression(
+                opponent_policy_id=opponent.opponent_policy_id,
+                latest_win_rate=opponent.win_rate,
+                best_previous_win_rate=best_previous,
+                drop=max(0.0, best_previous - opponent.win_rate),
+            )
+        )
+    return tuple(regressions)
 
 
 def _optional_mapping(value: Any) -> Mapping[str, Any] | None:

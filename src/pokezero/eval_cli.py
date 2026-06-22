@@ -249,6 +249,15 @@ def _print_audit_result(result) -> None:
     print(f"latest_collection_capped_rate: {_format_optional_float(result.latest_collection_capped_rate)}")
     print(f"latest_benchmark_capped_rate: {_format_optional_float(result.latest_benchmark_capped_rate)}")
     print(f"consecutive_promotion_failures: {result.consecutive_promotion_failures}")
+    if result.benchmark_regressions:
+        print("benchmark_regressions:")
+        for regression in result.benchmark_regressions:
+            print(
+                f"- {regression.opponent_policy_id}: "
+                f"latest={regression.latest_win_rate:.3f} "
+                f"previous_best={regression.best_previous_win_rate:.3f} "
+                f"drop={regression.drop:.3f}"
+            )
     print("checks:")
     for check in result.checks:
         check_status = "pass" if check.passed else "fail"
