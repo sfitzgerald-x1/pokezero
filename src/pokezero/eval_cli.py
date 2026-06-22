@@ -72,6 +72,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     audit.add_argument("--max-latest-collection-capped-rate", type=float, default=DEFAULT_MAX_COLLECTION_CAPPED_RATE)
     audit.add_argument("--max-latest-benchmark-capped-rate", type=float, default=DEFAULT_MAX_BENCHMARK_CAPPED_RATE)
     audit.add_argument("--max-latest-average-decision-rounds", type=float, default=None)
+    audit.add_argument("--max-latest-benchmark-average-decision-rounds", type=float, default=None)
     audit.add_argument("--max-benchmark-win-rate-drop", type=float, default=DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP)
     audit.add_argument(
         "--max-consecutive-promotion-failures",
@@ -179,6 +180,7 @@ def _audit(args: argparse.Namespace) -> int:
             max_latest_collection_capped_rate=args.max_latest_collection_capped_rate,
             max_latest_benchmark_capped_rate=args.max_latest_benchmark_capped_rate,
             max_latest_average_decision_rounds=args.max_latest_average_decision_rounds,
+            max_latest_benchmark_average_decision_rounds=args.max_latest_benchmark_average_decision_rounds,
             max_benchmark_win_rate_drop=args.max_benchmark_win_rate_drop,
             max_consecutive_promotion_failures=args.max_consecutive_promotion_failures,
             require_benchmark=not args.allow_missing_benchmark,
@@ -270,6 +272,10 @@ def _print_audit_result(result) -> None:
     print(f"latest_collection_capped_rate: {_format_optional_float(result.latest_collection_capped_rate)}")
     print(f"latest_average_decision_rounds: {_format_optional_float(result.latest_average_decision_rounds)}")
     print(f"latest_benchmark_capped_rate: {_format_optional_float(result.latest_benchmark_capped_rate)}")
+    print(
+        "latest_benchmark_average_decision_rounds: "
+        f"{_format_optional_float(result.latest_benchmark_average_decision_rounds)}"
+    )
     print(f"consecutive_promotion_failures: {result.consecutive_promotion_failures}")
     if result.benchmark_regressions:
         print("benchmark_regressions:")

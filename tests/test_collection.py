@@ -189,6 +189,8 @@ class CollectionTest(unittest.TestCase):
 
         self.assertEqual(report.games_per_matchup, 2)
         self.assertEqual(report.total_games, 8)
+        self.assertEqual(report.average_decision_rounds, 1.0)
+        self.assertEqual(report.to_dict()["average_decision_rounds"], 1.0)
         self.assertEqual(
             [result.label for result in report.matchups],
             [matchup.label for matchup in default_benchmark_matchups()],
