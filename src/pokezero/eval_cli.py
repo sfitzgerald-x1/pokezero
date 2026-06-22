@@ -50,6 +50,7 @@ CPU_SMOKE_SEED_BAND_SPACING = 1_000_000
 OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
+PROMOTION_ARCHIVE_INTEGRITY_SCHEMA_VERSION = "pokezero.promotion_archive_integrity.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -168,6 +169,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Archive directory for --apply-retention-plan. Defaults to a timestamped directory under "
             "<registry-dir>/retention-archive."
+        ),
+    )
+    promotions.add_argument(
+        "--archive-integrity",
+        action="store_true",
+        help=(
+            "Report archived promotion entries separately, including checkpoint existence, checksum, "
+            "and loadability status when --verify/--verify-loadable are enabled."
+        ),
+    )
+    promotions.add_argument(
+        "--require-archive-integrity",
+        action="store_true",
+        help=(
+            "With --archive-integrity --verify, return non-zero unless all archived entries and "
+            "registry-level checks pass."
         ),
     )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
@@ -993,6 +1010,10 @@ def _promotions(args: argparse.Namespace) -> int:
         raise ValueError("--retention-apply-confirm requires --apply-retention-plan.")
     if args.retention_archive_dir is not None and not args.apply_retention_plan:
         raise ValueError("--retention-archive-dir requires --apply-retention-plan.")
+    if args.require_archive_integrity and not args.archive_integrity:
+        raise ValueError("--require-archive-integrity requires --archive-integrity.")
+    if args.require_archive_integrity and not args.verify:
+        raise ValueError("--require-archive-integrity requires --verify.")
     if args.require_opponent_pool_size is not None and args.require_opponent_pool_size < 0:
         raise ValueError("--require-opponent-pool-size must be non-negative.")
     if (
@@ -1104,12 +1125,26 @@ def _promotions(args: argparse.Namespace) -> int:
         if args.retention_plan and opponent_pool is not None
         else None
     )
+    archive_integrity = (
+        _promotion_archive_integrity_payload(
+            registry=registry,
+            entry_statuses=entry_statuses,
+            verification=verification,
+            verify_loadable=args.verify_loadable,
+        )
+        if args.archive_integrity
+        else None
+    )
     promotions_exit_code = _promotions_exit_code(
         verification=verification,
         opponent_pool=opponent_pool,
         required_opponent_pool_size=args.require_opponent_pool_size,
         opponent_pool_preflight_verified=opponent_pool_preflight_verified,
         verify_opponent_pool_only=args.verify_opponent_pool_only,
+        require_archive_integrity=args.require_archive_integrity,
+        archive_integrity_passed=(
+            None if archive_integrity is None else archive_integrity["archive_integrity_passed"]
+        ),
     )
     if args.retention_apply_confirm == "archive" and promotions_exit_code != 0:
         raise ValueError("--retention-apply-confirm archive requires a passing promotions preflight.")
@@ -1160,6 +1195,8 @@ def _promotions(args: argparse.Namespace) -> int:
             payload["retention_plan"] = retention_plan
         if retention_apply is not None:
             payload["retention_apply"] = retention_apply
+        if archive_integrity is not None:
+            payload["archive_integrity"] = archive_integrity
         if verification is not None:
             payload["verification"] = verification.to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -1191,6 +1228,8 @@ def _promotions(args: argparse.Namespace) -> int:
         _print_promotion_retention_plan(retention_plan)
     if retention_apply is not None:
         _print_promotion_retention_apply(retention_apply)
+    if archive_integrity is not None:
+        _print_promotion_archive_integrity(archive_integrity)
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
@@ -1246,6 +1285,8 @@ def _promotions_exit_code(
     required_opponent_pool_size: int | None,
     opponent_pool_preflight_verified: bool | None,
     verify_opponent_pool_only: bool,
+    require_archive_integrity: bool,
+    archive_integrity_passed: object,
 ) -> int:
     if verify_opponent_pool_only:
         if opponent_pool_preflight_verified is not True:
@@ -1253,6 +1294,8 @@ def _promotions_exit_code(
     elif verification is not None and not verification.passed:
         return 2
     if not _opponent_pool_requirement_passed(opponent_pool, required_size=required_opponent_pool_size):
+        return 2
+    if require_archive_integrity and archive_integrity_passed is not True:
         return 2
     return 0
 
@@ -1738,6 +1781,108 @@ def _print_promotion_retention_apply(apply_payload: Mapping[str, object]) -> Non
             f"- {entry['sequence']}: action={entry['apply_action']} status={entry['apply_status']} "
             f"reason={entry['apply_reason']} checkpoint={entry['checkpoint_path'] or '-'} "
             f"archive={entry['archive_path'] or '-'}"
+        )
+
+
+def _promotion_archive_integrity_payload(
+    *,
+    registry,
+    entry_statuses: list[dict[str, object]],
+    verification,
+    verify_loadable: bool,
+) -> dict[str, object]:
+    archived_statuses = [
+        status
+        for status in entry_statuses
+        if status["retention_archived_at"] is not None
+    ]
+    registry_level_verification_passed = (
+        None
+        if verification is None
+        else all(check.passed for check in verification.checks if check.entry_sequence is None)
+    )
+    failed_archived_count = sum(1 for status in archived_statuses if status["failed_checks"])
+    archive_integrity_passed = (
+        None
+        if verification is None
+        else registry_level_verification_passed is True and failed_archived_count == 0
+    )
+    return {
+        "schema_version": PROMOTION_ARCHIVE_INTEGRITY_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "registry_path": str(registry.path),
+        "registry_latest_policy_id": registry.latest.policy_id if registry.latest is not None else None,
+        "registry_latest_checkpoint_path": registry.latest.checkpoint_path if registry.latest is not None else None,
+        "verification_enabled": verification is not None,
+        "verify_loadable_enabled": verify_loadable,
+        "registry_level_verification_passed": registry_level_verification_passed,
+        "archive_integrity_passed": archive_integrity_passed,
+        "summary": {
+            "total_entries": len(entry_statuses),
+            "archived_entry_count": len(archived_statuses),
+            "archived_failed_count": failed_archived_count,
+            "archived_healthy_count": len(archived_statuses) - failed_archived_count,
+            "verification_status_counts": _count_status_values(archived_statuses, "verification_status"),
+            "checkpoint_exists_counts": _count_status_values(archived_statuses, "checkpoint_exists"),
+            "checksum_counts": _count_status_values(archived_statuses, "checksum"),
+            "loadable_counts": _count_status_values(archived_statuses, "loadable"),
+            "policy_id_matches_counts": _count_status_values(archived_statuses, "policy_id_matches"),
+        },
+        "entries": [_promotion_archive_integrity_entry(status) for status in archived_statuses],
+    }
+
+
+def _promotion_archive_integrity_entry(status: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "sequence": status["sequence"],
+        "policy_id": status["policy_id"],
+        "label": status["label"],
+        "selection_checkpoint_policy_spec": status["selection_checkpoint_policy_spec"],
+        "checkpoint_path": status["checkpoint_path"],
+        "source_checkpoint_path": status["source_checkpoint_path"],
+        "source_type": status["source_type"],
+        "source_iteration": status["source_iteration"],
+        "retention_archived_from_checkpoint_path": status["retention_archived_from_checkpoint_path"],
+        "retention_archived_at": status["retention_archived_at"],
+        "promoted_at": status["promoted_at"],
+        "selected_as": list(status["selected_as"]),
+        "opponent_pool_status": status["opponent_pool_status"],
+        "verification_status": status["verification_status"],
+        "checkpoint_exists": status["checkpoint_exists"],
+        "checksum": status["checksum"],
+        "loadable": status["loadable"],
+        "policy_id_matches": status["policy_id_matches"],
+        "failed_checks": list(status["failed_checks"]),
+    }
+
+
+def _print_promotion_archive_integrity(archive_integrity: Mapping[str, object]) -> None:
+    summary = archive_integrity["summary"] if isinstance(archive_integrity["summary"], Mapping) else {}
+    print("archive_integrity:")
+    print(f"- schema_version: {archive_integrity['schema_version']}")
+    print(f"- verification_enabled: {archive_integrity['verification_enabled']}")
+    print(f"- verify_loadable_enabled: {archive_integrity['verify_loadable_enabled']}")
+    print(
+        "- registry_level_verification: "
+        f"{_verification_bool_label(archive_integrity['registry_level_verification_passed'])}"
+    )
+    print(f"- archive_integrity: {_verification_bool_label(archive_integrity['archive_integrity_passed'])}")
+    print(f"- archived_entry_count: {summary.get('archived_entry_count', 0)}")
+    print(f"- archived_healthy_count: {summary.get('archived_healthy_count', 0)}")
+    print(f"- archived_failed_count: {summary.get('archived_failed_count', 0)}")
+    print("archive_integrity_entries:")
+    entries = archive_integrity["entries"] if isinstance(archive_integrity["entries"], list) else []
+    if not entries:
+        print("- none")
+        return
+    for entry in entries:
+        failed_checks = ",".join(entry["failed_checks"]) if entry["failed_checks"] else "-"
+        print(
+            f"- {entry['sequence']}: verification={entry['verification_status']} "
+            f"exists={entry['checkpoint_exists']} checksum={entry['checksum']} "
+            f"loadable={entry['loadable']} policy_id={entry['policy_id_matches']} "
+            f"failed={failed_checks} checkpoint={entry['checkpoint_path'] or '-'} "
+            f"archived_from={entry['retention_archived_from_checkpoint_path'] or '-'}"
         )
 
 
