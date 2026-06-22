@@ -53,6 +53,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
+    iterate.add_argument(
+        "--benchmark-reference-policy",
+        action="append",
+        default=None,
+        help=(
+            "Additional policy spec retained as a benchmark reference across iterations. "
+            "May be repeated. A linear --initial-policy checkpoint is retained by default."
+        ),
+    )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
     iterate.add_argument(
         "--promotion-registry",
@@ -185,6 +194,10 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
     )
+    benchmark_references = tuple(
+        policy_spec_with_showdown_root(spec, policy_showdown_root)
+        for spec in (args.benchmark_reference_policy or ())
+    )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_selfplay_iterations(
         run_dir=args.run_dir,
@@ -196,6 +209,7 @@ def _iterate(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         initial_policy_spec=initial_policy,
         fixed_opponent_policy_specs=fixed_opponents,
+        benchmark_reference_policy_specs=benchmark_references,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
