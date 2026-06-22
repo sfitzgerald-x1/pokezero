@@ -452,6 +452,30 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(rss_check.threshold, 700.0)
         self.assertIn("within limit", rss_check.message)
 
+    def test_audit_skips_process_peak_rss_threshold_when_metric_is_unavailable(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.50,
+                    min_latest_benchmark_games=20,
+                    max_latest_process_peak_rss_mb=700.0,
+                ),
+            )
+
+        self.assertTrue(result.passed)
+        self.assertIsNone(result.latest_process_peak_rss_mb)
+        rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
+        self.assertTrue(rss_check.passed)
+        self.assertIsNone(rss_check.observed)
+        self.assertIn("skipped", rss_check.message)
+
     def test_audit_allows_missing_optional_benchmark_with_benchmark_average_threshold(self) -> None:
         manifest = selfplay_manifest(iterations=(selfplay_iteration(iteration=1, benchmark=False),))
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1054,6 +1078,35 @@ class RunAuditTest(unittest.TestCase):
         rss_check = next(check for check in payload["checks"] if check["name"] == "latest_process_peak_rss_mb")
         self.assertEqual(rss_check["observed"], 640.5)
         self.assertEqual(rss_check["threshold"], 600.0)
+
+    def test_eval_cli_audit_process_peak_rss_threshold_flag_skips_missing_metric(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--json",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-process-peak-rss-mb",
+                        "600",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(payload["latest_process_peak_rss_mb"])
+        rss_check = next(check for check in payload["checks"] if check["name"] == "latest_process_peak_rss_mb")
+        self.assertTrue(rss_check["passed"])
+        self.assertIsNone(rss_check["observed"])
+        self.assertIn("skipped", rss_check["message"])
 
     def test_eval_cli_audit_prints_text_summary(self) -> None:
         manifest = selfplay_manifest(

@@ -1005,15 +1005,18 @@ def _latest_process_peak_rss_checks(
         return ()
     observed = _latest_process_peak_rss_mb(latest)
     if observed is None:
-        message = "latest process peak RSS is unavailable"
+        passed = True
+        message = "latest process peak RSS is unavailable; RSS ceiling is skipped"
     elif observed <= config.max_latest_process_peak_rss_mb:
+        passed = True
         message = "latest process peak RSS is within limit"
     else:
+        passed = False
         message = "latest process peak RSS exceeds limit"
     return (
         RunAuditCheck(
             name="latest_process_peak_rss_mb",
-            passed=observed is not None and observed <= config.max_latest_process_peak_rss_mb,
+            passed=passed,
             observed=observed,
             threshold=config.max_latest_process_peak_rss_mb,
             message=message,
