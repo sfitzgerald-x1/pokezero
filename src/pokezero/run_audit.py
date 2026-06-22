@@ -21,7 +21,6 @@ from .evaluation import (
     _mapping,
     _sequence,
 )
-from .opponents import historical_opponent_policy_specs
 from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
@@ -903,32 +902,34 @@ def _latest_collection_capped_check(
 def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> RunAuditCheck:
     requirements: list[tuple[int, int]] = []
     failures: list[str] = []
-    iterations_by_number = {
-        int(iteration.get("iteration", 0)): iteration
-        for iteration in tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
-    }
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    iterations_by_number = {int(iteration.get("iteration", 0)): iteration for iteration in iterations}
     for invocation_index, invocation_config in enumerate(_manifest_invocation_configs(manifest), start=1):
         opponent_pool = _optional_mapping(invocation_config.get("opponent_pool"))
         if opponent_pool is None:
             continue
-        required_size = _optional_int(opponent_pool.get("required_promoted_opponent_pool_size"))
-        if required_size is None or required_size <= 0:
+        raw_required_size = opponent_pool.get("required_promoted_opponent_pool_size")
+        if raw_required_size is None:
+            continue
+        required_size = _optional_int(raw_required_size)
+        if required_size is None:
+            failures.append(f"invocation_{invocation_index}:invalid_required_promoted_opponent_pool_size")
+            continue
+        if required_size <= 0:
             continue
         pool_registry_path = _optional_str(opponent_pool.get("promotion_pool_registry_path"))
         if not pool_registry_path:
             failures.append(f"invocation_{invocation_index}:missing_promotion_pool_registry_path")
-        max_historical_opponents = _optional_int(opponent_pool.get("max_historical_opponents"))
+        raw_max_historical_opponents = opponent_pool.get("max_historical_opponents")
+        max_historical_opponents = _optional_int(raw_max_historical_opponents)
         if max_historical_opponents is None:
-            failures.append(f"invocation_{invocation_index}:missing_max_historical_opponents")
-            max_historical_opponents = 0
-        if required_size > max_historical_opponents:
+            failures.append(f"invocation_{invocation_index}:missing_or_invalid_max_historical_opponents")
+        elif required_size > max_historical_opponents:
             failures.append(
                 f"invocation_{invocation_index}:required={required_size},max_historical={max_historical_opponents}"
             )
-        promoted_specs = tuple(
-            str(spec)
-            for spec in _sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
-        )
+        promoted_specs = _string_sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
+        fixed_specs = set(_string_sequence(opponent_pool.get("fixed_opponent_policy_specs", ())))
         first_iteration = _optional_int(invocation_config.get("first_iteration"))
         first_iteration_payload = iterations_by_number.get(first_iteration or 0)
         current_policy_spec = (
@@ -936,17 +937,38 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
             if first_iteration_payload is not None
             else _optional_str(invocation_config.get("initial_policy_spec"))
         )
-        selectable_specs = historical_opponent_policy_specs(
-            promoted_specs,
-            current_policy_spec=current_policy_spec,
-            max_historical_opponents=max_historical_opponents,
-        )
-        requirements.append((len(selectable_specs), required_size))
-        if len(selectable_specs) < required_size:
-            failures.append(
-                f"invocation_{invocation_index}:selectable={len(selectable_specs)},required={required_size}"
+        if max_historical_opponents is not None:
+            launch_selectable_specs = _historical_specs(
+                promoted_specs,
+                current_policy_spec=current_policy_spec,
+                max_historical_opponents=max_historical_opponents,
             )
-    if not requirements:
+            requirements.append((len(launch_selectable_specs), required_size))
+            if len(launch_selectable_specs) < required_size:
+                failures.append(
+                    f"invocation_{invocation_index}:launch_selectable={len(launch_selectable_specs)},required={required_size}"
+                )
+        covered_iterations = _covered_invocation_iterations(
+            invocation_config,
+            iterations=iterations,
+        )
+        if not covered_iterations:
+            failures.append(f"invocation_{invocation_index}:no_covered_iterations")
+            continue
+        for iteration in covered_iterations:
+            iteration_number = int(iteration.get("iteration", 0))
+            opponent_specs = _string_sequence(iteration.get("opponent_policy_specs", ()))
+            if not opponent_specs:
+                failures.append(f"invocation_{invocation_index}:iteration_{iteration_number}:missing_opponent_policy_specs")
+                requirements.append((0, required_size))
+                continue
+            selected_promoted_specs = tuple(spec for spec in opponent_specs if spec not in fixed_specs)
+            requirements.append((len(selected_promoted_specs), required_size))
+            if len(selected_promoted_specs) < required_size:
+                failures.append(
+                    f"invocation_{invocation_index}:iteration_{iteration_number}:selected={len(selected_promoted_specs)},required={required_size}"
+                )
+    if not requirements and not failures:
         return RunAuditCheck(
             name="promoted_opponent_pool_requirement",
             passed=True,
@@ -954,7 +976,7 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
             threshold="not_recorded",
             message="no promoted opponent pool requirement was recorded",
         )
-    observed = min(available / required for available, required in requirements)
+    observed = min((available / required for available, required in requirements), default=None)
     return RunAuditCheck(
         name="promoted_opponent_pool_requirement",
         passed=not failures,
@@ -1319,7 +1341,10 @@ def _optional_float(value: Any) -> float | None:
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _manifest_invocation_configs(manifest: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -1334,6 +1359,42 @@ def _manifest_invocation_configs(manifest: Mapping[str, Any]) -> tuple[Mapping[s
         mapped = _mapping(config)
         configs_by_fingerprint.setdefault(json.dumps(mapped, sort_keys=True), mapped)
     return tuple(configs_by_fingerprint.values())
+
+
+def _covered_invocation_iterations(
+    invocation_config: Mapping[str, Any],
+    *,
+    iterations: tuple[Mapping[str, Any], ...],
+) -> tuple[Mapping[str, Any], ...]:
+    first_iteration = _optional_int(invocation_config.get("first_iteration"))
+    requested = _optional_int(invocation_config.get("iterations_requested"))
+    if first_iteration is None or requested is None or requested <= 0:
+        return ()
+    last_iteration = first_iteration + requested - 1
+    return tuple(
+        iteration
+        for iteration in iterations
+        if first_iteration <= int(iteration.get("iteration", 0)) <= last_iteration
+    )
+
+
+def _historical_specs(
+    specs: tuple[str, ...],
+    *,
+    current_policy_spec: str | None,
+    max_historical_opponents: int,
+) -> tuple[str, ...]:
+    if max_historical_opponents <= 0:
+        return ()
+    historical = tuple(spec for spec in specs if current_policy_spec is None or spec != current_policy_spec)
+    return historical[-max_historical_opponents:]
+
+
+def _string_sequence(value: Any) -> tuple[str, ...]:
+    try:
+        return tuple(str(item) for item in _sequence(value))
+    except ValueError:
+        return ()
 
 
 def _games_per_hour(metrics: Mapping[str, Any] | None) -> float | None:

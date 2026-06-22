@@ -45,7 +45,19 @@ class RunAuditTest(unittest.TestCase):
 
     def test_audit_validates_recorded_promoted_opponent_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
             invocation_configs=(
                 invocation_config(required_pool_size=2, promoted_checkpoint_count=2),
             ),
@@ -69,7 +81,18 @@ class RunAuditTest(unittest.TestCase):
 
     def test_audit_fails_recorded_undersized_promoted_opponent_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
+                ),
+            ),
             invocation_configs=(
                 invocation_config(required_pool_size=2, promoted_checkpoint_count=1),
             ),
@@ -90,7 +113,8 @@ class RunAuditTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertFalse(check.passed)
         self.assertEqual(check.observed, 0.5)
-        self.assertIn("selectable=1,required=2", check.message)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
 
     def test_audit_applies_current_policy_exclusion_to_recorded_promoted_pool_requirement(self) -> None:
         current_policy = "linear:runs/promoted-2/linear-policy.json"
@@ -102,6 +126,10 @@ class RunAuditTest(unittest.TestCase):
                     losses=6,
                     capped_games=0,
                     current_policy_spec=current_policy,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                    ),
                 ),
             ),
             invocation_configs=(
@@ -127,11 +155,23 @@ class RunAuditTest(unittest.TestCase):
         self.assertFalse(result.passed)
         self.assertFalse(check.passed)
         self.assertEqual(check.observed, 0.5)
-        self.assertIn("selectable=1,required=2", check.message)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
 
     def test_audit_applies_historical_cap_to_recorded_promoted_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
-            iterations=(selfplay_iteration(iteration=1, wins=14, losses=6, capped_games=0),),
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-3/linear-policy.json",
+                    ),
+                ),
+            ),
             invocation_configs=(
                 invocation_config(
                     required_pool_size=2,
@@ -157,7 +197,84 @@ class RunAuditTest(unittest.TestCase):
         self.assertFalse(check.passed)
         self.assertEqual(check.observed, 0.5)
         self.assertIn("required=2,max_historical=1", check.message)
-        self.assertIn("selectable=1,required=2", check.message)
+        self.assertIn("launch_selectable=1,required=2", check.message)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
+
+    def test_audit_fails_malformed_promoted_pool_requirement_without_crashing(self) -> None:
+        config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
+        config["opponent_pool"]["required_promoted_opponent_pool_size"] = "two"
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(config,),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertIsNone(check.observed)
+        self.assertIn("invalid_required_promoted_opponent_pool_size", check.message)
+
+    def test_audit_fails_invalid_promoted_pool_cap_without_double_counting_cap(self) -> None:
+        config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
+        config["opponent_pool"]["max_historical_opponents"] = "many"
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        "linear:runs/promoted-1/linear-policy.json",
+                        "linear:runs/promoted-2/linear-policy.json",
+                    ),
+                ),
+            ),
+            invocation_configs=(config,),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertEqual(check.observed, 1.0)
+        self.assertIn("missing_or_invalid_max_historical_opponents", check.message)
+        self.assertNotIn("max_historical=0", check.message)
+        self.assertNotIn("launch_selectable=0", check.message)
 
     def test_audit_fails_latest_same_opponent_benchmark_regression_from_previous_best(self) -> None:
         manifest = selfplay_manifest(
@@ -2125,6 +2242,7 @@ def selfplay_iteration(
     benchmark: bool = True,
     promotion_recorded: bool | None = None,
     current_policy_spec: str = "random-legal",
+    opponent_policy_specs: tuple[str, ...] = ("random-legal",),
 ) -> dict:
     policy_id = f"linear-selfplay-test-iter-{iteration:04d}"
     payload = {
@@ -2132,6 +2250,7 @@ def selfplay_iteration(
         "iteration": iteration,
         "checkpoint_path": f"run/iteration-{iteration:04d}/linear-policy.json",
         "current_policy_spec": current_policy_spec,
+        "opponent_policy_specs": list(opponent_policy_specs),
         "collection_metrics": collection_metrics(games=10, capped_games=0),
         "training": {"model": {"policy_id": policy_id}},
         "benchmark": (
