@@ -24,7 +24,7 @@ Implemented:
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
 - Named smoke/default/long-run evaluation profiles shared by gate and audit CLIs.
 - Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, optional policy loadability, and stored artifact checksums.
-- Append-only promotion registry for recording gate-passing checkpoints, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, filtering historical opponents to promoted checkpoints, and previewing the selected promoted opponent pool.
+- Append-only promotion registry for recording gate-passing checkpoints with per-registry write locking, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, filtering historical opponents to promoted checkpoints, and previewing the selected promoted opponent pool.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
 - Compact public-belief observation features for revealed opposing Pokemon, including surviving candidate count, uncertainty, possible ability/item/move counts, bucketed per-value possible-fact features, and revealed ability/item flags.
 

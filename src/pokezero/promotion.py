@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -178,7 +179,7 @@ class PromotionRegistryVerificationResult:
 
 
 def load_promotion_registry(path: Path) -> PromotionRegistry:
-    registry_path = path.expanduser().resolve(strict=False)
+    registry_path = _canonical_registry_path(path)
     if not registry_path.exists():
         return PromotionRegistry(path=registry_path, entries=())
     if not registry_path.is_file():
@@ -202,7 +203,8 @@ def record_promotion(
     allow_duplicate: bool = False,
 ) -> PromotionRecordResult:
     gate_result = evaluate_promotion_gate(manifest_path, config=config)
-    registry = load_promotion_registry(registry_path)
+    canonical_registry_path = _canonical_registry_path(registry_path)
+    registry = load_promotion_registry(canonical_registry_path)
     if not gate_result.passed:
         return PromotionRecordResult(
             registry_path=registry.path,
@@ -210,43 +212,68 @@ def record_promotion(
             entry=None,
             registry=registry,
         )
-    if not allow_duplicate:
-        _reject_duplicate(registry, gate_result)
-    sequence = len(registry.entries) + 1
-    checkpoint_path = gate_result.checkpoint_path
-    source_checkpoint_path = None
-    checkpoint_sha256 = None
-    if artifact_dir is not None:
-        # Copy before writing the registry so retries can safely overwrite the same
-        # sequence-named orphan if the later registry write fails.
-        checkpoint_path, checkpoint_sha256 = _copy_checkpoint_artifact(
-            gate_result,
-            artifact_dir=artifact_dir,
+    with _promotion_registry_lock(canonical_registry_path):
+        # Re-read inside the lock so duplicate checks and sequence assignment see
+        # any promotion recorded by another process while this gate was running.
+        registry = load_promotion_registry(canonical_registry_path)
+        if not allow_duplicate:
+            _reject_duplicate(registry, gate_result)
+        sequence = len(registry.entries) + 1
+        checkpoint_path = gate_result.checkpoint_path
+        source_checkpoint_path = None
+        checkpoint_sha256 = None
+        if artifact_dir is not None:
+            # Copy before writing the registry so retries can safely overwrite the same
+            # sequence-named orphan if the later registry write fails.
+            checkpoint_path, checkpoint_sha256 = _copy_checkpoint_artifact(
+                gate_result,
+                artifact_dir=artifact_dir,
+                sequence=sequence,
+            )
+            source_checkpoint_path = gate_result.checkpoint_path
+        entry = PromotionRegistryEntry(
             sequence=sequence,
+            policy_id=gate_result.candidate_policy_id,
+            checkpoint_path=checkpoint_path,
+            manifest_path=str(gate_result.manifest_path),
+            source_type=gate_result.source_type,
+            source_iteration=gate_result.source_iteration,
+            promoted_at=promoted_at or _utc_now_iso(),
+            label=label,
+            notes=notes,
+            gate_result=gate_result.to_dict(),
+            source_checkpoint_path=source_checkpoint_path,
+            checkpoint_sha256=checkpoint_sha256,
         )
-        source_checkpoint_path = gate_result.checkpoint_path
-    entry = PromotionRegistryEntry(
-        sequence=sequence,
-        policy_id=gate_result.candidate_policy_id,
-        checkpoint_path=checkpoint_path,
-        manifest_path=str(gate_result.manifest_path),
-        source_type=gate_result.source_type,
-        source_iteration=gate_result.source_iteration,
-        promoted_at=promoted_at or _utc_now_iso(),
-        label=label,
-        notes=notes,
-        gate_result=gate_result.to_dict(),
-        source_checkpoint_path=source_checkpoint_path,
-        checkpoint_sha256=checkpoint_sha256,
-    )
-    updated = PromotionRegistry(path=registry.path, entries=(*registry.entries, entry))
-    _write_registry(updated)
+        updated = PromotionRegistry(path=registry.path, entries=(*registry.entries, entry))
+        _write_registry(updated)
     return PromotionRecordResult(
         registry_path=registry.path,
         gate_result=gate_result,
         entry=entry,
         registry=updated,
     )
+
+
+def _canonical_registry_path(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+@contextmanager
+def _promotion_registry_lock(registry_path: Path):
+    lock_path = registry_path.with_name(f".{registry_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as handle:
+        try:
+            import fcntl
+        except ImportError:
+            yield
+            return
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def verify_promotion_registry(
