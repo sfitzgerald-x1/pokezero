@@ -569,6 +569,9 @@ def _print_audit_calibration(result) -> None:
     print("suggested_audit_flags:")
     flags = result.suggested_cli_flags()
     print(" ".join(flags) if flags else "-")
+    print("suggested_post_iteration_flags:")
+    post_iteration_flags = result.suggested_post_iteration_cli_flags()
+    print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
     if result.notes:
         print("notes:")
         for note in result.notes:

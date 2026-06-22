@@ -361,6 +361,29 @@ class RunAuditCalibrationResult:
             flags.append("--allow-missing-benchmark-opponents")
         return tuple(flags)
 
+    def suggested_post_iteration_cli_flags(self) -> tuple[str, ...]:
+        flags: list[str] = ["--audit-after-iteration"]
+        for field_name, flag_name in (
+            ("min_latest_benchmark_win_rate", "--audit-min-latest-benchmark-win-rate"),
+            ("min_latest_benchmark_games", "--audit-min-latest-benchmark-games"),
+            ("max_latest_collection_capped_rate", "--audit-max-latest-collection-capped-rate"),
+            ("max_latest_benchmark_capped_rate", "--audit-max-latest-benchmark-capped-rate"),
+            ("max_latest_average_decision_rounds", "--audit-max-latest-average-decision-rounds"),
+            ("max_latest_benchmark_average_decision_rounds", "--audit-max-latest-benchmark-average-decision-rounds"),
+            ("max_benchmark_win_rate_drop", "--audit-max-benchmark-win-rate-drop"),
+            ("max_consecutive_promotion_failures", "--audit-max-consecutive-promotion-failures"),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                if field_name == "min_latest_benchmark_games" and not self.require_benchmark:
+                    continue
+                flags.extend((flag_name, str(value)))
+        if not self.require_benchmark:
+            flags.append("--audit-allow-missing-benchmark")
+        if not self.require_benchmark_opponent_coverage:
+            flags.append("--audit-allow-missing-benchmark-opponents")
+        return tuple(flags)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "manifest_path": str(self.manifest_path),
@@ -371,6 +394,7 @@ class RunAuditCalibrationResult:
             "margin": self.margin,
             "suggested_config": self.suggested_config(),
             "suggested_cli_flags": list(self.suggested_cli_flags()),
+            "suggested_post_iteration_cli_flags": list(self.suggested_post_iteration_cli_flags()),
             "notes": list(self.notes),
         }
 
