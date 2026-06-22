@@ -14,6 +14,7 @@ DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
     max_consecutive_promotion_failures=3,
 )
 MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
+_UNSET = object()
 
 
 def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
@@ -45,9 +46,24 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--audit-min-latest-benchmark-games", type=int, default=None)
     parser.add_argument("--audit-max-latest-collection-capped-rate", type=float, default=None)
     parser.add_argument("--audit-max-latest-benchmark-capped-rate", type=float, default=None)
-    parser.add_argument("--audit-max-latest-average-decision-rounds", type=float, default=None)
-    parser.add_argument("--audit-max-latest-benchmark-average-decision-rounds", type=float, default=None)
-    parser.add_argument("--audit-max-latest-process-peak-rss-mb", type=float, default=None)
+    parser.add_argument(
+        "--audit-max-latest-average-decision-rounds",
+        type=_optional_float_arg,
+        default=_UNSET,
+        metavar="FLOAT|none",
+    )
+    parser.add_argument(
+        "--audit-max-latest-benchmark-average-decision-rounds",
+        type=_optional_float_arg,
+        default=_UNSET,
+        metavar="FLOAT|none",
+    )
+    parser.add_argument(
+        "--audit-max-latest-process-peak-rss-mb",
+        type=_optional_float_arg,
+        default=_UNSET,
+        metavar="FLOAT|none",
+    )
     parser.add_argument("--audit-max-benchmark-win-rate-drop", type=float, default=None)
     parser.add_argument("--audit-max-consecutive-promotion-failures", type=int, default=None)
     benchmark_group = parser.add_mutually_exclusive_group()
@@ -134,15 +150,15 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
             args.audit_max_latest_benchmark_capped_rate,
             defaults.max_latest_benchmark_capped_rate,
         ),
-        max_latest_average_decision_rounds=_arg_or_default(
+        max_latest_average_decision_rounds=_optional_arg_or_default(
             args.audit_max_latest_average_decision_rounds,
             defaults.max_latest_average_decision_rounds,
         ),
-        max_latest_benchmark_average_decision_rounds=_arg_or_default(
+        max_latest_benchmark_average_decision_rounds=_optional_arg_or_default(
             args.audit_max_latest_benchmark_average_decision_rounds,
             defaults.max_latest_benchmark_average_decision_rounds,
         ),
-        max_latest_process_peak_rss_mb=_arg_or_default(
+        max_latest_process_peak_rss_mb=_optional_arg_or_default(
             args.audit_max_latest_process_peak_rss_mb,
             defaults.max_latest_process_peak_rss_mb,
         ),
@@ -194,3 +210,17 @@ def validate_post_iteration_audit_evaluation_games(
 
 def _arg_or_default(value, default):
     return default if value is None else value
+
+
+def _optional_arg_or_default(value, default):
+    return default if value is _UNSET else value
+
+
+def _optional_float_arg(raw_value: str) -> float | None:
+    normalized = raw_value.strip().lower()
+    if normalized in {"none", "null"}:
+        return None
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected FLOAT or none, got {raw_value!r}") from exc
