@@ -176,7 +176,7 @@ def _iterate(args: argparse.Namespace) -> int:
     auto_promotion_gate_config = _auto_promotion_gate_config_from_args(args) if args.auto_promote else None
     if args.auto_promote and args.evaluation_games <= 0 and auto_promotion_gate_config.require_benchmark:
         raise ValueError(
-            "--auto-promote requires --evaluation-games > 0 unless the resolved promotion gate profile "
+            "--auto-promote requires --evaluation-games > 0 unless the resolved promotion gate config "
             "allows missing benchmarks."
         )
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
