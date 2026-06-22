@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
 from .run_audit import RunAuditConfig
 
 
@@ -14,10 +15,20 @@ DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
 
 
 def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
+    profile_choices = tuple(sorted(EVALUATION_PROFILES))
     parser.add_argument(
         "--audit-after-iteration",
         action="store_true",
         help="Run the self-play run audit after each completed iteration and stop on failure.",
+    )
+    parser.add_argument(
+        "--audit-profile",
+        choices=profile_choices,
+        default=None,
+        help=(
+            "Named audit profile used as defaults for --audit-after-iteration. "
+            "Omit to keep the looser post-iteration defaults."
+        ),
     )
     parser.add_argument("--audit-min-latest-benchmark-win-rate", type=float, default=None)
     parser.add_argument("--audit-min-latest-benchmark-games", type=int, default=None)
@@ -28,30 +39,67 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--audit-max-latest-process-peak-rss-mb", type=float, default=None)
     parser.add_argument("--audit-max-benchmark-win-rate-drop", type=float, default=None)
     parser.add_argument("--audit-max-consecutive-promotion-failures", type=int, default=None)
-    parser.add_argument(
-        "--audit-allow-missing-benchmark",
+    benchmark_group = parser.add_mutually_exclusive_group()
+    benchmark_group.add_argument(
+        "--audit-require-benchmark",
+        dest="audit_require_benchmark",
         action="store_true",
+        default=None,
+        help="With --audit-after-iteration, fail when the latest benchmark is missing.",
+    )
+    benchmark_group.add_argument(
+        "--audit-allow-missing-benchmark",
+        dest="audit_require_benchmark",
+        action="store_false",
+        default=None,
         help="With --audit-after-iteration, do not fail solely because the latest benchmark is missing.",
     )
-    parser.add_argument(
-        "--audit-allow-missing-benchmark-opponents",
+    benchmark_opponent_group = parser.add_mutually_exclusive_group()
+    benchmark_opponent_group.add_argument(
+        "--audit-require-benchmark-opponents",
+        dest="audit_require_benchmark_opponent_coverage",
         action="store_true",
+        default=None,
+        help=(
+            "With --audit-after-iteration, fail when the latest benchmark omits "
+            "fixed baseline opponents seen in prior benchmark evidence."
+        ),
+    )
+    benchmark_opponent_group.add_argument(
+        "--audit-allow-missing-benchmark-opponents",
+        dest="audit_require_benchmark_opponent_coverage",
+        action="store_false",
+        default=None,
         help=(
             "With --audit-after-iteration, do not fail when the latest benchmark omits "
             "fixed baseline opponents seen in prior benchmark evidence."
         ),
     )
-    parser.add_argument(
+    latest_promotion_group = parser.add_mutually_exclusive_group()
+    latest_promotion_group.add_argument(
         "--audit-require-latest-promotion",
+        dest="audit_require_latest_promotion",
         action="store_true",
+        default=None,
         help="With --audit-after-iteration, fail unless the latest iteration recorded a promotion.",
+    )
+    latest_promotion_group.add_argument(
+        "--audit-allow-missing-latest-promotion",
+        dest="audit_require_latest_promotion",
+        action="store_false",
+        default=None,
+        help="With --audit-after-iteration, do not fail solely because the latest iteration did not record a promotion.",
     )
 
 
 def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig | None:
     if not args.audit_after_iteration:
         return None
-    defaults = DEFAULT_POST_ITERATION_AUDIT_CONFIG
+    defaults = (
+        evaluation_profile(args.audit_profile).audit_config
+        if args.audit_profile is not None
+        else DEFAULT_POST_ITERATION_AUDIT_CONFIG
+    )
     return RunAuditConfig(
         min_latest_benchmark_win_rate=_arg_or_default(
             args.audit_min_latest_benchmark_win_rate,
@@ -89,9 +137,18 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
             args.audit_max_consecutive_promotion_failures,
             defaults.max_consecutive_promotion_failures,
         ),
-        require_benchmark=not args.audit_allow_missing_benchmark,
-        require_latest_promotion=bool(args.audit_require_latest_promotion),
-        require_benchmark_opponent_coverage=not args.audit_allow_missing_benchmark_opponents,
+        require_benchmark=_arg_or_default(
+            args.audit_require_benchmark,
+            defaults.require_benchmark,
+        ),
+        require_latest_promotion=_arg_or_default(
+            args.audit_require_latest_promotion,
+            defaults.require_latest_promotion,
+        ),
+        require_benchmark_opponent_coverage=_arg_or_default(
+            args.audit_require_benchmark_opponent_coverage,
+            defaults.require_benchmark_opponent_coverage,
+        ),
     )
 
 

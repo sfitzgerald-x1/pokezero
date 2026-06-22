@@ -365,6 +365,71 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
 
+    def test_neural_cli_iterate_uses_named_post_iteration_audit_profile(self) -> None:
+        fake_epoch = type(
+            "FakeEpoch",
+            (),
+            {"loss": 0.25, "policy_accuracy": 0.75},
+        )()
+        fake_iteration = type(
+            "FakeIteration",
+            (),
+            {
+                "iteration": 1,
+                "metrics": type("FakeMetrics", (), {"games": 2})(),
+                "checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "training": type("FakeTraining", (), {"final_metrics": fake_epoch})(),
+                "benchmark": None,
+            },
+        )()
+        fake_result = type(
+            "FakeResult",
+            (),
+            {
+                "run_dir": Path("run"),
+                "iterations": (fake_iteration,),
+                "latest_checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "to_dict": lambda self: {"ok": True},
+            },
+        )()
+
+        with (
+            patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--initial-policy",
+                    "random-legal",
+                    "--evaluation-games",
+                    "3",
+                    "--audit-after-iteration",
+                    "--audit-profile",
+                    "long-run",
+                    "--audit-min-latest-benchmark-games",
+                    "7",
+                    "--audit-allow-missing-benchmark",
+                    "--audit-require-latest-promotion",
+                ]
+            )
+
+        audit_config = run.call_args.kwargs["post_iteration_audit_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(audit_config.min_latest_benchmark_win_rate, 0.60)
+        self.assertEqual(audit_config.min_latest_benchmark_games, 7)
+        self.assertEqual(audit_config.max_latest_benchmark_capped_rate, 0.05)
+        self.assertEqual(audit_config.max_benchmark_win_rate_drop, 0.03)
+        self.assertFalse(audit_config.require_benchmark)
+        self.assertTrue(audit_config.require_latest_promotion)
+        self.assertTrue(audit_config.require_benchmark_opponent_coverage)
+
     def test_neural_cli_iterate_rejects_audit_requiring_missing_benchmark(self) -> None:
         stderr = io.StringIO()
 
