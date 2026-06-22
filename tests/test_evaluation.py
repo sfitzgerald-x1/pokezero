@@ -2726,6 +2726,7 @@ if __name__ == "__main__":
         self.assertTrue(payload["long_run_ready"])
         self.assertEqual(payload["long_run_ready_reasons"], [])
         self.assertEqual(payload["audit_config_path"], str(audit_config_path))
+        self.assertEqual(payload["profile"], "long-run")
         step = payload["steps"][0]
         argv = step["argv"]
         self.assertEqual(argv[:4], ["./.venv/bin/python", "-m", "pokezero.selfplay_cli", "iterate"])
@@ -2737,6 +2738,42 @@ if __name__ == "__main__":
         self.assertEqual(argv[argv.index("--promotion-registry") + 1], str(long_run_dir / "promotions.json"))
         self.assertEqual(argv[argv.index("--promotion-artifact-dir") + 1], str(long_run_dir / "promoted-checkpoints"))
         self.assertEqual(argv[argv.index("--validation-data") + 1], str(validation_path))
+
+    def test_eval_cli_cpu_long_run_plan_can_use_smoke_profile_for_rehearsal_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                min_latest_benchmark_games=1,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "rehearsal-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--evaluation-games",
+                        "1",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["profile"], "smoke")
+        self.assertIsNone(payload["promotion_gate_feasibility_error"])
+        self.assertIsNone(payload["audit_feasibility_error"])
+        argv = payload["steps"][0]["argv"]
+        self.assertEqual(argv[argv.index("--profile") + 1], "smoke")
+        self.assertEqual(argv[argv.index("--evaluation-games") + 1], "1")
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
 
     def test_eval_cli_cpu_long_run_plan_fails_when_required_generated_audit_config_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
