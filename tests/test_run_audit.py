@@ -1951,6 +1951,12 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(payload["preflight_runs"][0]["manifest_path"], str(manifest_path))
         self.assertEqual(payload["preflight_runs"][0]["failed_checks"], [])
         self.assertEqual(payload["config"]["min_latest_benchmark_win_rate"], 0.60)
+        self.assertIn("--audit-after-iteration", payload["post_iteration_flags"])
+        self.assertIn("--audit-min-latest-benchmark-win-rate", payload["post_iteration_flags"])
+        self.assertEqual(
+            post_iteration_config_from_flags(tuple(payload["post_iteration_flags"])),
+            RunAuditConfig(**payload["config"]),
+        )
         self.assertEqual(payload["checks"][-1]["name"], "preflight_audit_passed")
 
     def test_eval_cli_audit_config_report_requires_calibration_when_requested(self) -> None:
@@ -2103,6 +2109,9 @@ class RunAuditTest(unittest.TestCase):
         self.assertIn("calibration_metadata: present", output)
         self.assertIn("calibration_paths:", output)
         self.assertIn("- min_latest_benchmark_win_rate: 0.6", output)
+        self.assertIn("post_iteration_flags:", output)
+        self.assertIn("--audit-after-iteration", output)
+        self.assertIn("--audit-min-latest-benchmark-win-rate 0.6", output)
         self.assertIn("preflight: PASS", output)
 
     def test_eval_cli_audit_rejects_profile_with_audit_config(self) -> None:

@@ -2304,6 +2304,9 @@ def _audit_config_report(args: argparse.Namespace) -> int:
         "audit_config_path": str(args.audit_config),
         "schema_version": config_payload["schema_version"],
         "config": run_audit_config_to_dict(config_payload["config_object"]),
+        "post_iteration_flags": list(
+            _post_iteration_audit_config_cli_flags(run_audit_config_to_dict(config_payload["config_object"]))
+        ),
         "source": config_payload["source"],
         "calibration": config_payload["calibration"],
         "preflight_requested": bool(preflight_runs),
@@ -2544,6 +2547,9 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
     if isinstance(config, Mapping):
         for key, value in config.items():
             print(f"- {key}: {_format_summary_value(value)}")
+    print("post_iteration_flags:")
+    post_iteration_flags = tuple(str(flag) for flag in report.get("post_iteration_flags", ()))
+    print(" ".join(post_iteration_flags) if post_iteration_flags else "-")
     preflight_passed = report.get("preflight_passed")
     if preflight_passed is None:
         if report.get("preflight_required"):
