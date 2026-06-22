@@ -355,6 +355,7 @@ def _promotions(args: argparse.Namespace) -> int:
         registry,
         verification=verification,
         opponent_pool=opponent_pool,
+        current_policy_spec=preview_current_policy_spec,
     )
     if args.json:
         payload = registry.to_dict()
@@ -394,10 +395,11 @@ def _promotions(args: argparse.Namespace) -> int:
             source = f" source={entry.source_checkpoint_path}" if entry.source_checkpoint_path else ""
             status = status_by_sequence[entry.sequence]
             selected_as = ",".join(status["selected_as"]) if status["selected_as"] else "-"
+            pool = f" pool={status['opponent_pool_status']}" if opponent_pool is not None else ""
             print(
                 f"- {entry.sequence}: policy={entry.policy_id or '-'} "
                 f"checkpoint={entry.checkpoint_path or '-'} promoted_at={entry.promoted_at} "
-                f"status={status['verification_status']} selected={selected_as} "
+                f"status={status['verification_status']} selected={selected_as}{pool} "
                 f"path={status['checkpoint_path_present']} exists={status['checkpoint_exists']} checksum={status['checksum']} "
                 f"loadable={status['loadable']}{label}{source}"
             )
@@ -458,6 +460,7 @@ def _promotion_entry_statuses(
     *,
     verification,
     opponent_pool,
+    current_policy_spec,
 ) -> list[dict[str, object]]:
     checks_by_sequence: dict[int, list[object]] = {}
     if verification is not None:
@@ -476,6 +479,13 @@ def _promotion_entry_statuses(
             selected_as.append("latest")
         if entry.sequence in opponent_pool_sequences:
             selected_as.append("opponent_pool")
+        opponent_pool_status, opponent_pool_skip_reason = _opponent_pool_entry_status(
+            entry,
+            selection_checkpoint_policy_spec=selection_checkpoint_policy_spec,
+            opponent_pool=opponent_pool,
+            opponent_pool_sequences=opponent_pool_sequences,
+            current_policy_spec=current_policy_spec,
+        )
         failed_checks = [check.name for check in checks if not check.passed]
         checkpoint_path_present = _checkpoint_path_present_status(
             checks,
@@ -513,6 +523,8 @@ def _promotion_entry_statuses(
                 "source_iteration": entry.source_iteration,
                 "promoted_at": entry.promoted_at,
                 "selected_as": selected_as,
+                "opponent_pool_status": opponent_pool_status,
+                "opponent_pool_skip_reason": opponent_pool_skip_reason,
                 "verification_status": _entry_verification_status(
                     checks,
                     verification_enabled=verification is not None,
@@ -533,6 +545,25 @@ def _promotion_entry_statuses(
             }
         )
     return statuses
+
+
+def _opponent_pool_entry_status(
+    entry,
+    *,
+    selection_checkpoint_policy_spec,
+    opponent_pool,
+    opponent_pool_sequences: set[int],
+    current_policy_spec,
+) -> tuple[str, str | None]:
+    if opponent_pool is None:
+        return "not_requested", None
+    if entry.sequence in opponent_pool_sequences:
+        return "selected", None
+    if selection_checkpoint_policy_spec is None:
+        return "unselectable", "missing_selection_checkpoint"
+    if current_policy_spec is not None and selection_checkpoint_policy_spec == current_policy_spec:
+        return "excluded_current_policy", "matches_current_policy"
+    return "available_outside_requested_size", "outside_requested_pool_size"
 
 
 def _opponent_pool_entry_sequences(registry, opponent_pool) -> set[int]:
