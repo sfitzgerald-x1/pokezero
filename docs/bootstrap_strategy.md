@@ -260,6 +260,18 @@ The comparison report reads existing manifests and surfaces latest and best benc
 
 Add `--audit-profile smoke`, `--audit-profile default`, or `--audit-profile long-run` to include per-run audit pass/fail status and failed audit checks in the same comparison output. When an audit profile is supplied, best-run labels ignore audit-failing rows so a run is not highlighted as best while failing the selected health profile. The compare command remains read-only and does not run new games; audit failures are shown as row health signals unless `--fail-on-audit` is supplied or a manifest itself cannot be loaded.
 
+Add `--suggest-audit-calibration` when comparing pilot runs to include starter audit thresholds derived from the same valid manifests. This reuses the `audit-calibrate` logic inline with comparison output, so malformed comparison rows remain visible but are excluded from calibration suggestions:
+
+```bash
+python -m pokezero.eval_cli compare \
+  runs/cold-selfplay \
+  runs/bootstrap-selfplay \
+  runs/neural-selfplay \
+  --suggest-audit-calibration
+```
+
+The compare command still returns non-zero when any manifest cannot be loaded. In that case, inspect the reported errors before consuming a printed calibration suggestion from the remaining valid runs.
+
 Named evaluation profiles can be used instead of repeating every threshold flag:
 
 ```bash
