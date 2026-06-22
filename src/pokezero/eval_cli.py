@@ -109,6 +109,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "opponent pool and preflight status."
         ),
     )
+    promotions.add_argument(
+        "--lifecycle",
+        action="store_true",
+        help=(
+            "Report compact lifecycle counts for promoted checkpoints, including latest, "
+            "selected opponent-pool, stale, unselectable, and verification-status buckets."
+        ),
+    )
     promotions.add_argument("--json", action="store_true", help="Print the registry as formatted JSON.")
     promotions.set_defaults(func=_promotions)
 
@@ -461,6 +469,7 @@ def _promotions(args: argparse.Namespace) -> int:
         opponent_pool=opponent_pool,
         current_policy_spec=preview_current_policy_spec,
     )
+    lifecycle_summary = _promotion_lifecycle_summary(entry_statuses)
     opponent_pool_verified = _opponent_pool_verification_passed(
         entry_statuses,
         verification=verification,
@@ -514,6 +523,8 @@ def _promotions(args: argparse.Namespace) -> int:
     if args.json:
         payload = registry.to_dict()
         payload["entry_statuses"] = entry_statuses
+        if args.lifecycle:
+            payload["lifecycle_summary"] = lifecycle_summary
         if opponent_pool is not None:
             payload["opponent_pool_policy_specs"] = list(opponent_pool)
             payload["opponent_pool_excluded_current_policy_spec"] = preview_current_policy_spec
@@ -571,6 +582,8 @@ def _promotions(args: argparse.Namespace) -> int:
                 f"path={status['checkpoint_path_present']} exists={status['checkpoint_exists']} checksum={status['checksum']} "
                 f"loadable={status['loadable']}{label}{source}"
             )
+    if args.lifecycle:
+        _print_promotion_lifecycle_summary(lifecycle_summary)
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
@@ -718,6 +731,67 @@ def _opponent_pool_snapshot_entry(status: Mapping[str, object]) -> dict[str, obj
         "policy_id_matches": status["policy_id_matches"],
         "failed_checks": list(status["failed_checks"]),
     }
+
+
+def _promotion_lifecycle_summary(entry_statuses: list[dict[str, object]]) -> dict[str, object]:
+    total_entries = len(entry_statuses)
+    latest_count = sum(1 for status in entry_statuses if "latest" in status["selected_as"])
+    selected_opponent_pool_count = sum(1 for status in entry_statuses if "opponent_pool" in status["selected_as"])
+    status_counts = _count_status_values(entry_statuses, "opponent_pool_status")
+    verification_counts = _count_status_values(entry_statuses, "verification_status")
+    unselectable_count = int(status_counts.get("unselectable", 0))
+    excluded_current_policy_count = int(status_counts.get("excluded_current_policy", 0))
+    stale_available_count = int(status_counts.get("available_outside_requested_size", 0))
+    selection_eligible_count = sum(
+        1
+        for status in entry_statuses
+        if status["selection_checkpoint_policy_spec"] is not None
+    )
+    failed_verification_count = int(verification_counts.get("fail", 0))
+    return {
+        "total_entries": total_entries,
+        "latest_count": latest_count,
+        "selected_opponent_pool_count": selected_opponent_pool_count,
+        "selection_eligible_count": selection_eligible_count,
+        "unselectable_count": unselectable_count,
+        "excluded_current_policy_count": excluded_current_policy_count,
+        "stale_available_count": stale_available_count,
+        "failed_verification_count": failed_verification_count,
+        "opponent_pool_status_counts": status_counts,
+        "verification_status_counts": verification_counts,
+    }
+
+
+def _count_status_values(entry_statuses: list[dict[str, object]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for status in entry_statuses:
+        value = str(status[key])
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _print_promotion_lifecycle_summary(summary: Mapping[str, object]) -> None:
+    print("lifecycle_summary:")
+    print(f"- total_entries: {summary['total_entries']}")
+    print(f"- latest_count: {summary['latest_count']}")
+    print(f"- selected_opponent_pool_count: {summary['selected_opponent_pool_count']}")
+    print(f"- selection_eligible_count: {summary['selection_eligible_count']}")
+    print(f"- unselectable_count: {summary['unselectable_count']}")
+    print(f"- excluded_current_policy_count: {summary['excluded_current_policy_count']}")
+    print(f"- stale_available_count: {summary['stale_available_count']}")
+    print(f"- failed_verification_count: {summary['failed_verification_count']}")
+    _print_count_mapping("opponent_pool_status_counts", summary["opponent_pool_status_counts"])
+    _print_count_mapping("verification_status_counts", summary["verification_status_counts"])
+
+
+def _print_count_mapping(label: str, value: object) -> None:
+    counts = value if isinstance(value, Mapping) else {}
+    print(f"{label}:")
+    if not counts:
+        print("- none: 0")
+        return
+    for key, count in counts.items():
+        print(f"- {key}: {count}")
 
 
 def _write_json_payload(path: Path, payload: object) -> None:

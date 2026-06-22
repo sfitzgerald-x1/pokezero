@@ -23,6 +23,7 @@ Implemented:
 - Self-play iteration harness with current-policy-only training data, held-out validation data, frozen historical opponent checkpoints, checkpoint warm starts, per-iteration manifests with opponent-pool launch metadata, resumable runs, parallel collection workers, auto-promotion, run reporting, and side-by-side run comparison.
 - Configurable promotion gate CLI over bootstrap and self-play manifests using per-opponent benchmark win rates, incumbent-delta checks, minimum game counts, capped-game rates, and teacher-degradation counters.
 - Named smoke/default/long-run evaluation profiles shared by gate and audit CLIs.
+- Promotion registry lifecycle reporting that summarizes latest, selected opponent-pool, selection-eligible, unselectable, excluded-current, stale, and failed-verification promoted checkpoints.
 - Promotion registry verification that checks registry sequence integrity, promoted checkpoint existence, embedded passing gate results, optional policy loadability, and stored artifact checksums.
 - Append-only promotion registry for recording gate-passing checkpoints with same-host per-registry write locking, optionally copying them into a managed artifact directory, defaulting incumbent gates to the latest promoted policy, refreshing promoted self-play opponents during long runs, filtering historical opponents to promoted checkpoints, and previewing or requiring the selected promoted opponent pool before long runs.
 - Source-backed Gen 3 randbat belief sidecar for local battle inspection from public information.
@@ -55,7 +56,7 @@ Not implemented yet:
 - PPO-style online actor-critic training.
 - Validated GPU training path.
 - Large-scale experiment orchestration across multiple machines.
-- Empirically validated long-run benchmark thresholds or richer managed checkpoint lifecycle tooling beyond registry verification and opponent-pool previews.
+- Empirically validated long-run benchmark thresholds or richer managed checkpoint lifecycle actions beyond registry verification, opponent-pool previews, and lifecycle reporting.
 
 ## Deviations From Original Plan
 

@@ -568,6 +568,44 @@ class PromotionRegistryTest(unittest.TestCase):
             "outside_requested_pool_size",
         )
 
+    def test_eval_cli_promotions_json_can_report_lifecycle_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=4)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--lifecycle",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            lifecycle = payload["lifecycle_summary"]
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(lifecycle["total_entries"], 4)
+        self.assertEqual(lifecycle["latest_count"], 1)
+        self.assertEqual(lifecycle["selected_opponent_pool_count"], 2)
+        self.assertEqual(lifecycle["selection_eligible_count"], 4)
+        self.assertEqual(lifecycle["stale_available_count"], 1)
+        self.assertEqual(lifecycle["excluded_current_policy_count"], 1)
+        self.assertEqual(lifecycle["unselectable_count"], 0)
+        self.assertEqual(lifecycle["failed_verification_count"], 0)
+        self.assertEqual(
+            lifecycle["opponent_pool_status_counts"],
+            {
+                "available_outside_requested_size": 1,
+                "excluded_current_policy": 1,
+                "selected": 2,
+            },
+        )
+        self.assertEqual(lifecycle["verification_status_counts"], {"not_verified": 4})
+
     def test_eval_cli_promotions_json_marks_entries_without_selection_checkpoint_as_unselectable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -592,6 +630,37 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(result["entry_statuses"][0]["opponent_pool_status"], "unselectable")
         self.assertEqual(result["entry_statuses"][0]["opponent_pool_skip_reason"], "missing_selection_checkpoint")
+
+    def test_eval_cli_promotions_text_can_report_lifecycle_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = write_registry_with_entries(temp_path, count=3)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["entries"][0]["checkpoint_path"] = None
+            write_manifest(registry_path, payload)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--lifecycle",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("lifecycle_summary:", output)
+        self.assertIn("- total_entries: 3", output)
+        self.assertIn("- selected_opponent_pool_count: 1", output)
+        self.assertIn("- selection_eligible_count: 2", output)
+        self.assertIn("- unselectable_count: 1", output)
+        self.assertIn("opponent_pool_status_counts:", output)
+        self.assertIn("- unselectable: 1", output)
+        self.assertIn("- selected: 1", output)
 
     def test_eval_cli_promotions_rejects_required_pool_size_above_requested_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
