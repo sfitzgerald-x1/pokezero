@@ -124,7 +124,7 @@ Inspect or preflight the pilot suite without rerunning games:
 ./.venv/bin/python -m pokezero.eval_cli cpu-pilot-report runs/cpu-pilots
 ```
 
-The pilot report surfaces the calibrated audit config path, persisted compare artifact paths, and replay audit status when the replay JSON is available. Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
+The pilot report surfaces the calibrated audit config path, persisted compare artifact paths, calibration sufficiency/write status, replay audit status, and a derived `audit_config_ready` verdict. That verdict means only that the pilot suite passed, the calibration artifact says the audit config was written from sufficient pilot evidence, and the replay artifact says the generated config passed against the same pilots. It is a reuse/readiness check for the generated guardrail config, not a policy-strength claim. Use `cpu-pilot-report --json` when automation needs the same derived artifact report. By default, the report exit code still reflects the wrapper summary status for backward compatibility; add `--require-ready` when shell automation should also fail unless `audit_config_ready` is true. Like the smoke wrapper, the pilot suite is still CPU plumbing and threshold-calibration evidence, not proof of policy strength. Increase `--pilot-count`, per-pilot game counts, and calibration sufficiency floors before treating the generated audit config as a long-run guardrail.
 
 Import normalized replay decisions into standard rollout JSONL:
 

@@ -363,6 +363,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Pilot suite run root or cpu-pilot-suite-summary.json path.",
     )
     pilot_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    pilot_report.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="Return non-zero unless the derived audit_config_ready verdict is true.",
+    )
     pilot_report.set_defaults(func=_cpu_pilot_report)
 
     compare = subparsers.add_parser("compare", help="Compare self-play run manifests side by side.")
@@ -2103,46 +2108,50 @@ def _run_recipe_with_summary(
 def _cpu_pilot_report(args: argparse.Namespace) -> int:
     summary_path, summary = _load_cpu_pilot_summary(args.path)
     status = str(summary.get("status", "unknown"))
+    recipe = summary.get("recipe")
+    artifact_report = (
+        _cpu_pilot_artifact_report(summary, recipe)
+        if isinstance(recipe, Mapping)
+        else None
+    )
+    exit_code = _cpu_pilot_report_exit_code(status, artifact_report, require_ready=args.require_ready)
     if args.json:
         payload = dict(summary)
         payload["summary_source_path"] = str(summary_path)
+        payload["pilot_artifact_report"] = artifact_report
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0 if status == "passed" else 2
+        return exit_code
     print("cpu_pilot_report:")
     print(f"summary: {summary_path}")
     print(f"status: {_status_label(status)}")
     print(f"started_at: {_format_summary_value(summary.get('started_at'))}")
     print(f"ended_at: {_format_summary_value(summary.get('ended_at'))}")
     print(f"duration_seconds: {_format_summary_value(summary.get('duration_seconds'))}")
-    recipe = summary.get("recipe")
-    if isinstance(recipe, Mapping):
+    if isinstance(recipe, Mapping) and artifact_report is not None:
+        calibration_artifact = artifact_report["calibration"]
+        replay_artifact = artifact_report["replay"]
         print(f"pilot_count: {_format_summary_value(recipe.get('pilot_count'))}")
         print(f"manifest_glob: {_format_summary_value(recipe.get('manifest_glob'))}")
         print(f"audit_config_path: {_format_summary_value(recipe.get('audit_config_path'))}")
         print(f"calibration_output_path: {_format_summary_value(recipe.get('calibration_output_path'))}")
         print(f"replay_output_path: {_format_summary_value(recipe.get('replay_output_path'))}")
-        calibration_summary = _load_pilot_report_json_summary(recipe.get("calibration_output_path"))
-        if calibration_summary is None:
-            print("calibration_sufficient: -")
-            print("calibration_written_audit_config_path: -")
-            print("calibration_audit_config_write_error: -")
-        else:
-            print(f"calibration_sufficient: {_format_summary_value(calibration_summary.get('audit_calibration_sufficient'))}")
-            print(
-                "calibration_written_audit_config_path: "
-                f"{_format_summary_value(calibration_summary.get('written_audit_config_path'))}"
-            )
-            print(
-                "calibration_audit_config_write_error: "
-                f"{_format_summary_value(calibration_summary.get('audit_config_write_error'))}"
-            )
-        replay_summary = _load_pilot_report_json_summary(recipe.get("replay_output_path"))
-        if replay_summary is None:
-            print("replay_audit_failed: -")
-            print("replay_failed_check_count: -")
-        else:
-            print(f"replay_audit_failed: {_format_summary_value(replay_summary.get('audit_failed'))}")
-            print(f"replay_failed_check_count: {_comparison_failed_check_count(replay_summary)}")
+        print(f"calibration_sufficient: {_format_summary_value(calibration_artifact.get('sufficient'))}")
+        print(
+            "calibration_written_audit_config_path: "
+            f"{_format_summary_value(calibration_artifact.get('written_audit_config_path'))}"
+        )
+        print(
+            "calibration_audit_config_write_error: "
+            f"{_format_summary_value(calibration_artifact.get('audit_config_write_error'))}"
+        )
+        print(f"replay_audit_failed: {_format_summary_value(replay_artifact.get('audit_failed'))}")
+        print(f"replay_failed_check_count: {_format_summary_value(replay_artifact.get('failed_check_count'))}")
+        print(f"audit_config_ready: {_format_optional_bool(artifact_report['audit_config_ready'])}")
+        reasons = artifact_report["audit_config_ready_reasons"]
+        if isinstance(reasons, list) and reasons:
+            print("audit_config_ready_reasons:")
+            for reason in reasons:
+                print(f"- {reason}")
     failed_step = summary.get("failed_step")
     if isinstance(failed_step, dict):
         print(
@@ -2162,7 +2171,20 @@ def _cpu_pilot_report(args: argparse.Namespace) -> int:
                 f"{step.get('name')} returncode={_format_summary_value(step.get('returncode'))} "
                 f"duration={_format_summary_value(step.get('duration_seconds'))}"
             )
-    return 0 if status == "passed" else 2
+    return exit_code
+
+
+def _cpu_pilot_report_exit_code(
+    status: str,
+    artifact_report: Mapping[str, object] | None,
+    *,
+    require_ready: bool,
+) -> int:
+    if status != "passed":
+        return 2
+    if require_ready and (artifact_report is None or artifact_report.get("audit_config_ready") is not True):
+        return 2
+    return 0
 
 
 def _step_output_json_path(step: Mapping[str, object]) -> Path | None:
@@ -2214,6 +2236,80 @@ def _load_pilot_report_json_summary(path_value: object) -> dict[str, object] | N
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _cpu_pilot_artifact_report(summary: Mapping[str, object], recipe: Mapping[str, object]) -> dict[str, object]:
+    calibration_path = recipe.get("calibration_output_path")
+    replay_path = recipe.get("replay_output_path")
+    calibration_summary = _load_pilot_report_json_summary(calibration_path)
+    replay_summary = _load_pilot_report_json_summary(replay_path)
+    calibration = {
+        "path": None if calibration_path is None else str(calibration_path),
+        "available": calibration_summary is not None,
+        "sufficient": None,
+        "written_audit_config_path": None,
+        "expected_audit_config_path": None if recipe.get("audit_config_path") is None else str(recipe.get("audit_config_path")),
+        "audit_config_write_error": None,
+    }
+    if calibration_summary is not None:
+        calibration.update(
+            {
+                "sufficient": calibration_summary.get("audit_calibration_sufficient"),
+                "written_audit_config_path": calibration_summary.get("written_audit_config_path"),
+                "audit_config_write_error": calibration_summary.get("audit_config_write_error"),
+            }
+        )
+    replay = {
+        "path": None if replay_path is None else str(replay_path),
+        "available": replay_summary is not None,
+        "audit_failed": None,
+        "failed_check_count": None,
+    }
+    if replay_summary is not None:
+        replay.update(
+            {
+                "audit_failed": replay_summary.get("audit_failed"),
+                "failed_check_count": _comparison_failed_check_count(replay_summary),
+            }
+        )
+    reasons = _cpu_pilot_audit_config_not_ready_reasons(summary, calibration, replay)
+    return {
+        "calibration": calibration,
+        "replay": replay,
+        "audit_config_ready": not reasons,
+        "audit_config_ready_reasons": reasons,
+    }
+
+
+def _cpu_pilot_audit_config_not_ready_reasons(
+    summary: Mapping[str, object],
+    calibration: Mapping[str, object],
+    replay: Mapping[str, object],
+) -> list[str]:
+    reasons: list[str] = []
+    if summary.get("status") != "passed":
+        reasons.append("suite_status_not_passed")
+    if calibration.get("available") is not True:
+        reasons.append("calibration_artifact_missing")
+    else:
+        if calibration.get("sufficient") is not True:
+            reasons.append("calibration_not_sufficient")
+        if not calibration.get("written_audit_config_path"):
+            reasons.append("calibrated_audit_config_not_written")
+        elif (
+            calibration.get("expected_audit_config_path")
+            and str(calibration.get("written_audit_config_path")) != str(calibration.get("expected_audit_config_path"))
+        ):
+            reasons.append("calibrated_audit_config_path_mismatch")
+        if calibration.get("audit_config_write_error"):
+            reasons.append("calibrated_audit_config_write_error")
+    if replay.get("available") is not True:
+        reasons.append("replay_artifact_missing")
+    elif replay.get("audit_failed") is not False:
+        reasons.append("replay_audit_failed")
+    elif replay.get("failed_check_count") not in (0, None):
+        reasons.append("replay_failed_checks_present")
+    return reasons
 
 
 def _comparison_failed_check_count(payload: Mapping[str, object]) -> int:
