@@ -64,7 +64,7 @@ Replay import remains valuable after a randbat replay source is identified. A no
 - Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, basic Spikes pressure with max-layer suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; deeper hazard sequencing and matchup context remain future work.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
-- Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command.
+- Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command. A first matched-configuration smoke-profile comparison exists; the next useful comparison should use stricter pilot-derived or named long-run guardrails.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
 - Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
 - Use `python -m pokezero.eval_cli cpu-pilot-run ...` to run multiple seeded CPU smoke pilots, calibrate starting audit thresholds from their manifests, and immediately replay those thresholds against the same pilot suite before enforcing them on longer unattended experiments.
