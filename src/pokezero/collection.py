@@ -166,6 +166,7 @@ class CollectionMetrics:
     ties: int
     capped_games: int
     peak_rss_mb: float | None = None
+    peak_rss_mb_by_phase: Mapping[str, float | None] | None = None
 
     @property
     def games_per_second(self) -> float:
@@ -198,6 +199,11 @@ class CollectionMetrics:
             "average_decision_rounds": self.average_decision_rounds,
             "average_simulator_turns": self.average_simulator_turns,
             **({"peak_rss_mb": self.peak_rss_mb} if self.peak_rss_mb is not None else {}),
+            **(
+                {"peak_rss_mb_by_phase": dict(self.peak_rss_mb_by_phase)}
+                if self.peak_rss_mb_by_phase
+                else {}
+            ),
         }
 
 
@@ -488,11 +494,20 @@ def rollout_record_from_dict(payload: Mapping[str, Any]) -> RolloutRecord:
     )
 
 
-def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: float) -> CollectionMetrics:
+def summarize_records(
+    records: Iterable[RolloutRecord],
+    *,
+    elapsed_seconds: float,
+    peak_rss_mb_by_phase: Mapping[str, float | None] | None = None,
+) -> CollectionMetrics:
     accumulator = _MetricsAccumulator()
     for record in records:
         accumulator.add(record)
-    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds, peak_rss_mb=current_peak_rss_mb())
+    return accumulator.to_metrics(
+        elapsed_seconds=elapsed_seconds,
+        peak_rss_mb=current_peak_rss_mb(),
+        peak_rss_mb_by_phase=peak_rss_mb_by_phase,
+    )
 
 
 def policy_from_spec(spec: str) -> Policy:
@@ -742,7 +757,13 @@ class _MetricsAccumulator:
         if record.terminal.capped:
             self.capped_games += 1
 
-    def to_metrics(self, *, elapsed_seconds: float, peak_rss_mb: float | None = None) -> CollectionMetrics:
+    def to_metrics(
+        self,
+        *,
+        elapsed_seconds: float,
+        peak_rss_mb: float | None = None,
+        peak_rss_mb_by_phase: Mapping[str, float | None] | None = None,
+    ) -> CollectionMetrics:
         return CollectionMetrics(
             games=self.games,
             elapsed_seconds=elapsed_seconds,
@@ -753,6 +774,7 @@ class _MetricsAccumulator:
             ties=self.ties,
             capped_games=self.capped_games,
             peak_rss_mb=peak_rss_mb,
+            peak_rss_mb_by_phase=peak_rss_mb_by_phase,
         )
 
 

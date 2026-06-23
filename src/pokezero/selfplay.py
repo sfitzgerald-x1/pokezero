@@ -512,13 +512,17 @@ def collect_selfplay_rollouts(
     opponent_specs = tuple(opponent_policy_specs)
     if not opponent_specs:
         raise ValueError("at least one opponent policy spec is required.")
+    collection_peak_rss_mb_by_phase: dict[str, float | None] = {}
+    _record_process_peak_rss(collection_peak_rss_mb_by_phase, "collection_start")
     policy_factories = _policy_factories_for_specs((current_policy_spec, *opponent_specs))
+    _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_policy_factories")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path.with_name(f".{output_path.name}.tmp")
     training_write_path = None
     if training_output_path is not None:
         training_output_path.parent.mkdir(parents=True, exist_ok=True)
         training_write_path = training_output_path.with_name(f".{training_output_path.name}.tmp")
+    _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_setup")
     collection_start = perf_counter()
     try:
         with write_path.open("w", encoding="utf-8") as handle:
@@ -536,21 +540,26 @@ def collect_selfplay_rollouts(
                     policy_factories=policy_factories,
                     worker_count=worker_count,
                 )
+                _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_record_collection")
             finally:
                 if training_handle is not None:
                     training_handle.close()
         write_path.replace(output_path)
         if training_write_path is not None and training_output_path is not None:
             training_write_path.replace(training_output_path)
+        _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_commit")
     except Exception:
         write_path.unlink(missing_ok=True)
         if training_write_path is not None:
             training_write_path.unlink(missing_ok=True)
         raise
-    return summarize_records(
+    metrics = summarize_records(
         iter_rollout_records(output_path),
         elapsed_seconds=perf_counter() - collection_start,
+        peak_rss_mb_by_phase=collection_peak_rss_mb_by_phase,
     )
+    _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_summary")
+    return replace(metrics, peak_rss_mb_by_phase=dict(collection_peak_rss_mb_by_phase))
 
 
 def _collect_selfplay_records(
