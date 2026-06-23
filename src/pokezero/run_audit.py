@@ -182,6 +182,7 @@ class RunAuditIterationSummary:
     collection_games_per_hour: float | None
     collection_capped_rate: float | None
     collection_peak_rss_mb: float | None
+    collection_peak_rss_mb_by_phase: Mapping[str, float | None]
     average_decision_rounds: float | None
     benchmark_win_rate: float | None
     benchmark_games: int
@@ -204,6 +205,7 @@ class RunAuditIterationSummary:
             "collection_games_per_hour": self.collection_games_per_hour,
             "collection_capped_rate": self.collection_capped_rate,
             "collection_peak_rss_mb": self.collection_peak_rss_mb,
+            "collection_peak_rss_mb_by_phase": dict(self.collection_peak_rss_mb_by_phase),
             "average_decision_rounds": self.average_decision_rounds,
             "benchmark_win_rate": self.benchmark_win_rate,
             "benchmark_games": self.benchmark_games,
@@ -996,6 +998,7 @@ def _iteration_summary(
         collection_games_per_hour=_games_per_hour(collection_metrics),
         collection_capped_rate=_capped_rate(collection_metrics),
         collection_peak_rss_mb=_optional_float(collection_metrics.get("peak_rss_mb")),
+        collection_peak_rss_mb_by_phase=_collection_peak_rss_by_phase(collection_metrics),
         average_decision_rounds=_optional_float(collection_metrics.get("average_decision_rounds")),
         benchmark_win_rate=benchmark_summary.win_rate if benchmark_summary.games else None,
         benchmark_games=benchmark_summary.games,
@@ -1293,6 +1296,16 @@ def _latest_process_peak_rss_mb(latest: RunAuditIterationSummary) -> float | Non
             *latest.process_peak_rss_mb_by_phase.values(),
         )
     )
+
+
+def _collection_peak_rss_by_phase(collection_metrics: Mapping[str, Any]) -> dict[str, float | None]:
+    payload = collection_metrics.get("peak_rss_mb_by_phase")
+    if not isinstance(payload, Mapping):
+        return {}
+    return {
+        str(phase): _optional_float(value)
+        for phase, value in payload.items()
+    }
 
 
 def _process_peak_rss_by_phase(iteration: Mapping[str, Any]) -> dict[str, float | None]:

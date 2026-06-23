@@ -938,6 +938,11 @@ class RunAuditTest(unittest.TestCase):
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
         )
         manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
+        manifest["iterations"][0]["collection_metrics"]["peak_rss_mb_by_phase"] = {
+            "collection_start": 256.0,
+            "after_policy_factories": 512.25,
+            "after_record_collection": 512.25,
+        }
         manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
         manifest["iterations"][0]["process_peak_rss_mb_by_phase"] = {
             "iteration_start": 512.25,
@@ -960,6 +965,7 @@ class RunAuditTest(unittest.TestCase):
 
         self.assertFalse(result.passed)
         self.assertEqual(result.latest_process_peak_rss_mb, 704.0)
+        self.assertEqual(result.iterations[0].collection_peak_rss_mb_by_phase["after_policy_factories"], 512.25)
         self.assertEqual(result.iterations[0].process_peak_rss_mb_by_phase["after_training"], 704.0)
         rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
         self.assertEqual(rss_check.observed, 704.0)

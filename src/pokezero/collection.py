@@ -166,6 +166,7 @@ class CollectionMetrics:
     ties: int
     capped_games: int
     peak_rss_mb: float | None = None
+    peak_rss_mb_by_phase: Mapping[str, float | None] | None = None
 
     @property
     def games_per_second(self) -> float:
@@ -198,6 +199,11 @@ class CollectionMetrics:
             "average_decision_rounds": self.average_decision_rounds,
             "average_simulator_turns": self.average_simulator_turns,
             **({"peak_rss_mb": self.peak_rss_mb} if self.peak_rss_mb is not None else {}),
+            **(
+                {"peak_rss_mb_by_phase": dict(self.peak_rss_mb_by_phase)}
+                if self.peak_rss_mb_by_phase
+                else {}
+            ),
         }
 
 
