@@ -70,6 +70,23 @@ Replay import remains valuable after a randbat replay source is identified. A no
 - Use `python -m pokezero.eval_cli cpu-pilot-run ...` to run multiple seeded CPU smoke pilots, calibrate starting audit thresholds from their manifests, and immediately replay those thresholds against the same pilot suite before enforcing them on longer unattended experiments.
 - Extend the normalized replay-to-rollout importer with a raw Showdown replay converter after a useful Gen 3 randbat replay corpus is identified.
 
+For direct candidate comparisons, use a shared-opponent rollout benchmark instead of comparing aggregate win rates from self-play manifests with different benchmark opponent sets:
+
+```bash
+./.venv/bin/python -m pokezero.rollout_cli benchmark \
+  --showdown-root /path/to/pokemon-showdown \
+  --games 30 \
+  --seed-start 9000001 \
+  --policy linear:runs/cold-start/iteration-0002/linear-policy.json \
+  --policy linear:runs/teacher-bootstrap/iteration-0002/linear-policy.json \
+  --opponent-policy random-legal \
+  --opponent-policy simple-legal \
+  --include-policy-head-to-head \
+  --json
+```
+
+This runs mirrored seats for each candidate against the same opponent specs and seed range. Increase `--games` before using the result as strength evidence.
+
 ## Supported Command Shape
 
 Run a tiny CPU smoke validation before spending time on larger experiments:

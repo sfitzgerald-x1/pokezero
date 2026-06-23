@@ -33,6 +33,7 @@ Implemented:
 - The promotion registry records accepted checkpoints, can copy managed artifacts, verifies registry/checkpoint integrity, feeds promoted opponent pools back into self-play, previews pool selection, and supports recoverable retention archiving.
 - Run audits can check latest benchmark health, capped-game rates, same-opponent regressions, repeated promotion failures, decision-round length, missing benchmark opponents, and best-effort process RSS high-water marks.
 - Run audits can mark selected checks as warning-only diagnostics, so early CPU runs can surface provisional decision-round or same-opponent-regression concerns without stopping when the strict benchmark/capped/RSS gates still pass.
+- Rollout benchmarking can compare arbitrary candidate policies against a shared opponent set in mirrored seats, with optional candidate-vs-candidate mirrors. This provides the command shape needed for direct cold-start versus teacher-bootstrap evidence instead of aggregate comparisons with different opponent sets.
 - CPU smoke, pilot, and long-run wrappers can generate plans, execute guarded runs, persist wrapper summaries, calibrate audit configs from pilot evidence, replay those configs, launch readiness-checked long runs, and report or compare run health from summaries.
 - CPU smoke and pilot execution wrappers now reject non-fresh run roots before launching nested work, so accidental reruns do not overwrite wrapper summaries or collide later with existing bootstrap/self-play artifacts.
 - CPU pilot planning and execution now reject calibration benchmark-game floors that the selected `--evaluation-games` cannot guarantee before launching nested work.
@@ -75,7 +76,7 @@ The remaining work is less about wiring and more about making the loop empirical
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
 1. Use promotion registry discipline in the next CPU run by requiring a promoted historical opponent pool from an existing passing registry.
-2. Add a direct shared-opponent benchmark before deciding whether cold-start or teacher-bootstrap should become the next incumbent candidate; the current aggregate win rates are not directly comparable.
+2. Run a direct shared-opponent benchmark before deciding whether cold-start or teacher-bootstrap should become the next incumbent candidate; the current aggregate win rates are not directly comparable.
 3. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
 
 ## Progress Updates
