@@ -64,7 +64,7 @@ Replay import remains valuable after a randbat replay source is identified. A no
 - Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, basic Spikes pressure with max-layer suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; deeper hazard sequencing and matchup context remain future work.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
-- Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command. A first matched-configuration smoke-profile comparison exists; the next useful comparison should use stricter pilot-derived or named long-run guardrails.
+- Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command. A first matched-configuration smoke-profile comparison exists, and a first expanded summary-derived guardrail run failed closed. The next useful comparison should adjust those guardrails before rerunning, rather than treating the first envelope thresholds as final.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
 - Track benchmark win rate, capped-game rate, validation fit, games per hour, average decision-round length, and best-effort process peak RSS high-water marks for both paths. Treat validation fit as imitation-health only.
 - Use `python -m pokezero.eval_cli cpu-pilot-run ...` to run multiple seeded CPU smoke pilots, calibrate starting audit thresholds from their manifests, and immediately replay those thresholds against the same pilot suite before enforcing them on longer unattended experiments.
@@ -230,6 +230,8 @@ For the first local cold-start versus teacher-bootstrap comparison, envelope mod
 ```
 
 That suggests `--evaluation-games 30` plus a 120-game latest benchmark floor, 0.5025 latest benchmark win-rate floor, 0.10 capped-rate ceilings, 75.00625 latest average decision-round ceiling, 75.46 latest benchmark average decision-round ceiling, 636.521875 MB process RSS ceiling, 0.05 same-opponent benchmark win-rate drop ceiling, one allowed consecutive promotion failure, required benchmark evidence, required fixed-baseline coverage, and optional latest promotion. Treat these as provisional local CPU guardrails, not final success criteria. Use `--write-config` to persist the summary-derived config, then pass it to `cpu-long-run-plan/run` with `--runtime-audit-config`.
+
+The first expanded run using this summary-derived config at `runs/cpu-comparison-local-20260623-expanded` validated the wiring but failed closed. Cold-start stopped after iteration 1 on decision-round ceilings. Teacher-bootstrap reached iteration 2, passed capped-game, benchmark-count, latest win-rate, decision-round, and RSS checks, then failed the same-opponent benchmark regression threshold. This means the guardrails are doing useful work, but the first envelope config is too thin to treat every threshold as a hard long-run stop. The next run should either recalibrate from the expanded summaries or split early diagnostic thresholds from strict runtime stops.
 
 Summarize core CPU readiness artifacts without launching games:
 
