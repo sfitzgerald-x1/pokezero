@@ -1427,6 +1427,39 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(len(run_manifest["iterations"]), 1)
         self.assertFalse((run_dir / "iteration-0002").exists())
 
+    def test_runtime_health_audit_failure_mode_stops_when_mixed_with_promotion_strength_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with self.assertRaises(RunAuditFailure) as raised:
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    post_iteration_audit_config=RunAuditConfig(
+                        require_benchmark=True,
+                        require_latest_promotion=True,
+                    ),
+                    post_iteration_audit_failure_mode="runtime-health",
+                )
+
+            failed_names = {check.name for check in raised.exception.result.blocking_failed_checks}
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertIn("latest_benchmark_available", failed_names)
+        self.assertIn("latest_promotion_recorded", failed_names)
+        self.assertEqual(len(run_manifest["iterations"]), 1)
+        self.assertFalse((run_dir / "iteration-0002").exists())
+
     def test_post_iteration_audit_failure_prevents_auto_promotion_when_latest_promotion_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

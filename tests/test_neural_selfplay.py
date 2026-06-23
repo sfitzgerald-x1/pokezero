@@ -114,6 +114,32 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertFalse(run.call_args.kwargs["auto_promotion_config"].gate_config.require_benchmark)
 
+    def test_neural_cli_iterate_wires_post_iteration_audit_failure_mode(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--initial-policy",
+                        "random-legal",
+                        "--audit-after-iteration",
+                        "--audit-allow-missing-benchmark",
+                        "--audit-allow-missing-benchmark-opponents",
+                        "--audit-failure-mode",
+                        "runtime-health",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_args.kwargs["post_iteration_audit_failure_mode"], "runtime-health")
+
     def test_run_neural_selfplay_iterations_writes_manifests_and_accumulates_training_data(self) -> None:
         collected = []
         trained_paths = []
@@ -366,6 +392,54 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertFalse(registry_path.exists())
         self.assertEqual(iteration_manifest["promotion"]["recorded"], False)
         self.assertEqual(run_manifest["iterations"][0]["promotion"]["recorded"], False)
+
+    def test_runtime_health_audit_failure_mode_continues_on_neural_promotion_strength_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
+
+            with patched_neural_selfplay_dependencies(candidate_beats_incumbent=False):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    result = run_neural_selfplay_iterations(
+                        run_dir=run_dir,
+                        iterations=1,
+                        games_per_iteration=1,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        evaluation_games=1,
+                        promotion_registry_path=registry_path,
+                        auto_promotion_config=NeuralSelfPlayPromotionConfig(
+                            registry_path=registry_path,
+                            gate_config=PromotionGateConfig(
+                                min_benchmark_win_rate=0.5,
+                                min_benchmark_games=0,
+                                max_collection_capped_rate=1.0,
+                                max_benchmark_capped_rate=1.0,
+                            ),
+                            label_prefix="neural-candidate",
+                        ),
+                        post_iteration_audit_config=RunAuditConfig(
+                            min_latest_benchmark_win_rate=0.0,
+                            min_latest_benchmark_games=0,
+                            max_latest_benchmark_capped_rate=1.0,
+                            max_benchmark_win_rate_drop=1.0,
+                            max_consecutive_promotion_failures=0,
+                            require_benchmark=True,
+                        ),
+                        post_iteration_audit_failure_mode="runtime-health",
+                    )
+
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+            iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(result.iterations), 1)
+        self.assertEqual(iteration_manifest["promotion"]["recorded"], False)
+        self.assertEqual(run_manifest["iterations"][0]["promotion"]["recorded"], False)
+        self.assertIn("audit_nonblocking_failed_checks: consecutive_promotion_failures", stderr.getvalue())
 
     def test_run_neural_selfplay_iterations_post_iteration_audit_passes_and_continues(self) -> None:
         collected = []
