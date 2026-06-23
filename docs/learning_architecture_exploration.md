@@ -287,19 +287,94 @@ reuses all existing infra and stays CPU-smoke-friendly; (d) it de-risks the
 representation before we invest in search. AlphaGo Zero ideas then enter incrementally
 exactly where they pay off, instead of forcing a search loop the simulator can't support.
 
-## Infrastructure Implications
+## Model Infrastructure
 
-- **Forward-model speed is the real gate for any search.** A subprocess-per-step
-  simulator cannot back MCTS. Before Stage 3/4, we likely need an in-process or batched
-  Gen 3 engine, or a learned dynamics model. Worth scoping early even though Stage 1
-  doesn't need it.
-- **The GPU path is unvalidated** (`first_iteration_design.md`, "Not implemented yet").
-  Neural RL needs it for scale; Stage 1 should include a validated GPU training path.
-- **Consumer-GPU target** constrains model size (`embedding_dim`, layers, heads) — keep
-  the architecture sweepable and small by default.
+Resist introducing new frameworks; most of the stack is already chosen.
+
+- **Framework: PyTorch.** Already the `[neural]` extra (`neural_policy.py` is an
+  `nn.Module` with a `TransformerEncoder`). No reason to reach for JAX or anything else for
+  a proof of concept.
+- **RL algorithm: a lightweight, bespoke PPO/V-trace loop** (CleanRL single-file spirit),
+  *not* a heavy framework (RLlib / SB3 / TorchRL). Our shape — a custom recurrent
+  multi-head model, privileged auxiliary losses, and an already-built
+  league/promotion/benchmark/audit system — is exactly what heavy frameworks fight. A few
+  hundred lines of explicit PPO is more controllable than bending a framework to fit.
+- **Reuse the existing harness.** The iterate→collect→train→benchmark→promote loop, the
+  frozen-opponent pool, and the audits are assets. Wire a new *learner* into them; do not
+  replace them.
+- **Two concrete data-path changes** for RL: rollout records must also store the
+  **behavior-policy log-probs and value estimates** (for PPO importance weighting), and
+  collection must keep **each game's steps contiguous** (no cross-game shuffling) so the
+  recurrent core can backpropagate through time.
+- **Write it device-agnostic from day one** (`.to(device)`, no hard-coded CPU/GPU
+  assumptions). This is the single most important decision for the CPU→GPU question: it
+  makes "promote to GPU" a flag, not a port.
+
+## CPU Proof-Of-Life vs. GPU For Strength
+
+Separate two questions that have different bottlenecks and different hardware answers:
+"prove the design works" vs. "train something strong."
+
+**This workload is environment-bound, not compute-bound, at proof-of-concept scale.** The
+model is small (millions of params), but every step is a subprocess round-trip to Showdown
+BattleStream across a 30–60-turn game. The simulator dominates wall-clock, not the network
+(the CPU loop already sustains roughly 0.6–2 games/s). A GPU at this stage would sit
+starved behind a slow env, so it does not even attack the real bottleneck yet.
+
+### CPU is sufficient — and correct — for proving the design out
+
+Validating correctness and learning signal needs *iterations and signal*, not throughput,
+so it belongs on CPU and fits the existing CPU-first philosophy. Promote to GPU only after
+these proof-of-life criteria pass:
+
+- gradients flow, losses descend, no NaNs, and seat-symmetry holds
+- the model can **overfit a handful of games** (basic plumbing sanity)
+- it **beats `random-legal`, then `simple-legal`** (first real learning signal)
+- **belief-probe accuracy rises over the course of a game** (the direct test for the
+  explicit-vs-emergent belief tension above)
+- PPO is stable across iterations and the promotion gate behaves as expected
+
+These are order 10^4–10^5 games — hours to a couple of days on CPU. This mirrors the
+run-health-vs-strength split the CPU roadmap already uses: a passing proof-of-life run
+proves the *design*, not strength.
+
+### GPU (plus env throughput) is what buys strength
+
+Reaching real randbat strength is sample-hungry — conservatively 10^6–10^7+ games, which
+is weeks-to-months on CPU and not viable. But **a GPU alone does not fix it, because the
+env is the bottleneck.** The strength-scale architecture is the classic **actor–learner
+split**: many CPU env workers (subprocess Showdown) generating rollouts in parallel feeding
+**one GPU learner** doing batched forward/backward. GPU accelerates the learner and batched
+inference; CPU parallelism (or a faster/in-process engine) feeds it. Buying a GPU without
+scaling env throughput leaves it idle.
+
+### Sequencing and the promotion trigger
+
+1. **CPU proof-of-life** — validate architecture and learning signal against the criteria
+   above. No GPU.
+2. **Promotion trigger** — once those criteria pass *and* `games/s` vs `net-forward/s` is
+   instrumented to confirm where the bottleneck actually is.
+3. **GPU + env parallelism together** — actor–learner for the strength run, likely with a
+   bigger model and full-game attention.
+
+The clean mental model: **CPU proves the design is correct; GPU plus env throughput is what
+buys strength.** Because the bottleneck today is the simulator, the *first* scaling lever
+after proof-of-life may be "speed up / parallelize the env," not "buy a GPU" — measure
+before committing GPU budget.
+
+## Other Infrastructure Implications
+
+- **Forward-model speed is also the gate for any search.** A subprocess-per-step simulator
+  cannot back MCTS. Before Stage 3/4, we likely need an in-process or batched Gen 3 engine,
+  or a learned dynamics model. The same env-throughput work that feeds a GPU learner is
+  what later makes search feasible — worth scoping once, used twice.
+- **The GPU training path is unvalidated** (`first_iteration_design.md`, "Not implemented
+  yet"). The promotion step above is where it must be validated.
+- **Consumer-GPU target** constrains model size (`embedding_dim`, layers, heads) — keep the
+  architecture sweepable and small by default.
 - **Inference must stay fast** to preserve high-throughput self-play (`docs/goals.md`).
-- Reward shaping, the 250-turn cap, and capped-game scoring are already specified and
-  carry over unchanged.
+- Reward shaping, the 250-turn cap, and capped-game scoring are already specified and carry
+  over unchanged.
 
 ## Open Questions
 
@@ -315,6 +390,10 @@ exactly where they pay off, instead of forcing a search loop the simulator can't
   learned set embeddings.
 - Online RL vs the current iterate-train-promote loop: does PPO fit the existing
   manifest/promotion model, or does it need a new training driver?
+- Is the first post-proof-of-life scaling lever a GPU learner or a faster/parallel env?
+  (Decide from measured `games/s` vs `net-forward/s`, not a priori.)
+- In-process/batched Gen 3 engine vs. staying on subprocess Showdown: when is the env
+  rewrite worth it, given it unblocks both GPU-scale throughput and future search?
 
 ## Related Documents
 
