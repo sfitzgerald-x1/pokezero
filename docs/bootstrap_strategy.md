@@ -217,6 +217,20 @@ Derive a reusable audit config from several completed long-run wrapper summaries
 
 `cpu-long-run-calibrate` is intentionally summary-based: it uses one latest-iteration `derived_run_report` per wrapper summary, uses each wrapper's persisted report by default, and falls back to recomputing only when a summary has no persisted report. This is useful for threshold tuning after older long-run directories have been compacted or moved, but it does not see every iteration inside the nested run the way manifest-based `audit-calibrate` does. The command fails closed on unreadable summaries, failed wrappers, unavailable derived reports, or derived reports that did not pass. Add `--refresh-derived-audit` only when live nested manifests should override the persisted snapshots. Like `audit-calibrate`, `--write-config` requires explicit sufficiency floors. With the default `--aggregate-mode median`, sufficiency applies to the aggregate calibration; use `--aggregate-mode envelope` when every selected summary should remain passable under the written config or when a thin run should not be masked by larger runs. The output mirrors manifest calibration by printing both audit-only flags and a self-play post-iteration command fragment for an existing `selfplay_cli iterate` invocation, plus per-sample runtime audit source/flag provenance for the summaries being calibrated.
 
+For the first local cold-start versus teacher-bootstrap comparison, envelope mode is the safer calibration mode because there are only two summaries and the teacher-bootstrap run used more memory than the cold-start run. The current provisional envelope command is:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-long-run-calibrate \
+  runs/cpu-comparison-local-20260622/cold-start \
+  runs/cpu-comparison-local-20260622/teacher-bootstrap \
+  --aggregate-mode envelope \
+  --require-run-count 2 \
+  --require-benchmark-iterations 2 \
+  --require-min-benchmark-games 100
+```
+
+That suggests `--evaluation-games 30` plus a 120-game latest benchmark floor, 0.5025 latest benchmark win-rate floor, 0.10 capped-rate ceilings, 75.00625 latest average decision-round ceiling, 75.46 latest benchmark average decision-round ceiling, 636.521875 MB process RSS ceiling, 0.05 same-opponent benchmark win-rate drop ceiling, one allowed consecutive promotion failure, required benchmark evidence, required fixed-baseline coverage, and optional latest promotion. Treat these as provisional local CPU guardrails, not final success criteria.
+
 Summarize core CPU readiness artifacts without launching games:
 
 ```bash
