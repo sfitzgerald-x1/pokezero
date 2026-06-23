@@ -881,10 +881,64 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(registry_payload["entries"][0]["label"], "candidate-0001")
         self.assertEqual(registry_payload["entries"][1]["label"], "candidate-0002")
         self.assertEqual(Path(registry_payload["entries"][0]["checkpoint_path"]).parent, artifact_dir)
-        self.assertIn(first_promoted_spec, result.iterations[1].opponent_policy_specs)
+        self.assertEqual(result.iterations[1].current_policy_spec, first_promoted_spec)
+        self.assertNotIn(first_promoted_spec, result.iterations[1].opponent_policy_specs)
         self.assertEqual(iteration_one_manifest["promotion"]["recorded"], True)
         self.assertEqual(iteration_two_manifest["promotion"]["recorded"], True)
+        self.assertEqual(iteration_two_manifest["current_policy_spec"], first_promoted_spec)
         self.assertEqual(iteration_two_manifest["promotion"]["gate_result"]["incumbent_policy_id"], "linear-selfplay-test-iter-0001")
+
+    def test_run_selfplay_iterations_resume_uses_promoted_artifact_as_current_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
+            artifact_dir = temp_path / "promoted-checkpoints"
+            config = LinearTrainingConfig(
+                feature_count=32,
+                epochs=1,
+                shuffle_buffer_size=0,
+                policy_id="linear-selfplay-test",
+            )
+
+            first = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                seed_start=20,
+                fixed_opponent_policy_specs=("random-legal",),
+                max_historical_opponents=2,
+                evaluation_games=1,
+                promotion_registry_path=registry_path,
+                auto_promotion_config=SelfPlayPromotionConfig(
+                    registry_path=registry_path,
+                    artifact_dir=artifact_dir,
+                    gate_config=passing_promotion_gate_config(),
+                    label_prefix="candidate",
+                ),
+            )
+            registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            promoted_spec = f"linear:{Path(registry_payload['entries'][0]['checkpoint_path']).resolve(strict=False)}"
+
+            second = run_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=config,
+                fixed_opponent_policy_specs=("random-legal",),
+                max_historical_opponents=2,
+                promotion_registry_path=registry_path,
+                resume=True,
+            )
+
+        self.assertEqual(first.iterations[0].promotion.recorded if first.iterations[0].promotion else False, True)
+        self.assertEqual(second.iterations[0].current_policy_spec, promoted_spec)
+        self.assertNotIn(promoted_spec, second.iterations[0].opponent_policy_specs)
 
     def test_run_selfplay_iterations_static_reference_does_not_gate_auto_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -224,7 +224,7 @@ def run_selfplay_iterations(
     prior_invocation_configs = _load_prior_invocation_configs(run_dir) if prior_iteration_manifests else ()
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
-        current_policy_spec = str(last_iteration["checkpoint_policy_spec"])
+        current_policy_spec = _next_current_policy_spec_from_manifest(last_iteration)
         benchmark_references = _dedupe_policy_specs(
             (
                 *_benchmark_reference_policy_specs_from_manifest_history(prior_iteration_manifests),
@@ -408,8 +408,9 @@ def run_selfplay_iterations(
             _write_json(manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
                 promoted_checkpoint_specs = list(_promoted_checkpoint_specs(promotion_pool_registry_path))
-        checkpoint_history.append(result.checkpoint_policy_spec)
-        current_policy_spec = result.checkpoint_policy_spec
+        next_current_policy_spec = _next_current_policy_spec(result)
+        checkpoint_history.append(next_current_policy_spec)
+        current_policy_spec = next_current_policy_spec
         current_model = training.model
         _write_json(
             run_dir / "manifest.json",
@@ -659,6 +660,27 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
     return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
+
+
+def _next_current_policy_spec(result: SelfPlayIterationResult) -> str:
+    promotion = result.promotion
+    if promotion is not None and promotion.entry is not None:
+        promoted_spec = promotion.registry.selection_checkpoint_policy_spec_for_entry(promotion.entry)
+        if promoted_spec is not None:
+            return promoted_spec
+    return result.checkpoint_policy_spec
+
+
+def _next_current_policy_spec_from_manifest(manifest: Mapping[str, Any]) -> str:
+    promotion = manifest.get("promotion")
+    if isinstance(promotion, Mapping) and bool(promotion.get("recorded")):
+        entry = promotion.get("entry")
+        if isinstance(entry, Mapping) and entry.get("source_type") == SELFPLAY_RUN_SCHEMA_VERSION:
+            checkpoint_path = entry.get("checkpoint_path")
+            if checkpoint_path:
+                resolved_checkpoint = Path(str(checkpoint_path)).expanduser().resolve(strict=False)
+                return f"linear:{resolved_checkpoint}"
+    return str(manifest["checkpoint_policy_spec"])
 
 
 def _require_promoted_opponent_pool(
