@@ -4038,10 +4038,14 @@ if __name__ == "__main__":
         self.assertEqual(report["audit_profile"], "smoke")
         self.assertIsNone(report["audit_config_path"])
         self.assertTrue(report["audit_passed"])
+        self.assertTrue(report["runtime_health_passed"])
+        self.assertTrue(report["promotion_strength_passed"])
         self.assertEqual(report["latest_iteration"], 1)
         self.assertEqual(report["latest_benchmark_win_rate"], 0.65)
         self.assertEqual(report["latest_collection_capped_rate"], 0.1)
         self.assertEqual(report["failed_checks"], [])
+        self.assertEqual(report["runtime_health_failed_checks"], [])
+        self.assertEqual(report["promotion_strength_failed_checks"], [])
 
     def test_eval_cli_cpu_long_run_report_recomputes_pilot_config_audit_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4106,6 +4110,10 @@ if __name__ == "__main__":
         self.assertIsNone(report["audit_profile"])
         self.assertFalse(report["audit_passed"])
         self.assertIn("latest_benchmark_win_rate", report["failed_checks"])
+        self.assertFalse(report["runtime_health_passed"])
+        self.assertTrue(report["promotion_strength_passed"])
+        self.assertIn("latest_benchmark_win_rate", report["runtime_health_failed_checks"])
+        self.assertEqual(report["promotion_strength_failed_checks"], [])
 
     def test_eval_cli_cpu_long_run_report_recomputes_custom_runtime_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4183,6 +4191,10 @@ if __name__ == "__main__":
         self.assertEqual(report["audit_config_path"], str(runtime_audit_config_path))
         self.assertFalse(report["audit_passed"])
         self.assertIn("latest_benchmark_win_rate", report["failed_checks"])
+        self.assertFalse(report["runtime_health_passed"])
+        self.assertTrue(report["promotion_strength_passed"])
+        self.assertIn("latest_benchmark_win_rate", report["runtime_health_failed_checks"])
+        self.assertEqual(report["promotion_strength_failed_checks"], [])
 
     def test_eval_cli_cpu_long_run_report_default_exit_ignores_derived_audit_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4310,6 +4322,87 @@ if __name__ == "__main__":
         self.assertEqual(payload["derived_run_report_source"], "persisted")
         self.assertEqual(payload["derived_run_report"]["latest_iteration"], 3)
         self.assertEqual(payload["derived_run_report"]["latest_benchmark_win_rate"], 0.8)
+        self.assertTrue(payload["derived_run_report"]["runtime_health_passed"])
+        self.assertTrue(payload["derived_run_report"]["promotion_strength_passed"])
+        self.assertEqual(payload["derived_run_report"]["runtime_health_failed_checks"], [])
+        self.assertEqual(payload["derived_run_report"]["promotion_strength_failed_checks"], [])
+
+    def test_eval_cli_cpu_long_run_report_splits_promotion_strength_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            audit_config_path = temp_path / "promotion-strength-audit-config.json"
+            manifest = selfplay_manifest()
+            first_iteration = manifest["iterations"][0]
+            first_iteration["benchmark"] = benchmark_payload(
+                policy_id="linear-selfplay-test-iter-0001",
+                rows=(
+                    ("random-legal", 7, 3, 0),
+                    ("simple-legal", 7, 3, 0),
+                ),
+            )
+            first_iteration["promotion"] = {"recorded": False}
+            second_iteration = json.loads(json.dumps(first_iteration))
+            second_iteration["iteration"] = 2
+            second_iteration["checkpoint_path"] = "run/iteration-0002/linear-policy.json"
+            second_iteration["training"] = {"model": {"policy_id": "linear-selfplay-test-iter-0002"}}
+            second_iteration["benchmark"] = benchmark_payload(
+                policy_id="linear-selfplay-test-iter-0002",
+                rows=(
+                    ("random-legal", 7, 3, 0),
+                    ("simple-legal", 7, 3, 0),
+                ),
+            )
+            second_iteration["promotion"] = {"recorded": False}
+            manifest["iterations"].append(second_iteration)
+            manifest["latest_checkpoint_path"] = "run/iteration-0002/linear-policy.json"
+            write_manifest(run_root / "manifest.json", manifest)
+            write_json(
+                audit_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_win_rate=0.10,
+                        min_latest_benchmark_games=1,
+                        max_latest_collection_capped_rate=1.0,
+                        max_latest_benchmark_capped_rate=1.0,
+                        max_benchmark_win_rate_drop=1.0,
+                        max_consecutive_promotion_failures=1,
+                        require_benchmark=True,
+                        require_latest_promotion=False,
+                        require_benchmark_opponent_coverage=False,
+                    ),
+                ),
+            )
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "runtime-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(audit_config_path)
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--json", "--require-derived-audit"])
+            payload = json.loads(stdout.getvalue())
+
+            with patch("sys.stdout", new_callable=io.StringIO) as text_stdout:
+                text_exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--require-derived-audit"])
+            text_output = text_stdout.getvalue()
+
+        report = payload["derived_run_report"]
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(text_exit_code, 2)
+        self.assertTrue(payload["derived_audit_required"])
+        self.assertFalse(payload["derived_audit_requirement_passed"])
+        self.assertFalse(report["audit_passed"])
+        self.assertEqual(report["failed_checks"], ["consecutive_promotion_failures"])
+        self.assertTrue(report["runtime_health_passed"])
+        self.assertEqual(report["runtime_health_failed_checks"], [])
+        self.assertFalse(report["promotion_strength_passed"])
+        self.assertEqual(report["promotion_strength_failed_checks"], ["consecutive_promotion_failures"])
+        self.assertIn("runtime_health_passed: yes", text_output)
+        self.assertIn("promotion_strength_passed: no", text_output)
+        self.assertIn("promotion_strength_failed_checks:", text_output)
+        self.assertIn("- consecutive_promotion_failures", text_output)
 
     def test_eval_cli_cpu_long_run_report_refresh_ignores_persisted_derived_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4499,6 +4592,37 @@ if __name__ == "__main__":
         self.assertIsNone(payload["entries"][0]["derived_error"])
         self.assertEqual(payload["entries"][0]["latest_iteration"], 2)
         self.assertEqual(payload["entries"][0]["latest_benchmark_win_rate"], 0.75)
+        self.assertTrue(payload["entries"][0]["derived_runtime_health_passed"])
+        self.assertTrue(payload["entries"][0]["derived_promotion_strength_passed"])
+        self.assertEqual(payload["entries"][0]["runtime_health_failed_checks"], [])
+        self.assertEqual(payload["entries"][0]["promotion_strength_failed_checks"], [])
+
+    def test_eval_cli_cpu_long_run_compare_classifies_persisted_promotion_strength_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "promotion-failed"
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            report = long_run_derived_report()
+            report["audit_passed"] = False
+            report["failed_checks"] = ["consecutive_promotion_failures"]
+            summary["derived_run_report"] = report
+            write_json(run_root / "cpu-long-run-run-summary.json", summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-compare", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["summary_count"], 1)
+        self.assertEqual(payload["non_passing_count"], 1)
+        self.assertFalse(entry["passing"])
+        self.assertFalse(entry["derived_audit_passed"])
+        self.assertTrue(entry["derived_runtime_health_passed"])
+        self.assertFalse(entry["derived_promotion_strength_passed"])
+        self.assertEqual(entry["failed_checks"], ["consecutive_promotion_failures"])
+        self.assertEqual(entry["runtime_health_failed_checks"], [])
+        self.assertEqual(entry["promotion_strength_failed_checks"], ["consecutive_promotion_failures"])
 
     def test_eval_cli_cpu_long_run_compare_refresh_ignores_persisted_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

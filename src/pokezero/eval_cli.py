@@ -53,6 +53,13 @@ OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
 PROMOTION_ARCHIVE_INTEGRITY_SCHEMA_VERSION = "pokezero.promotion_archive_integrity.v1"
+CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES = frozenset(
+    (
+        "benchmark_win_rate_drop_by_opponent",
+        "consecutive_promotion_failures",
+        "latest_promotion_recorded",
+    )
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -4153,6 +4160,8 @@ def _cpu_long_run_compare_entry(
         "derived_run_report": report,
         "derived_run_report_source": report_source,
         "derived_audit_passed": derived_audit_passed,
+        "derived_runtime_health_passed": report.get("runtime_health_passed"),
+        "derived_promotion_strength_passed": report.get("promotion_strength_passed"),
         "latest_iteration": report.get("latest_iteration"),
         "latest_benchmark_win_rate": report.get("latest_benchmark_win_rate"),
         "best_benchmark_win_rate": report.get("best_benchmark_win_rate"),
@@ -4163,6 +4172,8 @@ def _cpu_long_run_compare_entry(
         "latest_process_peak_rss_mb": report.get("latest_process_peak_rss_mb"),
         "derived_error": report.get("error"),
         "failed_checks": list(report.get("failed_checks") or ()),
+        "runtime_health_failed_checks": list(report.get("runtime_health_failed_checks") or ()),
+        "promotion_strength_failed_checks": list(report.get("promotion_strength_failed_checks") or ()),
     }
 
 
@@ -4173,7 +4184,7 @@ def _cpu_long_run_summary_derived_run_report(
 ) -> tuple[Mapping[str, object], str]:
     persisted_report = summary.get("derived_run_report")
     if not refresh and isinstance(persisted_report, Mapping):
-        return persisted_report, "persisted"
+        return _classified_cpu_long_run_derived_run_report(persisted_report), "persisted"
     return _cpu_long_run_derived_run_report(summary), "computed"
 
 
@@ -4839,10 +4850,20 @@ def _print_cpu_long_run_compare(payload: Mapping[str, object]) -> None:
         print("non_passing_summaries:")
         for entry in failed_entries:
             failed_checks = ", ".join(str(check) for check in entry.get("failed_checks", ())) or "-"
+            runtime_health_failed_checks = (
+                ", ".join(str(check) for check in entry.get("runtime_health_failed_checks", ())) or "-"
+            )
+            promotion_strength_failed_checks = (
+                ", ".join(str(check) for check in entry.get("promotion_strength_failed_checks", ())) or "-"
+            )
             print(
                 f"- {entry.get('summary_path')}: status={entry.get('status')} "
                 f"derived_error={_format_summary_value(entry.get('derived_error'))} "
-                f"failed_checks={failed_checks}"
+                f"failed_checks={failed_checks} "
+                f"runtime_health={_format_optional_bool(entry.get('derived_runtime_health_passed'))} "
+                f"runtime_failed={runtime_health_failed_checks} "
+                f"promotion_strength={_format_optional_bool(entry.get('derived_promotion_strength_passed'))} "
+                f"promotion_failed={promotion_strength_failed_checks}"
             )
     if errors:
         print("")
@@ -4924,7 +4945,28 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
             "checks": [check.to_dict() for check in audit_result.checks],
         }
     )
-    return report
+    return _classified_cpu_long_run_derived_run_report(report)
+
+
+def _classified_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> dict[str, object]:
+    payload = dict(report)
+    failed_checks = [str(check) for check in payload.get("failed_checks") or ()]
+    promotion_strength_failed_checks = [
+        check for check in failed_checks if check in CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES
+    ]
+    runtime_health_failed_checks = [
+        check for check in failed_checks if check not in CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES
+    ]
+    payload["runtime_health_failed_checks"] = runtime_health_failed_checks
+    payload["promotion_strength_failed_checks"] = promotion_strength_failed_checks
+
+    if payload.get("available") is True and payload.get("error") is None:
+        payload["runtime_health_passed"] = not runtime_health_failed_checks
+        payload["promotion_strength_passed"] = not promotion_strength_failed_checks
+    else:
+        payload["runtime_health_passed"] = None
+        payload["promotion_strength_passed"] = None
+    return payload
 
 
 def _cpu_long_run_runtime_audit_report(summary: Mapping[str, object]) -> dict[str, object]:
@@ -5089,6 +5131,8 @@ def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None
     if report.get("audit_config_path") is not None and report.get("audit_source") != "profile":
         print(f"audit_config_path: {_format_summary_value(report.get('audit_config_path'))}")
     print(f"audit_passed: {_format_optional_bool(report.get('audit_passed'))}")
+    print(f"runtime_health_passed: {_format_optional_bool(report.get('runtime_health_passed'))}")
+    print(f"promotion_strength_passed: {_format_optional_bool(report.get('promotion_strength_passed'))}")
     print(f"latest_iteration: {_format_summary_value(report.get('latest_iteration'))}")
     print(f"latest_benchmark_win_rate: {_format_optional_float(report.get('latest_benchmark_win_rate'))}")
     print(f"best_benchmark_win_rate: {_format_optional_float(report.get('best_benchmark_win_rate'))}")
@@ -5104,6 +5148,16 @@ def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None
     if isinstance(failed_checks, list) and failed_checks:
         print("failed_checks:")
         for check in failed_checks:
+            print(f"- {check}")
+    runtime_health_failed_checks = report.get("runtime_health_failed_checks")
+    if isinstance(runtime_health_failed_checks, list) and runtime_health_failed_checks:
+        print("runtime_health_failed_checks:")
+        for check in runtime_health_failed_checks:
+            print(f"- {check}")
+    promotion_strength_failed_checks = report.get("promotion_strength_failed_checks")
+    if isinstance(promotion_strength_failed_checks, list) and promotion_strength_failed_checks:
+        print("promotion_strength_failed_checks:")
+        for check in promotion_strength_failed_checks:
             print(f"- {check}")
     warning_checks = report.get("warning_checks")
     if isinstance(warning_checks, list) and warning_checks:
