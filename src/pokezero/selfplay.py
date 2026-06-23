@@ -346,7 +346,7 @@ def run_selfplay_iterations(
             worker_count=worker_count,
             policy_factory_overrides=(
                 {current_policy_spec: linear_policy_factory_from_model_spec(current_policy_spec, current_model)}
-                if current_model is not None
+                if current_model is not None and _is_linear_policy_spec(current_policy_spec)
                 else None
             ),
         )

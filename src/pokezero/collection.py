@@ -7,13 +7,16 @@ import json
 from pathlib import Path
 import sys
 from time import perf_counter
-from typing import Any, Callable, Iterable, Iterator, Mapping, TextIO
+from typing import TYPE_CHECKING, Callable, Iterable, Iterator, Mapping, TextIO
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
 from .policy import Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
+
+if TYPE_CHECKING:
+    from .linear_policy import LinearPolicyModel
 
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
 LINEAR_POLICY_SPEC_PREFIX = "linear:"
@@ -505,12 +508,15 @@ def policy_from_spec(spec: str) -> Policy:
     return policy_factory_from_spec(spec)()
 
 
-def linear_policy_factory_from_model_spec(spec: str, model: Any) -> Callable[[], Policy]:
+def linear_policy_factory_from_model_spec(spec: str, model: "LinearPolicyModel") -> Callable[[], Policy]:
     """Create a linear policy factory from an already-loaded model and a policy spec's options."""
 
     policy_body, options = _split_policy_spec_options(spec.strip())
     if not policy_body.lower().startswith(LINEAR_POLICY_SPEC_PREFIX):
         raise ValueError("linear model factory override requires a linear: policy spec.")
+    checkpoint = policy_body[len(LINEAR_POLICY_SPEC_PREFIX) :].strip()
+    if not checkpoint:
+        raise ValueError("linear policy spec must include a checkpoint path after 'linear:'.")
     from .linear_policy import LinearSoftmaxPolicy
 
     linear_options = _linear_policy_options(options)

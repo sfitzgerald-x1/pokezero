@@ -534,6 +534,16 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(policy.exploration_epsilon, 0.25)
         self.assertEqual(policy.sampling_temperature, 2.5)
 
+    def test_linear_policy_factory_from_model_spec_rejects_empty_checkpoint_path(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=8,
+            window_size=1,
+            policy_id="linear-test",
+        )
+
+        with self.assertRaisesRegex(ValueError, "checkpoint path"):
+            linear_policy_factory_from_model_spec("linear:?sample=true", model)
+
     def test_policy_from_spec_rejects_empty_linear_checkpoint_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "checkpoint path"):
             policy_from_spec("linear:")
