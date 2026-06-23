@@ -1399,6 +1399,34 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(len(run_manifest["iterations"]), 1)
         self.assertFalse((run_dir / "iteration-0002").exists())
 
+    def test_runtime_health_audit_failure_mode_still_stops_on_runtime_health_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with self.assertRaisesRegex(RunAuditFailure, "latest_benchmark_available") as raised:
+                run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    post_iteration_audit_config=RunAuditConfig(require_benchmark=True),
+                    post_iteration_audit_failure_mode="runtime-health",
+                )
+
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(raised.exception.result.passed)
+        self.assertEqual(len(run_manifest["iterations"]), 1)
+        self.assertFalse((run_dir / "iteration-0002").exists())
+
     def test_post_iteration_audit_failure_prevents_auto_promotion_when_latest_promotion_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1491,6 +1519,52 @@ class SelfPlayTest(unittest.TestCase):
         self.assertFalse(registry_path.exists())
         self.assertEqual(iteration_manifest["promotion"]["recorded"], False)
         self.assertEqual(run_manifest["iterations"][0]["promotion"]["recorded"], False)
+
+    def test_runtime_health_audit_failure_mode_continues_on_promotion_strength_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                result = run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    promotion_registry_path=registry_path,
+                    auto_promotion_config=SelfPlayPromotionConfig(
+                        registry_path=registry_path,
+                        gate_config=PromotionGateConfig(min_benchmark_win_rate=1.0, min_benchmark_games=0),
+                        label_prefix="candidate",
+                    ),
+                    post_iteration_audit_config=RunAuditConfig(
+                        min_latest_benchmark_win_rate=0.0,
+                        min_latest_benchmark_games=0,
+                        max_latest_benchmark_capped_rate=1.0,
+                        max_benchmark_win_rate_drop=1.0,
+                        max_consecutive_promotion_failures=0,
+                        require_benchmark=True,
+                    ),
+                    post_iteration_audit_failure_mode="runtime-health",
+                )
+
+            run_manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(result.iterations), 1)
+        self.assertEqual(iteration_manifest["promotion"]["recorded"], False)
+        self.assertEqual(run_manifest["iterations"][0]["promotion"]["recorded"], False)
+        self.assertIn("audit_nonblocking_failed_checks: consecutive_promotion_failures", stderr.getvalue())
 
     def test_run_selfplay_iterations_post_iteration_audit_passes_and_continues(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1695,6 +1769,8 @@ class SelfPlayTest(unittest.TestCase):
                         "--audit-allow-missing-benchmark",
                         "--audit-allow-missing-benchmark-opponents",
                         "--audit-require-latest-promotion",
+                        "--audit-failure-mode",
+                        "runtime-health",
                     ]
                 )
 
@@ -1722,6 +1798,7 @@ class SelfPlayTest(unittest.TestCase):
         self.assertTrue(kwargs["post_iteration_audit_config"].require_latest_promotion)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
+        self.assertEqual(kwargs["post_iteration_audit_failure_mode"], "runtime-health")
         self.assertEqual(kwargs["validation_rollout_paths"], (Path("heldout-a.jsonl"), Path("heldout-b.jsonl")))
         self.assertEqual(kwargs["training_config"].objective, "reward-weighted")
         self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.3)
@@ -1950,6 +2027,25 @@ class SelfPlayTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--audit-config requires --audit-after-iteration", stderr.getvalue())
+
+    def test_selfplay_cli_iterate_rejects_audit_failure_mode_without_post_iteration_audit(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = selfplay_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--audit-failure-mode",
+                    "runtime-health",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--audit-failure-mode requires --audit-after-iteration", stderr.getvalue())
 
     def test_selfplay_cli_iterate_profile_boolean_overrides(self) -> None:
         fake_metrics = CollectionMetrics(

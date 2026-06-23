@@ -29,14 +29,17 @@ from .opponents import policy_spec_identity
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
+    RUN_AUDIT_PROMOTION_STRENGTH_CHECK_NAMES,
+    RUN_AUDIT_RUNTIME_HEALTH_CHECK_NAMES,
     RUN_AUDIT_CONFIG_SCHEMA_VERSION,
-    RUN_AUDIT_CHECK_NAMES,
     RunAuditConfig,
     audit_run,
     calibrate_run_audit,
     calibrate_run_audits,
     compare_run_manifests_with_threshold,
     load_run_audit_config,
+    promotion_strength_failed_check_names,
+    runtime_health_failed_check_names,
     run_audit_config_from_dict,
     run_audit_config_payload,
     run_audit_config_to_dict,
@@ -54,37 +57,8 @@ OPPONENT_POOL_SNAPSHOT_SCHEMA_VERSION = "pokezero.opponent_pool_snapshot.v1"
 PROMOTION_RETENTION_PLAN_SCHEMA_VERSION = "pokezero.promotion_retention_plan.v1"
 PROMOTION_RETENTION_APPLY_SCHEMA_VERSION = "pokezero.promotion_retention_apply.v1"
 PROMOTION_ARCHIVE_INTEGRITY_SCHEMA_VERSION = "pokezero.promotion_archive_integrity.v1"
-CPU_LONG_RUN_RUNTIME_HEALTH_CHECK_NAMES = frozenset(
-    (
-        "latest_collection_capped_rate",
-        "promoted_opponent_pool_requirement",
-        "latest_average_decision_rounds",
-        "latest_benchmark_available",
-        "latest_benchmark_games",
-        "latest_benchmark_win_rate",
-        "latest_benchmark_capped_rate",
-        "latest_benchmark_average_decision_rounds",
-        "latest_process_peak_rss_mb",
-        "latest_benchmark_opponent_coverage",
-    )
-)
-CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES = frozenset(
-    (
-        "benchmark_win_rate_drop_by_opponent",
-        "consecutive_promotion_failures",
-        "latest_promotion_recorded",
-    )
-)
-_CPU_LONG_RUN_CLASSIFIED_CHECK_NAMES = (
-    CPU_LONG_RUN_RUNTIME_HEALTH_CHECK_NAMES | CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES
-)
-if _CPU_LONG_RUN_CLASSIFIED_CHECK_NAMES != frozenset(RUN_AUDIT_CHECK_NAMES):
-    _missing_classified_checks = sorted(set(RUN_AUDIT_CHECK_NAMES) - _CPU_LONG_RUN_CLASSIFIED_CHECK_NAMES)
-    _extra_classified_checks = sorted(_CPU_LONG_RUN_CLASSIFIED_CHECK_NAMES - set(RUN_AUDIT_CHECK_NAMES))
-    raise RuntimeError(
-        "CPU long-run audit check classification is out of sync: "
-        f"missing={_missing_classified_checks}, extra={_extra_classified_checks}"
-    )
+CPU_LONG_RUN_RUNTIME_HEALTH_CHECK_NAMES = RUN_AUDIT_RUNTIME_HEALTH_CHECK_NAMES
+CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES = RUN_AUDIT_PROMOTION_STRENGTH_CHECK_NAMES
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1019,6 +993,16 @@ def _add_cpu_long_run_arguments(
         help=(
             "Custom post-iteration audit config for the nested self-play run, for example a "
             "cpu-long-run-calibrate --write-config output."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-audit-failure-mode",
+        choices=("strict", "runtime-health"),
+        default="strict",
+        help=(
+            "Nested post-iteration audit failure behavior. strict stops on any blocking audit failure. "
+            "runtime-health stops only on runtime-health failures while leaving promotion-strength "
+            "failures visible in reports."
         ),
     )
     parser.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
@@ -4980,14 +4964,8 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
 def _classified_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> dict[str, object]:
     payload = dict(report)
     failed_checks = [str(check) for check in payload.get("failed_checks") or ()]
-    promotion_strength_failed_checks = [
-        check for check in failed_checks if check in CPU_LONG_RUN_PROMOTION_STRENGTH_CHECK_NAMES
-    ]
-    runtime_health_failed_checks = [
-        check
-        for check in failed_checks
-        if check in CPU_LONG_RUN_RUNTIME_HEALTH_CHECK_NAMES or check not in _CPU_LONG_RUN_CLASSIFIED_CHECK_NAMES
-    ]
+    promotion_strength_failed_checks = list(promotion_strength_failed_check_names(failed_checks))
+    runtime_health_failed_checks = list(runtime_health_failed_check_names(failed_checks))
     payload["runtime_health_failed_checks"] = runtime_health_failed_checks
     payload["promotion_strength_failed_checks"] = promotion_strength_failed_checks
 
@@ -5016,6 +4994,7 @@ def _cpu_long_run_runtime_audit_report(summary: Mapping[str, object]) -> dict[st
         "source": _cpu_long_run_report_audit_source(recipe),
         "audit_config_path": _cpu_long_run_report_runtime_audit_config_path(recipe),
         "audit_profile": _cpu_long_run_report_runtime_audit_profile(recipe),
+        "failure_mode": _cpu_long_run_report_runtime_audit_failure_mode(recipe),
     }
     recorded_evaluation_games = _cpu_long_run_report_recorded_evaluation_games(recipe)
     payload["recorded_evaluation_games"] = recorded_evaluation_games
@@ -5109,11 +5088,17 @@ def _cpu_long_run_runtime_source_command_flags(
         profile_name = _cpu_long_run_report_runtime_audit_profile(recipe)
         if profile_name is not None:
             flags.extend(("--audit-profile", profile_name))
+            failure_mode = _cpu_long_run_report_runtime_audit_failure_mode(recipe)
+            if failure_mode != "strict":
+                flags.extend(("--audit-failure-mode", failure_mode))
             return tuple(flags)
 
     audit_config_path = _cpu_long_run_report_runtime_audit_config_path(recipe)
     if audit_config_path is not None:
         flags.extend(("--audit-config", audit_config_path))
+        failure_mode = _cpu_long_run_report_runtime_audit_failure_mode(recipe)
+        if failure_mode != "strict":
+            flags.extend(("--audit-failure-mode", failure_mode))
         return tuple(flags)
 
     return ()
@@ -5150,6 +5135,11 @@ def _cpu_long_run_report_runtime_audit_profile(recipe: Mapping[str, object]) -> 
         return None
     value = recipe.get("runtime_audit_profile") or recipe.get("profile")
     return None if value is None else str(value)
+
+
+def _cpu_long_run_report_runtime_audit_failure_mode(recipe: Mapping[str, object]) -> str:
+    value = recipe.get("runtime_audit_failure_mode")
+    return str(value) if value is not None else "strict"
 
 
 def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None:
@@ -5207,6 +5197,7 @@ def _print_cpu_long_run_runtime_audit_report(report: Mapping[str, object]) -> No
         print(f"audit_profile: {_format_summary_value(report.get('audit_profile'))}")
     if report.get("audit_config_path") is not None and report.get("source") != "profile":
         print(f"audit_config_path: {_format_summary_value(report.get('audit_config_path'))}")
+    print(f"failure_mode: {_format_summary_value(report.get('failure_mode'))}")
     if report.get("available") is True:
         print(f"minimum_evaluation_games: {_format_summary_value(report.get('minimum_evaluation_games'))}")
         print(f"recorded_evaluation_games: {_format_summary_value(report.get('recorded_evaluation_games'))}")
@@ -5306,6 +5297,7 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         "runtime_audit_source": runtime_audit_source,
         "runtime_audit_config_path": None if runtime_audit_config_path is None else str(runtime_audit_config_path),
         "runtime_audit_profile": runtime_audit_profile,
+        "runtime_audit_failure_mode": args.runtime_audit_failure_mode,
         "evaluation_games": args.evaluation_games,
         "promotion_gate_feasibility_error": promotion_gate_feasibility_error,
         "audit_feasibility_error": audit_feasibility_error,
@@ -5555,6 +5547,8 @@ def _cpu_long_run_selfplay_argv(
         argv.extend(["--audit-config", str(runtime_audit_config_path)])
     else:
         argv.extend(["--audit-profile", args.profile])
+    if args.runtime_audit_failure_mode != "strict":
+        argv.extend(["--audit-failure-mode", args.runtime_audit_failure_mode])
     if args.promotion_notes is not None:
         argv.extend(["--promotion-notes", args.promotion_notes])
     if args.require_promoted_opponent_pool_size is not None:
