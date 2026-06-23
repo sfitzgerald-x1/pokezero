@@ -61,6 +61,74 @@ times per move. We have none of those three properties. So the design question i
 "AlphaZero or not" — it is "which AlphaZero ideas do we keep, and what replaces MCTS
 as the policy-improvement operator until/unless real search becomes feasible."
 
+The part of AlphaGo Zero we actually want is **the self-play learning loop**: a policy
+that improves by repeatedly playing itself and learning from the outcomes, with no
+hand-coded strategy. MCTS was *how* AGZ produced an improvement signal; it is not the
+goal. The goal here is "learn to play Gen 3 randbats from self-play." That keeps the
+self-play/promotion/value-head machinery and treats search as an optional accelerator,
+not a requirement.
+
+## The Random-Battle Advantage: A Known, Finite Set Space
+
+Gen 3 randbats are a deliberately *easier* learning target than human-teambuilt formats,
+and the architecture should exploit exactly why.
+
+In open formats, a revealed Pokemon could carry almost any spread of moves, item, ability,
+EVs, and nature — the hidden space is effectively unbounded and human-chosen. In randbats,
+every Pokemon is drawn from a **known generator with a small, enumerable set of possible
+moves/items/abilities.** That changes the nature of the hidden-information problem:
+
+- Opponent uncertainty is a **posterior over a finite, listable set of realities**, not an
+  open-ended guess. The deterministic belief tracker (`docs/first_iteration_design.md`,
+  "Belief Tracking") already collapses that list from public events.
+- Therefore "model the opponent" can be a **classification head over candidate sets** for
+  each revealed slot, not generative uncertainty. The network learns the *behavioral*
+  narrowing on top of the rules-based narrowing the tracker already does.
+- The small hidden space is what makes everything below tractable: belief supervision,
+  opponent-action prediction, and any future determinized search all get cheaper because
+  the branching over hidden realities is bounded and known up front.
+
+This is the single biggest reason to be optimistic that self-play can work here without
+the full AlphaZero search apparatus.
+
+## Temporal Modeling And Opponent Inference
+
+A first-class requirement: the model must use **history to infer hidden cards**, because in
+this game a turn's best move often depends on what the opponent's earlier behavior implies
+about their unrevealed moves/sets.
+
+Motivating example: if the opponent repeatedly switches *out* in front of one of your
+Pokemon, that is strong evidence their active mon cannot threaten it. The skilled response
+is to read the switch coming, predict *what they switch to*, and punish the predicted
+incoming Pokemon — not to react one turn late. A purely per-turn model cannot represent
+this; the signal lives in the sequence of past decisions.
+
+Implications for the architecture:
+
+- **Carry belief state across turns.** A fixed history window (the current scaffold uses 4)
+  may be too short for patterns that develop over a long game. Prefer a **recurrent core**
+  (LSTM / GRU / small state-space model, AlphaStar-style) or full-game causal attention so
+  accumulated evidence persists for the whole battle.
+- **Make opponent inference an explicit objective.** Keep the existing opponent-next-action
+  head and add an **opponent-set / belief head** (which candidate set, which moves remain
+  possible). These heads pressure the recurrent state to actually encode "what have I
+  learned about the opponent so far."
+
+## Privileged Self-Play Supervision
+
+Self-play makes the hard part cheap. Because we control both sides, **the true hidden state
+of the opponent is known at training time**, even though the policy only sees public
+information at inference. So the opponent-action and opponent-set/belief heads can be
+**supervised directly against ground truth** during self-play, instead of being learned
+purely indirectly through reward.
+
+This converts the central imperfect-information difficulty — inferring hidden cards from
+behavior — into a supervised auxiliary loss riding on top of the RL objective. It is the
+asymmetric-information trick used by strong imperfect-info agents (e.g. AlphaStar's use of
+privileged signals), and it is *unusually* effective here because the finite randbat set
+space makes the supervision target small and well-defined. The policy/value path stays
+strictly public-information-only so the deployed agent never depends on hidden state.
+
 ## Decision Axes
 
 Five mostly-independent choices:
@@ -155,13 +223,16 @@ loop.
 ## Recommended Staged Path
 
 - **Stage 0 (done):** Linear baseline validates the harness end to end.
-- **Stage 1 — neural representation + model-free RL.** Wire the existing entity-token
-  transformer into the self-play loop with PPO/V-trace, value head trained to game
-  outcome, opponent-action aux on the shared trunk. Reuse promotion/benchmark/audit.
-  Keep it CPU-smoke-able; scale on GPU. **Highest value, lowest risk; unblocks real
-  representation learning.**
-- **Stage 2 — strengthen representation.** Pointer action head, belief-conditioned
-  opponent tokens, longer/recurrent temporal context, belief-prediction aux loss.
+- **Stage 1 — temporal self-play RL.** Build the recommended body — a per-turn
+  **set-encoder** over entity tokens feeding a **recurrent core across turns** — and train
+  it in the self-play loop with model-free RL (PPO/V-trace), value head trained to game
+  outcome. Add the **opponent-action and opponent-set/belief heads supervised with
+  privileged self-play ground truth** from the start, since temporal opponent inference is
+  the point, not a later nicety. Reuse promotion/benchmark/audit. Keep it CPU-smoke-able;
+  scale on GPU. **Highest value, lowest risk; unblocks real representation learning.**
+- **Stage 2 — strengthen representation.** Pointer action head (logits from move
+  semantics), richer belief-conditioned opponent tokens over the enumerated candidate
+  sets, longer temporal context, and tuning of the belief auxiliary losses.
 - **Stage 3 — decision-time search as a bolt-on.** Add shallow determinized value-net
   search at eval time and measure the strength delta vs the pure policy. This is the
   first concrete AGZ-flavored experiment and it is low-commitment: it answers "does
