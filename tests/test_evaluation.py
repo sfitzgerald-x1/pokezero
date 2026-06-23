@@ -2069,6 +2069,24 @@ class PromotionGateTest(unittest.TestCase):
         self.assertIn("only guarantees 32", error)
         self.assertIn("Use --evaluation-games >= 13", error)
 
+    def test_eval_cli_cpu_pilot_plan_accepts_boundary_calibration_game_floor(self) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-pilot-plan",
+                    "--evaluation-games",
+                    "13",
+                    "--calibration-require-min-benchmark-games",
+                    "50",
+                    "--json",
+                ]
+            )
+        recipe = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["guaranteed_calibration_benchmark_games"], 52)
+        self.assertEqual(recipe["minimum_evaluation_games_for_calibration_floor"], 13)
+
     def test_eval_cli_cpu_pilot_plan_propagates_teacher_branch_preflight_to_smoke_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
