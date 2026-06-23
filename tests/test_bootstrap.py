@@ -325,23 +325,25 @@ class TeacherBootstrapTest(unittest.TestCase):
                 baseline_policy_specs=("simple-legal",),
             )
 
-    def test_benchmark_teacher_selfplay_runs_teacher_in_both_seats(self) -> None:
+    def test_benchmark_teacher_selfplay_counts_scripted_teacher_metadata_in_both_seats(self) -> None:
         result = benchmark_teacher_selfplay(
             env_factory=OneTurnEnv,
             rollout_config=RolloutConfig(max_decision_rounds=5),
-            teacher_policy_spec="simple-legal",
+            teacher_policy_spec="scripted-teacher?allow_fallback=true",
             games=1,
             seed_start=10,
         )
         report = result.benchmark
 
         self.assertEqual(report.total_games, 1)
-        self.assertEqual([matchup.label for matchup in report.matchups], ["simple-legal self-play"])
-        self.assertEqual(report.matchups[0].p1_policy_id, "simple-legal")
-        self.assertEqual(report.matchups[0].p2_policy_id, "simple-legal")
+        self.assertEqual([matchup.label for matchup in report.matchups], ["scripted-teacher self-play"])
+        self.assertEqual(report.matchups[0].p1_policy_id, "scripted-teacher")
+        self.assertEqual(report.matchups[0].p2_policy_id, "scripted-teacher")
         self.assertEqual(report.head_to_head_results, ())
         self.assertEqual(result.teacher_decision_summary["total_decisions"], 2)
-        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 0)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["teacher_branch_counts"]["fallback"], 2)
 
     def test_benchmark_teacher_selfplay_rejects_non_positive_games(self) -> None:
         with self.assertRaisesRegex(ValueError, "games must be positive"):
