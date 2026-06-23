@@ -35,6 +35,7 @@ Implemented:
 - CPU smoke, pilot, and long-run wrappers can generate plans, execute guarded runs, persist wrapper summaries, calibrate audit configs from pilot evidence, replay those configs, launch readiness-checked long runs, and report or compare run health from summaries.
 - CPU smoke and pilot execution wrappers now reject non-fresh run roots before launching nested work, so accidental reruns do not overwrite wrapper summaries or collide later with existing bootstrap/self-play artifacts.
 - CPU pilot planning and execution now reject calibration benchmark-game floors that the selected `--evaluation-games` cannot guarantee before launching nested work.
+- CPU long-run planning can decouple the promotion gate profile from the post-iteration audit source, so a feasible smoke/default gate profile can still enforce the stronger pilot-derived audit config during the run.
 - `cpu-readiness-report` can roll up core pilot readiness, long-run derived audit health, and promotion-registry opponent-pool readiness from existing artifacts without launching games.
 - Source provenance is recorded in major run artifacts so dirty or unexpected code snapshots are visible during review.
 - A read-only Gen 3 randbat belief sidecar and compact belief observation features exist, but the detailed sidecar state is not required for the current linear CPU loop.
@@ -72,7 +73,7 @@ The remaining work is less about wiring and more about making the loop empirical
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
 1. Tighten long-run audit thresholds based on the stronger pilot and early cold-start/bootstrap artifacts.
-2. Run an expanded cold-start versus teacher-bootstrap comparison under the selected stricter thresholds.
+2. Run an expanded cold-start versus teacher-bootstrap comparison with a feasible promotion gate profile and `--runtime-audit-source pilot-audit-config`.
 3. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
 
 ## Progress Updates
