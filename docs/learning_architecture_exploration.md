@@ -129,6 +129,46 @@ privileged signals), and it is *unusually* effective here because the finite ran
 space makes the supervision target small and well-defined. The policy/value path stays
 strictly public-information-only so the deployed agent never depends on hidden state.
 
+## Design Tension: Explicit Belief vs. Emergent Inference
+
+Open and explicitly *not yet decided*. The question "do we need an opponent-belief system"
+hides three separate knobs with different answers:
+
+1. **Belief as input** — feed the deterministic tracker's candidate-set features into the
+   net. This is just exposing known, legal game structure (analogous to AGZ getting the
+   board, not hand-crafted features). Low controversy; keep it.
+2. **Belief as auxiliary output** — a head that predicts the opponent's hidden set / next
+   action, supervised against self-play ground truth. This is the contested knob.
+3. **Belief as a hard-coded module** — a Bayesian engine the policy must consume. Most
+   committed and least "Zero"; rejected for now because it bakes in our decomposition.
+
+The contested knob (2) is a genuine open tension, not a decision:
+
+- **Case for emergence:** end-to-end RL agents (AlphaStar, OpenAI Five) developed implicit
+  belief in their recurrent state with no belief head — the hidden state *is* the belief
+  state, shaped by the win/loss gradient. Forcing prediction of the literal set may waste
+  capacity on facts that do not affect winning, when a coarser task-relevant latent
+  ("this mon is passive, expect a pivot") would serve better.
+- **Case for explicit supervision:** terminal reward is a long, noisy credit-assignment
+  chain; an auxiliary loss gives a dense, immediate, *correct* gradient every turn, and the
+  signal is free and exact here thanks to self-play ground truth plus the finite set space.
+  It is also *measurable*: a belief probe shows whether inference is actually improving,
+  turning an otherwise black-box failure into a diagnosable one.
+
+**Resolution: treat it as an ablation, not an architecture commitment.** The temporal
+*capacity* to infer (recurrent state or history attention) is required either way and is
+the real commitment. The belief head is a single tunable loss weight: set it positive to
+accelerate and instrument early training, then anneal toward zero to let the policy rely on
+whatever internal representation actually wins. This honors the emergence hypothesis (the
+weight can go to zero) while not discarding an unusually clean free signal. Decide it by
+training with and without the aux loss and comparing both win rate and belief-probe
+accuracy — the cheapest A/B test in the project.
+
+Bitter-lesson note: predicting the opponent's true set is predicting a *fact the
+environment provides*, not encoding a human heuristic about how to play. "If they switch
+twice, assume X" would violate the bitter lesson; "predict the hidden state we can observe
+in self-play" does not.
+
 ## Decision Axes
 
 Five mostly-independent choices:
