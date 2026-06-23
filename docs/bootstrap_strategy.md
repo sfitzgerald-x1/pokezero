@@ -166,7 +166,7 @@ After a pilot suite is ready, generate the guarded long-run command from that sa
 
 The long-run plan is read-only. It fails closed unless the pilot suite passed, the generated audit config is ready under the requested calibration floors, and the requested `--evaluation-games` can satisfy the audit config's benchmark-game floor during post-iteration audit. When ready, it emits a `selfplay_cli iterate` command wired with `--audit-after-iteration --audit-config <generated-config>`, `--auto-promote`, and managed promotion artifact paths under the requested long-run directory. The `--initial-policy` remains explicit because the pilot suite calibrates guardrails; it does not decide which checkpoint should seed a longer experiment.
 
-By default, `cpu-long-run-plan` preserves the historical coupling between profile and post-iteration audit source: `--profile long-run` uses the generated pilot audit config, while smoke/default rehearsal profiles use their named audit profile. When the promotion gate profile needs to stay permissive but the runtime audit should still enforce calibrated pilot thresholds, pass `--runtime-audit-source pilot-audit-config`. This is useful for the next cold-start versus teacher-bootstrap comparison: keep `--profile smoke` or another feasible gate profile if needed, but enforce the stronger pilot-derived audit config during each completed iteration.
+By default, `cpu-long-run-plan` preserves the historical coupling between profile and post-iteration audit source: `--profile long-run` uses the generated pilot audit config, while smoke/default rehearsal profiles use their named audit profile. When the promotion gate profile needs to stay permissive but the runtime audit should still enforce calibrated pilot thresholds, pass `--runtime-audit-source pilot-audit-config`. This applies the generated pilot config; summary-derived comparison thresholds from `cpu-long-run-calibrate` are a separate input and currently need to be passed as emitted audit flags or wired into a follow-up wrapper config path.
 
 Use the paired execution wrapper when the validated plan should actually launch and leave behind a wrapper artifact:
 
@@ -216,6 +216,20 @@ Derive a reusable audit config from several completed long-run wrapper summaries
 ```
 
 `cpu-long-run-calibrate` is intentionally summary-based: it uses one latest-iteration `derived_run_report` per wrapper summary, uses each wrapper's persisted report by default, and falls back to recomputing only when a summary has no persisted report. This is useful for threshold tuning after older long-run directories have been compacted or moved, but it does not see every iteration inside the nested run the way manifest-based `audit-calibrate` does. The command fails closed on unreadable summaries, failed wrappers, unavailable derived reports, or derived reports that did not pass. Add `--refresh-derived-audit` only when live nested manifests should override the persisted snapshots. Like `audit-calibrate`, `--write-config` requires explicit sufficiency floors. With the default `--aggregate-mode median`, sufficiency applies to the aggregate calibration; use `--aggregate-mode envelope` when every selected summary should remain passable under the written config or when a thin run should not be masked by larger runs. The output mirrors manifest calibration by printing both audit-only flags and a self-play post-iteration command fragment for an existing `selfplay_cli iterate` invocation, plus per-sample runtime audit source/flag provenance for the summaries being calibrated.
+
+For the first local cold-start versus teacher-bootstrap comparison, envelope mode is the safer calibration mode because there are only two summaries and the teacher-bootstrap run used more memory than the cold-start run. The current provisional envelope command is:
+
+```bash
+./.venv/bin/python -m pokezero.eval_cli cpu-long-run-calibrate \
+  runs/cpu-comparison-local-20260622/cold-start \
+  runs/cpu-comparison-local-20260622/teacher-bootstrap \
+  --aggregate-mode envelope \
+  --require-run-count 2 \
+  --require-benchmark-iterations 2 \
+  --require-min-benchmark-games 100
+```
+
+That suggests `--evaluation-games 30` plus a 120-game latest benchmark floor, 0.5025 latest benchmark win-rate floor, 0.10 capped-rate ceilings, 75.00625 latest average decision-round ceiling, 75.46 latest benchmark average decision-round ceiling, 636.521875 MB process RSS ceiling, 0.05 same-opponent benchmark win-rate drop ceiling, one allowed consecutive promotion failure, required benchmark evidence, required fixed-baseline coverage, and optional latest promotion. Treat these as provisional local CPU guardrails, not final success criteria. The immediate implementation gap is making `cpu-long-run-plan/run` consume a summary-derived audit config directly, rather than only the pilot-generated audit config.
 
 Summarize core CPU readiness artifacts without launching games:
 
