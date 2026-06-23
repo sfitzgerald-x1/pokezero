@@ -300,6 +300,68 @@ def default_benchmark_matchups() -> tuple[BenchmarkMatchup, ...]:
     )
 
 
+def policy_benchmark_matchups(
+    *,
+    policy_specs: Iterable[str],
+    opponent_policy_specs: Iterable[str] = ("random-legal", "simple-legal"),
+    showdown_root: Path | str | None = None,
+    include_policy_head_to_head: bool = False,
+) -> tuple[BenchmarkMatchup, ...]:
+    candidates = _policy_factories(policy_specs, showdown_root=showdown_root, label="candidate policy")
+    opponents = _policy_factories(opponent_policy_specs, showdown_root=showdown_root, label="opponent policy")
+    if include_policy_head_to_head and len(candidates) < 2:
+        raise ValueError("--include-policy-head-to-head requires at least two distinct candidate policies.")
+    overlapping_policy_ids = sorted(
+        {candidate_id for candidate_id, _ in candidates}
+        & {opponent_id for opponent_id, _ in opponents}
+    )
+    if overlapping_policy_ids:
+        raise ValueError(
+            "candidate and opponent policy ids must be distinct for shared-opponent benchmarks: "
+            f"{', '.join(overlapping_policy_ids)}. Remove the duplicated opponent or retrain with a distinct --policy-id."
+        )
+    matchups: list[BenchmarkMatchup] = []
+
+    for candidate_id, candidate_factory in candidates:
+        for opponent_id, opponent_factory in opponents:
+            matchups.extend(
+                (
+                    BenchmarkMatchup(
+                        f"{candidate_id} vs {opponent_id}",
+                        candidate_factory(),
+                        opponent_factory(),
+                    ),
+                    BenchmarkMatchup(
+                        f"{opponent_id} vs {candidate_id}",
+                        opponent_factory(),
+                        candidate_factory(),
+                    ),
+                )
+            )
+
+    if include_policy_head_to_head:
+        for index, (first_id, first_factory) in enumerate(candidates):
+            for second_id, second_factory in candidates[index + 1 :]:
+                matchups.extend(
+                    (
+                        BenchmarkMatchup(
+                            f"{first_id} vs {second_id}",
+                            first_factory(),
+                            second_factory(),
+                        ),
+                        BenchmarkMatchup(
+                            f"{second_id} vs {first_id}",
+                            second_factory(),
+                            first_factory(),
+                        ),
+                    )
+                )
+
+    if not matchups:
+        raise ValueError("custom policy benchmark produced no matchups; choose distinct policy ids.")
+    return tuple(matchups)
+
+
 def aggregate_benchmark_head_to_heads(
     matchup_results: Iterable[BenchmarkMatchupResult],
 ) -> tuple[BenchmarkHeadToHeadResult, ...]:
@@ -487,6 +549,31 @@ def policy_spec_with_showdown_root(spec: str, showdown_root: Path | str | None) 
         return spec
     options = {**options, "showdown_root": str(showdown_root)}
     return f"{policy_body}?{urlencode(options)}"
+
+
+def _policy_factories(
+    specs: Iterable[str],
+    *,
+    showdown_root: Path | str | None,
+    label: str,
+) -> tuple[tuple[str, Callable[[], Policy]], ...]:
+    deduped_specs = tuple(dict.fromkeys(str(spec) for spec in specs))
+    if not deduped_specs:
+        raise ValueError(f"at least one {label} spec is required.")
+    factories: list[tuple[str, Callable[[], Policy]]] = []
+    seen_policy_ids: set[str] = set()
+    for spec in deduped_specs:
+        rooted_spec = policy_spec_with_showdown_root(spec, showdown_root)
+        factory = policy_factory_from_spec(rooted_spec)
+        policy_id = str(factory().policy_id)
+        if policy_id in seen_policy_ids:
+            raise ValueError(
+                f"duplicate {label} id: {policy_id}. Retrain with a distinct --policy-id "
+                "so benchmark labels and head-to-head aggregation can distinguish checkpoints."
+            )
+        seen_policy_ids.add(policy_id)
+        factories.append((policy_id, factory))
+    return tuple(factories)
 
 
 def _split_policy_spec_options(spec: str) -> tuple[str, dict[str, str]]:

@@ -17,6 +17,7 @@ from pokezero.collection import (
     current_peak_rss_mb,
     default_benchmark_matchups,
     iter_rollout_records,
+    policy_benchmark_matchups,
     policy_factory_from_spec,
     policy_from_name,
     policy_from_spec,
@@ -233,6 +234,91 @@ class CollectionTest(unittest.TestCase):
         )
 
         self.assertEqual(reset_seeds, [7, 8, 7, 8])
+
+    def test_policy_benchmark_matchups_builds_mirrored_shared_opponent_matchups(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_checkpoint = Path(temp_dir) / "first.json"
+            second_checkpoint = Path(temp_dir) / "second.json"
+            save_linear_model(
+                first_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="first-linear",
+                ),
+            )
+            save_linear_model(
+                second_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="second-linear",
+                ),
+            )
+
+            matchups = policy_benchmark_matchups(
+                policy_specs=(f"linear:{first_checkpoint}", f"linear:{second_checkpoint}"),
+                opponent_policy_specs=("random-legal",),
+                include_policy_head_to_head=True,
+            )
+
+        self.assertEqual(
+            [matchup.label for matchup in matchups],
+            [
+                "first-linear vs random-legal",
+                "random-legal vs first-linear",
+                "second-linear vs random-legal",
+                "random-legal vs second-linear",
+                "first-linear vs second-linear",
+                "second-linear vs first-linear",
+            ],
+        )
+        self.assertEqual(
+            [(matchup.p1_policy.policy_id, matchup.p2_policy.policy_id) for matchup in matchups],
+            [
+                ("first-linear", "random-legal"),
+                ("random-legal", "first-linear"),
+                ("second-linear", "random-legal"),
+                ("random-legal", "second-linear"),
+                ("first-linear", "second-linear"),
+                ("second-linear", "first-linear"),
+            ],
+        )
+
+    def test_policy_benchmark_matchups_rejects_duplicate_policy_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_checkpoint = Path(temp_dir) / "first.json"
+            second_checkpoint = Path(temp_dir) / "second.json"
+            for checkpoint in (first_checkpoint, second_checkpoint):
+                save_linear_model(
+                    checkpoint,
+                    LinearPolicyModel.initialized(
+                        feature_count=8,
+                        window_size=1,
+                        policy_id="duplicate-linear",
+                    ),
+                )
+
+            with self.assertRaisesRegex(ValueError, "duplicate candidate policy id: duplicate-linear"):
+                policy_benchmark_matchups(
+                    policy_specs=(f"linear:{first_checkpoint}", f"linear:{second_checkpoint}"),
+                    opponent_policy_specs=("random-legal",),
+                )
+
+    def test_policy_benchmark_matchups_rejects_candidate_opponent_policy_id_collision(self) -> None:
+        with self.assertRaisesRegex(ValueError, "candidate and opponent policy ids must be distinct"):
+            policy_benchmark_matchups(
+                policy_specs=("random-legal",),
+                opponent_policy_specs=("random-legal", "simple-legal"),
+            )
+
+    def test_policy_benchmark_matchups_rejects_single_policy_head_to_head(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires at least two distinct candidate policies"):
+            policy_benchmark_matchups(
+                policy_specs=("simple-legal",),
+                opponent_policy_specs=("random-legal",),
+                include_policy_head_to_head=True,
+            )
 
     def test_benchmark_head_to_head_aggregates_mirror_pair(self) -> None:
         rows = (
@@ -579,6 +665,95 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("total_games: 3", stdout.getvalue())
         self.assertIn("peak_rss_mb: 66.25", stdout.getvalue())
         self.assertIn("random-legal vs random-legal", stdout.getvalue())
+
+    def test_rollout_cli_benchmark_wires_custom_policy_matchups(self) -> None:
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=9,
+            games_per_matchup=2,
+            matchups=(),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_checkpoint = Path(temp_dir) / "first.json"
+            second_checkpoint = Path(temp_dir) / "second.json"
+            save_linear_model(
+                first_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="first-cli-linear",
+                ),
+            )
+            save_linear_model(
+                second_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=8,
+                    window_size=1,
+                    policy_id="second-cli-linear",
+                ),
+            )
+            with patch("pokezero.rollout_cli.benchmark_rollouts", return_value=fake_report) as benchmark:
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    exit_code = rollout_cli_main(
+                        [
+                            "benchmark",
+                            "--games",
+                            "2",
+                            "--seed-start",
+                            "60",
+                            "--max-decision-rounds",
+                            "9",
+                            "--policy",
+                            f"linear:{first_checkpoint}",
+                            "--policy",
+                            f"linear:{second_checkpoint}",
+                            "--opponent-policy",
+                            "random-legal",
+                            "--include-policy-head-to-head",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = benchmark.call_args.kwargs
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["seed_start"], 60)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 9)
+        self.assertEqual(
+            [matchup.label for matchup in kwargs["matchups"]],
+            [
+                "first-cli-linear vs random-legal",
+                "random-legal vs first-cli-linear",
+                "second-cli-linear vs random-legal",
+                "random-legal vs second-cli-linear",
+                "first-cli-linear vs second-cli-linear",
+                "second-cli-linear vs first-cli-linear",
+            ],
+        )
+
+    def test_rollout_cli_benchmark_rejects_opponents_without_custom_policy(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = rollout_cli_main(
+                [
+                    "benchmark",
+                    "--opponent-policy",
+                    "random-legal",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--opponent-policy requires at least one --policy", stderr.getvalue())
+
+    def test_rollout_cli_benchmark_rejects_head_to_head_without_custom_policy(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = rollout_cli_main(
+                [
+                    "benchmark",
+                    "--include-policy-head-to-head",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--include-policy-head-to-head requires at least two --policy values", stderr.getvalue())
 
     @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
     def test_collect_rollouts_smoke_with_local_showdown_env(self) -> None:

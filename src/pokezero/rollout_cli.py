@@ -7,7 +7,14 @@ import json
 from pathlib import Path
 import sys
 
-from .collection import BenchmarkReport, benchmark_rollouts, collect_rollouts, policy_from_spec, policy_spec_with_showdown_root
+from .collection import (
+    BenchmarkReport,
+    benchmark_rollouts,
+    collect_rollouts,
+    policy_benchmark_matchups,
+    policy_from_spec,
+    policy_spec_with_showdown_root,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .rollout import RolloutConfig
 
@@ -33,18 +40,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     collect.set_defaults(func=_collect)
 
-    benchmark = subparsers.add_parser("benchmark", help="Run baseline rollout throughput benchmarks without writing trajectories.")
+    benchmark = subparsers.add_parser("benchmark", help="Run rollout benchmarks without writing trajectories.")
     benchmark.add_argument(
         "--games",
         type=int,
         default=20,
-        help="Number of games to run per baseline matchup. Default is a smoke size; use hundreds for quality comparisons.",
+        help="Number of games to run per matchup. Default is a smoke size; use hundreds for quality comparisons.",
     )
     benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed for every matchup.")
     benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
     benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    benchmark.add_argument(
+        "--policy",
+        action="append",
+        default=None,
+        help=(
+            "Candidate policy spec to benchmark. May be repeated. When omitted, the command runs "
+            "the default baseline throughput matchups."
+        ),
+    )
+    benchmark.add_argument(
+        "--opponent-policy",
+        action="append",
+        default=None,
+        help=(
+            "Opponent policy spec for custom --policy benchmarks. May be repeated. "
+            "Defaults to random-legal and simple-legal."
+        ),
+    )
+    benchmark.add_argument(
+        "--include-policy-head-to-head",
+        action="store_true",
+        help="Also run mirrored candidate-vs-candidate matchups when multiple --policy values are provided.",
+    )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.set_defaults(func=_benchmark)
     return parser
@@ -92,15 +122,30 @@ def _benchmark(args: argparse.Namespace) -> int:
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
     )
+    policy_showdown_root = env_config.resolved_showdown_root()
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
     )
+    matchups = None
+    if args.policy:
+        matchups = policy_benchmark_matchups(
+            policy_specs=args.policy,
+            opponent_policy_specs=args.opponent_policy or ("random-legal", "simple-legal"),
+            showdown_root=policy_showdown_root,
+            include_policy_head_to_head=args.include_policy_head_to_head,
+        )
+    elif args.opponent_policy:
+        raise ValueError("--opponent-policy requires at least one --policy.")
+    elif args.include_policy_head_to_head:
+        raise ValueError("--include-policy-head-to-head requires at least two --policy values.")
+
     report = benchmark_rollouts(
         games=args.games,
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=rollout_config,
         seed_start=args.seed_start,
+        matchups=matchups,
     )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
