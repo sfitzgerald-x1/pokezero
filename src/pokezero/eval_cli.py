@@ -6009,6 +6009,13 @@ def _cpu_pilot_recipe(args: argparse.Namespace) -> dict[str, object]:
         "replay_output_path": str(replay_output_path),
         "benchmark_iterations_required": benchmark_iterations_required,
         "calibration_require_min_benchmark_games": args.calibration_require_min_benchmark_games,
+        "minimum_benchmark_matchups": MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS,
+        "guaranteed_calibration_benchmark_games": _guaranteed_cpu_pilot_calibration_benchmark_games(
+            args.evaluation_games
+        ),
+        "minimum_evaluation_games_for_calibration_floor": _minimum_cpu_pilot_calibration_evaluation_games(
+            args.calibration_require_min_benchmark_games
+        ),
         "teacher_scenario_preflight_requested": args.teacher_scenario_preflight,
         "teacher_branch_preflight_requested": _teacher_branch_preflight_requested(args),
         "teacher_branch_preflight_games": args.teacher_branch_preflight_games,
@@ -6191,6 +6198,30 @@ def _validate_cpu_pilot_args(args: argparse.Namespace, *, validate_showdown_root
         )
     if args.calibration_require_min_benchmark_games <= 0:
         raise ValueError("calibration-require-min-benchmark-games must be positive.")
+    guaranteed_benchmark_games = _guaranteed_cpu_pilot_calibration_benchmark_games(args.evaluation_games)
+    if guaranteed_benchmark_games < args.calibration_require_min_benchmark_games:
+        minimum_evaluation_games = _minimum_cpu_pilot_calibration_evaluation_games(
+            args.calibration_require_min_benchmark_games
+        )
+        raise ValueError(
+            "calibration-require-min-benchmark-games requires enough --evaluation-games to satisfy "
+            "the guaranteed pilot calibration benchmark-game floor: at least "
+            f"{args.calibration_require_min_benchmark_games} aggregate benchmark games are required "
+            f"per calibrated iteration, but {args.evaluation_games} evaluation games only guarantees "
+            f"{guaranteed_benchmark_games}. Use --evaluation-games >= {minimum_evaluation_games} "
+            "or lower --calibration-require-min-benchmark-games."
+        )
+
+
+def _guaranteed_cpu_pilot_calibration_benchmark_games(evaluation_games: int) -> int:
+    return evaluation_games * MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS
+
+
+def _minimum_cpu_pilot_calibration_evaluation_games(require_min_benchmark_games: int) -> int:
+    return max(
+        1,
+        math.ceil(require_min_benchmark_games / MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS),
+    )
 
 
 def _require_fresh_run_root(run_root: Path, *, summary_path: Path, command_name: str) -> None:

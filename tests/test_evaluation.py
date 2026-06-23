@@ -2030,6 +2030,9 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(recipe["calibration_output_path"], str(run_root / "pilot-calibration-compare.json"))
         self.assertEqual(recipe["replay_output_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertEqual(len(recipe["steps"]), 4)
+        self.assertEqual(recipe["minimum_benchmark_matchups"], 4)
+        self.assertEqual(recipe["guaranteed_calibration_benchmark_games"], 8)
+        self.assertEqual(recipe["minimum_evaluation_games_for_calibration_floor"], 1)
         first_pilot_argv = recipe["steps"][0]["argv"]
         second_pilot_argv = recipe["steps"][1]["argv"]
         self.assertEqual(first_pilot_argv[first_pilot_argv.index("--run-root") + 1], str(run_root / "pilot-0001"))
@@ -2048,6 +2051,23 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(recipe["steps"][3]["output_json_path"], str(run_root / "pilot-audit-replay.json"))
         self.assertIn("--audit-config", audit_argv)
         self.assertIn(str(run_root / "pilot-audit-config.json"), audit_argv)
+
+    def test_eval_cli_cpu_pilot_plan_rejects_underpowered_calibration_game_floor(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = eval_cli_main(
+                [
+                    "cpu-pilot-plan",
+                    "--evaluation-games",
+                    "8",
+                    "--calibration-require-min-benchmark-games",
+                    "50",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        error = stderr.getvalue()
+        self.assertIn("only guarantees 32", error)
+        self.assertIn("Use --evaluation-games >= 13", error)
 
     def test_eval_cli_cpu_pilot_plan_propagates_teacher_branch_preflight_to_smoke_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2609,6 +2629,38 @@ if __name__ == "__main__":
         self.assertEqual(exit_code, 1)
         run.assert_not_called()
         self.assertIn("cpu-pilot-run summary already exists; choose a fresh run-root", stderr.getvalue())
+
+    def test_eval_cli_cpu_pilot_run_rejects_underpowered_calibration_game_floor_before_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            showdown_root = temp_path / "showdown"
+            showdown_root.mkdir()
+            run_root = temp_path / "runs" / "pilots"
+
+            with (
+                patch("pokezero.eval_cli.subprocess.run") as run,
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-pilot-run",
+                        "--run-root",
+                        str(run_root),
+                        "--showdown-root",
+                        str(showdown_root),
+                        "--evaluation-games",
+                        "8",
+                        "--calibration-require-min-benchmark-games",
+                        "50",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+        self.assertFalse((run_root / "cpu-pilot-suite-summary.json").exists())
+        error = stderr.getvalue()
+        self.assertIn("only guarantees 32", error)
+        self.assertIn("Use --evaluation-games >= 13", error)
 
     def test_eval_cli_cpu_pilot_plan_rejects_seed_band_overlap(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
