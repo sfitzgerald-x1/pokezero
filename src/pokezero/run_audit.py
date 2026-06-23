@@ -31,6 +31,44 @@ DEFAULT_REQUIRED_BENCHMARK_OPPONENTS = ("random-legal", "simple-legal")
 AUDIT_CALIBRATION_AGGREGATE_MODES = ("median", "envelope")
 RUN_AUDIT_CONFIG_SCHEMA_VERSION = "pokezero.run_audit_config.v1"
 _THRESHOLD_EPSILON = 1e-12
+RUN_AUDIT_CHECK_SEVERITIES = ("error", "warning")
+RUN_AUDIT_CHECK_NAMES = (
+    "latest_collection_capped_rate",
+    "promoted_opponent_pool_requirement",
+    "latest_average_decision_rounds",
+    "latest_benchmark_available",
+    "latest_benchmark_games",
+    "latest_benchmark_win_rate",
+    "latest_benchmark_capped_rate",
+    "latest_benchmark_average_decision_rounds",
+    "latest_process_peak_rss_mb",
+    "latest_benchmark_opponent_coverage",
+    "benchmark_win_rate_drop_by_opponent",
+    "consecutive_promotion_failures",
+    "latest_promotion_recorded",
+)
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raise ValueError("string sequence value must be an array, not a string.")
+    return tuple(str(item) for item in _sequence(value))
+
+
+def _normalized_warning_check_names(value: Any) -> tuple[str, ...]:
+    names: list[str] = []
+    for raw_name in _string_tuple(value):
+        name = raw_name.strip()
+        if not name:
+            raise ValueError("warning_check_names entries must be non-empty.")
+        if name not in RUN_AUDIT_CHECK_NAMES:
+            choices = ", ".join(RUN_AUDIT_CHECK_NAMES)
+            raise ValueError(f"unknown warning_check_names entry {name!r}; choose one of: {choices}")
+        if name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 @dataclass(frozen=True)
@@ -47,8 +85,10 @@ class RunAuditConfig:
     require_benchmark: bool = True
     require_latest_promotion: bool = False
     require_benchmark_opponent_coverage: bool = True
+    warning_check_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "warning_check_names", _normalized_warning_check_names(self.warning_check_names))
         if self.min_latest_benchmark_games < 0:
             raise ValueError("min_latest_benchmark_games must be non-negative.")
         if self.max_consecutive_promotion_failures < 0:
@@ -80,6 +120,20 @@ class RunAuditCheck:
     observed: float | int | str | None
     threshold: float | int | str | None
     message: str
+    severity: str = "error"
+
+    def __post_init__(self) -> None:
+        if self.severity not in RUN_AUDIT_CHECK_SEVERITIES:
+            choices = ", ".join(RUN_AUDIT_CHECK_SEVERITIES)
+            raise ValueError(f"unknown run-audit check severity {self.severity!r}; choose one of: {choices}")
+
+    @property
+    def blocking_failed(self) -> bool:
+        return not self.passed and self.severity != "warning"
+
+    @property
+    def warning_failed(self) -> bool:
+        return not self.passed and self.severity == "warning"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +142,7 @@ class RunAuditCheck:
             "observed": self.observed,
             "threshold": self.threshold,
             "message": self.message,
+            "severity": self.severity,
         }
 
 
@@ -202,7 +257,15 @@ class RunAuditResult:
 
     @property
     def passed(self) -> bool:
-        return all(check.passed for check in self.checks)
+        return not self.blocking_failed_checks
+
+    @property
+    def blocking_failed_checks(self) -> tuple[RunAuditCheck, ...]:
+        return tuple(check for check in self.checks if check.blocking_failed)
+
+    @property
+    def warning_failed_checks(self) -> tuple[RunAuditCheck, ...]:
+        return tuple(check for check in self.checks if check.warning_failed)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -223,6 +286,8 @@ class RunAuditResult:
             "benchmark_regressions": [regression.to_dict() for regression in self.benchmark_regressions],
             "consecutive_promotion_failures": self.consecutive_promotion_failures,
             "passed": self.passed,
+            "failed_checks": [check.name for check in self.blocking_failed_checks],
+            "warning_checks": [check.name for check in self.warning_failed_checks],
             "checks": [check.to_dict() for check in self.checks],
         }
 
@@ -256,6 +321,7 @@ class RunComparisonEntry:
     audit_profile: str | None = None
     audit_passed: bool | None = None
     audit_failed_checks: tuple[str, ...] = ()
+    audit_warning_checks: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -286,6 +352,7 @@ class RunComparisonEntry:
             "audit_profile": self.audit_profile,
             "audit_passed": self.audit_passed,
             "audit_failed_checks": list(self.audit_failed_checks),
+            "audit_warning_checks": list(self.audit_warning_checks),
         }
 
 
@@ -453,14 +520,14 @@ class MultiRunAuditCalibrationResult:
 class RunAuditFailure(RuntimeError):
     def __init__(self, result: RunAuditResult) -> None:
         self.result = result
-        failed = tuple(check.name for check in result.checks if not check.passed)
+        failed = tuple(check.name for check in result.blocking_failed_checks)
         failed_summary = ", ".join(failed) if failed else "unknown"
         super().__init__(
             f"run audit failed for {result.manifest_path}: {failed_summary}"
         )
 
 
-def run_audit_config_to_dict(config: RunAuditConfig) -> dict[str, float | int | bool | None]:
+def run_audit_config_to_dict(config: RunAuditConfig) -> dict[str, float | int | bool | None | list[str]]:
     return {
         "min_latest_benchmark_win_rate": config.min_latest_benchmark_win_rate,
         "min_latest_benchmark_games": config.min_latest_benchmark_games,
@@ -474,6 +541,7 @@ def run_audit_config_to_dict(config: RunAuditConfig) -> dict[str, float | int | 
         "require_benchmark": config.require_benchmark,
         "require_latest_promotion": config.require_latest_promotion,
         "require_benchmark_opponent_coverage": config.require_benchmark_opponent_coverage,
+        "warning_check_names": list(config.warning_check_names),
     }
 
 
@@ -493,6 +561,7 @@ def run_audit_config_from_dict(payload: Mapping[str, Any]) -> RunAuditConfig:
         require_benchmark=_required_bool(payload, "require_benchmark"),
         require_latest_promotion=_required_bool(payload, "require_latest_promotion"),
         require_benchmark_opponent_coverage=_required_bool(payload, "require_benchmark_opponent_coverage"),
+        warning_check_names=_string_tuple(payload.get("warning_check_names", ())),
     )
 
 
@@ -554,17 +623,20 @@ def audit_run(
     benchmark_regressions = _opponent_regressions(iterations)
     missing_latest_benchmark_opponents = _missing_latest_benchmark_opponents(iterations)
     consecutive_promotion_failures = _consecutive_promotion_failures(iterations)
-    checks = (
-        _latest_collection_capped_check(latest, config),
-        _promoted_opponent_pool_requirement_check(manifest),
-        *_latest_average_decision_rounds_checks(latest, config),
-        *_latest_benchmark_checks(latest, config),
-        *_latest_benchmark_average_decision_rounds_checks(latest, config),
-        *_latest_process_peak_rss_checks(latest, config),
-        _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
-        _benchmark_regression_check(iterations, benchmark_regressions, config),
-        _promotion_failure_check(consecutive_promotion_failures, config),
-        _latest_promotion_check(latest, config),
+    checks = _apply_warning_check_severity(
+        (
+            _latest_collection_capped_check(latest, config),
+            _promoted_opponent_pool_requirement_check(manifest),
+            *_latest_average_decision_rounds_checks(latest, config),
+            *_latest_benchmark_checks(latest, config),
+            *_latest_benchmark_average_decision_rounds_checks(latest, config),
+            *_latest_process_peak_rss_checks(latest, config),
+            _benchmark_opponent_coverage_check(latest, missing_latest_benchmark_opponents, config),
+            _benchmark_regression_check(iterations, benchmark_regressions, config),
+            _promotion_failure_check(consecutive_promotion_failures, config),
+            _latest_promotion_check(latest, config),
+        ),
+        warning_check_names=config.warning_check_names,
     )
     return RunAuditResult(
         manifest_path=manifest_path,
@@ -840,11 +912,12 @@ def _comparison_entry(
         latest_advancement_reason=latest.advancement_reason,
         audit_profile=audit_profile,
         audit_passed=strict_audit.passed if strict_audit is not None else None,
-        audit_failed_checks=(
-            tuple(check.name for check in strict_audit.checks if not check.passed)
-            if strict_audit is not None
-            else ()
-        ),
+        audit_failed_checks=tuple(check.name for check in strict_audit.blocking_failed_checks)
+        if strict_audit is not None
+        else (),
+        audit_warning_checks=tuple(check.name for check in strict_audit.warning_failed_checks)
+        if strict_audit is not None
+        else (),
     )
 
 
@@ -1429,6 +1502,27 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _apply_warning_check_severity(
+    checks: tuple[RunAuditCheck, ...],
+    *,
+    warning_check_names: tuple[str, ...],
+) -> tuple[RunAuditCheck, ...]:
+    if not warning_check_names:
+        return checks
+    warning_names = set(warning_check_names)
+    return tuple(
+        RunAuditCheck(
+            name=check.name,
+            passed=check.passed,
+            observed=check.observed,
+            threshold=check.threshold,
+            message=check.message,
+            severity="warning" if check.name in warning_names else check.severity,
+        )
+        for check in checks
+    )
+
+
 def _required_bool(payload: Mapping[str, Any], field_name: str) -> bool:
     value = payload[field_name]
     if not isinstance(value, bool):
@@ -1523,7 +1617,7 @@ def _permissive_audit_config() -> RunAuditConfig:
     )
 
 
-def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]:
+def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None | list[str]]:
     require_benchmark = bool(result.require_benchmark)
     return {
         "min_latest_benchmark_win_rate": (
@@ -1556,6 +1650,7 @@ def _suggested_audit_config(result: Any) -> dict[str, float | int | bool | None]
         "require_benchmark": require_benchmark,
         "require_latest_promotion": False,
         "require_benchmark_opponent_coverage": bool(result.require_benchmark_opponent_coverage),
+        "warning_check_names": [],
     }
 
 
@@ -1590,6 +1685,8 @@ def _suggested_audit_cli_flags(result: Any) -> tuple[str, ...]:
         flags.append("--allow-missing-benchmark")
     if not config["require_benchmark_opponent_coverage"]:
         flags.append("--allow-missing-benchmark-opponents")
+    for check_name in config["warning_check_names"]:
+        flags.extend(("--warning-check", str(check_name)))
     return tuple(flags)
 
 
@@ -1627,6 +1724,8 @@ def _suggested_post_iteration_audit_cli_flags(result: Any) -> tuple[str, ...]:
         if config["require_latest_promotion"]
         else "--audit-allow-missing-latest-promotion"
     )
+    for check_name in config["warning_check_names"]:
+        flags.extend(("--audit-warning-check", str(check_name)))
     return tuple(flags)
 
 

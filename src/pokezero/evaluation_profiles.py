@@ -60,6 +60,7 @@ class EvaluationProfile:
                 "require_benchmark": self.audit_config.require_benchmark,
                 "require_latest_promotion": self.audit_config.require_latest_promotion,
                 "require_benchmark_opponent_coverage": self.audit_config.require_benchmark_opponent_coverage,
+                "warning_check_names": list(self.audit_config.warning_check_names),
             },
         }
 

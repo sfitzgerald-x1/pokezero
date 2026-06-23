@@ -66,6 +66,16 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--audit-max-benchmark-win-rate-drop", type=float, default=None)
     parser.add_argument("--audit-max-consecutive-promotion-failures", type=int, default=None)
+    parser.add_argument(
+        "--audit-warning-check",
+        action="append",
+        default=None,
+        metavar="CHECK",
+        help=(
+            "Treat the named run-audit check as warning-only. May be repeated. "
+            "Warning-only failures are reported but do not stop the run."
+        ),
+    )
     benchmark_group = parser.add_mutually_exclusive_group()
     benchmark_group.add_argument(
         "--audit-require-benchmark",
@@ -125,6 +135,8 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
     if not args.audit_after_iteration:
         if args.audit_config is not None:
             raise ValueError("--audit-config requires --audit-after-iteration.")
+        if args.audit_warning_check:
+            raise ValueError("--audit-warning-check requires --audit-after-iteration.")
         return None
     defaults = (
         evaluation_profile(args.audit_profile).audit_config
@@ -182,6 +194,7 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
             args.audit_require_benchmark_opponent_coverage,
             defaults.require_benchmark_opponent_coverage,
         ),
+        warning_check_names=(*defaults.warning_check_names, *tuple(args.audit_warning_check or ())),
     )
 
 

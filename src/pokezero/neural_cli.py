@@ -385,7 +385,7 @@ def _iterate(args: argparse.Namespace) -> int:
 
 
 def _print_run_audit_failure(exc: RunAuditFailure) -> None:
-    failed = [check.name for check in exc.result.checks if not check.passed]
+    failed = [check.name for check in exc.result.blocking_failed_checks]
     print(f"audit_failed: {exc.result.manifest_path}", file=sys.stderr)
     print(f"failed_checks: {', '.join(failed) if failed else 'unknown'}", file=sys.stderr)
 
