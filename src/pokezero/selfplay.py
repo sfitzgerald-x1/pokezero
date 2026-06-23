@@ -17,6 +17,7 @@ from .collection import (
     NEURAL_POLICY_SPEC_PREFIX,
     RolloutRecord,
     benchmark_rollouts,
+    current_peak_rss_mb,
     iter_rollout_records,
     policy_factory_from_spec,
     policy_from_spec,
@@ -77,6 +78,7 @@ class SelfPlayIterationResult:
     training: LinearTrainingResult
     benchmark: BenchmarkReport | None = None
     promotion: "PromotionRecordResult | None" = None
+    process_peak_rss_mb_by_phase: Mapping[str, float | None] = field(default_factory=dict)
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     source: Mapping[str, Any] = field(default_factory=dict)
@@ -107,6 +109,7 @@ class SelfPlayIterationResult:
             "training": _training_result_to_dict(self.training),
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
             "promotion": self.promotion.to_dict() if self.promotion is not None else None,
+            "process_peak_rss_mb_by_phase": dict(self.process_peak_rss_mb_by_phase),
         }
 
 
@@ -321,6 +324,8 @@ def run_selfplay_iterations(
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
         )
+        process_peak_rss_mb_by_phase: dict[str, float | None] = {}
+        _record_process_peak_rss(process_peak_rss_mb_by_phase, "iteration_start")
 
         metrics = collect_selfplay_rollouts(
             output_path=rollout_path,
@@ -333,6 +338,7 @@ def run_selfplay_iterations(
             opponent_policy_specs=opponent_policy_specs,
             worker_count=worker_count,
         )
+        _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_collection")
         iteration_training_config = replace(
             training_config,
             policy_id=f"{training_config.policy_id}-iter-{iteration:04d}",
@@ -344,7 +350,9 @@ def run_selfplay_iterations(
             initial_model=current_model,
             validation_paths=validation_paths or None,
         )
+        _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_training")
         save_linear_model(checkpoint_path, training.model)
+        _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_checkpoint_save")
         benchmark = None
         if evaluation_games:
             benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
@@ -360,6 +368,7 @@ def run_selfplay_iterations(
                 games=evaluation_games,
                 seed_start=evaluation_seed_start + ((iteration - 1) * evaluation_games),
             )
+            _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_benchmark")
 
         result = SelfPlayIterationResult(
             iteration=iteration,
@@ -379,6 +388,7 @@ def run_selfplay_iterations(
             benchmark=benchmark,
             opponent_pool_config=opponent_pool_manifest_config,
             invocation_config=invocation_config,
+            process_peak_rss_mb_by_phase=process_peak_rss_mb_by_phase,
             source=source_metadata,
         )
         _write_json(manifest_path, result.to_manifest_dict())
@@ -413,6 +423,8 @@ def run_selfplay_iterations(
                 iteration=iteration,
             )
             result = replace(result, promotion=promotion)
+            _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_auto_promotion")
+            result = replace(result, process_peak_rss_mb_by_phase=dict(process_peak_rss_mb_by_phase))
             results[-1] = result
             _write_json(manifest_path, result.to_manifest_dict())
             if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
@@ -468,6 +480,10 @@ def _enforce_post_iteration_audit(
     from .run_audit import enforce_run_audit
 
     return enforce_run_audit(manifest_path, config=config)
+
+
+def _record_process_peak_rss(snapshots: dict[str, float | None], phase: str) -> None:
+    snapshots[phase] = current_peak_rss_mb()
 
 
 def _report_post_iteration_audit_warnings(result: "RunAuditResult | None") -> None:

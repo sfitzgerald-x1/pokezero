@@ -193,6 +193,7 @@ class RunAuditIterationSummary:
     promotion_recorded: bool | None
     advancement_recorded: bool | None
     advancement_reason: str | None
+    process_peak_rss_mb_by_phase: Mapping[str, float | None]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -214,6 +215,7 @@ class RunAuditIterationSummary:
             "promotion_recorded": self.promotion_recorded,
             "advancement_recorded": self.advancement_recorded,
             "advancement_reason": self.advancement_reason,
+            "process_peak_rss_mb_by_phase": dict(self.process_peak_rss_mb_by_phase),
         }
 
 
@@ -1029,6 +1031,7 @@ def _iteration_summary(
             if advancement is None or advancement.get("reason") is None
             else str(advancement.get("reason"))
         ),
+        process_peak_rss_mb_by_phase=_process_peak_rss_by_phase(iteration),
     )
 
 
@@ -1287,8 +1290,19 @@ def _latest_process_peak_rss_mb(latest: RunAuditIterationSummary) -> float | Non
         (
             latest.collection_peak_rss_mb,
             latest.benchmark_peak_rss_mb,
+            *latest.process_peak_rss_mb_by_phase.values(),
         )
     )
+
+
+def _process_peak_rss_by_phase(iteration: Mapping[str, Any]) -> dict[str, float | None]:
+    payload = iteration.get("process_peak_rss_mb_by_phase")
+    if not isinstance(payload, Mapping):
+        return {}
+    return {
+        str(phase): _optional_float(value)
+        for phase, value in payload.items()
+    }
 
 
 def _benchmark_regression_check(
