@@ -19,6 +19,7 @@ from .collection import (
     benchmark_rollouts,
     current_peak_rss_mb,
     iter_rollout_records,
+    linear_policy_factory_from_model_spec,
     policy_factory_from_spec,
     policy_from_spec,
     run_rollout_record,
@@ -343,6 +344,11 @@ def run_selfplay_iterations(
             current_policy_spec=current_policy_spec,
             opponent_policy_specs=opponent_policy_specs,
             worker_count=worker_count,
+            policy_factory_overrides=(
+                {current_policy_spec: linear_policy_factory_from_model_spec(current_policy_spec, current_model)}
+                if current_model is not None and _is_linear_policy_spec(current_policy_spec)
+                else None
+            ),
         )
         _record_process_peak_rss(process_peak_rss_mb_by_phase, "after_collection")
         iteration_training_config = replace(
@@ -526,6 +532,7 @@ def collect_selfplay_rollouts(
     current_policy_spec: str,
     opponent_policy_specs: Iterable[str],
     worker_count: int = 1,
+    policy_factory_overrides: Mapping[str, Callable[[], Any]] | None = None,
 ) -> CollectionMetrics:
     if games <= 0:
         raise ValueError("games must be positive.")
@@ -536,7 +543,10 @@ def collect_selfplay_rollouts(
         raise ValueError("at least one opponent policy spec is required.")
     collection_peak_rss_mb_by_phase: dict[str, float | None] = {}
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "collection_start")
-    policy_factories = _policy_factories_for_specs((current_policy_spec, *opponent_specs))
+    policy_factories = _policy_factories_for_specs(
+        (current_policy_spec, *opponent_specs),
+        overrides=policy_factory_overrides,
+    )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_policy_factories")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_path = output_path.with_name(f".{output_path.name}.tmp")
@@ -696,8 +706,16 @@ def _run_selfplay_game_record(
     return record, _record_for_player(record, current_player)
 
 
-def _policy_factories_for_specs(specs: Iterable[str]) -> Mapping[str, Callable[[], Any]]:
-    return {spec: policy_factory_from_spec(spec) for spec in dict.fromkeys(specs)}
+def _policy_factories_for_specs(
+    specs: Iterable[str],
+    *,
+    overrides: Mapping[str, Callable[[], Any]] | None = None,
+) -> Mapping[str, Callable[[], Any]]:
+    factory_overrides = overrides or {}
+    return {
+        spec: factory_overrides.get(spec) or policy_factory_from_spec(spec)
+        for spec in dict.fromkeys(specs)
+    }
 
 
 def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:

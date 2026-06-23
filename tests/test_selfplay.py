@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from pokezero.collection import CollectionMetrics, read_rollout_records, rollout_record_to_dict
+from pokezero.collection import (
+    CollectionMetrics,
+    linear_policy_factory_from_model_spec,
+    read_rollout_records,
+    rollout_record_to_dict,
+)
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import (
     LINEAR_FEATURE_SCHEMA_VERSION,
@@ -91,6 +96,18 @@ class MultiActionEnv(OneTurnEnv):
         self._observation = observation((True, True, True, True, True, True, False, False, False))
 
 
+def _rollout_action_signature(records) -> list[tuple]:
+    return [
+        (
+            record.seed,
+            tuple(sorted(record.policy_ids.items())),
+            None if record.terminal is None else record.terminal.winner,
+            tuple((step.player_id, step.action_index) for step in record.trajectory.steps),
+        )
+        for record in records
+    ]
+
+
 class SelfPlayTest(unittest.TestCase):
     def test_collect_selfplay_rollouts_alternates_current_policy_seat(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -139,6 +156,74 @@ class SelfPlayTest(unittest.TestCase):
 
         self.assertEqual(training_records[0].policy_ids, {"p1": "random-legal"})
         self.assertEqual(training_records[1].policy_ids, {"p2": "random-legal"})
+
+    def test_run_selfplay_iterations_reuses_loaded_current_model_during_collection(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=32,
+            window_size=1,
+            policy_id="linear-loaded-once",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patch("pokezero.linear_policy.load_linear_model", return_value=model) as load:
+                result = run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    initial_policy_spec="linear:/tmp/current-policy.json?sample=true",
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
+
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(result.iterations[0].current_policy_spec, "linear:/tmp/current-policy.json?sample=true")
+
+    def test_reused_current_model_collection_matches_reloaded_model_collection(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=32,
+            window_size=1,
+            policy_id="linear-equivalent",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "linear-policy.json"
+            save_linear_model(checkpoint_path, model)
+            spec = f"linear:{checkpoint_path}?sample=true"
+            reloaded_output_path = temp_path / "reloaded-rollouts.jsonl"
+            reused_output_path = temp_path / "reused-rollouts.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=reloaded_output_path,
+                games=4,
+                env_factory=MultiActionEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=123,
+                current_policy_spec=spec,
+                opponent_policy_specs=("random-legal",),
+            )
+            collect_selfplay_rollouts(
+                output_path=reused_output_path,
+                games=4,
+                env_factory=MultiActionEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=123,
+                current_policy_spec=spec,
+                opponent_policy_specs=("random-legal",),
+                policy_factory_overrides={spec: linear_policy_factory_from_model_spec(spec, model)},
+            )
+
+            reloaded_records = read_rollout_records(reloaded_output_path)
+            reused_records = read_rollout_records(reused_output_path)
+
+        self.assertEqual(_rollout_action_signature(reused_records), _rollout_action_signature(reloaded_records))
 
     def test_collect_selfplay_rollouts_parallel_preserves_order_and_training_filter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
