@@ -959,6 +959,16 @@ def _add_cpu_long_run_arguments(
             "Defaults to long-run; use smoke only for local rehearsal runs."
         ),
     )
+    parser.add_argument(
+        "--runtime-audit-source",
+        choices=("auto", "profile", "pilot-audit-config"),
+        default="auto",
+        help=(
+            "Post-iteration audit source for the nested self-play run. "
+            "auto preserves the historical behavior: long-run uses the pilot audit config, "
+            "other profiles use their named profile audit."
+        ),
+    )
     parser.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
     parser.add_argument(
         "--require-promoted-opponent-pool-size",
@@ -5112,7 +5122,7 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
     if promotion_gate_feasibility_error is not None:
         ready_reasons.append("promotion_gate_not_satisfiable_by_evaluation_games")
     audit_feasibility_error = None
-    runtime_audit_source = "pilot-audit-config" if args.profile == "long-run" else "profile"
+    runtime_audit_source = _cpu_long_run_resolved_runtime_audit_source(args)
     runtime_audit_config_path = audit_config_path if runtime_audit_source == "pilot-audit-config" else None
     runtime_audit_profile = args.profile if runtime_audit_source == "profile" else None
     if not ready_reasons:
@@ -5138,7 +5148,11 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
     steps = [
         {
             "name": "run guarded CPU self-play long run",
-            "argv": _cpu_long_run_selfplay_argv(args, audit_config_path=audit_config_path),
+            "argv": _cpu_long_run_selfplay_argv(
+                args,
+                audit_config_path=audit_config_path,
+                runtime_audit_source=runtime_audit_source,
+            ),
         }
     ] if ready and audit_config_path is not None else []
     payload = {
@@ -5240,11 +5254,18 @@ def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
 
 
 def _cpu_long_run_runtime_audit_config(args: argparse.Namespace, *, audit_config_path: Path | None) -> RunAuditConfig:
-    if args.profile == "long-run":
+    if _cpu_long_run_resolved_runtime_audit_source(args) == "pilot-audit-config":
         if audit_config_path is None:
-            raise ValueError("pilot audit config path is required for long-run audit feasibility.")
+            raise ValueError("pilot audit config path is required for pilot audit-config feasibility.")
         return load_run_audit_config(audit_config_path)
     return evaluation_profile(args.profile).audit_config
+
+
+def _cpu_long_run_resolved_runtime_audit_source(args: argparse.Namespace) -> str:
+    requested = getattr(args, "runtime_audit_source", "auto")
+    if requested != "auto":
+        return str(requested)
+    return "pilot-audit-config" if args.profile == "long-run" else "profile"
 
 
 def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int, *, profile_name: str) -> str | None:
@@ -5301,7 +5322,12 @@ def _cpu_long_run_not_ready_reasons(
     return reasons
 
 
-def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: Path) -> list[str]:
+def _cpu_long_run_selfplay_argv(
+    args: argparse.Namespace,
+    *,
+    audit_config_path: Path,
+    runtime_audit_source: str,
+) -> list[str]:
     promotion_registry = args.promotion_registry if args.promotion_registry is not None else args.run_dir / "promotions.json"
     promotion_artifact_dir = (
         args.promotion_artifact_dir
@@ -5354,7 +5380,7 @@ def _cpu_long_run_selfplay_argv(args: argparse.Namespace, *, audit_config_path: 
         args.profile,
         "--audit-after-iteration",
     ]
-    if args.profile == "long-run":
+    if runtime_audit_source == "pilot-audit-config":
         argv.extend(["--audit-config", str(audit_config_path)])
     else:
         argv.extend(["--audit-profile", args.profile])

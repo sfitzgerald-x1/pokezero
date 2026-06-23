@@ -166,6 +166,8 @@ After a pilot suite is ready, generate the guarded long-run command from that sa
 
 The long-run plan is read-only. It fails closed unless the pilot suite passed, the generated audit config is ready under the requested calibration floors, and the requested `--evaluation-games` can satisfy the audit config's benchmark-game floor during post-iteration audit. When ready, it emits a `selfplay_cli iterate` command wired with `--audit-after-iteration --audit-config <generated-config>`, `--auto-promote`, and managed promotion artifact paths under the requested long-run directory. The `--initial-policy` remains explicit because the pilot suite calibrates guardrails; it does not decide which checkpoint should seed a longer experiment.
 
+By default, `cpu-long-run-plan` preserves the historical coupling between profile and post-iteration audit source: `--profile long-run` uses the generated pilot audit config, while smoke/default rehearsal profiles use their named audit profile. When the promotion gate profile needs to stay permissive but the runtime audit should still enforce calibrated pilot thresholds, pass `--runtime-audit-source pilot-audit-config`. This is useful for the next cold-start versus teacher-bootstrap comparison: keep `--profile smoke` or another feasible gate profile if needed, but enforce the stronger pilot-derived audit config during each completed iteration.
+
 Use the paired execution wrapper when the validated plan should actually launch and leave behind a wrapper artifact:
 
 ```bash

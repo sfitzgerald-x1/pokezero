@@ -3122,6 +3122,50 @@ if __name__ == "__main__":
         self.assertEqual(argv[argv.index("--audit-profile") + 1], "smoke")
         self.assertNotIn("--audit-config", argv)
 
+    def test_eval_cli_cpu_long_run_plan_can_use_pilot_audit_config_with_smoke_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                audit_config_min_latest_benchmark_games=20,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "calibrated-rehearsal-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--runtime-audit-source",
+                        "pilot-audit-config",
+                        "--evaluation-games",
+                        "5",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["profile"], "smoke")
+        self.assertIsNone(payload["promotion_gate_feasibility_error"])
+        self.assertIsNone(payload["audit_feasibility_error"])
+        self.assertEqual(payload["audit_config_path"], str(audit_config_path))
+        self.assertEqual(payload["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(payload["runtime_audit_config_path"], str(audit_config_path))
+        self.assertIsNone(payload["runtime_audit_profile"])
+        argv = payload["steps"][0]["argv"]
+        self.assertEqual(argv[argv.index("--profile") + 1], "smoke")
+        self.assertEqual(argv[argv.index("--evaluation-games") + 1], "5")
+        self.assertIn("--audit-config", argv)
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
+        self.assertNotIn("--audit-profile", argv)
+
     def test_eval_cli_cpu_long_run_run_uses_smoke_profile_audit_for_rehearsal_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
