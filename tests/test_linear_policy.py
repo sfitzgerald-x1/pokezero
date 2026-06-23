@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import pokezero.linear_policy as linear_policy_module
-from pokezero.actions import ACTION_SCHEMA_VERSION
+from pokezero.actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.linear_cli import main as linear_cli_main
@@ -221,6 +221,42 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(restored.feature_schema_version, LINEAR_FEATURE_SCHEMA_VERSION)
         self.assertEqual(restored.feature_fingerprint, linear_feature_fingerprint())
         self.assertEqual(restored.predict_action(features, LEGAL_TWO_ACTION_MASK), model.predict_action(features, LEGAL_TWO_ACTION_MASK))
+
+    def test_linear_model_omits_default_zero_opponent_head(self) -> None:
+        model = LinearPolicyModel.initialized(feature_count=8, window_size=1)
+        probabilities = model.opponent_action_probabilities({0: 1.0})
+
+        self.assertEqual(model.opponent_weights, ())
+        self.assertEqual(model.to_dict()["opponent_weights"], [])
+        self.assertEqual(probabilities, tuple(1.0 / ACTION_COUNT for _ in range(ACTION_COUNT)))
+        self.assertEqual(model.predict_opponent_action({0: 1.0}), 0)
+
+    def test_load_linear_model_compacts_legacy_zero_opponent_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "legacy-linear.json"
+            payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+            payload["opponent_weights"] = [[0.0 for _ in range(8)] for _ in range(ACTION_COUNT)]
+            checkpoint_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            with patch.object(linear_policy_module.json, "loads", wraps=json.loads) as loads:
+                restored = load_linear_model(checkpoint_path)
+
+        self.assertIn('"opponent_weights": []', loads.call_args.args[0])
+        self.assertEqual(restored.opponent_weights, ())
+
+    def test_load_linear_model_preserves_nonzero_opponent_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "linear-with-opponent-head.json"
+            payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+            opponent_weights = [[0.0 for _ in range(8)] for _ in range(ACTION_COUNT)]
+            opponent_weights[1][0] = 10.0
+            payload["opponent_weights"] = opponent_weights
+            checkpoint_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+            restored = load_linear_model(checkpoint_path)
+
+        self.assertEqual(len(restored.opponent_weights), ACTION_COUNT)
+        self.assertEqual(restored.predict_opponent_action({0: 1.0}), 1)
 
     def test_linear_checkpoint_rejects_stale_runtime_schema_versions(self) -> None:
         payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()

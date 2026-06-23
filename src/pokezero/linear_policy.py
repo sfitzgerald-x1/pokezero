@@ -95,17 +95,14 @@ class LinearPolicyModel:
             raise ValueError("feature_count must be greater than 1.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
-        if not self.opponent_weights:
-            object.__setattr__(
-                self,
-                "opponent_weights",
-                tuple(tuple(0.0 for _ in range(self.feature_count)) for _ in range(ACTION_COUNT)),
-            )
         if len(self.weights) != ACTION_COUNT:
             raise ValueError(f"weights must contain {ACTION_COUNT} action rows.")
-        if len(self.opponent_weights) != ACTION_COUNT:
+        if self.opponent_weights and len(self.opponent_weights) != ACTION_COUNT:
             raise ValueError(f"opponent_weights must contain {ACTION_COUNT} action rows.")
-        for row in (*self.weights, *self.opponent_weights):
+        for row in self.weights:
+            if len(row) != self.feature_count:
+                raise ValueError("each weight row must match feature_count.")
+        for row in self.opponent_weights:
             if len(row) != self.feature_count:
                 raise ValueError("each weight row must match feature_count.")
 
@@ -122,7 +119,7 @@ class LinearPolicyModel:
             feature_count=feature_count,
             window_size=window_size,
             weights=tuple(tuple(0.0 for _ in range(feature_count)) for _ in range(ACTION_COUNT)),
-            opponent_weights=tuple(tuple(0.0 for _ in range(feature_count)) for _ in range(ACTION_COUNT)),
+            opponent_weights=(),
         )
 
     def logits(self, features: Mapping[int, float]) -> tuple[float, ...]:
@@ -153,6 +150,8 @@ class LinearPolicyModel:
         return max(legal, key=lambda action_index: (probabilities[action_index], -action_index))
 
     def opponent_action_probabilities(self, features: Mapping[int, float]) -> tuple[float, ...]:
+        if not self.opponent_weights:
+            return tuple(1.0 / ACTION_COUNT for _ in range(ACTION_COUNT))
         return _probabilities_from_weights(self.opponent_weights, features, ALL_ACTIONS_LEGAL_MASK)
 
     def predict_opponent_action(self, features: Mapping[int, float]) -> int:
@@ -170,7 +169,11 @@ class LinearPolicyModel:
             "feature_count": self.feature_count,
             "window_size": self.window_size,
             "weights": [list(row) for row in self.weights],
-            "opponent_weights": [list(row) for row in self.opponent_weights],
+            "opponent_weights": (
+                []
+                if _weights_are_all_zero(self.opponent_weights)
+                else [list(row) for row in self.opponent_weights]
+            ),
         }
 
     @classmethod
@@ -186,10 +189,7 @@ class LinearPolicyModel:
             feature_count=int(payload["feature_count"]),
             window_size=int(payload["window_size"]),
             weights=tuple(tuple(float(value) for value in row) for row in _sequence(payload["weights"])),
-            opponent_weights=tuple(
-                tuple(float(value) for value in row)
-                for row in _sequence(payload["opponent_weights"])
-            ),
+            opponent_weights=_opponent_weights_from_payload(payload.get("opponent_weights", ())),
         )
 
 
@@ -376,7 +376,12 @@ def train_linear_policy(
         if initial_model.window_size != training_config.window_size:
             raise ValueError("initial_model window_size must match the training config.")
         weights = [list(row) for row in initial_model.weights]
-        opponent_weights = [list(row) for row in initial_model.opponent_weights]
+        if initial_model.opponent_weights:
+            opponent_weights = [list(row) for row in initial_model.opponent_weights]
+        elif training_config.opponent_action_loss_weight:
+            opponent_weights = _zero_weight_rows(training_config.feature_count)
+        else:
+            opponent_weights = []
     else:
         initialized = LinearPolicyModel.initialized(
             feature_count=training_config.feature_count,
@@ -384,7 +389,11 @@ def train_linear_policy(
             policy_id=training_config.policy_id,
         )
         weights = [list(row) for row in initialized.weights]
-        opponent_weights = [list(row) for row in initialized.opponent_weights]
+        opponent_weights = (
+            _zero_weight_rows(training_config.feature_count)
+            if training_config.opponent_action_loss_weight
+            else []
+        )
     epoch_metrics = []
     dataset_config = TrajectoryDatasetConfig(
         window_size=training_config.window_size,
@@ -622,6 +631,50 @@ def features_from_window(
     return features
 
 
+def _zero_weight_rows(feature_count: int) -> list[list[float]]:
+    return [[0.0 for _ in range(feature_count)] for _ in range(ACTION_COUNT)]
+
+
+def _opponent_weights_from_payload(payload: Any) -> tuple[tuple[float, ...], ...]:
+    rows = tuple(tuple(float(value) for value in row) for row in _sequence(payload))
+    return () if _weights_are_all_zero(rows) else rows
+
+
+def _weights_are_all_zero(weights: Sequence[Sequence[float]]) -> bool:
+    return not weights or all(float(value) == 0.0 for row in weights for value in row)
+
+
+def _compact_zero_opponent_weights_json(raw_payload: str) -> str:
+    # Memory fast path only: _opponent_weights_from_payload still verifies the
+    # parsed value, so missed compaction cannot change model semantics.
+    key = '"opponent_weights"'
+    key_index = raw_payload.find(key)
+    if key_index < 0:
+        return raw_payload
+    colon_index = raw_payload.find(":", key_index + len(key))
+    if colon_index < 0:
+        return raw_payload
+    array_start = raw_payload.find("[", colon_index + 1)
+    if array_start < 0:
+        return raw_payload
+
+    depth = 0
+    for index in range(array_start, len(raw_payload)):
+        char = raw_payload[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                array_end = index + 1
+                return f"{raw_payload[:array_start]}[]{raw_payload[array_end:]}"
+        elif char in "123456789":
+            return raw_payload
+        elif char not in " \t\r\n[],0.-+eE":
+            return raw_payload
+    return raw_payload
+
+
 def save_linear_model(path: str | PathLike[str] | Path, model: LinearPolicyModel) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -629,7 +682,8 @@ def save_linear_model(path: str | PathLike[str] | Path, model: LinearPolicyModel
 
 
 def load_linear_model(path: str | PathLike[str] | Path) -> LinearPolicyModel:
-    return LinearPolicyModel.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+    raw_payload = Path(path).read_text(encoding="utf-8")
+    return LinearPolicyModel.from_dict(json.loads(_compact_zero_opponent_weights_json(raw_payload)))
 
 
 def _required_str(payload: Mapping[str, Any], key: str) -> str:
