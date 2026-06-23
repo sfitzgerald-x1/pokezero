@@ -109,6 +109,8 @@ For the next non-smoke CPU run, treat the run as a local CPU loop success only i
 - Keep decision-round checks visible as diagnostics for now: the current ceilings are warning-only until more non-smoke evidence exists.
 - Record throughput and source provenance, but do not hard-fail on throughput yet unless games/s or decisions/s regresses enough to make unattended runs impractical.
 
+This exact combination of two iterations, larger per-iteration collection, a promoted opponent pool, and hard RSS enforcement has not yet passed locally; if it fails the RSS gate, treat that as useful capacity evidence rather than proof that the compact-head fix regressed.
+
 Treat checkpoint strength as a separate bar:
 
 - Do not replace `expanded-teacher-bootstrap-linear-iter-0001` as the working reference from wrapper aggregate metrics alone.
