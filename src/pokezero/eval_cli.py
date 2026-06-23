@@ -25,6 +25,7 @@ from .evaluation import (
     evaluate_promotion_gate,
 )
 from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
+from .opponents import policy_spec_identity
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
@@ -2280,7 +2281,10 @@ def _opponent_pool_entry_status(
         return "selected", None
     if selection_checkpoint_policy_spec is None:
         return "unselectable", "missing_selection_checkpoint"
-    if current_policy_spec is not None and selection_checkpoint_policy_spec == current_policy_spec:
+    if (
+        current_policy_spec is not None
+        and policy_spec_identity(selection_checkpoint_policy_spec) == policy_spec_identity(current_policy_spec)
+    ):
         return "excluded_current_policy", "matches_current_policy"
     return "available_outside_requested_size", "outside_requested_pool_size"
 

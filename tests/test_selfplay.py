@@ -782,6 +782,61 @@ class SelfPlayTest(unittest.TestCase):
 
         self.assertEqual(specs, (f"linear:{checkpoint_path.resolve(strict=False)}",))
 
+    def test_run_selfplay_iterations_excludes_relative_current_policy_from_promoted_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            previous_checkpoint_path = temp_path / "previous-linear.json"
+            current_checkpoint_path = temp_path / "current-linear.json"
+            registry_path = temp_path / "promotions.json"
+            save_linear_model(
+                previous_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted-previous",
+                ),
+            )
+            save_linear_model(
+                current_checkpoint_path,
+                LinearPolicyModel.initialized(
+                    feature_count=32,
+                    window_size=1,
+                    policy_id="linear-promoted-current",
+                ),
+            )
+            write_promotion_registry(
+                registry_path,
+                checkpoint_paths=(previous_checkpoint_path, current_checkpoint_path),
+                policy_ids=("linear-promoted-previous", "linear-promoted-current"),
+            )
+            current_relative_spec = f"linear:{os.path.relpath(current_checkpoint_path, Path.cwd())}"
+
+            result = run_selfplay_iterations(
+                run_dir=temp_path / "run",
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                training_config=LinearTrainingConfig(
+                    feature_count=32,
+                    epochs=1,
+                    shuffle_buffer_size=0,
+                    policy_id="linear-selfplay-test",
+                ),
+                seed_start=20,
+                initial_policy_spec=current_relative_spec,
+                fixed_opponent_policy_specs=("random-legal",),
+                max_historical_opponents=2,
+                promotion_registry_path=registry_path,
+                required_promoted_opponent_pool_size=1,
+            )
+
+        previous_spec = f"linear:{previous_checkpoint_path.resolve(strict=False)}"
+        current_registry_spec = f"linear:{current_checkpoint_path.resolve(strict=False)}"
+        self.assertEqual(result.iterations[0].current_policy_spec, current_relative_spec)
+        self.assertEqual(result.iterations[0].opponent_policy_specs, ("random-legal", previous_spec))
+        self.assertNotIn(current_registry_spec, result.iterations[0].opponent_policy_specs)
+
     def test_run_selfplay_iterations_auto_promotes_and_feeds_next_opponent_pool(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
