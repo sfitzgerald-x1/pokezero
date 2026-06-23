@@ -351,15 +351,18 @@ class SelfPlayTest(unittest.TestCase):
                     14.0,
                     15.0,
                     16.0,
+                    17.0,
+                    18.0,
                     20.0,
                     30.0,
                     40.0,
                     50.0,
                     60.0,
+                    70.0,
                 ),
             ), patch(
                 "pokezero.collection.current_peak_rss_mb",
-                return_value=17.0,
+                return_value=19.0,
             ):
                 run_selfplay_iterations(
                     run_dir=run_dir,
@@ -387,23 +390,26 @@ class SelfPlayTest(unittest.TestCase):
 
         expected = {
             "iteration_start": 10.0,
-            "after_collection": 20.0,
-            "after_training": 30.0,
-            "after_checkpoint_save": 40.0,
-            "after_benchmark": 50.0,
-            "after_auto_promotion": 60.0,
+            "after_collection": 30.0,
+            "after_training": 40.0,
+            "after_checkpoint_save": 50.0,
+            "after_benchmark": 60.0,
+            "after_auto_promotion": 70.0,
         }
         expected_collection = {
             "collection_start": 11.0,
             "after_policy_factories": 12.0,
             "after_output_setup": 13.0,
-            "after_record_collection": 14.0,
-            "after_output_commit": 15.0,
-            "after_summary": 16.0,
+            "after_first_record": 14.0,
+            "after_half_records": 15.0,
+            "after_all_records": 16.0,
+            "after_record_collection": 17.0,
+            "after_output_commit": 18.0,
+            "after_summary": 20.0,
         }
         self.assertEqual(iteration_manifest["process_peak_rss_mb_by_phase"], expected)
         self.assertEqual(run_manifest["iterations"][0]["process_peak_rss_mb_by_phase"], expected)
-        self.assertEqual(iteration_manifest["collection_metrics"]["peak_rss_mb"], 17.0)
+        self.assertEqual(iteration_manifest["collection_metrics"]["peak_rss_mb"], 19.0)
         self.assertEqual(iteration_manifest["collection_metrics"]["peak_rss_mb_by_phase"], expected_collection)
         self.assertEqual(
             run_manifest["iterations"][0]["collection_metrics"]["peak_rss_mb_by_phase"],

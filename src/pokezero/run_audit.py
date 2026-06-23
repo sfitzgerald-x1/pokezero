@@ -1293,7 +1293,6 @@ def _latest_process_peak_rss_mb(latest: RunAuditIterationSummary) -> float | Non
         (
             latest.collection_peak_rss_mb,
             latest.benchmark_peak_rss_mb,
-            *latest.collection_peak_rss_mb_by_phase.values(),
             *latest.process_peak_rss_mb_by_phase.values(),
         )
     )

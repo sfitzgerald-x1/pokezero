@@ -940,8 +940,8 @@ class RunAuditTest(unittest.TestCase):
         manifest["iterations"][0]["collection_metrics"]["peak_rss_mb"] = 512.25
         manifest["iterations"][0]["collection_metrics"]["peak_rss_mb_by_phase"] = {
             "collection_start": 256.0,
-            "after_policy_factories": 804.0,
-            "after_record_collection": 804.0,
+            "after_policy_factories": 512.25,
+            "after_record_collection": 512.25,
         }
         manifest["iterations"][0]["benchmark"]["peak_rss_mb"] = 640.5
         manifest["iterations"][0]["process_peak_rss_mb_by_phase"] = {
@@ -959,17 +959,17 @@ class RunAuditTest(unittest.TestCase):
                 config=RunAuditConfig(
                     min_latest_benchmark_win_rate=0.50,
                     min_latest_benchmark_games=20,
-                    max_latest_process_peak_rss_mb=800.0,
+                    max_latest_process_peak_rss_mb=700.0,
                 ),
             )
 
         self.assertFalse(result.passed)
-        self.assertEqual(result.latest_process_peak_rss_mb, 804.0)
-        self.assertEqual(result.iterations[0].collection_peak_rss_mb_by_phase["after_policy_factories"], 804.0)
+        self.assertEqual(result.latest_process_peak_rss_mb, 704.0)
+        self.assertEqual(result.iterations[0].collection_peak_rss_mb_by_phase["after_policy_factories"], 512.25)
         self.assertEqual(result.iterations[0].process_peak_rss_mb_by_phase["after_training"], 704.0)
         rss_check = next(check for check in result.checks if check.name == "latest_process_peak_rss_mb")
-        self.assertEqual(rss_check.observed, 804.0)
-        self.assertEqual(rss_check.threshold, 800.0)
+        self.assertEqual(rss_check.observed, 704.0)
+        self.assertEqual(rss_check.threshold, 700.0)
 
     def test_audit_passes_latest_process_peak_rss_threshold(self) -> None:
         manifest = selfplay_manifest(

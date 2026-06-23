@@ -494,20 +494,11 @@ def rollout_record_from_dict(payload: Mapping[str, Any]) -> RolloutRecord:
     )
 
 
-def summarize_records(
-    records: Iterable[RolloutRecord],
-    *,
-    elapsed_seconds: float,
-    peak_rss_mb_by_phase: Mapping[str, float | None] | None = None,
-) -> CollectionMetrics:
+def summarize_records(records: Iterable[RolloutRecord], *, elapsed_seconds: float) -> CollectionMetrics:
     accumulator = _MetricsAccumulator()
     for record in records:
         accumulator.add(record)
-    return accumulator.to_metrics(
-        elapsed_seconds=elapsed_seconds,
-        peak_rss_mb=current_peak_rss_mb(),
-        peak_rss_mb_by_phase=peak_rss_mb_by_phase,
-    )
+    return accumulator.to_metrics(elapsed_seconds=elapsed_seconds, peak_rss_mb=current_peak_rss_mb())
 
 
 def policy_from_spec(spec: str) -> Policy:
@@ -757,13 +748,7 @@ class _MetricsAccumulator:
         if record.terminal.capped:
             self.capped_games += 1
 
-    def to_metrics(
-        self,
-        *,
-        elapsed_seconds: float,
-        peak_rss_mb: float | None = None,
-        peak_rss_mb_by_phase: Mapping[str, float | None] | None = None,
-    ) -> CollectionMetrics:
+    def to_metrics(self, *, elapsed_seconds: float, peak_rss_mb: float | None = None) -> CollectionMetrics:
         return CollectionMetrics(
             games=self.games,
             elapsed_seconds=elapsed_seconds,
@@ -774,7 +759,6 @@ class _MetricsAccumulator:
             ties=self.ties,
             capped_games=self.capped_games,
             peak_rss_mb=peak_rss_mb,
-            peak_rss_mb_by_phase=peak_rss_mb_by_phase,
         )
 
 

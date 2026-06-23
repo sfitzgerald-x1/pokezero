@@ -539,6 +539,7 @@ def collect_selfplay_rollouts(
                     opponent_specs=opponent_specs,
                     policy_factories=policy_factories,
                     worker_count=worker_count,
+                    rss_recorder=lambda phase: _record_process_peak_rss(collection_peak_rss_mb_by_phase, phase),
                 )
                 _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_record_collection")
             finally:
@@ -556,7 +557,6 @@ def collect_selfplay_rollouts(
     metrics = summarize_records(
         iter_rollout_records(output_path),
         elapsed_seconds=perf_counter() - collection_start,
-        peak_rss_mb_by_phase=collection_peak_rss_mb_by_phase,
     )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_summary")
     return replace(metrics, peak_rss_mb_by_phase=dict(collection_peak_rss_mb_by_phase))
@@ -574,6 +574,7 @@ def _collect_selfplay_records(
     opponent_specs: tuple[str, ...],
     policy_factories: Mapping[str, Callable[[], Any]],
     worker_count: int,
+    rss_recorder: Callable[[str], None] | None = None,
 ) -> None:
     if worker_count == 1:
         results = (
@@ -588,7 +589,13 @@ def _collect_selfplay_records(
             )
             for game_index in range(games)
         )
-        _write_selfplay_game_results(handle=handle, training_handle=training_handle, results=results)
+        _write_selfplay_game_results(
+            handle=handle,
+            training_handle=training_handle,
+            results=results,
+            total_results=games,
+            rss_recorder=rss_recorder,
+        )
         return
 
     max_workers = min(worker_count, games)
@@ -605,7 +612,13 @@ def _collect_selfplay_records(
             ),
             range(games),
         )
-        _write_selfplay_game_results(handle=handle, training_handle=training_handle, results=results)
+        _write_selfplay_game_results(
+            handle=handle,
+            training_handle=training_handle,
+            results=results,
+            total_results=games,
+            rss_recorder=rss_recorder,
+        )
 
 
 def _write_selfplay_game_results(
@@ -613,11 +626,21 @@ def _write_selfplay_game_results(
     handle,
     training_handle,
     results: Iterable[tuple[RolloutRecord, RolloutRecord]],
+    total_results: int | None = None,
+    rss_recorder: Callable[[str], None] | None = None,
 ) -> None:
-    for record, training_record in results:
+    midpoint = max(1, total_results // 2) if total_results else None
+    for index, (record, training_record) in enumerate(results, start=1):
         write_rollout_record(handle, record)
         if training_handle is not None:
             write_rollout_record(training_handle, training_record)
+        if rss_recorder is not None:
+            if index == 1:
+                rss_recorder("after_first_record")
+            if midpoint is not None and index == midpoint:
+                rss_recorder("after_half_records")
+            if total_results is not None and index == total_results:
+                rss_recorder("after_all_records")
 
 
 def _run_selfplay_game_record(
