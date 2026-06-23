@@ -181,6 +181,12 @@ class TeacherBootstrapTest(unittest.TestCase):
             def write_demo(path, **kwargs):
                 from pokezero.teacher_scenarios import write_teacher_scenario_rollouts
 
+                self.assertEqual(kwargs["policy"].policy_id, "simple-legal")
+                self.assertEqual(kwargs["scenario_ids"], ("team-status-cure",))
+                self.assertEqual(kwargs["seed_start"], 700)
+                self.assertEqual(kwargs["rng_seed"], 800)
+                self.assertEqual(kwargs["repeat"], 2)
+                self.assertEqual(kwargs["format_id"], "gen3randombattle")
                 return write_teacher_scenario_rollouts(
                     path,
                     policy=ScriptedTeacherPolicy(dex=teacher_scenario_dex()),
@@ -209,6 +215,8 @@ class TeacherBootstrapTest(unittest.TestCase):
                     preflight_games=0,
                     scenario_demo_repeat=2,
                     scenario_demo_scenario_ids=("team-status-cure",),
+                    scenario_demo_seed_start=700,
+                    scenario_demo_rng_seed=800,
                 )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
@@ -222,10 +230,9 @@ class TeacherBootstrapTest(unittest.TestCase):
             manifest["scenario_demo_rollout_path"],
             str(result.scenario_demo_rollout_path),
         )
-        self.assertEqual(
-            result.teacher_decision_summary["teacher_branch_counts"]["team_status_cure"],
-            2,
-        )
+        self.assertEqual(result.teacher_decision_summary["total_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 0)
+        self.assertEqual(result.teacher_decision_summary["teacher_branch_counts"], {})
         self.assertEqual(result.training.validation_metrics.examples, 1)
         self.assertGreaterEqual(result.training.final_metrics.examples, 3)
 
@@ -444,6 +451,27 @@ class TeacherBootstrapTest(unittest.TestCase):
                     validation_seed_start=11,
                     benchmark_games=0,
                     preflight_games=0,
+                )
+
+    def test_run_teacher_bootstrap_rejects_scenario_demo_seed_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "scenario_demo seed range"):
+                run_teacher_bootstrap(
+                    run_dir=Path(temp_dir) / "run",
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(feature_count=32, epochs=1),
+                    train_games=2,
+                    validation_games=1,
+                    teacher_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                    seed_start=10,
+                    validation_seed_start=100,
+                    benchmark_games=0,
+                    preflight_games=0,
+                    scenario_demo_repeat=1,
+                    scenario_demo_scenario_ids=("team-status-cure",),
+                    scenario_demo_seed_start=10,
                 )
 
     def test_bootstrap_cli_teacher_wires_arguments(self) -> None:

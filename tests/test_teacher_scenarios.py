@@ -94,6 +94,13 @@ class TeacherScenarioPreflightTest(unittest.TestCase):
         self.assertIsNone(scenario["observed"])
         self.assertIn("RuntimeError: boom", scenario["error"])
 
+    def test_scenario_rollout_records_reject_unexpected_policy_decisions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "did not match curated expectation"):
+            build_teacher_scenario_rollout_records(
+                policy=AlwaysFirstBadPolicy(),
+                scenario_ids=("damaging-super-effective",),
+            )
+
     def test_scenario_rollout_records_are_training_examples_for_sparse_branches(self) -> None:
         records = build_teacher_scenario_rollout_records(
             policy=ScriptedTeacherPolicy(dex=teacher_scenario_dex()),

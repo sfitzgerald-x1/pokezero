@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 from .collection import RolloutRecord, write_rollout_record
 from .env import TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
-from .policy import Policy, ScriptedTeacherPolicy
+from .policy import Policy, PolicyDecision, ScriptedTeacherPolicy
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -428,6 +428,7 @@ def _scenario_rollout_record(
     repeat_index: int,
 ) -> RolloutRecord:
     decision = policy.select_action(scenario.observation, rng=random.Random(rng_seed))
+    _require_expected_scenario_decision(scenario, decision)
     metadata = {
         "source": "teacher_scenario_demo",
         "scenario_id": scenario.scenario_id,
@@ -469,6 +470,24 @@ def _scenario_rollout_record(
         terminal=trajectory.terminal,
         trajectory=trajectory,
     )
+
+
+def _require_expected_scenario_decision(scenario: TeacherScenario, decision: PolicyDecision) -> None:
+    mismatches: list[str] = []
+    if decision.action_index != scenario.expected_action_index:
+        mismatches.append(
+            f"action_index expected {scenario.expected_action_index}, observed {decision.action_index}"
+        )
+    observed_branch = decision.metadata.get("teacher_branch")
+    if observed_branch != scenario.expected_teacher_branch:
+        mismatches.append(
+            f"teacher_branch expected {scenario.expected_teacher_branch!r}, observed {observed_branch!r}"
+        )
+    if mismatches:
+        raise ValueError(
+            f"teacher scenario demo {scenario.scenario_id!r} did not match curated expectation: "
+            + "; ".join(mismatches)
+        )
 
 
 def _teacher_branch_counts(records: Sequence[RolloutRecord]) -> dict[str, int]:
