@@ -1,14 +1,20 @@
 import os
 from pathlib import Path
 import random
+import tempfile
 import unittest
 
+from pokezero.collection import read_rollout_records
+from pokezero.dataset import TrajectoryDatasetConfig, iter_training_examples
 from pokezero.dex import load_showdown_dex, showdown_dex_from_payload
 from pokezero.policy import PolicyDecision, ScriptedTeacherPolicy
 from pokezero.teacher_scenarios import (
     TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION,
+    TEACHER_SCENARIO_ROLLOUT_SCHEMA_VERSION,
+    build_teacher_scenario_rollout_records,
     run_teacher_scenario_preflight,
     teacher_scenario_ids,
+    write_teacher_scenario_rollouts,
 )
 
 
@@ -87,6 +93,46 @@ class TeacherScenarioPreflightTest(unittest.TestCase):
         scenario = payload["scenarios"][0]
         self.assertIsNone(scenario["observed"])
         self.assertIn("RuntimeError: boom", scenario["error"])
+
+    def test_scenario_rollout_records_are_training_examples_for_sparse_branches(self) -> None:
+        records = build_teacher_scenario_rollout_records(
+            policy=ScriptedTeacherPolicy(dex=teacher_scenario_dex()),
+            scenario_ids=("team-status-cure", "rapid-spin-clear-hazards"),
+            seed_start=900,
+            repeat=2,
+        )
+
+        self.assertEqual(len(records), 4)
+        self.assertEqual(records[0].battle_id, "teacher-scenario-team-status-cure-900")
+        self.assertEqual(records[0].terminal.winner, "p1")
+        self.assertEqual(records[0].policy_ids, {"p1": "scripted-teacher"})
+        self.assertEqual(records[0].trajectory.steps[0].metadata["source"], "teacher_scenario_demo")
+        self.assertEqual(records[0].trajectory.steps[0].metadata["teacher_branch"], "team_status_cure")
+        self.assertEqual(records[1].trajectory.steps[0].metadata["teacher_branch"], "rapid_spin_clear_hazards")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "scenario-rollouts.jsonl"
+            summary = write_teacher_scenario_rollouts(
+                path,
+                policy=ScriptedTeacherPolicy(dex=teacher_scenario_dex()),
+                scenario_ids=("team-status-cure",),
+                repeat=3,
+            )
+            written_records = read_rollout_records(path)
+            examples = tuple(
+                iter_training_examples(
+                    path,
+                    config=TrajectoryDatasetConfig(window_size=1),
+                )
+            )
+
+        self.assertEqual(summary["schema_version"], TEACHER_SCENARIO_ROLLOUT_SCHEMA_VERSION)
+        self.assertEqual(summary["record_count"], 3)
+        self.assertEqual(summary["teacher_branch_counts"], {"team_status_cure": 3})
+        self.assertEqual(len(written_records), 3)
+        self.assertEqual(len(examples), 3)
+        self.assertTrue(all(example.return_value == 1.0 for example in examples))
+        self.assertEqual({example.step_metadata["teacher_branch"] for example in examples}, {"team_status_cure"})
 
 
 class AlwaysFirstBadPolicy:

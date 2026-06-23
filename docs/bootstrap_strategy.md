@@ -61,8 +61,9 @@ Replay import remains valuable after a randbat replay source is identified. A no
 ## Near-Term Implementation Plan
 
 - Use the initial capped-game scoring policy: self-play defaults to `--capped-terminal-value -0.25`, a mild double-loss penalty that can be tuned later.
-- Continue expanding the deterministic scripted teacher for Gen 3 randbats beyond the initial metadata-backed version. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, basic Spikes pressure with max-layer suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; deeper hazard sequencing and matchup context remain future work.
+- Continue using the deterministic scripted teacher as bootstrap-data scaffolding, not as the final source of strategy. It now covers team-status cure value, status-aware switch targets, low-HP active preservation, basic Spikes pressure with max-layer suppression, Rapid Spin hazard clearing, and obvious Gen 3 status-immunity checks; deeper hazard sequencing and matchup context remain future work only for teacher quality, while the self-play loop still has to prove strength through benchmarks.
 - Collect teacher-vs-baseline and teacher-self-play trajectories through the normal rollout JSONL path.
+- For sparse branches that are covered by deterministic teacher scenarios but rarely appear in sampled games, optionally add scenario-demo rollout records to bootstrap training data. These demos are training-only; they should not be mixed into held-out validation data or treated as benchmark evidence.
 - Train bootstrap checkpoints from teacher trajectories with held-out validation.
 - Start self-play from the bootstrap checkpoint and compare against cold-start runs using the self-play report command. A first matched-configuration smoke-profile comparison exists, and a first expanded summary-derived guardrail run failed closed. The next useful comparison should adjust those guardrails before rerunning, rather than treating the first envelope thresholds as final.
 - Benchmark each candidate against `random-legal`, `simple-legal`, historical self-play checkpoints, and the static bootstrap checkpoint.
@@ -289,6 +290,23 @@ python -m pokezero.bootstrap_cli teacher \
 ```
 
 This writes full audit rollouts, current-teacher-only train and validation JSONL, a linear behavior-cloning checkpoint, baseline benchmark results, and `manifest.json`.
+
+To intentionally include rare deterministic scenario branches in the training set, add scenario demos to the bootstrap run:
+
+```bash
+python -m pokezero.bootstrap_cli teacher \
+  --run-dir runs/scripted-teacher-bootstrap-with-demos \
+  --train-games 1000 \
+  --validation-games 200 \
+  --workers 4 \
+  --showdown-root /path/to/pokemon-showdown \
+  --window-size 4 \
+  --teacher-scenario-demo-repeat 5 \
+  --teacher-scenario-demo team-status-cure \
+  --teacher-scenario-demo rapid-spin-clear-hazards
+```
+
+These records are written to `scenario-demo-rollouts.jsonl` and added only to training. Keep validation rollout-only so held-out fit remains a distribution check rather than a memorization check over curated fixtures.
 
 Quickly benchmark the scripted teacher itself against fixed baselines before running a full bootstrap:
 
