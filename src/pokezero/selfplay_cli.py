@@ -236,6 +236,7 @@ def _iterate(args: argparse.Namespace) -> int:
         required_promoted_opponent_pool_size=args.require_promoted_opponent_pool_size,
         auto_promotion_config=auto_promotion_config,
         post_iteration_audit_config=post_iteration_audit_config,
+        post_iteration_audit_failure_mode=args.audit_failure_mode,
         resume=args.resume,
         worker_count=args.workers,
     )

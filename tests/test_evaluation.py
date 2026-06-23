@@ -3068,17 +3068,56 @@ if __name__ == "__main__":
         self.assertEqual(payload["runtime_audit_source"], "pilot-audit-config")
         self.assertEqual(payload["runtime_audit_config_path"], str(audit_config_path))
         self.assertIsNone(payload["runtime_audit_profile"])
+        self.assertEqual(payload["runtime_audit_failure_mode"], "strict")
         step = payload["steps"][0]
         argv = step["argv"]
         self.assertEqual(argv[:4], ["./.venv/bin/python", "-m", "pokezero.selfplay_cli", "iterate"])
         self.assertIn("--audit-after-iteration", argv)
         self.assertIn("--audit-config", argv)
         self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
+        self.assertNotIn("--audit-failure-mode", argv)
         self.assertIn("--auto-promote", argv)
         self.assertEqual(argv[argv.index("--profile") + 1], "long-run")
         self.assertEqual(argv[argv.index("--promotion-registry") + 1], str(long_run_dir / "promotions.json"))
         self.assertEqual(argv[argv.index("--promotion-artifact-dir") + 1], str(long_run_dir / "promoted-checkpoints"))
         self.assertEqual(argv[argv.index("--validation-data") + 1], str(validation_path))
+
+    def test_eval_cli_cpu_long_run_plan_can_request_runtime_health_audit_failure_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                audit_config_min_latest_benchmark_games=20,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "long-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--evaluation-games",
+                        "200",
+                        "--runtime-audit-failure-mode",
+                        "runtime-health",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["runtime_audit_source"], "pilot-audit-config")
+        self.assertEqual(payload["runtime_audit_config_path"], str(audit_config_path))
+        self.assertEqual(payload["runtime_audit_failure_mode"], "runtime-health")
+        argv = payload["steps"][0]["argv"]
+        self.assertIn("--audit-config", argv)
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
+        self.assertIn("--audit-failure-mode", argv)
+        self.assertEqual(argv[argv.index("--audit-failure-mode") + 1], "runtime-health")
 
     def test_eval_cli_cpu_long_run_plan_can_use_smoke_profile_for_rehearsal_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4025,6 +4064,7 @@ if __name__ == "__main__":
         self.assertEqual(runtime_audit["source"], "profile")
         self.assertEqual(runtime_audit["audit_profile"], "smoke")
         self.assertIsNone(runtime_audit["audit_config_path"])
+        self.assertEqual(runtime_audit["failure_mode"], "strict")
         self.assertEqual(runtime_audit["minimum_evaluation_games"], 0)
         self.assertEqual(runtime_audit["recorded_evaluation_games"], 42)
         self.assertEqual(
@@ -4046,6 +4086,51 @@ if __name__ == "__main__":
         self.assertEqual(report["failed_checks"], [])
         self.assertEqual(report["runtime_health_failed_checks"], [])
         self.assertEqual(report["promotion_strength_failed_checks"], [])
+
+    def test_eval_cli_cpu_long_run_report_includes_runtime_audit_failure_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_root = temp_path / "long-run"
+            summary_path = run_root / "cpu-long-run-run-summary.json"
+            audit_config_path = temp_path / "pilot-audit-config.json"
+            write_manifest(run_root / "manifest.json", selfplay_manifest())
+            write_json(
+                audit_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_games=1,
+                        require_benchmark=True,
+                        require_benchmark_opponent_coverage=False,
+                    ),
+                ),
+            )
+            summary = cpu_long_run_summary(status="passed")
+            summary["recipe"]["run_dir"] = str(run_root)
+            summary["recipe"]["runtime_audit_source"] = "runtime-audit-config"
+            summary["recipe"]["runtime_audit_config_path"] = str(audit_config_path)
+            summary["recipe"]["runtime_audit_failure_mode"] = "runtime-health"
+            summary["recipe"]["evaluation_games"] = 23
+            write_json(summary_path, summary)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["cpu-long-run-report", str(run_root), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        runtime_audit = payload["runtime_audit"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime_audit["failure_mode"], "runtime-health")
+        self.assertEqual(
+            runtime_audit["post_iteration_command_flags"],
+            [
+                "--evaluation-games",
+                "23",
+                "--audit-after-iteration",
+                "--audit-config",
+                str(audit_config_path),
+                "--audit-failure-mode",
+                "runtime-health",
+            ],
+        )
 
     def test_eval_cli_cpu_long_run_report_recomputes_pilot_config_audit_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

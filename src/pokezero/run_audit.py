@@ -48,6 +48,47 @@ RUN_AUDIT_CHECK_NAMES = (
     "consecutive_promotion_failures",
     "latest_promotion_recorded",
 )
+RUN_AUDIT_RUNTIME_HEALTH_CHECK_NAMES = frozenset(
+    (
+        "latest_collection_capped_rate",
+        "promoted_opponent_pool_requirement",
+        "latest_average_decision_rounds",
+        "latest_benchmark_available",
+        "latest_benchmark_games",
+        "latest_benchmark_win_rate",
+        "latest_benchmark_capped_rate",
+        "latest_benchmark_average_decision_rounds",
+        "latest_process_peak_rss_mb",
+        "latest_benchmark_opponent_coverage",
+    )
+)
+RUN_AUDIT_PROMOTION_STRENGTH_CHECK_NAMES = frozenset(
+    (
+        "benchmark_win_rate_drop_by_opponent",
+        "consecutive_promotion_failures",
+        "latest_promotion_recorded",
+    )
+)
+RUN_AUDIT_CLASSIFIED_CHECK_NAMES = RUN_AUDIT_RUNTIME_HEALTH_CHECK_NAMES | RUN_AUDIT_PROMOTION_STRENGTH_CHECK_NAMES
+if RUN_AUDIT_CLASSIFIED_CHECK_NAMES != frozenset(RUN_AUDIT_CHECK_NAMES):
+    _missing_classified_checks = sorted(set(RUN_AUDIT_CHECK_NAMES) - RUN_AUDIT_CLASSIFIED_CHECK_NAMES)
+    _extra_classified_checks = sorted(RUN_AUDIT_CLASSIFIED_CHECK_NAMES - set(RUN_AUDIT_CHECK_NAMES))
+    raise RuntimeError(
+        "Run-audit check classification is out of sync: "
+        f"missing={_missing_classified_checks}, extra={_extra_classified_checks}"
+    )
+
+
+def runtime_health_failed_check_names(check_names: Iterable[str]) -> tuple[str, ...]:
+    return tuple(
+        check
+        for check in check_names
+        if check in RUN_AUDIT_RUNTIME_HEALTH_CHECK_NAMES or check not in RUN_AUDIT_CLASSIFIED_CHECK_NAMES
+    )
+
+
+def promotion_strength_failed_check_names(check_names: Iterable[str]) -> tuple[str, ...]:
+    return tuple(check for check in check_names if check in RUN_AUDIT_PROMOTION_STRENGTH_CHECK_NAMES)
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

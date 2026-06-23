@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from .run_audit import RunAuditConfig, RunAuditResult
 
 SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.selfplay_run.v1"
+POST_ITERATION_AUDIT_FAILURE_MODES = ("strict", "runtime-health")
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,7 @@ def run_selfplay_iterations(
     required_promoted_opponent_pool_size: int | None = None,
     auto_promotion_config: SelfPlayPromotionConfig | None = None,
     post_iteration_audit_config: "RunAuditConfig | None" = None,
+    post_iteration_audit_failure_mode: str = "strict",
     resume: bool = False,
     worker_count: int = 1,
 ) -> SelfPlayRunResult:
@@ -202,6 +204,9 @@ def run_selfplay_iterations(
         raise ValueError("required_promoted_opponent_pool_size must be non-negative.")
     if worker_count <= 0:
         raise ValueError("worker_count must be positive.")
+    if post_iteration_audit_failure_mode not in POST_ITERATION_AUDIT_FAILURE_MODES:
+        choices = ", ".join(POST_ITERATION_AUDIT_FAILURE_MODES)
+        raise ValueError(f"post_iteration_audit_failure_mode must be one of: {choices}.")
 
     run_dir.mkdir(parents=True, exist_ok=True)
     fixed_opponents = tuple(fixed_opponent_policy_specs)
@@ -297,6 +302,7 @@ def run_selfplay_iterations(
         "validation_rollout_paths": [str(path) for path in validation_paths],
         "benchmark_reference_policy_specs": list(benchmark_references),
         "source": source_metadata,
+        "post_iteration_audit_failure_mode": post_iteration_audit_failure_mode,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -415,6 +421,7 @@ def run_selfplay_iterations(
             post_iteration_audit_result = _enforce_post_iteration_audit(
                 run_manifest_path,
                 post_iteration_audit_config,
+                failure_mode=post_iteration_audit_failure_mode,
             )
         if auto_promotion_config is not None:
             promotion = _record_auto_promotion(
@@ -454,9 +461,11 @@ def run_selfplay_iterations(
             post_iteration_audit_result = _enforce_post_iteration_audit(
                 run_manifest_path,
                 post_iteration_audit_config,
+                failure_mode=post_iteration_audit_failure_mode,
             )
         _report_post_iteration_audit_warnings(
-            post_iteration_audit_result
+            post_iteration_audit_result,
+            failure_mode=post_iteration_audit_failure_mode,
         )
 
     run_result = SelfPlayRunResult(
@@ -474,23 +483,36 @@ def run_selfplay_iterations(
 def _enforce_post_iteration_audit(
     manifest_path: Path,
     config: "RunAuditConfig | None",
+    *,
+    failure_mode: str = "strict",
 ) -> "RunAuditResult | None":
     if config is None:
         return None
-    from .run_audit import enforce_run_audit
+    from .run_audit import RunAuditFailure, audit_run, runtime_health_failed_check_names
 
-    return enforce_run_audit(manifest_path, config=config)
+    result = audit_run(manifest_path, config=config)
+    if result.passed:
+        return result
+    if failure_mode == "runtime-health":
+        failed_names = tuple(check.name for check in result.blocking_failed_checks)
+        if not runtime_health_failed_check_names(failed_names):
+            return result
+    raise RunAuditFailure(result)
 
 
 def _record_process_peak_rss(snapshots: dict[str, float | None], phase: str) -> None:
     snapshots[phase] = current_peak_rss_mb()
 
 
-def _report_post_iteration_audit_warnings(result: "RunAuditResult | None") -> None:
-    if result is None or not result.warning_failed_checks:
+def _report_post_iteration_audit_warnings(result: "RunAuditResult | None", *, failure_mode: str = "strict") -> None:
+    if result is None:
         return
-    warning_names = ", ".join(check.name for check in result.warning_failed_checks)
-    print(f"audit_warning_checks: {warning_names}", file=sys.stderr)
+    if result.warning_failed_checks:
+        warning_names = ", ".join(check.name for check in result.warning_failed_checks)
+        print(f"audit_warning_checks: {warning_names}", file=sys.stderr)
+    if failure_mode == "runtime-health" and result.blocking_failed_checks:
+        nonblocking_names = ", ".join(check.name for check in result.blocking_failed_checks)
+        print(f"audit_nonblocking_failed_checks: {nonblocking_names}", file=sys.stderr)
 
 
 def collect_selfplay_rollouts(

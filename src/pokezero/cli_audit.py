@@ -14,6 +14,7 @@ DEFAULT_POST_ITERATION_AUDIT_CONFIG = RunAuditConfig(
     max_consecutive_promotion_failures=3,
 )
 MIN_SELFPLAY_POST_ITERATION_BENCHMARK_MATCHUPS = 4
+POST_ITERATION_AUDIT_FAILURE_MODES = ("strict", "runtime-health")
 _UNSET = object()
 
 
@@ -74,6 +75,16 @@ def add_post_iteration_audit_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Treat the named run-audit check as warning-only. May be repeated. "
             "Warning-only failures are reported but do not stop the run."
+        ),
+    )
+    parser.add_argument(
+        "--audit-failure-mode",
+        choices=POST_ITERATION_AUDIT_FAILURE_MODES,
+        default="strict",
+        help=(
+            "How --audit-after-iteration failures affect the run. strict stops on any blocking audit "
+            "failure. runtime-health stops only on runtime-health failures and keeps promotion-strength "
+            "failures visible without stopping capacity diagnostics."
         ),
     )
     benchmark_group = parser.add_mutually_exclusive_group()
@@ -137,6 +148,8 @@ def post_iteration_audit_config_from_args(args: argparse.Namespace) -> RunAuditC
             raise ValueError("--audit-config requires --audit-after-iteration.")
         if args.audit_warning_check:
             raise ValueError("--audit-warning-check requires --audit-after-iteration.")
+        if getattr(args, "audit_failure_mode", "strict") != "strict":
+            raise ValueError("--audit-failure-mode requires --audit-after-iteration.")
         return None
     defaults = (
         evaluation_profile(args.audit_profile).audit_config
