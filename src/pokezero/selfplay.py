@@ -397,6 +397,15 @@ def run_selfplay_iterations(
                 source=source_metadata,
             ).to_dict(),
         )
+        post_iteration_audit_result = None
+        if (
+            post_iteration_audit_config is not None
+            and not post_iteration_audit_config.require_latest_promotion
+        ):
+            post_iteration_audit_result = _enforce_post_iteration_audit(
+                run_manifest_path,
+                post_iteration_audit_config,
+            )
         if auto_promotion_config is not None:
             promotion = _record_auto_promotion(
                 manifest_path=run_manifest_path,
@@ -423,8 +432,19 @@ def run_selfplay_iterations(
                 source=source_metadata,
             ).to_dict(),
         )
+        if (
+            post_iteration_audit_config is not None
+            and (
+                post_iteration_audit_config.require_latest_promotion
+                or auto_promotion_config is not None
+            )
+        ):
+            post_iteration_audit_result = _enforce_post_iteration_audit(
+                run_manifest_path,
+                post_iteration_audit_config,
+            )
         _report_post_iteration_audit_warnings(
-            _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
+            post_iteration_audit_result
         )
 
     run_result = SelfPlayRunResult(
