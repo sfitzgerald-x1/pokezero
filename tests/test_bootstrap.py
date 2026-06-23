@@ -28,8 +28,10 @@ from pokezero.collection import BenchmarkMatchupResult, BenchmarkReport, Collect
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
+from pokezero.policy import ScriptedTeacherPolicy
 from pokezero.rollout import RolloutConfig
 from pokezero.teacher_scenarios import TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION
+from tests.test_teacher_scenarios import teacher_scenario_dex
 
 
 def observation(mask: tuple[bool, ...]) -> PokeZeroObservationV0:
@@ -173,6 +175,66 @@ class TeacherBootstrapTest(unittest.TestCase):
         )
         self.assertEqual({step.player_id for record in train_records for step in record.trajectory.steps}, {"p1", "p2"})
         self.assertEqual(validation_records[0].policy_ids, {"p1": "simple-legal"})
+
+    def test_run_teacher_bootstrap_can_add_scenario_demo_training_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            def write_demo(path, **kwargs):
+                from pokezero.teacher_scenarios import write_teacher_scenario_rollouts
+
+                self.assertEqual(kwargs["policy"].policy_id, "simple-legal")
+                self.assertEqual(kwargs["scenario_ids"], ("team-status-cure",))
+                self.assertEqual(kwargs["seed_start"], 700)
+                self.assertEqual(kwargs["rng_seed"], 800)
+                self.assertEqual(kwargs["repeat"], 2)
+                self.assertEqual(kwargs["format_id"], "gen3randombattle")
+                return write_teacher_scenario_rollouts(
+                    path,
+                    policy=ScriptedTeacherPolicy(dex=teacher_scenario_dex()),
+                    scenario_ids=("team-status-cure",),
+                    repeat=2,
+                )
+
+            with patch("pokezero.bootstrap.write_teacher_scenario_rollouts", side_effect=write_demo):
+                result = run_teacher_bootstrap(
+                    run_dir=Path(temp_dir) / "run",
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-bootstrap-demo-test",
+                    ),
+                    train_games=1,
+                    validation_games=1,
+                    teacher_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                    seed_start=10,
+                    validation_seed_start=100,
+                    benchmark_games=0,
+                    preflight_games=0,
+                    scenario_demo_repeat=2,
+                    scenario_demo_scenario_ids=("team-status-cure",),
+                    scenario_demo_seed_start=700,
+                    scenario_demo_rng_seed=800,
+                )
+
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            demo_records = read_rollout_records(result.scenario_demo_rollout_path)
+
+        self.assertIsNotNone(result.scenario_demo_rollout_path)
+        self.assertEqual(len(demo_records), 2)
+        self.assertEqual(manifest["scenario_demo"]["record_count"], 2)
+        self.assertEqual(manifest["scenario_demo"]["teacher_branch_counts"], {"team_status_cure": 2})
+        self.assertEqual(
+            manifest["scenario_demo_rollout_path"],
+            str(result.scenario_demo_rollout_path),
+        )
+        self.assertEqual(result.teacher_decision_summary["total_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 0)
+        self.assertEqual(result.teacher_decision_summary["teacher_branch_counts"], {})
+        self.assertEqual(result.training.validation_metrics.examples, 1)
+        self.assertGreaterEqual(result.training.final_metrics.examples, 3)
 
     def test_run_teacher_bootstrap_defaults_include_teacher_mirror_and_baselines(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -391,6 +453,27 @@ class TeacherBootstrapTest(unittest.TestCase):
                     preflight_games=0,
                 )
 
+    def test_run_teacher_bootstrap_rejects_scenario_demo_seed_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "scenario_demo seed range"):
+                run_teacher_bootstrap(
+                    run_dir=Path(temp_dir) / "run",
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(feature_count=32, epochs=1),
+                    train_games=2,
+                    validation_games=1,
+                    teacher_policy_spec="simple-legal",
+                    opponent_policy_specs=("random-legal",),
+                    seed_start=10,
+                    validation_seed_start=100,
+                    benchmark_games=0,
+                    preflight_games=0,
+                    scenario_demo_repeat=1,
+                    scenario_demo_scenario_ids=("team-status-cure",),
+                    scenario_demo_seed_start=10,
+                )
+
     def test_bootstrap_cli_teacher_wires_arguments(self) -> None:
         fake_metrics = CollectionMetrics(
             games=2,
@@ -448,6 +531,14 @@ class TeacherBootstrapTest(unittest.TestCase):
                         "0.25",
                         "--benchmark-games",
                         "5",
+                        "--teacher-scenario-demo-repeat",
+                        "2",
+                        "--teacher-scenario-demo",
+                        "team-status-cure",
+                        "--teacher-scenario-demo-seed-start",
+                        "123",
+                        "--teacher-scenario-demo-rng-seed",
+                        "456",
                     ]
                 )
 
@@ -465,6 +556,10 @@ class TeacherBootstrapTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].window_size, 4)
         self.assertEqual(kwargs["training_config"].epochs, 2)
         self.assertEqual(kwargs["training_config"].opponent_action_loss_weight, 0.25)
+        self.assertEqual(kwargs["scenario_demo_repeat"], 2)
+        self.assertEqual(kwargs["scenario_demo_scenario_ids"], ("team-status-cure",))
+        self.assertEqual(kwargs["scenario_demo_seed_start"], 123)
+        self.assertEqual(kwargs["scenario_demo_rng_seed"], 456)
         expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
         self.assertIn(expected_showdown_root, kwargs["teacher_policy_spec"])
         self.assertEqual(len(kwargs["opponent_policy_specs"]), 1)

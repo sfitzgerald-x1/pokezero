@@ -77,6 +77,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
     teacher.add_argument("--shuffle-buffer-size", type=int, default=1024, help="Streaming shuffle buffer size; 0 disables shuffling.")
     teacher.add_argument("--shuffle-seed", type=int, default=1, help="Deterministic shuffle seed.")
     teacher.add_argument("--max-examples", type=int, default=None, help="Optional max examples per epoch.")
+    teacher.add_argument(
+        "--teacher-scenario-demo-repeat",
+        type=int,
+        default=0,
+        help=(
+            "Repeat deterministic teacher-scenario demonstrations this many times and append them to "
+            "bootstrap training data. Defaults to 0, which preserves rollout-only training."
+        ),
+    )
+    teacher.add_argument(
+        "--teacher-scenario-demo",
+        action="append",
+        default=None,
+        help=(
+            "Scenario id to include when --teacher-scenario-demo-repeat is positive. "
+            "May be repeated. Defaults to all curated scenarios."
+        ),
+    )
+    teacher.add_argument(
+        "--teacher-scenario-demo-seed-start",
+        type=int,
+        default=4_000_000,
+        help="First deterministic seed assigned to scenario-demo rollout records.",
+    )
+    teacher.add_argument(
+        "--teacher-scenario-demo-rng-seed",
+        type=int,
+        default=1,
+        help="First deterministic policy RNG seed used for scenario-demo decisions.",
+    )
     teacher.add_argument("--policy-id", default="linear-bootstrap", help="Policy id stored in the bootstrap checkpoint.")
     teacher.add_argument("--json", action="store_true", help="Print the bootstrap manifest as JSON.")
     teacher.set_defaults(func=_teacher)
@@ -253,6 +283,10 @@ def _teacher(args: argparse.Namespace) -> int:
         preflight_games=args.preflight_games,
         preflight_seed_start=args.preflight_seed_start,
         worker_count=args.workers,
+        scenario_demo_repeat=args.teacher_scenario_demo_repeat,
+        scenario_demo_scenario_ids=tuple(args.teacher_scenario_demo or ()),
+        scenario_demo_seed_start=args.teacher_scenario_demo_seed_start,
+        scenario_demo_rng_seed=args.teacher_scenario_demo_rng_seed,
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
@@ -670,6 +704,11 @@ def _print_teacher_summary(result) -> None:
     print(f"run_dir: {result.run_dir}")
     print(f"train_rollouts: {result.train_rollout_path}")
     print(f"validation_rollouts: {result.validation_rollout_path}")
+    scenario_demo_rollout_path = getattr(result, "scenario_demo_rollout_path", None)
+    if scenario_demo_rollout_path is not None:
+        demo_summary = getattr(result, "scenario_demo_summary", None) or {}
+        print(f"scenario_demo_rollouts: {scenario_demo_rollout_path}")
+        print(f"scenario_demo_records: {demo_summary.get('record_count', 0)}")
     print(f"checkpoint: {result.checkpoint_path}")
     print(f"train_games: {result.train_metrics.games}")
     print(f"validation_games: {result.validation_metrics.games}")

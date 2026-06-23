@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import random
 from typing import Any, Mapping, Sequence
 
+from .collection import RolloutRecord, write_rollout_record
+from .env import TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
-from .policy import Policy, ScriptedTeacherPolicy
+from .policy import Policy, PolicyDecision, ScriptedTeacherPolicy
+from .trajectory import BattleTrajectory, TrajectoryStep
 
 
 TEACHER_SCENARIO_PREFLIGHT_SCHEMA_VERSION = "pokezero.teacher_scenario_preflight.v1"
+TEACHER_SCENARIO_ROLLOUT_SCHEMA_VERSION = "pokezero.teacher_scenario_rollouts.v1"
 
 
 @dataclass(frozen=True)
@@ -317,6 +322,80 @@ def run_teacher_scenario_preflight(
     }
 
 
+def build_teacher_scenario_rollout_records(
+    *,
+    policy: Policy | None = None,
+    scenario_ids: Sequence[str] | None = None,
+    rng_seed: int = 1,
+    seed_start: int = 4_000_000,
+    repeat: int = 1,
+    format_id: str = "gen3randombattle",
+) -> tuple[RolloutRecord, ...]:
+    """Build one-step rollout records from deterministic teacher scenarios."""
+
+    if repeat <= 0:
+        raise ValueError("repeat must be positive.")
+    if not format_id.strip():
+        raise ValueError("format_id must be non-empty.")
+    selected_scenarios = _select_scenarios(scenario_ids)
+    teacher = policy if policy is not None else ScriptedTeacherPolicy()
+    records: list[RolloutRecord] = []
+    for repeat_index in range(repeat):
+        for scenario_index, scenario in enumerate(selected_scenarios):
+            seed_offset = repeat_index * len(selected_scenarios) + scenario_index
+            seed = seed_start + seed_offset
+            records.append(
+                _scenario_rollout_record(
+                    teacher,
+                    scenario,
+                    seed=seed,
+                    rng_seed=rng_seed + seed_offset,
+                    format_id=format_id,
+                    repeat_index=repeat_index,
+                )
+            )
+    return tuple(records)
+
+
+def write_teacher_scenario_rollouts(
+    output_path: Path,
+    *,
+    policy: Policy | None = None,
+    scenario_ids: Sequence[str] | None = None,
+    rng_seed: int = 1,
+    seed_start: int = 4_000_000,
+    repeat: int = 1,
+    format_id: str = "gen3randombattle",
+    append: bool = False,
+) -> dict[str, Any]:
+    """Write deterministic teacher scenario demonstrations as rollout JSONL."""
+
+    selected_scenarios = _select_scenarios(scenario_ids)
+    records = build_teacher_scenario_rollout_records(
+        policy=policy,
+        scenario_ids=tuple(scenario.scenario_id for scenario in selected_scenarios),
+        rng_seed=rng_seed,
+        seed_start=seed_start,
+        repeat=repeat,
+        format_id=format_id,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a" if append else "w", encoding="utf-8") as handle:
+        for record in records:
+            write_rollout_record(handle, record)
+    return {
+        "schema_version": TEACHER_SCENARIO_ROLLOUT_SCHEMA_VERSION,
+        "path": str(output_path),
+        "record_count": len(records),
+        "repeat": repeat,
+        "seed_start": seed_start,
+        "rng_seed": rng_seed,
+        "format_id": format_id,
+        "scenario_ids": [scenario.scenario_id for scenario in selected_scenarios],
+        "teacher_branch_counts": _teacher_branch_counts(records),
+    }
+
+
 def _select_scenarios(scenario_ids: Sequence[str] | None) -> tuple[TeacherScenario, ...]:
     scenarios = {scenario.scenario_id: scenario for scenario in default_teacher_scenarios()}
     if not scenario_ids:
@@ -337,6 +416,88 @@ def _select_scenarios(scenario_ids: Sequence[str] | None) -> tuple[TeacherScenar
         known = ", ".join(sorted(scenarios))
         raise ValueError(f"unknown teacher scenario(s): {', '.join(unknown)}. Known scenarios: {known}")
     return tuple(selected)
+
+
+def _scenario_rollout_record(
+    policy: Policy,
+    scenario: TeacherScenario,
+    *,
+    seed: int,
+    rng_seed: int,
+    format_id: str,
+    repeat_index: int,
+) -> RolloutRecord:
+    decision = policy.select_action(scenario.observation, rng=random.Random(rng_seed))
+    _require_expected_scenario_decision(scenario, decision)
+    metadata = {
+        "source": "teacher_scenario_demo",
+        "scenario_id": scenario.scenario_id,
+        "scenario_description": scenario.description,
+        "scenario_repeat_index": repeat_index,
+        "policy_id": decision.policy_id,
+        **dict(decision.metadata),
+    }
+    trajectory = BattleTrajectory(
+        battle_id=f"teacher-scenario-{scenario.scenario_id}-{seed}",
+        format_id=format_id,
+        seed=seed,
+        metadata={
+            "source": "teacher_scenario_demo",
+            "scenario_id": scenario.scenario_id,
+            "scenario_description": scenario.description,
+            "scenario_repeat_index": repeat_index,
+        },
+    )
+    trajectory.append(
+        TrajectoryStep(
+            player_id="p1",
+            turn_index=0,
+            observation=scenario.observation,
+            legal_action_mask=tuple(scenario.observation.legal_action_mask),
+            action_index=decision.action_index,
+            reward=0.0,
+            metadata=metadata,
+        )
+    )
+    trajectory.record_terminal(TerminalState(winner="p1", turn_count=1, capped=False))
+    return RolloutRecord(
+        battle_id=trajectory.battle_id,
+        seed=seed,
+        format_id=format_id,
+        policy_ids={"p1": decision.policy_id},
+        decision_round_count=1,
+        elapsed_seconds=0.0,
+        terminal=trajectory.terminal,
+        trajectory=trajectory,
+    )
+
+
+def _require_expected_scenario_decision(scenario: TeacherScenario, decision: PolicyDecision) -> None:
+    mismatches: list[str] = []
+    if decision.action_index != scenario.expected_action_index:
+        mismatches.append(
+            f"action_index expected {scenario.expected_action_index}, observed {decision.action_index}"
+        )
+    observed_branch = decision.metadata.get("teacher_branch")
+    if observed_branch != scenario.expected_teacher_branch:
+        mismatches.append(
+            f"teacher_branch expected {scenario.expected_teacher_branch!r}, observed {observed_branch!r}"
+        )
+    if mismatches:
+        raise ValueError(
+            f"teacher scenario demo {scenario.scenario_id!r} did not match curated expectation: "
+            + "; ".join(mismatches)
+        )
+
+
+def _teacher_branch_counts(records: Sequence[RolloutRecord]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        for step in record.trajectory.steps:
+            branch = step.metadata.get("teacher_branch")
+            if isinstance(branch, str) and branch:
+                counts[branch] = counts.get(branch, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _run_scenario(policy: Policy, scenario: TeacherScenario, *, rng_seed: int) -> dict[str, Any]:

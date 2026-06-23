@@ -26,6 +26,7 @@ from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
 from .source_metadata import collect_source_metadata
+from .teacher_scenarios import default_teacher_scenarios, write_teacher_scenario_rollouts
 
 
 TEACHER_BOOTSTRAP_SCHEMA_VERSION = "pokezero.teacher_bootstrap.v1"
@@ -52,6 +53,8 @@ class TeacherBootstrapResult:
     train_rollout_path: Path
     full_validation_rollout_path: Path
     validation_rollout_path: Path
+    scenario_demo_rollout_path: Path | None
+    scenario_demo_summary: Mapping[str, Any] | None
     checkpoint_path: Path
     teacher_policy_spec: str
     opponent_policy_specs: tuple[str, ...]
@@ -73,6 +76,10 @@ class TeacherBootstrapResult:
             "train_rollout_path": str(self.train_rollout_path),
             "full_validation_rollout_path": str(self.full_validation_rollout_path),
             "validation_rollout_path": str(self.validation_rollout_path),
+            "scenario_demo_rollout_path": (
+                str(self.scenario_demo_rollout_path) if self.scenario_demo_rollout_path is not None else None
+            ),
+            "scenario_demo": dict(self.scenario_demo_summary or {}),
             "checkpoint_path": str(self.checkpoint_path),
             "checkpoint_policy_spec": f"linear:{self.checkpoint_path}",
             "teacher_policy_spec": self.teacher_policy_spec,
@@ -118,6 +125,10 @@ def run_teacher_bootstrap(
     preflight_games: int = DEFAULT_PREFLIGHT_GAMES,
     preflight_seed_start: int = DEFAULT_PREFLIGHT_SEED_START,
     worker_count: int = 1,
+    scenario_demo_repeat: int = 0,
+    scenario_demo_scenario_ids: Iterable[str] | None = None,
+    scenario_demo_seed_start: int = 4_000_000,
+    scenario_demo_rng_seed: int = 1,
 ) -> TeacherBootstrapResult:
     if train_games <= 0:
         raise ValueError("train_games must be positive.")
@@ -129,6 +140,14 @@ def run_teacher_bootstrap(
         raise ValueError("preflight_games must be non-negative.")
     if worker_count <= 0:
         raise ValueError("worker_count must be positive.")
+    if scenario_demo_repeat < 0:
+        raise ValueError("scenario_demo_repeat must be non-negative.")
+    scenario_demo_scenario_ids_tuple = tuple(scenario_demo_scenario_ids or ())
+    scenario_demo_seed_count = scenario_demo_repeat * (
+        len(scenario_demo_scenario_ids_tuple)
+        if scenario_demo_scenario_ids_tuple
+        else len(default_teacher_scenarios())
+    )
     opponents = (
         _default_opponent_policy_specs(teacher_policy_spec)
         if opponent_policy_specs is None
@@ -143,6 +162,7 @@ def run_teacher_bootstrap(
             ("validation", validation_seed_start, validation_games),
             ("benchmark", benchmark_seed_start, benchmark_games),
             ("preflight", preflight_seed_start, preflight_games),
+            ("scenario_demo", scenario_demo_seed_start, scenario_demo_seed_count),
         )
     )
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -154,14 +174,18 @@ def run_teacher_bootstrap(
     train_rollout_path = run_dir / "train-rollouts.jsonl"
     full_validation_rollout_path = run_dir / "validation-full-rollouts.jsonl"
     validation_rollout_path = run_dir / "validation-rollouts.jsonl"
+    scenario_demo_rollout_path = run_dir / "scenario-demo-rollouts.jsonl"
     checkpoint_path = run_dir / "linear-bootstrap.json"
-    _require_outputs_absent(
+    output_paths = [
         full_train_rollout_path,
         train_rollout_path,
         full_validation_rollout_path,
         validation_rollout_path,
         checkpoint_path,
-    )
+    ]
+    if scenario_demo_repeat:
+        output_paths.append(scenario_demo_rollout_path)
+    _require_outputs_absent(*output_paths)
 
     preflight_metrics = None
     if preflight_games:
@@ -197,8 +221,25 @@ def run_teacher_bootstrap(
         opponent_policy_specs=opponents,
         worker_count=worker_count,
     )
+    scenario_demo_summary = None
+    if scenario_demo_repeat:
+        scenario_demo_summary = write_teacher_scenario_rollouts(
+            scenario_demo_rollout_path,
+            policy=policy_from_spec(teacher_policy_spec),
+            scenario_ids=scenario_demo_scenario_ids_tuple,
+            seed_start=scenario_demo_seed_start,
+            rng_seed=scenario_demo_rng_seed,
+            repeat=scenario_demo_repeat,
+            format_id=rollout_config.format_id,
+        )
+    training_paths: Path | tuple[Path, Path]
+    training_paths = (
+        (train_rollout_path, scenario_demo_rollout_path)
+        if scenario_demo_summary is not None
+        else train_rollout_path
+    )
     training = train_linear_policy(
-        train_rollout_path,
+        training_paths,
         config=training_config,
         validation_paths=validation_rollout_path,
     )
@@ -225,6 +266,8 @@ def run_teacher_bootstrap(
         train_rollout_path=train_rollout_path,
         full_validation_rollout_path=full_validation_rollout_path,
         validation_rollout_path=validation_rollout_path,
+        scenario_demo_rollout_path=scenario_demo_rollout_path if scenario_demo_summary is not None else None,
+        scenario_demo_summary=scenario_demo_summary,
         checkpoint_path=checkpoint_path,
         teacher_policy_spec=teacher_policy_spec,
         opponent_policy_specs=opponents,
