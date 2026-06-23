@@ -91,11 +91,31 @@ The remaining work is less about wiring and more about making the loop empirical
 
 4. Decide the first local success threshold.
 
-   Before treating any CPU run as progress, define provisional minimums for benchmark game count, fixed-baseline win rate, incumbent win rate, capped-game rate, decision-round limits, throughput, RSS ceiling, and required promoted-opponent-pool size. These should come from pilot calibration plus manual judgment, not from arbitrary defaults.
+   The first local success threshold should separate run-health success from checkpoint-strength evidence. A healthy run proves the local CPU loop can be left running and audited; it does not automatically prove the latest checkpoint is stronger than the current reference.
 
 5. Keep the neural path optional until the CPU baseline is trustworthy.
 
    The neural scaffold can run CPU smoke tests when `.[neural]` is installed, but it is not the blocking path for the local CPU proof of concept. PPO, GPU training, and distributed rollout orchestration remain later milestones.
+
+## First Local Success Threshold
+
+For the next non-smoke CPU run, treat the run as a local CPU loop success only if all run-health criteria pass:
+
+- Launch through `cpu-long-run-run` from the ready pilot artifact, not by calling `selfplay_cli iterate` directly.
+- Use the hard adjusted runtime audit config, with RSS enforced as an error and no RSS warning-only override.
+- Run at least two self-play iterations with `games-per-iteration >= 32`, `workers = 4`, `feature-count = 131072`, `window-size = 4`, and `evaluation-games >= 30`.
+- Require a promoted historical opponent pool of at least one selectable checkpoint before collection starts.
+- Pass derived audit with `latest_process_peak_rss_mb <= 636.521875`, `latest_benchmark_games >= 120`, `latest_benchmark_win_rate >= 0.5025`, collection and benchmark capped rates `<= 0.10`, required fixed-baseline coverage, and no hard failed checks.
+- Keep decision-round checks visible as diagnostics for now: the current ceilings are warning-only until more non-smoke evidence exists.
+- Record throughput and source provenance, but do not hard-fail on throughput yet unless games/s or decisions/s regresses enough to make unattended runs impractical.
+
+Treat checkpoint strength as a separate bar:
+
+- Do not replace `expanded-teacher-bootstrap-linear-iter-0001` as the working reference from wrapper aggregate metrics alone.
+- Require a targeted shared-opponent benchmark before claiming a candidate is stronger than the current reference.
+- Consider a candidate promising only if it wins the mirrored direct row against the current reference by point estimate over at least 120 games with zero capped games.
+- Treat incumbent replacement as requiring either two independent 120-game seed bands with the candidate ahead, or one 240-game mirrored direct row with a clear candidate point-estimate lead and clean capped-game health.
+- If the candidate only passes run-health gates but fails or ties the reference benchmark, keep the run as useful loop evidence but do not promote it as the next reference.
 
 ## Suggested Next Tasks
 
@@ -103,7 +123,7 @@ The next implementation tasks should be chosen in this order unless a real pilot
 
 1. Keep the existing standalone teacher-bootstrap reference. If continuing on data quality, target sparse branches or an intentionally different bootstrap recipe before rerunning shared-seed comparison; same-teacher/same-recipe reruns should be treated as variance checks, not new reference candidates.
 2. Decide whether the next experiment is data-quality work or a stricter long-run rehearsal. The compact-head RSS fix has now passed both the direct diagnostic and guarded wrapper path under the current hard RSS ceiling, but the successful runs were short smoke-profile continuations.
-3. Define the first local success threshold from item 4 before launching a longer unattended run.
+3. Use the First Local Success Threshold section before launching a longer unattended run.
 
 ## Progress Updates
 
