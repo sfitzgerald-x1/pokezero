@@ -39,40 +39,33 @@ Implemented:
 - Source provenance is recorded in major run artifacts so dirty or unexpected code snapshots are visible during review.
 - A read-only Gen 3 randbat belief sidecar and compact belief observation features exist, but the detailed sidecar state is not required for the current linear CPU loop.
 - A real local smoke-scale `cpu-pilot-run` has passed against a local Showdown checkout with two seeded pilots, deterministic teacher scenario preflight, rollout-backed `status_pressure` branch gates, audit calibration, and calibrated audit replay. This proves the wrapper path works on local artifacts; it is still too thin to define long-run quality thresholds.
+- A stronger local `cpu-pilot-run` has passed with two seeded pilots, six total self-play benchmark iterations, a 50-game calibration sufficiency floor, calibrated audit replay, and `cpu-readiness-report` marking `pilot_suite_ready` as PASS.
 
 ## What Is Left
 
 The remaining work is less about wiring and more about making the loop empirically usable.
 
-1. Rerun the stronger local CPU pilot suite with a feasible benchmark-game floor.
-
-   The first smoke-scale local pilot proved that the wrappers, local Showdown path, teacher bootstrap, linear self-play, audit calibration, and config replay work together outside unit tests. A stronger local pilot was attempted with two seeded pilots, three self-play iterations per pilot, and a 50-game calibration floor. Both nested pilots passed, but the suite-level calibration correctly failed because the selected `--evaluation-games 8` produced only a 48-game observed floor. The pilot guard uses the conservative guaranteed four-matchup benchmark floor, so a 50-game calibration floor now requires at least `--evaluation-games 13` even though some current pilot iterations may observe extra reference matchups. The next pilot should use enough benchmark games to satisfy the intended floor before spending a full run.
-
-2. Promote a calibrated audit config from stronger pilot evidence.
-
-   The smoke-scale pilot did write and replay a calibrated config, but it used the minimum benchmark-game floor needed for plumbing validation. A reusable long-run config should come only after enough pilot manifests, benchmark iterations, and benchmark games are present. Thin smoke thresholds should not become the long-run policy.
-
-3. Generate a current scripted-teacher bootstrap checkpoint.
+1. Generate a current scripted-teacher bootstrap checkpoint.
 
    Run the teacher bootstrap path with strict defaults, held-out validation, baseline benchmarks, and source provenance. This checkpoint is the intended seed for the first meaningful local linear self-play runs.
 
-4. Run a cold-start control and a teacher-bootstrap run.
+2. Run a cold-start control and a teacher-bootstrap run.
 
    The CPU baseline should include at least one cold-start run and one teacher-bootstrap run under comparable audit settings. The comparison should use benchmark win rate, capped-game rate, average decision rounds, throughput, RSS high-water marks, and promotion outcomes. Validation fit remains imitation-health only.
 
-5. Use promotion registry discipline for historical opponents.
+3. Use promotion registry discipline for historical opponents.
 
    Long runs should use `--auto-promote`, a promotion registry, a managed artifact directory, and a required promoted-opponent-pool preflight once enough promoted checkpoints exist. Historical opponents should come from accepted checkpoints, not every raw iteration.
 
-6. Validate scripted-teacher data quality with measurements.
+4. Validate scripted-teacher data quality with measurements.
 
    The teacher now has multiple tactical heuristics, but heuristic branches firing is not the same as better bootstrap data. The next useful evidence is teacher-vs-baseline and teacher-self-play benchmark deltas, branch coverage, degradation counters, and capped-game health.
 
-7. Decide the first local success threshold.
+5. Decide the first local success threshold.
 
    Before treating any CPU run as progress, define provisional minimums for benchmark game count, fixed-baseline win rate, incumbent win rate, capped-game rate, decision-round limits, throughput, RSS ceiling, and required promoted-opponent-pool size. These should come from pilot calibration plus manual judgment, not from arbitrary defaults.
 
-8. Keep the neural path optional until the CPU baseline is trustworthy.
+6. Keep the neural path optional until the CPU baseline is trustworthy.
 
    The neural scaffold can run CPU smoke tests when `.[neural]` is installed, but it is not the blocking path for the local CPU proof of concept. PPO, GPU training, and distributed rollout orchestration remain later milestones.
 
@@ -80,11 +73,10 @@ The remaining work is less about wiring and more about making the loop empirical
 
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
-1. Rerun the stronger `cpu-pilot-run` with `--evaluation-games` high enough to guarantee the selected calibration floor, then inspect it with `cpu-pilot-report` plus `cpu-readiness-report`.
-2. Run and document a reproducible teacher-bootstrap experiment.
-3. Run and document comparable cold-start and teacher-bootstrap linear self-play experiments.
-4. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
-5. Tighten long-run audit thresholds based on the stronger pilot and early long-run artifacts.
+1. Run and document a reproducible teacher-bootstrap experiment.
+2. Run and document comparable cold-start and teacher-bootstrap linear self-play experiments.
+3. Add focused scripted-teacher improvements only when they can be measured with deterministic scenarios and rollout-backed branch coverage.
+4. Tighten long-run audit thresholds based on the stronger pilot and early long-run artifacts.
 
 ## Progress Updates
 
@@ -92,6 +84,7 @@ The next implementation tasks should be chosen in this order unless a real pilot
 - Ran a real local smoke-scale CPU pilot suite at `runs/cpu-pilots-local-20260622-smoke-2` against `/Users/scott/workspace/pokerena/vendor/pokemon-showdown`. The suite passed in 138.6 seconds with two seeded pilots, deterministic teacher scenario preflights passing 13/13 scenarios per pilot, rollout-backed `status_pressure` branch gates passing with 13 aggregate observations, zero capped games in the nested smoke self-play runs, generated audit calibration, and calibrated audit replay. `cpu-pilot-report --require-ready --require-smoke-ready --require-calibration-run-count 2 --require-calibration-benchmark-iterations 4 --require-calibration-min-benchmark-games 1` passed. `cpu-readiness-report --pilot-summary ...` reports the pilot item as PASS while the overall checklist remains not ready because no long-run summary or promotion registry was supplied.
 - The local pilot validation exposed a stale-run-root failure mode when rerunning into an existing ignored artifact directory. The smoke and pilot execution wrappers now fail fast on non-fresh run roots before starting child commands.
 - Ran a stronger local pilot attempt at `runs/cpu-pilots-local-20260622-strong-1` with two seeded pilots, three self-play iterations per pilot, stricter teacher branch coverage, and a 50-game calibration floor. Both nested pilots completed successfully, but suite-level calibration failed after about 711 seconds because the selected `--evaluation-games 8` produced a 48-game observed floor. A manual compare at a 48-game floor succeeded and wrote a provisional config, but that artifact should not become the long-run config. The failure is now captured as a preflight validation gap: pilot plan/run reject calibration floors that cannot be guaranteed by the selected evaluation-game count before launching nested work. For a 50-game floor the current guaranteed recommendation is `--evaluation-games 13`; this is intentionally conservative because it relies on the minimum four post-iteration benchmark matchups rather than incidental extra reference matchups.
+- Reran the stronger local pilot at `runs/cpu-pilots-local-20260622-strong-2` with `--evaluation-games 13`, which guarantees 52 benchmark games for the requested 50-game calibration floor. The suite passed in 976.5 seconds with two seeded pilots, six total self-play benchmark iterations, deterministic teacher scenario preflights passing 13/13 scenarios per pilot, rollout-backed `status_pressure` branch gates passing with 37 aggregate observations, zero capped games, generated audit calibration, and calibrated audit replay. `cpu-pilot-report --require-ready --require-smoke-ready --require-calibration-run-count 2 --require-calibration-benchmark-iterations 6 --require-calibration-min-benchmark-games 50` passed. The generated pilot audit config has `min_latest_benchmark_games: 78`, `min_latest_benchmark_win_rate: 0.475962`, and recommends `--evaluation-games 20` for post-iteration audit use. `cpu-readiness-report --pilot-summary ...` now reports `pilot_suite_ready` as PASS while the overall checklist remains blocked on the long-run summary and promotion registry inputs.
 
 ## Out Of Scope For This Milestone
 
