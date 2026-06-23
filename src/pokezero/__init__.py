@@ -29,6 +29,7 @@ from .bootstrap import (
     TEACHER_BOOTSTRAP_SCHEMA_VERSION,
     TeacherBenchmarkResult,
     TeacherBootstrapResult,
+    benchmark_teacher_selfplay,
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
@@ -381,6 +382,7 @@ __all__ = [
     "rollout_record_to_dict",
     "audit_run",
     "benchmark_teacher_policy",
+    "benchmark_teacher_selfplay",
     "enforce_run_audit",
     "run_neural_selfplay_iterations",
     "run_audit_config_from_dict",
