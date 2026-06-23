@@ -309,6 +309,39 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(len(run_manifest["iterations"]), 2)
         self.assertTrue(second_manifest_exists)
 
+    def test_run_neural_selfplay_iterations_reports_warning_only_post_iteration_audit_checks(self) -> None:
+        collected = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(collected=collected):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    result = run_neural_selfplay_iterations(
+                        run_dir=run_dir,
+                        iterations=1,
+                        games_per_iteration=1,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        evaluation_games=1,
+                        post_iteration_audit_config=RunAuditConfig(
+                            min_latest_benchmark_win_rate=0.0,
+                            min_latest_benchmark_games=0,
+                            max_latest_average_decision_rounds=0.5,
+                            max_latest_benchmark_capped_rate=1.0,
+                            max_benchmark_win_rate_drop=1.0,
+                            require_benchmark=True,
+                            warning_check_names=("latest_average_decision_rounds",),
+                        ),
+                    )
+
+        self.assertEqual(len(result.iterations), 1)
+        self.assertEqual(len(collected), 1)
+        self.assertIn("audit_warning_checks: latest_average_decision_rounds", stderr.getvalue())
+
     def test_run_neural_selfplay_iterations_resumes_from_manifest(self) -> None:
         collected = []
         trained_paths = []

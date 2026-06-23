@@ -35,7 +35,7 @@ from .opponents import opponent_pool_policy_specs, require_historical_opponent_p
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
-from .selfplay import collect_selfplay_rollouts
+from .selfplay import _report_post_iteration_audit_warnings, collect_selfplay_rollouts
 from .source_metadata import collect_source_metadata
 
 if TYPE_CHECKING:
@@ -479,7 +479,9 @@ def run_neural_selfplay_iterations(
                 source=source_metadata,
             ).to_dict(),
         )
-        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
+        _report_post_iteration_audit_warnings(
+            _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
+        )
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,

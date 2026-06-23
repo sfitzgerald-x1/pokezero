@@ -12,6 +12,7 @@ from pokezero.cli_audit import (
 )
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.run_audit import (
+    RUN_AUDIT_CHECK_NAMES,
     RUN_AUDIT_CONFIG_SCHEMA_VERSION,
     RunAuditConfig,
     RunAuditFailure,
@@ -110,6 +111,37 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_average_decision_rounds, 10.0)
         self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
+
+    def test_warnable_check_name_registry_covers_produced_audit_checks(self) -> None:
+        benchmarked = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        unbenchmarked = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0, benchmark=False),)
+        )
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.60,
+            min_latest_benchmark_games=20,
+            max_latest_average_decision_rounds=200.0,
+            max_latest_benchmark_average_decision_rounds=200.0,
+            max_latest_process_peak_rss_mb=1024.0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            benchmarked_path = Path(temp_dir) / "benchmarked" / "manifest.json"
+            unbenchmarked_path = Path(temp_dir) / "unbenchmarked" / "manifest.json"
+            write_manifest(benchmarked_path, benchmarked)
+            write_manifest(unbenchmarked_path, unbenchmarked)
+
+            produced_names = {
+                check.name
+                for result in (
+                    audit_run(benchmarked_path, config=config),
+                    audit_run(unbenchmarked_path, config=config),
+                )
+                for check in result.checks
+            }
+
+        self.assertLessEqual(produced_names, set(RUN_AUDIT_CHECK_NAMES))
 
     def test_audit_validates_recorded_promoted_opponent_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
