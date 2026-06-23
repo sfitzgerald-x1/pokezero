@@ -645,6 +645,8 @@ def _weights_are_all_zero(weights: Sequence[Sequence[float]]) -> bool:
 
 
 def _compact_zero_opponent_weights_json(raw_payload: str) -> str:
+    # Memory fast path only: _opponent_weights_from_payload still verifies the
+    # parsed value, so missed compaction cannot change model semantics.
     key = '"opponent_weights"'
     key_index = raw_payload.find(key)
     if key_index < 0:
