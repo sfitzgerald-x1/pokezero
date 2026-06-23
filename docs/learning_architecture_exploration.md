@@ -375,6 +375,40 @@ before committing GPU budget.
 - **Inference must stay fast** to preserve high-throughput self-play (`docs/goals.md`).
 - Reward shaping, the 250-turn cap, and capped-game scoring are already specified and carry
   over unchanged.
+- **Observability uses TensorBoard for now** (local, one dependency); see the Observability
+  section.
+
+## Observability
+
+Live observability matters increasingly as runs move from minutes to multi-hour CPU
+proof-of-life and then GPU strength runs: point-in-time CLI snapshots
+(`cpu-long-run-report`, `compare`) are not enough once you need *curves over time* —
+win-rate vs iteration, the RL losses, belief-probe accuracy, `games/s`, RSS, and promotion
+events — to catch a bad run early instead of reading a manifest after the fact.
+
+**Goal: use TensorBoard for now; do not build a custom browser server yet.** TensorBoard
+pairs natively with PyTorch, adds one dependency, runs fully local (no external service,
+nothing published off-machine), and provides live scalar curves and run comparison in a
+browser for free. That covers the proof-of-life phase.
+
+The one piece of enabling work worth doing early is **decoupling metric emission from any
+viewer**: have the training loop write append-only scalar streams (TensorBoard event files,
+and/or metrics JSONL alongside the manifests already persisted). Any viewer then reads from
+that stream, so the trainer is never coupled to a UI. Runs already persist structured JSON,
+so this is a small step.
+
+Deliberately deferred:
+
+- **Weights & Biases** — richer (system metrics, run tables, sweeps) and a good fit at the
+  GPU/scale phase, but it is a *hosted external service*: logging to it publishes run data
+  off-machine. Revisit at scale as a deliberate choice, not a default. Self-hosted MLflow or
+  Aim are local alternatives if a server is wanted without building one.
+- **A custom browser server** — justified only once Pokemon-specific views are needed that
+  generic tools cannot render: live battle replay of in-progress self-play games, per-turn
+  belief-probe visualization (watching the opponent-set posterior sharpen as evidence
+  accumulates — a strong debugging tool for the temporal-inference work), and a
+  promotion/league graph of the opponent pool. Build it only when the generic tools
+  demonstrably fall short, not before.
 
 ## Open Questions
 
