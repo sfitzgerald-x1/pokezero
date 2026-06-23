@@ -179,6 +179,23 @@ class PromotionRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             registry.opponent_pool_policy_specs(max_historical_opponents=-1)
 
+    def test_historical_opponent_policy_specs_excludes_current_checkpoint_by_resolved_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            previous_checkpoint = temp_path / "previous-linear.json"
+            current_checkpoint = temp_path / "current-linear.json"
+            previous_spec = f"linear:{previous_checkpoint.resolve(strict=False)}"
+            current_absolute_spec = f"linear:{current_checkpoint.resolve(strict=False)}"
+            current_relative_spec = f"linear:{os.path.relpath(current_checkpoint, Path.cwd())}"
+
+            selected = historical_opponent_policy_specs(
+                (previous_spec, current_absolute_spec),
+                current_policy_spec=current_relative_spec,
+                max_historical_opponents=2,
+            )
+
+        self.assertEqual(selected, (previous_spec,))
+
     def test_verify_promotion_registry_can_require_loadable_neural_policy_specs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -2440,6 +2457,50 @@ class PromotionRegistryTest(unittest.TestCase):
             result["entry_statuses"][1]["selection_checkpoint_policy_spec"],
             f"linear:{second_checkpoint.resolve(strict=False)}",
         )
+
+    def test_eval_cli_promotions_json_excludes_relative_current_policy_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "runs" / "promotions.json"
+            first_checkpoint = registry_path.parent / "promoted" / "first.json"
+            second_checkpoint = registry_path.parent / "promoted" / "second.json"
+            first_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            first_checkpoint.write_text("{}", encoding="utf-8")
+            second_checkpoint.write_text("{}", encoding="utf-8")
+            payload = promotion_registry_payload(
+                checkpoint_path="promoted/first.json",
+                manifest_path="selfplay-a/manifest.json",
+            )
+            second_entry = dict(payload["entries"][0])
+            second_entry["sequence"] = 2
+            second_entry["policy_id"] = "linear-selfplay-test-iter-0002"
+            second_entry["checkpoint_path"] = "promoted/second.json"
+            second_entry["manifest_path"] = "selfplay-b/manifest.json"
+            payload["entries"].append(second_entry)
+            write_manifest(registry_path, payload)
+            current_policy_spec = f"linear:{os.path.relpath(second_checkpoint, Path.cwd())}"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--current-policy-spec",
+                        current_policy_spec,
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["opponent_pool_policy_specs"], [f"linear:{first_checkpoint.resolve(strict=False)}"])
+        self.assertEqual(result["opponent_pool_excluded_current_policy_spec"], current_policy_spec)
+        self.assertEqual(result["entry_statuses"][0]["opponent_pool_status"], "selected")
+        self.assertEqual(result["entry_statuses"][1]["opponent_pool_status"], "excluded_current_policy")
+        self.assertEqual(result["entry_statuses"][1]["opponent_pool_skip_reason"], "matches_current_policy")
 
     def test_eval_cli_promotions_verify_json_marks_missing_checkpoint_path_as_failed_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

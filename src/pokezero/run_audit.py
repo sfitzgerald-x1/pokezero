@@ -21,6 +21,7 @@ from .evaluation import (
     _mapping,
     _sequence,
 )
+from .opponents import historical_opponent_policy_specs
 from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
@@ -1576,10 +1577,11 @@ def _historical_specs(
     current_policy_spec: str | None,
     max_historical_opponents: int,
 ) -> tuple[str, ...]:
-    if max_historical_opponents <= 0:
-        return ()
-    historical = tuple(spec for spec in specs if current_policy_spec is None or spec != current_policy_spec)
-    return historical[-max_historical_opponents:]
+    return historical_opponent_policy_specs(
+        specs,
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max(0, max_historical_opponents),
+    )
 
 
 def _string_sequence(value: Any) -> tuple[str, ...]:

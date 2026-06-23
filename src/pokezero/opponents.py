@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterable
 
 
 DEFAULT_MAX_HISTORICAL_OPPONENTS = 3
+CHECKPOINT_POLICY_SPEC_PREFIXES = ("linear:", "neural:")
+
+
+def policy_spec_identity(policy_spec: str | None) -> tuple[str, str] | None:
+    """Return a comparison key for policy specs that may name checkpoint paths."""
+    if policy_spec is None:
+        return None
+    body = str(policy_spec).strip().partition("?")[0].strip()
+    lowered = body.lower()
+    for prefix in CHECKPOINT_POLICY_SPEC_PREFIXES:
+        if lowered.startswith(prefix):
+            checkpoint_path = body[len(prefix) :].strip()
+            return (prefix[:-1], str(Path(checkpoint_path).expanduser().resolve(strict=False)))
+    return ("named", lowered)
 
 
 def historical_opponent_policy_specs(
@@ -18,10 +33,11 @@ def historical_opponent_policy_specs(
         raise ValueError("max_historical_opponents must be non-negative.")
     if max_historical_opponents == 0:
         return ()
+    current_identity = policy_spec_identity(current_policy_spec)
     historical = [
         spec
         for spec in checkpoint_history
-        if current_policy_spec is None or spec != current_policy_spec
+        if current_identity is None or policy_spec_identity(spec) != current_identity
     ]
     return tuple(historical[-max_historical_opponents:])
 
