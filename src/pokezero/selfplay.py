@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+import sys
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
@@ -421,7 +422,9 @@ def run_selfplay_iterations(
                 source=source_metadata,
             ).to_dict(),
         )
-        _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
+        _report_post_iteration_audit_warnings(
+            _enforce_post_iteration_audit(run_manifest_path, post_iteration_audit_config)
+        )
 
     run_result = SelfPlayRunResult(
         run_dir=run_dir,
@@ -444,6 +447,13 @@ def _enforce_post_iteration_audit(
     from .run_audit import enforce_run_audit
 
     return enforce_run_audit(manifest_path, config=config)
+
+
+def _report_post_iteration_audit_warnings(result: "RunAuditResult | None") -> None:
+    if result is None or not result.warning_failed_checks:
+        return
+    warning_names = ", ".join(check.name for check in result.warning_failed_checks)
+    print(f"audit_warning_checks: {warning_names}", file=sys.stderr)
 
 
 def collect_selfplay_rollouts(

@@ -217,6 +217,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
     )
+    audit.add_argument(
+        "--warning-check",
+        action="append",
+        default=None,
+        metavar="CHECK",
+        help=(
+            "Treat the named run-audit check as warning-only. May be repeated. "
+            "Warning-only failures are reported but do not make the audit fail."
+        ),
+    )
     _add_benchmark_requirement_arguments(
         audit,
         missing_help="Do not fail solely because the latest benchmark is missing.",
@@ -2454,6 +2464,7 @@ def _audit_config_preflight_run_payload(path: Path, *, config: RunAuditConfig) -
             "latest_benchmark_capped_rate": None,
             "passed": False,
             "failed_checks": ["manifest_error"],
+            "warning_checks": [],
             "error": str(exc),
         }
     else:
@@ -2466,7 +2477,8 @@ def _audit_config_preflight_run_payload(path: Path, *, config: RunAuditConfig) -
             "latest_collection_capped_rate": result.latest_collection_capped_rate,
             "latest_benchmark_capped_rate": result.latest_benchmark_capped_rate,
             "passed": result.passed,
-            "failed_checks": [check.name for check in result.checks if not check.passed],
+            "failed_checks": [check.name for check in result.blocking_failed_checks],
+            "warning_checks": [check.name for check in result.warning_failed_checks],
         }
 
 
@@ -2667,12 +2679,15 @@ def _print_audit_config_report(report: Mapping[str, object]) -> None:
             run_status = "PASS" if run.get("passed") else "FAIL"
             failed_checks = run.get("failed_checks")
             failed_summary = ", ".join(str(check) for check in failed_checks) if failed_checks else "-"
+            warning_checks = run.get("warning_checks")
+            warning_summary = ", ".join(str(check) for check in warning_checks) if warning_checks else "-"
             print(
                 f"- {run_status} {run.get('manifest_path')} "
                 f"latest_iteration={_format_summary_value(run.get('latest_iteration'))} "
                 f"latest_wr={_format_optional_float(run.get('latest_benchmark_win_rate'))} "
                 f"bench_games={_format_summary_value(run.get('latest_benchmark_games'))} "
-                f"failed_checks={failed_summary}"
+                f"failed_checks={failed_summary} "
+                f"warning_checks={warning_summary}"
             )
             if run.get("error") is not None:
                 print(f"  error: {run.get('error')}")
@@ -4615,6 +4630,8 @@ def _audit_config_cli_flags(config: Mapping[str, object]) -> tuple[str, ...]:
         flags.append("--allow-missing-benchmark")
     if not config.get("require_benchmark_opponent_coverage"):
         flags.append("--allow-missing-benchmark-opponents")
+    for check_name in _config_warning_check_names(config):
+        flags.extend(("--warning-check", check_name))
     return tuple(flags)
 
 
@@ -4651,7 +4668,18 @@ def _post_iteration_audit_config_cli_flags(config: Mapping[str, object]) -> tupl
         if config.get("require_latest_promotion")
         else "--audit-allow-missing-latest-promotion"
     )
+    for check_name in _config_warning_check_names(config):
+        flags.extend(("--audit-warning-check", check_name))
     return tuple(flags)
+
+
+def _config_warning_check_names(config: Mapping[str, object]) -> tuple[str, ...]:
+    value = config.get("warning_check_names", ())
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Iterable):
+        return tuple(str(item) for item in value)
+    return ()
 
 
 def _minimum_selfplay_post_iteration_evaluation_games(config: Mapping[str, object]) -> int:
@@ -4867,7 +4895,8 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
         report["error"] = str(exc)
         return report
 
-    failed_checks = [check.name for check in audit_result.checks if not check.passed]
+    failed_checks = [check.name for check in audit_result.blocking_failed_checks]
+    warning_checks = [check.name for check in audit_result.warning_failed_checks]
     report.update(
         {
             "available": True,
@@ -4877,6 +4906,7 @@ def _cpu_long_run_derived_run_report(summary: Mapping[str, object]) -> dict[str,
             "latest_iteration": audit_result.latest_iteration,
             "audit_passed": audit_result.passed,
             "failed_checks": failed_checks,
+            "warning_checks": warning_checks,
             "latest_benchmark_win_rate": audit_result.latest_benchmark_win_rate,
             "latest_benchmark_games": audit_result.iterations[-1].benchmark_games if audit_result.iterations else 0,
             "best_benchmark_win_rate": audit_result.best_benchmark_win_rate,
@@ -5070,6 +5100,11 @@ def _print_cpu_long_run_derived_run_report(report: Mapping[str, object]) -> None
     if isinstance(failed_checks, list) and failed_checks:
         print("failed_checks:")
         for check in failed_checks:
+            print(f"- {check}")
+    warning_checks = report.get("warning_checks")
+    if isinstance(warning_checks, list) and warning_checks:
+        print("warning_checks:")
+        for check in warning_checks:
             print(f"- {check}")
     if report.get("error") is not None:
         print(f"error: {report['error']}")
@@ -6865,6 +6900,7 @@ def _audit_config_from_args(args: argparse.Namespace) -> RunAuditConfig:
             args.require_benchmark_opponent_coverage,
             profile_config.require_benchmark_opponent_coverage,
         ),
+        warning_check_names=(*profile_config.warning_check_names, *tuple(args.warning_check or ())),
     )
 
 
@@ -6902,7 +6938,7 @@ def _print_audit_result(result) -> None:
             )
     print("checks:")
     for check in result.checks:
-        check_status = "pass" if check.passed else "fail"
+        check_status = "pass" if check.passed else "warn" if check.severity == "warning" else "fail"
         print(f"- {check_status} {check.name}: observed={check.observed} threshold={check.threshold}")
 
 
@@ -7012,7 +7048,8 @@ def _profile_audit_payload(
             {
                 "manifest_path": str(result.manifest_path),
                 "passed": result.passed,
-                "failed_checks": [check.name for check in result.checks if not check.passed],
+                "failed_checks": [check.name for check in result.blocking_failed_checks],
+                "warning_checks": [check.name for check in result.warning_failed_checks],
             }
         )
     return {
@@ -7033,6 +7070,8 @@ def _print_profile_audit(payload: dict[str, object]) -> None:
         print(f"- {run_status} {run['manifest_path']}")
         if run["failed_checks"]:
             print(f"  failed_checks: {', '.join(run['failed_checks'])}")
+        if run.get("warning_checks"):
+            print(f"  warning_checks: {', '.join(run['warning_checks'])}")
 
 
 def _print_run_comparison(result) -> None:
@@ -7086,12 +7125,19 @@ def _print_run_comparison(result) -> None:
             print(f"- {entry.label}: {_format_source_metadata(entry.source_metadata)}")
     if result.audit_profile is not None:
         failed_entries = tuple(entry for entry in result.entries if entry.audit_passed is False)
+        warning_entries = tuple(entry for entry in result.entries if entry.audit_warning_checks)
         if failed_entries:
             print("")
             print("audit_failures:")
             for entry in failed_entries:
                 failed = ", ".join(entry.audit_failed_checks) if entry.audit_failed_checks else "unknown"
                 print(f"- {entry.label}: {failed}")
+        if warning_entries:
+            print("")
+            print("audit_warnings:")
+            for entry in warning_entries:
+                warnings = ", ".join(entry.audit_warning_checks)
+                print(f"- {entry.label}: {warnings}")
 
 
 def _print_registry_verification(result) -> None:

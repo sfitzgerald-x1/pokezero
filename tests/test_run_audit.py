@@ -12,11 +12,14 @@ from pokezero.cli_audit import (
 )
 from pokezero.eval_cli import main as eval_cli_main
 from pokezero.run_audit import (
+    RUN_AUDIT_CHECK_NAMES,
     RUN_AUDIT_CONFIG_SCHEMA_VERSION,
     RunAuditConfig,
+    RunAuditFailure,
     audit_run,
     calibrate_run_audit,
     calibrate_run_audits,
+    enforce_run_audit,
     compare_run_manifests,
     load_run_audit_config,
     run_audit_config_payload,
@@ -108,6 +111,37 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result.latest_average_decision_rounds, 10.0)
         self.assertEqual(result.latest_benchmark_average_decision_rounds, 12.0)
         self.assertEqual(result.consecutive_promotion_failures, 0)
+
+    def test_warnable_check_name_registry_covers_produced_audit_checks(self) -> None:
+        benchmarked = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        unbenchmarked = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0, benchmark=False),)
+        )
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.60,
+            min_latest_benchmark_games=20,
+            max_latest_average_decision_rounds=200.0,
+            max_latest_benchmark_average_decision_rounds=200.0,
+            max_latest_process_peak_rss_mb=1024.0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            benchmarked_path = Path(temp_dir) / "benchmarked" / "manifest.json"
+            unbenchmarked_path = Path(temp_dir) / "unbenchmarked" / "manifest.json"
+            write_manifest(benchmarked_path, benchmarked)
+            write_manifest(unbenchmarked_path, unbenchmarked)
+
+            produced_names = {
+                check.name
+                for result in (
+                    audit_run(benchmarked_path, config=config),
+                    audit_run(unbenchmarked_path, config=config),
+                )
+                for check in result.checks
+            }
+
+        self.assertLessEqual(produced_names, set(RUN_AUDIT_CHECK_NAMES))
 
     def test_audit_validates_recorded_promoted_opponent_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
@@ -722,6 +756,58 @@ class RunAuditTest(unittest.TestCase):
         average_check = next(check for check in result.checks if check.name == "latest_average_decision_rounds")
         self.assertEqual(average_check.observed, 225.0)
         self.assertEqual(average_check.threshold, 200.0)
+
+    def test_audit_warning_only_failed_check_does_not_fail_run(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.50,
+            min_latest_benchmark_games=20,
+            max_latest_average_decision_rounds=200.0,
+            warning_check_names=("latest_average_decision_rounds",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(manifest_path, config=config)
+            enforced = enforce_run_audit(manifest_path, config=config)
+
+        average_check = next(check for check in result.checks if check.name == "latest_average_decision_rounds")
+        self.assertTrue(result.passed)
+        self.assertTrue(enforced.passed)
+        self.assertFalse(average_check.passed)
+        self.assertEqual(average_check.severity, "warning")
+        self.assertEqual(result.blocking_failed_checks, ())
+        self.assertEqual(tuple(check.name for check in result.warning_failed_checks), ("latest_average_decision_rounds",))
+        self.assertEqual(result.to_dict()["failed_checks"], [])
+        self.assertEqual(result.to_dict()["warning_checks"], ["latest_average_decision_rounds"])
+
+    def test_audit_still_fails_when_any_blocking_check_fails_alongside_warning(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=9, losses=11, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.60,
+            min_latest_benchmark_games=20,
+            max_latest_average_decision_rounds=200.0,
+            warning_check_names=("latest_average_decision_rounds",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(manifest_path, config=config)
+            with self.assertRaises(RunAuditFailure) as raised:
+                enforce_run_audit(manifest_path, config=config)
+
+        self.assertFalse(result.passed)
+        self.assertEqual(tuple(check.name for check in result.blocking_failed_checks), ("latest_benchmark_win_rate",))
+        self.assertEqual(tuple(check.name for check in result.warning_failed_checks), ("latest_average_decision_rounds",))
+        self.assertEqual(tuple(check.name for check in raised.exception.result.blocking_failed_checks), ("latest_benchmark_win_rate",))
 
     def test_audit_fails_latest_benchmark_average_decision_rounds_threshold(self) -> None:
         manifest = selfplay_manifest(
@@ -1955,6 +2041,75 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(override_exit, 0)
         self.assertTrue(override_payload["passed"])
 
+    def test_eval_cli_audit_warning_check_flag_reports_warning_without_failure(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "audit",
+                        str(manifest_path),
+                        "--min-latest-benchmark-win-rate",
+                        "0.50",
+                        "--min-latest-benchmark-games",
+                        "20",
+                        "--max-latest-average-decision-rounds",
+                        "200",
+                        "--warning-check",
+                        "latest_average_decision_rounds",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["failed_checks"], [])
+        self.assertEqual(payload["warning_checks"], ["latest_average_decision_rounds"])
+        check = next(check for check in payload["checks"] if check["name"] == "latest_average_decision_rounds")
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["severity"], "warning")
+
+    def test_run_audit_config_round_trips_warning_check_names(self) -> None:
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.60,
+            min_latest_benchmark_games=20,
+            warning_check_names=("latest_average_decision_rounds", "benchmark_win_rate_drop_by_opponent"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(config_path, run_audit_config_payload(config))
+
+            loaded = load_run_audit_config(config_path)
+
+        self.assertEqual(loaded.warning_check_names, config.warning_check_names)
+
+    def test_run_audit_config_rejects_unknown_warning_check_names(self) -> None:
+        with self.assertRaises(ValueError):
+            RunAuditConfig(warning_check_names=("not_a_real_check",))
+
+    def test_post_iteration_audit_warning_check_flag_round_trips(self) -> None:
+        config = post_iteration_config_from_flags(
+            (
+                "--audit-after-iteration",
+                "--audit-min-latest-benchmark-win-rate",
+                "0.50",
+                "--audit-min-latest-benchmark-games",
+                "20",
+                "--audit-warning-check",
+                "latest_average_decision_rounds",
+            )
+        )
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.warning_check_names, ("latest_average_decision_rounds",))
+
     def test_eval_cli_audit_config_report_json_includes_metadata_and_preflight(self) -> None:
         manifest = selfplay_manifest(
             iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
@@ -2019,6 +2174,37 @@ class RunAuditTest(unittest.TestCase):
         )
         self.assertEqual(command_config, RunAuditConfig(**payload["config"]))
         self.assertEqual(payload["checks"][-1]["name"], "preflight_audit_passed")
+
+    def test_eval_cli_audit_config_report_preserves_warning_checks(self) -> None:
+        manifest = selfplay_manifest(
+            iterations=(selfplay_iteration(iteration=1, wins=13, losses=7, capped_games=0),)
+        )
+        manifest["iterations"][0]["collection_metrics"]["average_decision_rounds"] = 225.0
+        config = RunAuditConfig(
+            min_latest_benchmark_win_rate=0.50,
+            min_latest_benchmark_games=20,
+            max_latest_average_decision_rounds=200.0,
+            warning_check_names=("latest_average_decision_rounds",),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "linear-run" / "manifest.json"
+            config_path = Path(temp_dir) / "audit-config.json"
+            write_manifest(manifest_path, manifest)
+            write_manifest(config_path, run_audit_config_payload(config))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(["audit-config-report", str(config_path), str(manifest_path), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["preflight_passed"])
+        self.assertEqual(payload["preflight_runs"][0]["failed_checks"], [])
+        self.assertEqual(payload["preflight_runs"][0]["warning_checks"], ["latest_average_decision_rounds"])
+        self.assertIn("--audit-warning-check", payload["post_iteration_flags"])
+        self.assertIn("latest_average_decision_rounds", payload["post_iteration_flags"])
+        self.assertIn("--audit-warning-check", payload["post_iteration_command_flags"])
+        command_config = post_iteration_config_from_flags(tuple(payload["post_iteration_command_flags"][2:]))
+        self.assertEqual(command_config, config)
 
     def test_eval_cli_audit_config_report_requires_calibration_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
