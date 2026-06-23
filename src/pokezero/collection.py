@@ -309,12 +309,21 @@ def policy_benchmark_matchups(
 ) -> tuple[BenchmarkMatchup, ...]:
     candidates = _policy_factories(policy_specs, showdown_root=showdown_root, label="candidate policy")
     opponents = _policy_factories(opponent_policy_specs, showdown_root=showdown_root, label="opponent policy")
+    if include_policy_head_to_head and len(candidates) < 2:
+        raise ValueError("--include-policy-head-to-head requires at least two distinct candidate policies.")
+    overlapping_policy_ids = sorted(
+        {candidate_id for candidate_id, _ in candidates}
+        & {opponent_id for opponent_id, _ in opponents}
+    )
+    if overlapping_policy_ids:
+        raise ValueError(
+            "candidate and opponent policy ids must be distinct for shared-opponent benchmarks: "
+            f"{', '.join(overlapping_policy_ids)}. Remove the duplicated opponent or retrain with a distinct --policy-id."
+        )
     matchups: list[BenchmarkMatchup] = []
 
     for candidate_id, candidate_factory in candidates:
         for opponent_id, opponent_factory in opponents:
-            if candidate_id == opponent_id:
-                continue
             matchups.extend(
                 (
                     BenchmarkMatchup(
@@ -333,8 +342,6 @@ def policy_benchmark_matchups(
     if include_policy_head_to_head:
         for index, (first_id, first_factory) in enumerate(candidates):
             for second_id, second_factory in candidates[index + 1 :]:
-                if first_id == second_id:
-                    continue
                 matchups.extend(
                     (
                         BenchmarkMatchup(
@@ -560,7 +567,10 @@ def _policy_factories(
         factory = policy_factory_from_spec(rooted_spec)
         policy_id = str(factory().policy_id)
         if policy_id in seen_policy_ids:
-            raise ValueError(f"duplicate {label} id: {policy_id}")
+            raise ValueError(
+                f"duplicate {label} id: {policy_id}. Retrain with a distinct --policy-id "
+                "so benchmark labels and head-to-head aggregation can distinguish checkpoints."
+            )
         seen_policy_ids.add(policy_id)
         factories.append((policy_id, factory))
     return tuple(factories)

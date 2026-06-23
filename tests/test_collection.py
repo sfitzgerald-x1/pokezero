@@ -305,6 +305,21 @@ class CollectionTest(unittest.TestCase):
                     opponent_policy_specs=("random-legal",),
                 )
 
+    def test_policy_benchmark_matchups_rejects_candidate_opponent_policy_id_collision(self) -> None:
+        with self.assertRaisesRegex(ValueError, "candidate and opponent policy ids must be distinct"):
+            policy_benchmark_matchups(
+                policy_specs=("random-legal",),
+                opponent_policy_specs=("random-legal", "simple-legal"),
+            )
+
+    def test_policy_benchmark_matchups_rejects_single_policy_head_to_head(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires at least two distinct candidate policies"):
+            policy_benchmark_matchups(
+                policy_specs=("simple-legal",),
+                opponent_policy_specs=("random-legal",),
+                include_policy_head_to_head=True,
+            )
+
     def test_benchmark_head_to_head_aggregates_mirror_pair(self) -> None:
         rows = (
             BenchmarkMatchupResult(
@@ -727,6 +742,18 @@ class CollectionTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--opponent-policy requires at least one --policy", stderr.getvalue())
+
+    def test_rollout_cli_benchmark_rejects_head_to_head_without_custom_policy(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = rollout_cli_main(
+                [
+                    "benchmark",
+                    "--include-policy-head-to-head",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--include-policy-head-to-head requires at least two --policy values", stderr.getvalue())
 
     @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
     def test_collect_rollouts_smoke_with_local_showdown_env(self) -> None:

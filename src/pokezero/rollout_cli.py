@@ -45,7 +45,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--games",
         type=int,
         default=20,
-        help="Number of games to run per baseline matchup. Default is a smoke size; use hundreds for quality comparisons.",
+        help="Number of games to run per matchup. Default is a smoke size; use hundreds for quality comparisons.",
     )
     benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")

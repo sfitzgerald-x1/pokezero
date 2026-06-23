@@ -85,7 +85,7 @@ For direct candidate comparisons, use a shared-opponent rollout benchmark instea
   --json
 ```
 
-This runs mirrored seats for each candidate against the same opponent specs and seed range. Increase `--games` before using the result as strength evidence.
+This runs mirrored seats for each candidate against the same opponent specs and seed range. Candidate and opponent checkpoints must have distinct stored `policy_id` values so labels and head-to-head aggregation can distinguish them; retrain with a distinct `--policy-id` if two checkpoints collide. Increase `--games` before using the result as strength evidence.
 
 ## Supported Command Shape
 
