@@ -15,10 +15,15 @@ from pokezero.bootstrap import (
     TeacherBenchmarkResult,
     _top_teacher_counts,
     _top_teacher_reasons,
+    benchmark_teacher_selfplay,
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
-from pokezero.bootstrap_cli import TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION, main as bootstrap_cli_main
+from pokezero.bootstrap_cli import (
+    TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION,
+    TEACHER_SELFPLAY_BENCHMARK_SCHEMA_VERSION,
+    main as bootstrap_cli_main,
+)
 from pokezero.collection import BenchmarkMatchupResult, BenchmarkReport, CollectionMetrics, read_rollout_records
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearTrainingConfig, linear_feature_fingerprint
@@ -320,6 +325,35 @@ class TeacherBootstrapTest(unittest.TestCase):
                 baseline_policy_specs=("simple-legal",),
             )
 
+    def test_benchmark_teacher_selfplay_counts_scripted_teacher_metadata_in_both_seats(self) -> None:
+        result = benchmark_teacher_selfplay(
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            teacher_policy_spec="scripted-teacher?allow_fallback=true",
+            games=1,
+            seed_start=10,
+        )
+        report = result.benchmark
+
+        self.assertEqual(report.total_games, 1)
+        self.assertEqual([matchup.label for matchup in report.matchups], ["scripted-teacher self-play"])
+        self.assertEqual(report.matchups[0].p1_policy_id, "scripted-teacher")
+        self.assertEqual(report.matchups[0].p2_policy_id, "scripted-teacher")
+        self.assertEqual(report.head_to_head_results, ())
+        self.assertEqual(result.teacher_decision_summary["total_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["scripted_teacher_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["fallback_decisions"], 2)
+        self.assertEqual(result.teacher_decision_summary["teacher_branch_counts"]["fallback"], 2)
+
+    def test_benchmark_teacher_selfplay_rejects_non_positive_games(self) -> None:
+        with self.assertRaisesRegex(ValueError, "games must be positive"):
+            benchmark_teacher_selfplay(
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                teacher_policy_spec="simple-legal",
+                games=0,
+            )
+
     def test_run_teacher_bootstrap_refuses_existing_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -595,6 +629,128 @@ class TeacherBootstrapTest(unittest.TestCase):
             payload["teacher_decision_summary"]["top_teacher_reasons"],
             [{"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}],
         )
+
+    def test_bootstrap_cli_teacher_selfplay_benchmark_wires_arguments_json_and_report(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=1.0,
+            total_decision_rounds=4,
+            total_simulator_turns=4,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+        )
+        fake_report = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=12,
+            games_per_matchup=2,
+            matchups=(
+                BenchmarkMatchupResult(
+                    label="scripted-teacher self-play",
+                    p1_policy_id="scripted-teacher",
+                    p2_policy_id="scripted-teacher",
+                    seed_start=10,
+                    metrics=fake_metrics,
+                ),
+            ),
+        )
+        fake_result = TeacherBenchmarkResult(
+            benchmark=fake_report,
+            teacher_decision_summary={
+                "total_decisions": 4,
+                "scripted_teacher_decisions": 4,
+                "unknown_move_decisions": 0,
+                "fallback_decisions": 0,
+                "fallback_reasons": {},
+                "teacher_branch_counts": {"damaging_move": 4},
+                "top_teacher_branches": [{"branch": "damaging_move", "count": 4}],
+                "teacher_reason_unique_count": 1,
+                "top_teacher_reasons": [
+                    {"reason": "Flamethrower: bp=95 type=Fire eff=2 stab=1.5", "count": 4}
+                ],
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "teacher-selfplay-benchmark.json"
+            with patch("pokezero.bootstrap_cli.benchmark_teacher_selfplay", return_value=fake_result) as benchmark:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    exit_code = bootstrap_cli_main(
+                        [
+                            "teacher-selfplay-benchmark",
+                            "--games",
+                            "2",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--max-decision-rounds",
+                            "12",
+                            "--seed-start",
+                            "10",
+                            "--teacher-policy",
+                            "scripted-teacher?allow_fallback=true",
+                            "--max-capped-rate",
+                            "0.25",
+                            "--fail-on-degraded-decisions",
+                            "--require-teacher-branch",
+                            "damaging_move",
+                            "--min-teacher-branch-count",
+                            "damaging_move=3",
+                            "--out",
+                            str(report_path),
+                            "--json",
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+            report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        kwargs = benchmark.call_args.kwargs
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["seed_start"], 10)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 12)
+        expected_showdown_root = f"showdown_root={quote(str(Path('/tmp/showdown').resolve()), safe='')}"
+        self.assertIn(expected_showdown_root, kwargs["teacher_policy_spec"])
+        self.assertEqual(payload, report_payload)
+        self.assertEqual(payload["schema_version"], TEACHER_SELFPLAY_BENCHMARK_SCHEMA_VERSION)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["benchmark"]["total_games"], 2)
+        self.assertEqual(payload["benchmark"]["head_to_heads"], [])
+        self.assertEqual(
+            payload["checks"],
+            [
+                {
+                    "name": "teacher_selfplay_capped_rate",
+                    "passed": True,
+                    "observed": 0.0,
+                    "threshold": 0.25,
+                    "message": "teacher self-play capped rate observed=0.000 required<=0.250",
+                },
+                {
+                    "name": "teacher_degraded_decisions",
+                    "passed": True,
+                    "observed": 0,
+                    "threshold": 0,
+                    "message": "teacher degraded decisions 0 == 0 (unknown_moves=0, fallbacks=0)",
+                },
+                {
+                    "name": "teacher_branch_present:damaging_move",
+                    "passed": True,
+                    "observed": 4,
+                    "threshold": 1,
+                    "message": "teacher branch damaging_move observed 4 time(s); required>=1",
+                },
+                {
+                    "name": "teacher_branch_count:damaging_move",
+                    "passed": True,
+                    "observed": 4,
+                    "threshold": 3,
+                    "message": "teacher branch damaging_move observed 4 time(s); required>=3",
+                },
+            ],
+        )
+        self.assertEqual(payload["teacher_policy_id"], "scripted-teacher")
+        self.assertEqual(payload["teacher_decision_summary"]["fallback_decisions"], 0)
 
     def test_bootstrap_cli_teacher_benchmark_can_fail_preflight_and_write_report(self) -> None:
         fake_metrics = CollectionMetrics(

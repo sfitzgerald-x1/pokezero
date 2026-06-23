@@ -13,6 +13,7 @@ from .bootstrap import (
     DEFAULT_BENCHMARK_GAMES,
     DEFAULT_PREFLIGHT_GAMES,
     DEFAULT_PREFLIGHT_SEED_START,
+    benchmark_teacher_selfplay,
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
@@ -28,6 +29,7 @@ from .teacher_scenarios import (
 )
 
 TEACHER_BENCHMARK_PREFLIGHT_SCHEMA_VERSION = "pokezero.teacher_benchmark_preflight.v1"
+TEACHER_SELFPLAY_BENCHMARK_SCHEMA_VERSION = "pokezero.teacher_selfplay_benchmark.v1"
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -132,6 +134,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     teacher_benchmark.add_argument("--json", action="store_true", help="Print the benchmark report as JSON.")
     teacher_benchmark.set_defaults(func=_teacher_benchmark)
+
+    teacher_selfplay_benchmark = subparsers.add_parser(
+        "teacher-selfplay-benchmark",
+        help="Benchmark a teacher policy against itself to measure self-play branch coverage.",
+    )
+    teacher_selfplay_benchmark.add_argument("--games", type=int, default=DEFAULT_BENCHMARK_GAMES, help="Teacher self-play games.")
+    teacher_selfplay_benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    teacher_selfplay_benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    teacher_selfplay_benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic benchmark seed.")
+    teacher_selfplay_benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    teacher_selfplay_benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    teacher_selfplay_benchmark.add_argument("--teacher-policy", default="scripted-teacher", help="Teacher policy spec.")
+    teacher_selfplay_benchmark.add_argument("--out", type=Path, default=None, help="Optional JSON report path for the self-play benchmark payload.")
+    teacher_selfplay_benchmark.add_argument(
+        "--max-capped-rate",
+        type=float,
+        default=None,
+        help="Fail unless the teacher self-play capped-game rate is at or below this value.",
+    )
+    teacher_selfplay_benchmark.add_argument(
+        "--fail-on-degraded-decisions",
+        action="store_true",
+        help="Fail if the teacher used unknown-move or fallback decisions during self-play.",
+    )
+    teacher_selfplay_benchmark.add_argument(
+        "--require-teacher-branch",
+        action="append",
+        default=None,
+        help=(
+            "Fail unless this scripted-teacher branch appears at least once in teacher_branch_counts. "
+            "May be repeated."
+        ),
+    )
+    teacher_selfplay_benchmark.add_argument(
+        "--min-teacher-branch-count",
+        action="append",
+        default=None,
+        metavar="BRANCH=COUNT",
+        help=(
+            "Fail unless the scripted-teacher branch appears at least COUNT times. "
+            "May be repeated."
+        ),
+    )
+    teacher_selfplay_benchmark.add_argument("--json", action="store_true", help="Print the self-play benchmark report as JSON.")
+    teacher_selfplay_benchmark.set_defaults(func=_teacher_selfplay_benchmark)
 
     teacher_scenario_preflight = subparsers.add_parser(
         "teacher-scenario-preflight",
@@ -269,6 +316,106 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         if args.out is not None:
             print(f"report: {args.out}")
     return 0 if passed else 2
+
+
+def _teacher_selfplay_benchmark(args: argparse.Namespace) -> int:
+    _validate_optional_rate(args.max_capped_rate, "--max-capped-rate")
+    required_teacher_branches = _parse_required_teacher_branches(tuple(args.require_teacher_branch or ()))
+    min_teacher_branch_counts = _parse_teacher_branch_count_requirements(
+        tuple(args.min_teacher_branch_count or ())
+    )
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    teacher_policy = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
+    result = benchmark_teacher_selfplay(
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=RolloutConfig(
+            max_decision_rounds=args.max_decision_rounds,
+            format_id=args.format_id,
+        ),
+        teacher_policy_spec=teacher_policy,
+        games=args.games,
+        seed_start=args.seed_start,
+    )
+    teacher_policy_id = _teacher_policy_id_from_spec(args.teacher_policy) or _teacher_policy_id_from_benchmark(result)
+    checks = _teacher_selfplay_benchmark_checks(
+        result,
+        teacher_policy_id=teacher_policy_id,
+        max_capped_rate=args.max_capped_rate,
+        fail_on_degraded_decisions=args.fail_on_degraded_decisions,
+        required_teacher_branches=required_teacher_branches,
+        min_teacher_branch_counts=min_teacher_branch_counts,
+    )
+    passed = all(bool(check["passed"]) for check in checks)
+    payload = _teacher_benchmark_payload(
+        result,
+        teacher_policy_id=teacher_policy_id,
+        checks=checks,
+        passed=passed,
+    )
+    payload["schema_version"] = TEACHER_SELFPLAY_BENCHMARK_SCHEMA_VERSION
+    if args.out is not None:
+        _write_json(args.out, payload)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_teacher_benchmark_result(result, checks=checks, passed=passed)
+        if args.out is not None:
+            print(f"report: {args.out}")
+    return 0 if passed else 2
+
+
+def _teacher_selfplay_benchmark_checks(
+    result,
+    *,
+    teacher_policy_id: str,
+    max_capped_rate: float | None,
+    fail_on_degraded_decisions: bool,
+    required_teacher_branches: tuple[str, ...],
+    min_teacher_branch_counts: Mapping[str, int],
+) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    if max_capped_rate is not None:
+        if not result.benchmark.matchups:
+            checks.append(
+                _preflight_check(
+                    name="teacher_selfplay_matchup_present",
+                    passed=False,
+                    observed=0,
+                    threshold=1,
+                    message="teacher self-play benchmark did not produce any matchup rows",
+                )
+            )
+        for matchup in result.benchmark.matchups:
+            games = matchup.metrics.games
+            capped_rate = matchup.metrics.capped_games / games if games else 0.0
+            checks.append(
+                _preflight_check(
+                    name="teacher_selfplay_capped_rate",
+                    passed=capped_rate <= max_capped_rate,
+                    observed=capped_rate,
+                    threshold=max_capped_rate,
+                    message=(
+                        f"teacher self-play capped rate observed={capped_rate:.3f} "
+                        f"required<={max_capped_rate:.3f}"
+                    ),
+                )
+            )
+    checks.extend(
+        _teacher_benchmark_checks(
+            result,
+            teacher_policy_id=teacher_policy_id,
+            min_teacher_win_rate=None,
+            max_capped_rate=None,
+            fail_on_degraded_decisions=fail_on_degraded_decisions,
+            required_teacher_branches=required_teacher_branches,
+            min_teacher_branch_counts=min_teacher_branch_counts,
+        )
+    )
+    return checks
 
 
 def _teacher_scenario_preflight(args: argparse.Namespace) -> int:

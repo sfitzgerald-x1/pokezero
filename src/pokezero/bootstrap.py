@@ -318,6 +318,58 @@ def benchmark_teacher_policy(
     )
 
 
+def benchmark_teacher_selfplay(
+    *,
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    teacher_policy_spec: str = "scripted-teacher",
+    games: int = DEFAULT_BENCHMARK_GAMES,
+    seed_start: int = 1,
+) -> TeacherBenchmarkResult:
+    if games <= 0:
+        raise ValueError("games must be positive.")
+    p1_policy = policy_from_spec(teacher_policy_spec)
+    p2_policy = policy_from_spec(teacher_policy_spec)
+    teacher_policy_id = p1_policy.policy_id
+    matchup = BenchmarkMatchup(
+        f"{teacher_policy_id} self-play",
+        p1_policy,
+        p2_policy,
+    )
+    accumulator = _BenchmarkMetricsAccumulator()
+    records: list[RolloutRecord] = []
+    matchup_start = perf_counter()
+    for game_index in range(games):
+        seed = seed_start + game_index
+        record = run_rollout_record(
+            env_factory=env_factory,
+            policies={"p1": matchup.p1_policy, "p2": matchup.p2_policy},
+            rollout_config=rollout_config,
+            seed=seed,
+            battle_id=f"teacher-selfplay-{_slugify_label(matchup.label)}-{seed}",
+        )
+        accumulator.add(record)
+        records.append(record)
+    benchmark = BenchmarkReport(
+        format_id=rollout_config.format_id,
+        max_decision_rounds=rollout_config.max_decision_rounds,
+        games_per_matchup=games,
+        matchups=(
+            BenchmarkMatchupResult(
+                label=matchup.label,
+                p1_policy_id=matchup.p1_policy.policy_id,
+                p2_policy_id=matchup.p2_policy.policy_id,
+                seed_start=seed_start,
+                metrics=accumulator.to_metrics(elapsed_seconds=perf_counter() - matchup_start),
+            ),
+        ),
+    )
+    return TeacherBenchmarkResult(
+        benchmark=benchmark,
+        teacher_decision_summary=_teacher_decision_summary_from_records(records),
+    )
+
+
 def _default_opponent_policy_specs(teacher_policy_spec: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((teacher_policy_spec, *DEFAULT_BASELINE_OPPONENT_POLICY_SPECS)))
 
