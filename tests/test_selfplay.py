@@ -338,10 +338,12 @@ class SelfPlayTest(unittest.TestCase):
 
     def test_run_selfplay_iterations_records_process_peak_rss_phase_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            run_dir = Path(temp_dir) / "run"
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            registry_path = temp_path / "promotions.json"
             with patch(
                 "pokezero.selfplay.current_peak_rss_mb",
-                side_effect=(10.0, 20.0, 30.0, 40.0),
+                side_effect=(10.0, 20.0, 30.0, 40.0, 50.0, 60.0),
             ):
                 run_selfplay_iterations(
                     run_dir=run_dir,
@@ -357,6 +359,11 @@ class SelfPlayTest(unittest.TestCase):
                     ),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    auto_promotion_config=SelfPlayPromotionConfig(
+                        registry_path=registry_path,
+                        gate_config=passing_promotion_gate_config(),
+                    ),
                 )
 
             iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
@@ -367,6 +374,8 @@ class SelfPlayTest(unittest.TestCase):
             "after_collection": 20.0,
             "after_training": 30.0,
             "after_checkpoint_save": 40.0,
+            "after_benchmark": 50.0,
+            "after_auto_promotion": 60.0,
         }
         self.assertEqual(iteration_manifest["process_peak_rss_mb_by_phase"], expected)
         self.assertEqual(run_manifest["iterations"][0]["process_peak_rss_mb_by_phase"], expected)
