@@ -3166,6 +3166,94 @@ if __name__ == "__main__":
         self.assertEqual(argv[argv.index("--audit-config") + 1], str(audit_config_path))
         self.assertNotIn("--audit-profile", argv)
 
+    def test_eval_cli_cpu_long_run_plan_can_use_custom_runtime_audit_config_with_smoke_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, pilot_audit_config_path, _, _ = write_ready_cpu_long_run_pilot(
+                temp_path,
+                audit_config_min_latest_benchmark_games=20,
+            )
+            runtime_audit_config_path = temp_path / "comparison-envelope-audit-config.json"
+            write_json(
+                runtime_audit_config_path,
+                run_audit_config_payload(
+                    RunAuditConfig(
+                        min_latest_benchmark_games=20,
+                        require_benchmark=True,
+                        require_benchmark_opponent_coverage=True,
+                    ),
+                    calibration={
+                        "source": "cpu_long_run_summaries",
+                        "run_count": 2,
+                        "benchmark_iteration_count": 2,
+                        "min_latest_benchmark_games": 20,
+                    },
+                ),
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "summary-calibrated-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--runtime-audit-config",
+                        str(runtime_audit_config_path),
+                        "--evaluation-games",
+                        "5",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["long_run_ready"])
+        self.assertEqual(payload["audit_config_path"], str(pilot_audit_config_path))
+        self.assertEqual(payload["runtime_audit_source"], "runtime-audit-config")
+        self.assertEqual(payload["runtime_audit_config_path"], str(runtime_audit_config_path))
+        self.assertIsNone(payload["runtime_audit_profile"])
+        argv = payload["steps"][0]["argv"]
+        self.assertEqual(argv[argv.index("--profile") + 1], "smoke")
+        self.assertIn("--audit-config", argv)
+        self.assertEqual(argv[argv.index("--audit-config") + 1], str(runtime_audit_config_path))
+        self.assertNotIn("--audit-profile", argv)
+
+    def test_eval_cli_cpu_long_run_plan_rejects_missing_custom_runtime_audit_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pilot_root, _, _, _ = write_ready_cpu_long_run_pilot(temp_path)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "cpu-long-run-plan",
+                        str(pilot_root),
+                        "--json",
+                        "--run-dir",
+                        str(temp_path / "summary-calibrated-run"),
+                        "--initial-policy",
+                        "random-legal",
+                        "--profile",
+                        "smoke",
+                        "--runtime-audit-config",
+                        str(temp_path / "missing-audit-config.json"),
+                        "--evaluation-games",
+                        "5",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 2)
+        self.assertFalse(payload["long_run_ready"])
+        self.assertEqual(payload["steps"], [])
+        self.assertIn("runtime_audit_config_missing", payload["long_run_ready_reasons"])
+        self.assertEqual(payload["runtime_audit_source"], "runtime-audit-config")
+
     def test_eval_cli_cpu_long_run_plan_smoke_gate_with_pilot_audit_config_enforces_pilot_floor(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

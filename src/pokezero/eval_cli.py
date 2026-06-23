@@ -961,12 +961,21 @@ def _add_cpu_long_run_arguments(
     )
     parser.add_argument(
         "--runtime-audit-source",
-        choices=("auto", "profile", "pilot-audit-config"),
+        choices=("auto", "profile", "pilot-audit-config", "runtime-audit-config"),
         default="auto",
         help=(
             "Post-iteration audit source for the nested self-play run. "
             "auto preserves the historical behavior: long-run uses the pilot audit config, "
-            "other profiles use their named profile audit."
+            "other profiles use their named profile audit unless --runtime-audit-config is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-audit-config",
+        type=Path,
+        default=None,
+        help=(
+            "Custom post-iteration audit config for the nested self-play run, for example a "
+            "cpu-long-run-calibrate --write-config output."
         ),
     )
     parser.add_argument("--max-historical-opponents", type=int, default=3, help="Historical opponent pool size.")
@@ -5123,7 +5132,11 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
         ready_reasons.append("promotion_gate_not_satisfiable_by_evaluation_games")
     audit_feasibility_error = None
     runtime_audit_source = _cpu_long_run_resolved_runtime_audit_source(args)
-    runtime_audit_config_path = audit_config_path if runtime_audit_source == "pilot-audit-config" else None
+    runtime_audit_config_path = _cpu_long_run_runtime_audit_config_path(
+        args,
+        audit_config_path=audit_config_path,
+        runtime_audit_source=runtime_audit_source,
+    )
     runtime_audit_profile = args.profile if runtime_audit_source == "profile" else None
     if not ready_reasons:
         try:
@@ -5150,11 +5163,11 @@ def _cpu_long_run_plan_payload(args: argparse.Namespace) -> dict[str, object]:
             "name": "run guarded CPU self-play long run",
             "argv": _cpu_long_run_selfplay_argv(
                 args,
-                audit_config_path=audit_config_path,
+                runtime_audit_config_path=runtime_audit_config_path,
                 runtime_audit_source=runtime_audit_source,
             ),
         }
-    ] if ready and audit_config_path is not None else []
+    ] if ready and (runtime_audit_source == "profile" or runtime_audit_config_path is not None) else []
     payload = {
         "schema_version": CPU_LONG_RUN_PLAN_SCHEMA_VERSION,
         "purpose": "guarded CPU self-play long-run launch plan",
@@ -5229,6 +5242,8 @@ def _validate_cpu_long_run_plan_args(args: argparse.Namespace) -> None:
         and args.require_promoted_opponent_pool_size > args.max_historical_opponents
     ):
         raise ValueError("require-promoted-opponent-pool-size cannot exceed max-historical-opponents.")
+    if args.runtime_audit_config is not None and args.runtime_audit_source not in ("auto", "runtime-audit-config"):
+        raise ValueError("--runtime-audit-config can only be combined with --runtime-audit-source auto or runtime-audit-config.")
 
 
 def _cpu_long_run_input_not_ready_reasons(args: argparse.Namespace) -> list[str]:
@@ -5240,6 +5255,12 @@ def _cpu_long_run_input_not_ready_reasons(args: argparse.Namespace) -> list[str]
         if not validation_data.exists():
             reasons.append("validation_data_missing")
             break
+    runtime_audit_source = _cpu_long_run_resolved_runtime_audit_source(args)
+    if runtime_audit_source == "runtime-audit-config":
+        if args.runtime_audit_config is None:
+            reasons.append("runtime_audit_config_missing")
+        elif not args.runtime_audit_config.exists():
+            reasons.append("runtime_audit_config_missing")
     return reasons
 
 
@@ -5254,7 +5275,12 @@ def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
 
 
 def _cpu_long_run_runtime_audit_config(args: argparse.Namespace, *, audit_config_path: Path | None) -> RunAuditConfig:
-    if _cpu_long_run_resolved_runtime_audit_source(args) == "pilot-audit-config":
+    runtime_source = _cpu_long_run_resolved_runtime_audit_source(args)
+    if runtime_source == "runtime-audit-config":
+        if args.runtime_audit_config is None:
+            raise ValueError("runtime audit config path is required for runtime audit-config feasibility.")
+        return load_run_audit_config(args.runtime_audit_config)
+    if runtime_source == "pilot-audit-config":
         if audit_config_path is None:
             raise ValueError("pilot audit config path is required for pilot audit-config feasibility.")
         return load_run_audit_config(audit_config_path)
@@ -5265,7 +5291,22 @@ def _cpu_long_run_resolved_runtime_audit_source(args: argparse.Namespace) -> str
     requested = getattr(args, "runtime_audit_source", "auto")
     if requested != "auto":
         return str(requested)
+    if getattr(args, "runtime_audit_config", None) is not None:
+        return "runtime-audit-config"
     return "pilot-audit-config" if args.profile == "long-run" else "profile"
+
+
+def _cpu_long_run_runtime_audit_config_path(
+    args: argparse.Namespace,
+    *,
+    audit_config_path: Path | None,
+    runtime_audit_source: str,
+) -> Path | None:
+    if runtime_audit_source == "runtime-audit-config":
+        return args.runtime_audit_config
+    if runtime_audit_source == "pilot-audit-config":
+        return audit_config_path
+    return None
 
 
 def _cpu_long_run_promotion_gate_feasibility_error(evaluation_games: int, *, profile_name: str) -> str | None:
@@ -5325,7 +5366,7 @@ def _cpu_long_run_not_ready_reasons(
 def _cpu_long_run_selfplay_argv(
     args: argparse.Namespace,
     *,
-    audit_config_path: Path,
+    runtime_audit_config_path: Path | None,
     runtime_audit_source: str,
 ) -> list[str]:
     promotion_registry = args.promotion_registry if args.promotion_registry is not None else args.run_dir / "promotions.json"
@@ -5381,7 +5422,13 @@ def _cpu_long_run_selfplay_argv(
         "--audit-after-iteration",
     ]
     if runtime_audit_source == "pilot-audit-config":
-        argv.extend(["--audit-config", str(audit_config_path)])
+        if runtime_audit_config_path is None:
+            raise ValueError("runtime audit config path is required for pilot audit-config command generation.")
+        argv.extend(["--audit-config", str(runtime_audit_config_path)])
+    elif runtime_audit_source == "runtime-audit-config":
+        if runtime_audit_config_path is None:
+            raise ValueError("runtime audit config path is required for runtime audit-config command generation.")
+        argv.extend(["--audit-config", str(runtime_audit_config_path)])
     else:
         argv.extend(["--audit-profile", args.profile])
     if args.promotion_notes is not None:
