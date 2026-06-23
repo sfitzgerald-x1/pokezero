@@ -112,6 +112,7 @@ For the next non-smoke CPU run, evaluate run-health and checkpoint-strength sepa
 
 This exact combination of two iterations, larger per-iteration collection, a promoted opponent pool, and hard RSS enforcement has now passed runtime-health locally, but with thin RSS headroom. Do not extrapolate that result to longer unattended runs until a longer run either stays below the ceiling or produces a clearer memory-growth diagnosis.
 The reporting layer now classifies this outcome directly: `runtime_health_passed` can remain true while `promotion_strength_passed` is false when only promotion/advancement checks fail. Re-reading the first threshold rehearsal after the split reports `runtime_health_passed: yes`, `promotion_strength_passed: no`, and `promotion_strength_failed_checks: consecutive_promotion_failures`. The wrapper exit can still be non-zero, but the report makes the capacity evidence explicit.
+An attempted three-iteration extension at `runs/threshold-rss-extended-local-20260623/reference-default-hard-rss-3iter/run` stopped after iteration 2 because the hard audit failed `consecutive_promotion_failures`. This was not a runtime-health failure: `runtime_health_passed: yes`, `promotion_strength_passed: no`, latest collection and benchmark capped rates were both `0.0`, latest benchmark win rate was `0.57875` over `1,600` games, and latest process peak RSS was `614.6875 MB` against the `636.521875 MB` ceiling. RSS grew from `553.921875 MB` after iteration 1 to `614.6875 MB` after iteration 2, leaving about `21.83 MB` of headroom. The run therefore gives another two-iteration capacity datapoint under the hard ceiling, but it does not answer whether RSS stays under the ceiling beyond two iterations because promotion-strength failure stopped the wrapper before iteration 3.
 
 Treat checkpoint strength as a separate bar:
 
@@ -127,7 +128,7 @@ Treat checkpoint strength as a separate bar:
 The next implementation tasks should be chosen in this order unless a real pilot run exposes a more urgent failure.
 
 1. Keep the existing standalone teacher-bootstrap reference. If continuing on data quality, target sparse branches or an intentionally different bootstrap recipe before rerunning shared-seed comparison; same-teacher/same-recipe reruns should be treated as variance checks, not new reference candidates.
-2. Extend the threshold run shape to test whether RSS growth stays under the hard ceiling beyond two iterations, or choose an explicit data-quality task instead of another same-recipe rerun. The RSS extension is about thin headroom risk, not the gating failure; the observed failure was promotion strength.
+2. Do not rerun the same three-iteration threshold shape unchanged. The latest attempt stopped after two iterations on `consecutive_promotion_failures`, so a true beyond-two-iteration RSS test needs either a capacity-only audit mode where promotion-strength remains reported but does not stop the wrapper, or a stronger/data-quality path that can plausibly record a promotion before the failure counter trips.
 3. If choosing data-quality work, target sparse teacher branches or an intentionally different bootstrap recipe before another reference comparison.
 4. Use targeted shared-opponent benchmarks, not wrapper aggregate metrics, before replacing the current working reference.
 
