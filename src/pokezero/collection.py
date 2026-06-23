@@ -505,6 +505,18 @@ def policy_from_spec(spec: str) -> Policy:
     return policy_factory_from_spec(spec)()
 
 
+def linear_policy_factory_from_model_spec(spec: str, model: Any) -> Callable[[], Policy]:
+    """Create a linear policy factory from an already-loaded model and a policy spec's options."""
+
+    policy_body, options = _split_policy_spec_options(spec.strip())
+    if not policy_body.lower().startswith(LINEAR_POLICY_SPEC_PREFIX):
+        raise ValueError("linear model factory override requires a linear: policy spec.")
+    from .linear_policy import LinearSoftmaxPolicy
+
+    linear_options = _linear_policy_options(options)
+    return lambda: LinearSoftmaxPolicy(model=model, **linear_options)
+
+
 def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
     normalized = spec.strip()
     policy_body, options = _split_policy_spec_options(normalized)

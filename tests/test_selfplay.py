@@ -140,6 +140,35 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(training_records[0].policy_ids, {"p1": "random-legal"})
         self.assertEqual(training_records[1].policy_ids, {"p2": "random-legal"})
 
+    def test_run_selfplay_iterations_reuses_loaded_current_model_during_collection(self) -> None:
+        model = LinearPolicyModel.initialized(
+            feature_count=32,
+            window_size=1,
+            policy_id="linear-loaded-once",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patch("pokezero.linear_policy.load_linear_model", return_value=model) as load:
+                result = run_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=OneTurnEnv,
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    training_config=LinearTrainingConfig(
+                        feature_count=32,
+                        epochs=1,
+                        shuffle_buffer_size=0,
+                        policy_id="linear-selfplay-test",
+                    ),
+                    initial_policy_spec="linear:/tmp/current-policy.json?sample=true",
+                    fixed_opponent_policy_specs=("random-legal",),
+                )
+
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(result.iterations[0].current_policy_spec, "linear:/tmp/current-policy.json?sample=true")
+
     def test_collect_selfplay_rollouts_parallel_preserves_order_and_training_filter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
