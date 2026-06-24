@@ -14,7 +14,7 @@ from .cli_audit import (
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
 )
-from .collection import policy_spec_with_showdown_root
+from .collection import policy_spec_with_showdown_root, reject_eval_only_specs
 from .evaluation_profiles import EVALUATION_PROFILES
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -207,6 +207,10 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_id=args.policy_id,
     )
     policy_showdown_root = env_config.resolved_showdown_root()
+    # Eval-only baselines (max-damage) are allowed as benchmark references below, but not as
+    # the trained collector or a training opponent.
+    reject_eval_only_specs([args.initial_policy], role="self-play initial policy")
+    reject_eval_only_specs(args.opponent_policy or (), role="self-play training opponent")
     initial_policy = policy_spec_with_showdown_root(args.initial_policy, policy_showdown_root)
     fixed_opponents = tuple(
         policy_spec_with_showdown_root(spec, policy_showdown_root)

@@ -12,7 +12,7 @@ from pokezero.policy import (
     legal_move_action_indices,
     legal_switch_action_indices,
 )
-from pokezero.collection import policy_factory_from_spec, policy_spec_with_showdown_root
+from pokezero.collection import policy_factory_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
 from pokezero.dex import showdown_dex_from_payload
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 
@@ -218,6 +218,60 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertIn("showdown_root", rooted)
         policy = policy_factory_from_spec(rooted)()
         self.assertEqual(str(policy.showdown_root), "/tmp/showdown")
+
+    def test_max_damage_unknown_move_scores_zero(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "notarealmove", "move_name": "Not Real"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "flamethrower", "move_name": "Flamethrower"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertEqual(decision.action_index, 1)  # unknown move scores 0, damaging move wins
+
+    def test_max_damage_all_status_moves_pick_a_legal_move(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "toxic", "move_name": "Toxic"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "thunderwave", "move_name": "Thunder Wave"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertIn(decision.action_index, (0, 1))
+        self.assertEqual(decision.metadata["branch"], "max_damage_move")
+        self.assertEqual(decision.metadata["damage_estimate"], 0.0)
+
+    def test_max_damage_falls_back_without_candidate_metadata(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation((True, False, True, False, False, False, False, False, False))
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertIn(decision.action_index, (0, 2))
+        self.assertEqual(decision.metadata["branch"], "fallback")
+
+    def test_reject_eval_only_specs_blocks_max_damage_for_training(self) -> None:
+        with self.assertRaisesRegex(ValueError, "evaluation-only"):
+            reject_eval_only_specs(["max-damage"], role="self-play training opponent")
+        with self.assertRaisesRegex(ValueError, "evaluation-only"):
+            reject_eval_only_specs(["max-damage?showdown_root=/x"], role="self-play initial policy")
+        # Ordinary training opponents/specs pass through untouched (including None).
+        reject_eval_only_specs(["random-legal", "simple-legal", "linear:foo.json", None], role="opponent")
+
+    def test_scripted_teacher_root_injection_preserves_existing_options(self) -> None:
+        rooted = policy_spec_with_showdown_root("scripted-teacher?allow_fallback=true", "/tmp/showdown")
+        self.assertIn("showdown_root", rooted)
+        self.assertIn("allow_fallback", rooted)
 
     def test_scripted_teacher_fails_loudly_without_dex_by_default(self) -> None:
         policy = ScriptedTeacherPolicy()

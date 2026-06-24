@@ -568,6 +568,23 @@ def policy_from_name(name: str) -> Policy:
     return policy_from_spec(name)
 
 
+# Baselines that exist only to evaluate candidates and must never seed training data.
+EVAL_ONLY_POLICY_NAMES = frozenset({"max-damage"})
+
+
+def reject_eval_only_specs(specs: Iterable[str], *, role: str) -> None:
+    """Raise if any spec names an evaluation-only baseline (e.g. max-damage) used for training."""
+    for spec in specs:
+        if spec is None:
+            continue
+        body, _ = _split_policy_spec_options(str(spec).strip())
+        if body.lower() in EVAL_ONLY_POLICY_NAMES:
+            raise ValueError(
+                f"'{body}' is an evaluation-only baseline and cannot be used as a {role}; "
+                "use it as a benchmark opponent (e.g. rollout_cli benchmark --opponent-policy max-damage) instead."
+            )
+
+
 def policy_spec_with_showdown_root(spec: str, showdown_root: Path | str | None) -> str:
     if showdown_root is None:
         return spec
