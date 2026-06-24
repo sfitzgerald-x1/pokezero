@@ -62,20 +62,26 @@ REQUEST_KINDS = ("move", "force_switch", "team_preview", "wait", "none", "unknow
 EVENT_ROLES = ("self", "opponent", "none")
 
 # Showdown protocol message types that can appear as recent-event tokens. This is a
-# superset for coverage; unobserved types are harmless extra rows.
+# comprehensive superset of the bounded protocol vocabulary; unobserved types are harmless
+# extra rows. Kept broad on purpose so bounded events never fall into OOV.
 EVENT_TYPES = (
-    "move", "switch", "drag", "replace", "faint", "cant", "turn", "upkeep",
-    "-damage", "-heal", "-sethp", "-status", "-curestatus", "-cureteam",
-    "-boost", "-unboost", "-setboost", "-swapboost", "-clearboost", "-clearallboost",
-    "-weather", "-fieldstart", "-fieldend", "-sidestart", "-sideend",
-    "-ability", "-endability", "-item", "-enditem", "-start", "-end", "-activate",
-    "-immune", "-miss", "-fail", "-crit", "-supereffective", "-resisted",
-    "-transform", "-mega", "-formechange", "-prepare", "-mustrecharge",
-    "-singleturn", "-singlemove", "-hint", "-message", "-block",
-    "player", "win", "tie", "unknown",
-    # Battle-log preamble / framing events.
-    "t:", "gametype", "gen", "tier", "rule", "teamsize", "clearpoke", "poke",
-    "teampreview", "start", "inactive", "inactiveoff", "raw", "j", "l", "c:",
+    # Major actions / framing.
+    "move", "switch", "drag", "replace", "detailschange", "swap", "cant", "faint",
+    "turn", "upkeep", "win", "tie", "request", "unknown",
+    "player", "teamsize", "gametype", "gen", "tier", "rule", "clearpoke", "poke",
+    "teampreview", "start", "inactive", "inactiveoff", "raw", "html", "uhtml",
+    "error", "bigerror", "debug", "t:", "j", "l", "n", "c", "c:", "b",
+    # Minor (-) effects.
+    "-formechange", "-fail", "-block", "-notarget", "-miss", "-damage", "-heal",
+    "-sethp", "-status", "-curestatus", "-cureteam", "-boost", "-unboost", "-setboost",
+    "-swapboost", "-invertboost", "-clearboost", "-clearallboost", "-clearpositiveboost",
+    "-clearnegativeboost", "-copyboost", "-weather", "-fieldstart", "-fieldend",
+    "-sidestart", "-sideend", "-swapsideconditions", "-start", "-end", "-crit",
+    "-supereffective", "-resisted", "-immune", "-item", "-enditem", "-ability",
+    "-endability", "-transform", "-mega", "-primal", "-burst", "-zpower", "-zbroken",
+    "-activate", "-hint", "-center", "-message", "-combine", "-waiting", "-prepare",
+    "-mustrecharge", "-nothing", "-hitcount", "-singlemove", "-singleturn", "-anim",
+    "-ohko", "-fieldactivate", "-candynamax", "-terastallize",
 )
 
 

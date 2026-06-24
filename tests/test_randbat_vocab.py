@@ -74,7 +74,7 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
     # Bounded structural/entity prefixes that MUST be covered by the full-universe vocab.
     _REQUIRED_PREFIXES = (
         "species:", "move:", "belief:", "status:", "request_kind:", "pokemon:",
-        "event_actor:", "event_target:", "self_slot:", "opponent_slot:",
+        "event:", "event_actor:", "event_target:", "self_slot:", "opponent_slot:",
         "move_slot:", "switch_slot:",
     )
 
