@@ -51,11 +51,12 @@ GEN3_STATUSES = ("brn", "par", "slp", "frz", "psn", "tox", "fnt", "none")
 UNIVERSAL_MOVES = ("struggle", "recharge", "hiddenpower")
 
 # Unown's cosmetic formes share one randbat set but appear with forme-specific display
-# names in battle (e.g. "Unown-L"). Enumerate them so each is collision-free in vocab.
-UNOWN_FORMES = tuple(f"Unown-{letter}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") + ("Unown-Exclamation", "Unown-Question")
+# names in battle (e.g. "Unown-L"). The A forme is the base species "Unown" (no suffix),
+# so cosmetic formes start at B. Enumerate them so each is collision-free in vocab.
+UNOWN_FORMES = tuple(f"Unown-{letter}" for letter in "BCDEFGHIJKLMNOPQRSTUVWXYZ") + ("Unown-Exclamation", "Unown-Question")
 
-# Bounded structural request kinds the env can surface.
-REQUEST_KINDS = ("move", "switch", "teampreview", "wait", "none")
+# Bounded structural request kinds the env can surface (see showdown.py _request_kind).
+REQUEST_KINDS = ("move", "force_switch", "team_preview", "wait", "none", "unknown")
 
 # Token actor/target roles used by the encoder.
 EVENT_ROLES = ("self", "opponent", "none")

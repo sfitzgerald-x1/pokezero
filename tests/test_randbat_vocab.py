@@ -53,6 +53,70 @@ class Gen3RandbatVocabTests(unittest.TestCase):
         for value in ("species:Mr. Mime", "move:Aerial Ace", "species:Ho-Oh", "move:Struggle"):
             self.assertIn(stable_category_id(value), vocab)
 
+    def test_no_intra_group_hash_collisions(self) -> None:
+        # stable_category_id lowercases+strips, so id/display forms of the same entity share
+        # a key (intentional). A true collision is two DISTINCT keys mapping to the same id.
+        for name, strings in gen3_randbat_category_strings(SHOWDOWN_ROOT).items():
+            keys = {str(s).strip().lower() for s in strings}
+            ids = {stable_category_id(key) for key in keys}
+            self.assertEqual(len(keys), len(ids), f"hash collision within group {name}")
+
+
+@unittest.skipUnless(_HAS_GEN3_SETS, "requires a local Pokemon Showdown checkout with gen3 randbat data")
+class Gen3RandbatVocabCoverageTests(unittest.TestCase):
+    """Live-game coverage: every non-dynamic category the encoder emits must be in the vocab.
+
+    This is the regression guard for enumeration/encoder drift (e.g. request_kind values,
+    species/move display forms). Dynamic fields (HP condition text, usernames, free-form
+    event details) are intentionally allowed to fall through to the OOV block.
+    """
+
+    # Bounded structural/entity prefixes that MUST be covered by the full-universe vocab.
+    _REQUIRED_PREFIXES = (
+        "species:", "move:", "belief:", "status:", "request_kind:", "pokemon:",
+        "event_actor:", "event_target:", "self_slot:", "opponent_slot:",
+        "move_slot:", "switch_slot:",
+    )
+
+    def test_live_games_have_no_required_oov(self) -> None:
+        try:
+            import pokezero.showdown as sd
+            from pokezero.collection import BenchmarkMatchup, benchmark_rollouts
+            from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+            from pokezero.policy import RandomLegalPolicy
+            from pokezero.rollout import RolloutConfig
+        except Exception as exc:  # pragma: no cover - environment guard
+            self.skipTest(f"runtime deps unavailable: {exc}")
+
+        seen: dict[str, int] = {}
+        original = sd.stable_category_id
+
+        def spy(value, *, buckets=sd.CATEGORY_ID_BUCKETS):
+            result = original(value, buckets=buckets)
+            if buckets == sd.CATEGORY_ID_BUCKETS:
+                seen[str(value)] = result
+            return result
+
+        sd.stable_category_id = spy
+        try:
+            benchmark_rollouts(
+                games=12,
+                env_factory=lambda: LocalShowdownEnv(LocalShowdownConfig(showdown_root=SHOWDOWN_ROOT)),
+                rollout_config=RolloutConfig(max_decision_rounds=250),
+                seed_start=9100001,
+                matchups=[BenchmarkMatchup("r", RandomLegalPolicy(), RandomLegalPolicy())],
+            )
+        finally:
+            sd.stable_category_id = original
+
+        vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
+        uncovered = [
+            value
+            for value, cid in seen.items()
+            if cid not in vocab and value.startswith(self._REQUIRED_PREFIXES)
+        ]
+        self.assertEqual(uncovered, [], f"required categories fell into OOV: {sorted(uncovered)[:20]}")
+
 
 if __name__ == "__main__":
     unittest.main()
