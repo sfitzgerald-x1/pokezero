@@ -223,6 +223,27 @@ def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int,
     return tuple(sorted(set(aliases)))
 
 
+def canonicalize_with_cosmetic_aliases(
+    vocab_ids: Iterable[int],
+    showdown_root: str | Path,
+) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
+    """Collapse cosmetic-forme ids in an arbitrary vocab onto their base species.
+
+    Used to apply the Unown cosmetic-forme collapse to any compact vocabulary (e.g. one
+    collected from observed training rollouts), not just the statically-enumerated
+    randbat-dex universe. Drops cosmetic-forme ids from the vocab, ensures each alias base
+    id is present, and returns the (vocab, aliases) pair. Functional formes (Deoxys) are not
+    cosmetic aliases, so they pass through untouched.
+    """
+    aliases = gen3_randbat_cosmetic_aliases(showdown_root)
+    alias_keys = {alias for alias, _ in aliases}
+    base_ids = {base for _, base in aliases}
+    vocab = {int(value) for value in vocab_ids if int(value) > 0}
+    vocab -= alias_keys
+    vocab |= base_ids
+    return tuple(sorted(vocab)), aliases
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
