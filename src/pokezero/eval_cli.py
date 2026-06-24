@@ -839,7 +839,7 @@ def _add_cpu_smoke_arguments(
             "If omitted, child commands use their normal Showdown-root resolution."
         ),
     )
-    parser.add_argument("--workers", type=int, default=1, help="Worker count used by the smoke recipe.")
+    parser.add_argument("--workers", type=int, default=16, help="Worker count used by the smoke recipe (capped at the game count).")
     parser.add_argument("--train-games", type=int, default=4, help="Teacher bootstrap training games.")
     parser.add_argument("--validation-games", type=int, default=2, help="Teacher bootstrap validation games.")
     parser.add_argument("--bootstrap-benchmark-games", type=int, default=2, help="Teacher bootstrap benchmark games.")
@@ -953,7 +953,7 @@ def _add_cpu_long_run_arguments(
     parser.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     parser.add_argument("--iterations", type=int, default=20, help="Self-play iterations for the long run.")
     parser.add_argument("--games-per-iteration", type=int, default=100, help="Rollout games per long-run iteration.")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
+    parser.add_argument("--workers", type=int, default=16, help="Parallel rollout collection workers (capped at the game count).")
     parser.add_argument("--evaluation-games", type=int, default=200, help="Benchmark games per matchup after each iteration.")
     parser.add_argument("--seed-start", type=int, default=10_000_000, help="First deterministic self-play seed.")
     parser.add_argument(

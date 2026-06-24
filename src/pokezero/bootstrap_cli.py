@@ -40,7 +40,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     teacher.add_argument("--run-dir", type=Path, required=True, help="Output directory for data, checkpoint, and manifest.")
     teacher.add_argument("--train-games", type=int, required=True, help="Teacher-current games for training data.")
     teacher.add_argument("--validation-games", type=int, required=True, help="Teacher-current games for held-out validation data.")
-    teacher.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers.")
+    teacher.add_argument("--workers", type=int, default=16, help="Parallel rollout collection workers (capped at the game count).")
     teacher.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     teacher.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     teacher.add_argument("--seed-start", type=int, default=1, help="First deterministic training-data seed.")
