@@ -63,6 +63,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     train.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
+    train.add_argument("--objective", choices=("behavior-cloning", "ppo"), default="behavior-cloning", help="Training objective: supervised behavior cloning (default) or PPO self-play RL.")
+    train.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
+    train.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
+    train.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
     train.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     train.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     train.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
@@ -187,6 +191,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--capped-terminal-value", type=float, default=-0.25, help="Return assigned to each player in capped games.")
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     iterate.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
+    iterate.add_argument("--objective", choices=("behavior-cloning", "ppo"), default="behavior-cloning", help="Training objective: supervised behavior cloning (default) or PPO self-play RL.")
+    iterate.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
+    iterate.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
+    iterate.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
     iterate.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     iterate.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     iterate.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
@@ -268,6 +276,10 @@ def _train(args: argparse.Namespace) -> int:
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         max_batches=args.max_batches,
         device=args.device,
+        objective=args.objective,
+        clip_epsilon=args.clip_epsilon,
+        entropy_coef=args.entropy_coef,
+        normalize_advantage=not args.no_normalize_advantage,
     )
     model_config_kwargs = dict(
         policy_id=args.policy_id,
@@ -425,6 +437,10 @@ def _iterate(args: argparse.Namespace) -> int:
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         max_batches=args.max_batches,
         device=args.device,
+        objective=args.objective,
+        clip_epsilon=args.clip_epsilon,
+        entropy_coef=args.entropy_coef,
+        normalize_advantage=not args.no_normalize_advantage,
     )
     iterate_model_config_kwargs = dict(
         policy_id=args.policy_id,

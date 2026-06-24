@@ -130,6 +130,47 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(value_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "opponent_action_loss_weight"):
             TransformerTrainingConfig(opponent_action_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "objective"):
+            TransformerTrainingConfig(objective="bogus")
+        with self.assertRaisesRegex(ValueError, "clip_epsilon"):
+            TransformerTrainingConfig(objective="ppo", clip_epsilon=0.0)
+        # round-trips through to_dict/from_dict-equivalent (asdict) with RL knobs.
+        self.assertEqual(TransformerTrainingConfig(objective="ppo").objective, "ppo")
+
+    def test_ppo_objective_uses_value_baselined_clipped_surrogate(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        # Uniform logits over all-legal actions -> current prob == behavior prob (ratio 1);
+        # returns 1 with value 0 -> advantage +1, so the clipped surrogate pushes chosen-action
+        # prob up and the policy loss is negative.
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros(3, 9),
+            value=torch.zeros(3),
+            opponent_action_logits=torch.zeros(3, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(3, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1, 2], dtype=torch.long),
+            "returns": torch.ones(3),
+            "action_probabilities": torch.full((3,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(3, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(3, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(3, dtype=torch.long),
+        }
+        config = TransformerTrainingConfig(
+            objective="ppo", normalize_advantage=False, entropy_coef=0.0, opponent_action_loss_weight=0.0
+        )
+        loss, metrics = _transformer_loss(output, tensors, config)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertLess(metrics["policy_loss"], 0.0)  # positive advantage -> negative policy loss
+        self.assertAlmostEqual(metrics["value_loss"], 1.0, places=5)  # MSE(0, 1)
+        # Behavior-cloning objective on the same tensors yields a positive CE policy loss.
+        bc_loss, bc_metrics = _transformer_loss(output, tensors, TransformerTrainingConfig())
+        self.assertGreater(bc_metrics["policy_loss"], 0.0)
 
     def test_require_torch_fails_loudly_without_neural_extra(self) -> None:
         if torch_available():
