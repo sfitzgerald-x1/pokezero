@@ -99,6 +99,7 @@ class TransformerPolicyConfig:
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
     category_vocab: tuple[int, ...] = ()
     category_oov_buckets: int = 0
+    category_aliases: tuple[tuple[int, int], ...] = ()
 
     @classmethod
     def compact_category(
@@ -106,6 +107,7 @@ class TransformerPolicyConfig:
         *,
         category_vocab: Iterable[int],
         category_oov_buckets: int = DEFAULT_CATEGORY_OOV_BUCKETS,
+        category_aliases: Iterable[tuple[int, int]] = (),
         **kwargs: Any,
     ) -> "TransformerPolicyConfig":
         """Build a config whose category embedding is a compact vocabulary.
@@ -117,10 +119,12 @@ class TransformerPolicyConfig:
         """
         ids = tuple(sorted({int(value) for value in category_vocab if int(value) > 0}))
         size = 1 + len(ids) + int(category_oov_buckets)
+        aliases = tuple(sorted({(int(alias), int(base)) for alias, base in category_aliases}))
         return cls(
             categorical_vocab_size=size,
             category_vocab=ids,
             category_oov_buckets=int(category_oov_buckets),
+            category_aliases=aliases,
             **kwargs,
         )
 
@@ -128,6 +132,11 @@ class TransformerPolicyConfig:
         # Normalize to an immutable tuple of ints so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
         object.__setattr__(self, "category_vocab", tuple(int(value) for value in self.category_vocab))
+        # Sort by alias id: the model's remap uses torch.searchsorted, which requires
+        # sorted alias keys regardless of how the config was constructed.
+        object.__setattr__(
+            self, "category_aliases", tuple(sorted((int(alias), int(base)) for alias, base in self.category_aliases))
+        )
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
@@ -169,8 +178,21 @@ class TransformerPolicyConfig:
                 raise ValueError(
                     "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
                 )
+            vocab_set = set(ids)
+            alias_keys = [alias for alias, _ in self.category_aliases]
+            if len(alias_keys) != len(set(alias_keys)):
+                raise ValueError("category_aliases must have unique alias ids.")
+            for alias, base in self.category_aliases:
+                if alias <= 0 or base <= 0:
+                    raise ValueError("category_aliases ids must be >= 1.")
+                if base not in vocab_set:
+                    raise ValueError("category_aliases base id must be in category_vocab.")
+                if alias in vocab_set:
+                    raise ValueError("category_aliases alias id must not be a category_vocab entry.")
         elif self.category_oov_buckets != 0:
             raise ValueError("category_oov_buckets must be 0 when category_vocab is empty.")
+        elif self.category_aliases:
+            raise ValueError("category_aliases require a non-empty category_vocab.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -202,6 +224,7 @@ class TransformerPolicyConfig:
             observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
             category_vocab=tuple(int(value) for value in (payload.get("category_vocab") or ())),
             category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
+            category_aliases=tuple((int(pair[0]), int(pair[1])) for pair in (payload.get("category_aliases") or ())),
         )
 
 
@@ -324,11 +347,31 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 )
                 self._category_oov_buckets = int(config.category_oov_buckets)
                 self._category_vocab_len = len(config.category_vocab)
+                self._category_has_aliases = bool(config.category_aliases)
+                if self._category_has_aliases:
+                    # Aliases collapse cosmetic-forme ids onto a base-species vocab id
+                    # (sorted by alias id for searchsorted membership).
+                    self.register_buffer(
+                        "category_alias_keys",
+                        torch.tensor([alias for alias, _ in config.category_aliases], dtype=torch.long),
+                        persistent=False,
+                    )
+                    self.register_buffer(
+                        "category_alias_values",
+                        torch.tensor([base for _, base in config.category_aliases], dtype=torch.long),
+                        persistent=False,
+                    )
 
         def _remap_category_ids(self, ids: Any) -> Any:
             # Map original hashed ids -> compact rows. In-vocab ids get a unique,
             # collision-free row (lossless); unseen ids fold into the reserved OOV
             # block; padding (0) stays 0.
+            if getattr(self, "_category_has_aliases", False):
+                # Collapse cosmetic-forme ids onto their base-species id before lookup.
+                alias_keys = self.category_alias_keys
+                alias_pos = torch.searchsorted(alias_keys, ids).clamp(max=alias_keys.numel() - 1)
+                is_alias = alias_keys[alias_pos] == ids
+                ids = torch.where(is_alias, self.category_alias_values[alias_pos], ids)
             sorted_ids = self.category_vocab_sorted
             position = torch.searchsorted(sorted_ids, ids).clamp(max=sorted_ids.numel() - 1)
             in_vocab = (sorted_ids[position] == ids) & (ids > 0)

@@ -101,6 +101,29 @@ class CompactRemapTests(unittest.TestCase):
         for value in out:
             self.assertLess(value, model.config.categorical_vocab_size)
 
+    def test_alias_remaps_to_base_slot(self) -> None:
+        import torch
+
+        from pokezero.neural_policy import EntityTokenTransformerPolicy
+
+        # base ids 10 and 20 in vocab; 999 aliases onto base 10.
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=[10, 20], category_oov_buckets=4, category_aliases=[(999, 10)]
+        )
+        model = EntityTokenTransformerPolicy(config)
+        ids = torch.tensor([[10, 20, 999]], dtype=torch.long)
+        out = model._remap_category_ids(ids).tolist()[0]
+        # 10 -> slot 1, 20 -> slot 2, and aliased 999 -> base 10's slot (1)
+        self.assertEqual(out[0], 1)
+        self.assertEqual(out[1], 2)
+        self.assertEqual(out[2], out[0])
+
+    def test_alias_validation_rejects_base_outside_vocab(self) -> None:
+        with self.assertRaises(ValueError):
+            TransformerPolicyConfig.compact_category(
+                category_vocab=[10, 20], category_oov_buckets=4, category_aliases=[(999, 30)]
+            )
+
     def test_embedding_is_compact(self) -> None:
         model, _ = self._model(list(range(1, 101)), 16)
         self.assertEqual(model.category_embedding.num_embeddings, 1 + 100 + 16)
@@ -158,6 +181,41 @@ class CompactCheckpointRoundTripTests(unittest.TestCase):
                 loaded._remap_category_ids(ids).tolist(),
                 model._remap_category_ids(ids).tolist(),
             )
+
+    def test_aliased_checkpoint_round_trip(self) -> None:
+        import torch
+
+        from pokezero.neural_policy import (
+            EntityTokenTransformerPolicy,
+            TransformerEpochMetrics,
+            TransformerTrainingConfig,
+            TransformerTrainingResult,
+            load_transformer_checkpoint,
+            save_transformer_checkpoint,
+        )
+
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=[10, 20], category_oov_buckets=4, category_aliases=[(999, 10)]
+        )
+        model = EntityTokenTransformerPolicy(config)
+        result = TransformerTrainingResult(
+            model_config=config,
+            training_config=TransformerTrainingConfig(),
+            epochs=(TransformerEpochMetrics(epoch=1, examples=1, loss=1.0, policy_loss=1.0, policy_accuracy=0.5),),
+        )
+        ids = torch.tensor([[10, 20, 999]], dtype=torch.long)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "aliased.pt"
+            save_transformer_checkpoint(path, model, result=result)
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            # alias buffers are non-persistent (not serialized)
+            self.assertNotIn("category_alias_keys", payload["state_dict"])
+            self.assertNotIn("category_alias_values", payload["state_dict"])
+            loaded, loaded_result = load_transformer_checkpoint(path)
+            # config aliases survive serialization and rebuild the remap
+            self.assertEqual(loaded_result.model_config.category_aliases, ((999, 10),))
+            out = loaded._remap_category_ids(ids).tolist()[0]
+            self.assertEqual(out[2], out[0])  # 999 aliased onto base 10's slot
 
 
 if __name__ == "__main__":

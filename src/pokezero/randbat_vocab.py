@@ -128,16 +128,13 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     dex = load_showdown_dex_cached(showdown_root)
     groups: dict[str, list[str]] = {}
 
-    # The encoder emits species/move tokens using Showdown *display names* (e.g.
-    # "species:Mr. Mime", "move:Aerial Ace"), lowercased by stable_category_id. Include
-    # both the display-name form (what the encoder emits at play time) and the id form
-    # (belt-and-suspenders) so the vocabulary is collision-free and complete.
-    def _species_strings(species_id: str) -> list[str]:
+    # The species token uses the Showdown *display name* (e.g. "species:Mr. Mime"); the id
+    # form is never emitted, so enumerate display-only (no dead id-form rows). Moves DO use
+    # both forms: the action token emits the move id while event-detail emits the display
+    # name, so moves keep both.
+    def _species_display(species_id: str) -> str:
         info = dex.species_info(species_id)
-        names = {species_id}
-        if info is not None and info.name:
-            names.add(info.name)
-        return [f"species:{name}" for name in names]
+        return info.name if info is not None and info.name else species_id
 
     def _move_action_strings(move_id: str) -> list[str]:
         info = dex.move_info(move_id)
@@ -146,12 +143,11 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
             names.add(info.name)
         return [f"move:{name}" for name in names]
 
-    species_strings = [s for species in entities["species"] for s in _species_strings(species)]
-    # Unown cosmetic formes appear only as display names in battle.
-    has_unown = any(_normalize_identifier(species) == "unown" for species in entities["species"])
-    if has_unown:
-        species_strings += [f"species:{forme}" for forme in UNOWN_FORMES]
-    groups["species"] = species_strings
+    # Unown cosmetic formes are collapsed to the base species via aliases (see
+    # gen3_randbat_cosmetic_aliases), so they are NOT enumerated as separate rows here.
+    # Functional formes (Deoxys-Attack/-Defense/-Speed) are distinct sets.json keys and
+    # therefore remain distinct species rows.
+    groups["species"] = [f"species:{_species_display(species)}" for species in entities["species"]]
 
     move_strings = [s for move in entities["moves"] for s in _move_action_strings(move)]
     move_strings += [f"move:{move}" for move in UNIVERSAL_MOVES]
@@ -203,6 +199,28 @@ def gen3_randbat_vocabulary_breakdown(showdown_root: str | Path) -> dict[str, in
         all_ids |= group_ids
     breakdown["total_distinct"] = len(all_ids)
     return breakdown
+
+
+def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int, int], ...]:
+    """Map cosmetic-forme species category ids onto their base-species id.
+
+    Unown's lettered formes are purely cosmetic (identical stats/moves/ability, one shared
+    randbat set), so the encoder's per-forme tokens (`species:Unown-L`, ...) should collapse
+    onto a single trained `species:Unown` row rather than 27 sparse rows. Functional formes
+    such as Deoxys-Attack are NOT cosmetic (separate sets, distinct stats) and are not
+    aliased. Returns (alias_id, base_id) pairs for use as compact-embedding aliases.
+    """
+    entities = gen3_randbat_entities(showdown_root)
+    has_unown = any(_normalize_identifier(species) == "unown" for species in entities["species"])
+    if not has_unown:
+        return ()
+    base_id = stable_category_id("species:Unown")
+    aliases: list[tuple[int, int]] = []
+    for forme in UNOWN_FORMES:
+        alias_id = stable_category_id(f"species:{forme}")
+        if alias_id != base_id:
+            aliases.append((alias_id, base_id))
+    return tuple(sorted(set(aliases)))
 
 
 def main(argv: list[str] | None = None) -> int:

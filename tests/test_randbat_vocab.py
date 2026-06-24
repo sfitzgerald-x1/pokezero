@@ -7,6 +7,7 @@ from pokezero.randbat_vocab import (
     UNOWN_FORMES,
     build_gen3_randbat_category_vocabulary,
     gen3_randbat_category_strings,
+    gen3_randbat_cosmetic_aliases,
     gen3_randbat_entities,
     gen3_randbat_vocabulary_breakdown,
 )
@@ -39,13 +40,34 @@ class Gen3RandbatVocabTests(unittest.TestCase):
         # No hash collisions across the closed universe: group sizes sum to the total.
         self.assertEqual(sum(breakdown.values()), total)
 
-    def test_universal_moves_and_unown_formes_present(self) -> None:
+    def test_universal_moves_present(self) -> None:
         strings = set(gen3_randbat_category_strings(SHOWDOWN_ROOT)["move_action"])
         for move in UNIVERSAL_MOVES:
             self.assertIn(f"move:{move}", strings)
+
+    def test_species_are_display_only_no_dead_id_rows(self) -> None:
+        # Punctuation fix: only display-name forms are enumerated, not dead id forms.
         species_strings = set(gen3_randbat_category_strings(SHOWDOWN_ROOT)["species"])
-        # Unown is in the gen3 randbat pool, so its cosmetic formes are enumerated.
-        self.assertIn(f"species:{UNOWN_FORMES[0]}", species_strings)
+        self.assertIn("species:Mr. Mime", species_strings)
+        self.assertNotIn("species:mrmime", species_strings)
+        self.assertIn("species:Ho-Oh", species_strings)
+        self.assertNotIn("species:hooh", species_strings)
+
+    def test_unown_formes_collapse_to_base_but_deoxys_preserved(self) -> None:
+        vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
+        species_strings = set(gen3_randbat_category_strings(SHOWDOWN_ROOT)["species"])
+        # Cosmetic Unown formes are NOT separate rows; they alias onto base "Unown".
+        self.assertIn("species:Unown", species_strings)
+        for forme in UNOWN_FORMES:
+            self.assertNotIn(f"species:{forme}", species_strings)
+        aliases = dict(gen3_randbat_cosmetic_aliases(SHOWDOWN_ROOT))
+        base_id = stable_category_id("species:Unown")
+        for forme in UNOWN_FORMES:
+            self.assertEqual(aliases.get(stable_category_id(f"species:{forme}")), base_id)
+        # Functional Deoxys formes are distinct rows and are NOT aliased.
+        for forme in ("Deoxys-Attack", "Deoxys-Defense", "Deoxys-Speed"):
+            self.assertIn(stable_category_id(f"species:{forme}"), vocab)
+            self.assertNotIn(stable_category_id(f"species:{forme}"), aliases)
 
     def test_known_entities_map_into_vocab(self) -> None:
         vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
@@ -109,11 +131,14 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
         finally:
             sd.stable_category_id = original
 
-        vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
+        # A required category is "covered" if it is a vocab id OR a cosmetic-forme alias
+        # (which the model remaps onto a base-species vocab row).
+        covered = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
+        covered |= {alias for alias, _ in gen3_randbat_cosmetic_aliases(SHOWDOWN_ROOT)}
         uncovered = [
             value
             for value, cid in seen.items()
-            if cid not in vocab and value.startswith(self._REQUIRED_PREFIXES)
+            if cid not in covered and value.startswith(self._REQUIRED_PREFIXES)
         ]
         self.assertEqual(uncovered, [], f"required categories fell into OOV: {sorted(uncovered)[:20]}")
 

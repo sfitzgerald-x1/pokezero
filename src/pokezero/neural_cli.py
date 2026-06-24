@@ -274,12 +274,17 @@ def _train(args: argparse.Namespace) -> int:
     if args.legacy_category_hash:
         model_config = TransformerPolicyConfig(**model_config_kwargs)
     else:
+        category_aliases: tuple[tuple[int, int], ...] = ()
         if args.category_vocab_source == "randbat-dex":
             if args.showdown_root is None:
                 raise ValueError("--category-vocab-source randbat-dex requires --showdown-root.")
-            from .randbat_vocab import build_gen3_randbat_category_vocabulary
+            from .randbat_vocab import (
+                build_gen3_randbat_category_vocabulary,
+                gen3_randbat_cosmetic_aliases,
+            )
 
             category_vocab = build_gen3_randbat_category_vocabulary(args.showdown_root)
+            category_aliases = gen3_randbat_cosmetic_aliases(args.showdown_root)
             vocab_label = "randbat-dex universe"
         else:
             vocab_paths = args.category_vocab_from or args.data
@@ -290,6 +295,7 @@ def _train(args: argparse.Namespace) -> int:
         model_config = TransformerPolicyConfig.compact_category(
             category_vocab=category_vocab,
             category_oov_buckets=args.category_oov_buckets,
+            category_aliases=category_aliases,
             **model_config_kwargs,
         )
         print(
