@@ -54,6 +54,12 @@ class CompactCategoryConfigTests(unittest.TestCase):
         restored = TransformerPolicyConfig.from_dict(config.to_dict())
         self.assertEqual(restored, config)
 
+    def test_list_vocab_normalized_to_tuple_and_round_trips(self) -> None:
+        config = TransformerPolicyConfig(categorical_vocab_size=4, category_vocab=[5, 10], category_oov_buckets=1)
+        self.assertIsInstance(config.category_vocab, tuple)
+        self.assertEqual(config.category_vocab, (5, 10))
+        self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
+
     def test_rejects_inconsistent_size(self) -> None:
         with self.assertRaises(ValueError):
             TransformerPolicyConfig(categorical_vocab_size=999, category_vocab=(5, 10), category_oov_buckets=4)
@@ -111,6 +117,47 @@ class CompactRemapTests(unittest.TestCase):
 
         ids = torch.tensor([[0, 3, 8, 15, 99]], dtype=torch.long)
         self.assertEqual(model._remap_category_ids(ids).tolist(), rebuilt._remap_category_ids(ids).tolist())
+
+
+@unittest.skipUnless(torch_available(), "requires torch")
+class CompactCheckpointRoundTripTests(unittest.TestCase):
+    def test_save_load_preserves_vocab_and_remap(self) -> None:
+        import torch
+
+        from pokezero.neural_policy import (
+            EntityTokenTransformerPolicy,
+            TransformerEpochMetrics,
+            TransformerTrainingConfig,
+            TransformerTrainingResult,
+            load_transformer_checkpoint,
+            save_transformer_checkpoint,
+        )
+
+        config = TransformerPolicyConfig.compact_category(category_vocab=[3, 8, 15], category_oov_buckets=4)
+        model = EntityTokenTransformerPolicy(config)
+        result = TransformerTrainingResult(
+            model_config=config,
+            training_config=TransformerTrainingConfig(),
+            epochs=(
+                TransformerEpochMetrics(
+                    epoch=1, examples=1, loss=1.0, policy_loss=1.0, policy_accuracy=0.5
+                ),
+            ),
+        )
+        ids = torch.tensor([[0, 3, 8, 15, 99, 4103]], dtype=torch.long)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "compact.pt"
+            save_transformer_checkpoint(path, model, result=result)
+            # non-persistent remap buffer is not serialized, keeping the checkpoint small
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            self.assertNotIn("category_vocab_sorted", payload["state_dict"])
+            # strict load succeeds and the rebuilt model remaps identically
+            loaded, loaded_result = load_transformer_checkpoint(path)
+            self.assertEqual(loaded_result.model_config.category_vocab, (3, 8, 15))
+            self.assertEqual(
+                loaded._remap_category_ids(ids).tolist(),
+                model._remap_category_ids(ids).tolist(),
+            )
 
 
 if __name__ == "__main__":

@@ -46,10 +46,12 @@ def collect_categorical_ids(
 ) -> tuple[int, ...]:
     """Collect the distinct non-zero categorical ids that occur in rollout JSONL.
 
-    These are the only embedding rows that ever carry trained signal, so a compact
-    category vocabulary built from them is lossless for everything the model can learn
-    from the given data; ids absent here are untrained rows in either the full hash
-    table or the compact table.
+    These are the only embedding rows that ever carry trained signal. A compact category
+    vocabulary built from them keeps a dedicated, collision-free row for every id the model
+    can learn from the given data. Ids absent here are untrained (initialization) rows in
+    either the full hash table or the compact table; in the compact table they fold into a
+    shared out-of-vocabulary block and may collide, but since both schemes leave them
+    untrained this does not change learned behavior.
     """
     if isinstance(paths, (str, Path, PathLike)):
         paths = [paths]
@@ -123,6 +125,9 @@ class TransformerPolicyConfig:
         )
 
     def __post_init__(self) -> None:
+        # Normalize to an immutable tuple of ints so a frozen config stays hashable and
+        # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
+        object.__setattr__(self, "category_vocab", tuple(int(value) for value in self.category_vocab))
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:

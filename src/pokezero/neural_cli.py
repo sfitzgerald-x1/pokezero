@@ -21,6 +21,7 @@ from .neural_policy import (
     TransformerTrainingConfig,
     collect_categorical_ids,
     load_transformer_policy,
+    require_torch,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
@@ -234,6 +235,8 @@ def _describe(args: argparse.Namespace) -> int:
 
 
 def _train(args: argparse.Namespace) -> int:
+    # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
+    require_torch()
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
