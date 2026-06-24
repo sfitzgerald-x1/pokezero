@@ -11,7 +11,6 @@ from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.neural_cli import main as neural_cli_main
 from pokezero.neural_policy import (
-    DEFAULT_CATEGORY_VOCAB_SIZE,
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
     NEURAL_INSTALL_MESSAGE,
     TorchUnavailableError,
@@ -74,24 +73,38 @@ def rollout_record() -> RolloutRecord:
 
 
 class NeuralPolicyScaffoldTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # Self-play (iterate) builds the compact randbat-dex vocab from --showdown-root;
+        # stub the dex lookups so CLI tests stay fast without a real Showdown checkout.
+        vocab_patch = patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30))
+        alias_patch = patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),))
+        vocab_patch.start()
+        alias_patch.start()
+        self.addCleanup(vocab_patch.stop)
+        self.addCleanup(alias_patch.stop)
+
     def test_transformer_policy_config_defaults_match_replay_observation_shape(self) -> None:
-        config = TransformerPolicyConfig()
+        config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
 
         self.assertEqual(config.window_size, 4)
         self.assertEqual(config.token_count, DEFAULT_REPLAY_OBSERVATION_SPEC.token_count)
         self.assertEqual(config.categorical_feature_count, DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count)
         self.assertEqual(config.numeric_feature_count, DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count)
-        self.assertEqual(config.categorical_vocab_size, CATEGORY_ID_BUCKETS + 1)
-        self.assertEqual(config.categorical_vocab_size, DEFAULT_CATEGORY_VOCAB_SIZE)
+        # categorical_vocab_size is derived: 1 padding + 3 vocab + 4 oov.
+        self.assertEqual(config.categorical_vocab_size, 8)
         self.assertEqual(config.token_type_vocab_size, DEFAULT_TOKEN_TYPE_VOCAB_SIZE)
         self.assertGreaterEqual(config.token_count, ACTION_CANDIDATE_TOKEN_OFFSET + 9)
         self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
 
+    def test_transformer_policy_config_requires_category_vocab(self) -> None:
+        with self.assertRaisesRegex(ValueError, "category_vocab is required"):
+            TransformerPolicyConfig()
+
     def test_transformer_policy_config_validates_attention_shape(self) -> None:
         with self.assertRaisesRegex(ValueError, "divisible"):
-            TransformerPolicyConfig(embedding_dim=65, attention_heads=4)
+            TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, embedding_dim=65, attention_heads=4)
         with self.assertRaisesRegex(ValueError, "token_count"):
-            TransformerPolicyConfig(token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
+            TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
 
     def test_transformer_training_config_validates_training_knobs(self) -> None:
         self.assertEqual(TransformerTrainingConfig().window_size, 4)
@@ -410,12 +423,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         return captured["model_config"]
 
-    def test_neural_cli_iterate_defaults_to_legacy_hash_category_vocab(self) -> None:
-        model_config = self._run_iterate_capturing_model_config(["--showdown-root", "/tmp/showdown"])
-        self.assertEqual(model_config.category_vocab, ())
-        self.assertEqual(model_config.category_aliases, ())
+    def test_neural_cli_iterate_builds_compact_randbat_dex_config(self) -> None:
+        # setUp stubs the randbat-dex builders to vocab (10, 20, 30) + alias (999 -> 10).
+        model_config = self._run_iterate_capturing_model_config(
+            ["--showdown-root", "/tmp/showdown", "--category-oov-buckets", "4"]
+        )
+        self.assertEqual(model_config.category_vocab, (10, 20, 30))
+        self.assertEqual(model_config.category_aliases, ((999, 10),))
+        self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 4)
 
-    def test_neural_cli_iterate_randbat_dex_requires_showdown_root(self) -> None:
+    def test_neural_cli_iterate_requires_showdown_root(self) -> None:
         with (
             patch("pokezero.neural_cli.run_neural_selfplay_iterations") as run,
             contextlib.redirect_stdout(io.StringIO()),
@@ -423,22 +440,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         ):
             exit_code = neural_cli_main(
                 ["iterate", "--run-dir", "run", "--iterations", "1", "--games-per-iteration", "2",
-                 "--initial-policy", "simple-legal", "--category-vocab-source", "randbat-dex"]
+                 "--initial-policy", "simple-legal"]
             )
         self.assertEqual(exit_code, 1)
         run.assert_not_called()
-
-    def test_neural_cli_iterate_randbat_dex_builds_compact_config(self) -> None:
-        with (
-            patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30)),
-            patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),)),
-        ):
-            model_config = self._run_iterate_capturing_model_config(
-                ["--showdown-root", "/tmp/showdown", "--category-vocab-source", "randbat-dex", "--category-oov-buckets", "4"]
-            )
-        self.assertEqual(model_config.category_vocab, (10, 20, 30))
-        self.assertEqual(model_config.category_aliases, ((999, 10),))
-        self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 4)
 
     def test_neural_cli_iterate_uses_named_post_iteration_audit_profile(self) -> None:
         fake_epoch = type(
@@ -481,6 +486,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "1",
                     "--games-per-iteration",
                     "2",
+                    "--showdown-root",
+                    "/tmp/showdown",
                     "--initial-policy",
                     "random-legal",
                     "--evaluation-games",
@@ -554,6 +561,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "1",
                         "--games-per-iteration",
                         "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
                         "--initial-policy",
                         "random-legal",
                         "--evaluation-games",
@@ -609,6 +618,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "1",
                     "--games-per-iteration",
                     "2",
+                    "--showdown-root",
+                    "/tmp/showdown",
                     "--initial-policy",
                     "random-legal",
                     "--evaluation-games",
@@ -643,10 +654,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
             model, result = train_transformer_policy(
                 data_path,
-                model_config=TransformerPolicyConfig(
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
                     policy_id="neural-smoke",
                     window_size=2,
-                    categorical_vocab_size=32,
                     token_type_vocab_size=8,
                     categorical_feature_count=1,
                     numeric_feature_count=1,
@@ -670,10 +682,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
             _, continued_result = train_transformer_policy(
                 data_path,
-                model_config=TransformerPolicyConfig(
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
                     policy_id="neural-smoke-continued",
                     window_size=2,
-                    categorical_vocab_size=32,
                     token_type_vocab_size=8,
                     categorical_feature_count=1,
                     numeric_feature_count=1,

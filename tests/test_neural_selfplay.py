@@ -32,7 +32,26 @@ from pokezero.run_audit import RunAuditConfig, RunAuditFailure
 from pokezero.rollout import RolloutConfig
 
 
+def _entity_test_model_config(**overrides):
+    """Small compact-vocab model config for self-play tests (legacy hash embedding retired)."""
+    params = dict(policy_id="entity-test", embedding_dim=16, attention_heads=4)
+    params.update(overrides)
+    return TransformerPolicyConfig.compact_category(
+        category_vocab=tuple(range(1, 65)), category_oov_buckets=8, **params
+    )
+
+
 class NeuralSelfPlayTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # Self-play builds the compact randbat-dex vocab from --showdown-root; stub the dex
+        # lookups so CLI tests stay fast and do not need a real Showdown checkout.
+        vocab_patch = patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30))
+        alias_patch = patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),))
+        vocab_patch.start()
+        alias_patch.start()
+        self.addCleanup(vocab_patch.stop)
+        self.addCleanup(alias_patch.stop)
+
     def test_run_neural_selfplay_iterations_requires_torch_before_collecting(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -46,7 +65,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(),
                 )
 
@@ -63,7 +82,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     )
 
@@ -102,6 +121,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "1",
                         "--games-per-iteration",
                         "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
                         "--initial-policy",
                         "random-legal",
                         "--auto-promote",
@@ -127,6 +148,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "1",
                         "--games-per-iteration",
                         "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
                         "--initial-policy",
                         "random-legal",
                         "--audit-after-iteration",
@@ -169,7 +192,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=2,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
@@ -220,7 +243,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     evaluation_games=2,
                     evaluation_seed_start=100,
@@ -252,7 +275,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
                     evaluation_games=1,
@@ -284,7 +307,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                         fixed_opponent_policy_specs=("random-legal",),
                         evaluation_games=1,
@@ -316,7 +339,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                         fixed_opponent_policy_specs=("random-legal",),
                         evaluation_games=1,
@@ -360,7 +383,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                         fixed_opponent_policy_specs=("random-legal",),
                         evaluation_games=1,
@@ -407,7 +430,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                         fixed_opponent_policy_specs=("random-legal",),
                         evaluation_games=1,
@@ -454,7 +477,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
                     evaluation_games=1,
@@ -489,7 +512,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         games_per_iteration=1,
                         env_factory=lambda: None,  # type: ignore[return-value]
                         rollout_config=RolloutConfig(max_decision_rounds=5),
-                        model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                        model_config=_entity_test_model_config(),
                         training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                         fixed_opponent_policy_specs=("random-legal",),
                         evaluation_games=1,
@@ -527,7 +550,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=2,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
@@ -539,7 +562,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=2,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
                     evaluation_games=1,
@@ -581,7 +604,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
@@ -610,7 +633,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
                     max_historical_opponents=2,
@@ -702,7 +725,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     games_per_iteration=1,
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
-                    model_config=TransformerPolicyConfig(policy_id="entity-test", embedding_dim=16, attention_heads=4),
+                    model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
                     evaluation_games=1,
@@ -839,10 +862,11 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 games_per_iteration=1,
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
-                model_config=TransformerPolicyConfig(
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
                     policy_id="entity-smoke",
                     window_size=2,
-                    categorical_vocab_size=32,
                     token_type_vocab_size=8,
                     categorical_feature_count=1,
                     numeric_feature_count=1,
