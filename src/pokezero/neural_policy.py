@@ -9,6 +9,7 @@ is available.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+import json
 from os import PathLike
 from pathlib import Path
 import random
@@ -37,6 +38,39 @@ NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
 DEFAULT_CATEGORY_VOCAB_SIZE = CATEGORY_ID_BUCKETS + 1
 DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
+DEFAULT_CATEGORY_OOV_BUCKETS = 4096
+
+
+def collect_categorical_ids(
+    paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
+) -> tuple[int, ...]:
+    """Collect the distinct non-zero categorical ids that occur in rollout JSONL.
+
+    These are the only embedding rows that ever carry trained signal, so a compact
+    category vocabulary built from them is lossless for everything the model can learn
+    from the given data; ids absent here are untrained rows in either the full hash
+    table or the compact table.
+    """
+    if isinstance(paths, (str, Path, PathLike)):
+        paths = [paths]
+    ids: set[int] = set()
+    for path in paths:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                trajectory = record.get("trajectory") if isinstance(record, Mapping) else None
+                steps = (trajectory or record).get("steps", []) if isinstance(trajectory or record, Mapping) else []
+                for step in steps:
+                    observation = step.get("observation") or {}
+                    for row in observation.get("categorical_ids", []):
+                        for value in row:
+                            ivalue = int(value)
+                            if ivalue > 0:
+                                ids.add(ivalue)
+    return tuple(sorted(ids))
 
 
 class TorchUnavailableError(RuntimeError):
@@ -61,6 +95,32 @@ class TransformerPolicyConfig:
     dropout: float = 0.1
     action_schema_version: str = ACTION_SCHEMA_VERSION
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
+    category_vocab: tuple[int, ...] = ()
+    category_oov_buckets: int = 0
+
+    @classmethod
+    def compact_category(
+        cls,
+        *,
+        category_vocab: Iterable[int],
+        category_oov_buckets: int = DEFAULT_CATEGORY_OOV_BUCKETS,
+        **kwargs: Any,
+    ) -> "TransformerPolicyConfig":
+        """Build a config whose category embedding is a compact vocabulary.
+
+        ``category_vocab`` is the set of original (hashed) categorical ids that should
+        keep a dedicated, collision-free embedding row; ids outside it fold into
+        ``category_oov_buckets`` reserved rows. The full embedding has
+        ``1 + len(vocab) + oov_buckets`` rows (row 0 is padding).
+        """
+        ids = tuple(sorted({int(value) for value in category_vocab if int(value) > 0}))
+        size = 1 + len(ids) + int(category_oov_buckets)
+        return cls(
+            categorical_vocab_size=size,
+            category_vocab=ids,
+            category_oov_buckets=int(category_oov_buckets),
+            **kwargs,
+        )
 
     def __post_init__(self) -> None:
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
@@ -91,6 +151,21 @@ class TransformerPolicyConfig:
             raise ValueError("feedforward_dim must be positive.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
+        if self.category_vocab:
+            if self.category_oov_buckets < 1:
+                raise ValueError("category_oov_buckets must be >= 1 when category_vocab is set.")
+            ids = self.category_vocab
+            if ids[0] < 1:
+                raise ValueError("category_vocab ids must be >= 1.")
+            if any(earlier >= later for earlier, later in zip(ids, ids[1:])):
+                raise ValueError("category_vocab must be sorted and unique.")
+            expected = 1 + len(ids) + self.category_oov_buckets
+            if self.categorical_vocab_size != expected:
+                raise ValueError(
+                    "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
+                )
+        elif self.category_oov_buckets != 0:
+            raise ValueError("category_oov_buckets must be 0 when category_vocab is empty.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,6 +195,8 @@ class TransformerPolicyConfig:
             dropout=_float_field(payload, "dropout", 0.1),
             action_schema_version=_str_field(payload, "action_schema_version", ACTION_SCHEMA_VERSION),
             observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
+            category_vocab=tuple(int(value) for value in (payload.get("category_vocab") or ())),
+            category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
         )
 
 
@@ -231,6 +308,29 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             self.policy_head = nn.Linear(config.embedding_dim, 1)
             self.value_head = nn.Linear(config.embedding_dim, 1)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
+            self._category_compact = bool(config.category_vocab)
+            if self._category_compact:
+                # Non-persistent: rebuilt from config on load, so the checkpoint only
+                # stores the small vocab list rather than this lookup tensor.
+                self.register_buffer(
+                    "category_vocab_sorted",
+                    torch.tensor(config.category_vocab, dtype=torch.long),
+                    persistent=False,
+                )
+                self._category_oov_buckets = int(config.category_oov_buckets)
+                self._category_vocab_len = len(config.category_vocab)
+
+        def _remap_category_ids(self, ids: Any) -> Any:
+            # Map original hashed ids -> compact rows. In-vocab ids get a unique,
+            # collision-free row (lossless); unseen ids fold into the reserved OOV
+            # block; padding (0) stays 0.
+            sorted_ids = self.category_vocab_sorted
+            position = torch.searchsorted(sorted_ids, ids).clamp(max=sorted_ids.numel() - 1)
+            in_vocab = (sorted_ids[position] == ids) & (ids > 0)
+            vocab_compact = position + 1
+            oov_compact = (1 + self._category_vocab_len) + ids.remainder(self._category_oov_buckets)
+            compact = torch.where(in_vocab, vocab_compact, oov_compact)
+            return torch.where(ids > 0, compact, torch.zeros_like(ids))
 
         def forward(
             self,
@@ -243,7 +343,10 @@ if nn is not None:  # pragma: no cover - optional dependency path.
         ) -> TransformerPolicyOutput:
             _validate_tensor_shapes(categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask, self.config)
             batch_size, window_size, token_count, _ = categorical_ids.shape
-            clipped_categories = categorical_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1).long()
+            category_ids = categorical_ids.long()
+            if self._category_compact:
+                category_ids = self._remap_category_ids(category_ids)
+            clipped_categories = category_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1)
             category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
             token_embeddings = self.token_type_embedding(
                 token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
