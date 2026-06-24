@@ -6,8 +6,124 @@ softmax baseline once the CPU harness is trusted. AlphaGo Zero / AlphaZero is th
 stated inspiration, so this doc starts from that lineage and then adapts it to the
 ways Gen 3 random battles differ from Go.
 
-Status: exploration only. Nothing here is committed implementation. The intent is
-to agree on a staged path and a first concrete neural training target.
+This file now doubles as a **goal specification**: point `/goal` at it to drive the
+work below. Follow `docs/autonomous_task_loop.md` for the per-task loop (Claude executor,
+Codex GPT-5.5 xhigh reviewer, serial, merge-on-sign-off) and the conventions in
+`docs/goal_cpu_past_simple_legal.md`. The sections after the goal are the supporting design
+menu the hypotheses draw from.
+
+## Active Goal: Beat `max-damage` > 80% From Self-Play
+
+Produce a CPU-trained (GPU for scale) neural policy that **beats the `max-damage` baseline
+more than 80% of the time**, reached by *self-play learning* rather than imitation alone.
+
+### Where we are
+- The compact entity-token transformer, trained supervised (behavior-cloning + value) on
+  64 teacher games, scores ~0.80 vs `simple-legal` and ~0.94 vs `random-legal` — but it has
+  **not** beaten `max-damage`, which itself scores 0.875 vs `simple-legal` (a tougher bar
+  than our current model). See `docs/cpu_self_play_roadmap.md`.
+- The category embedding was retired from a 1,000,001-row hash to a compact ~795-id
+  vocabulary, so the model dropped from ~128M params (513 MB) to ~1.3M params (~5 MB) with
+  no loss in benchmark strength. **The trunk is now ~270K params of ~1.3M total — there is
+  large headroom to grow the network and add structure while staying small enough for
+  CPU proof-of-life and a consumer GPU.** This is what makes the hypotheses below affordable.
+
+### Definition of Done
+- A checkpoint beats `max-damage` in a mirrored shared-opponent benchmark with **Wilson 95%
+  lower bound > 0.80** over **>= 240 games per seed band**, **reproduced across two
+  independent seed bands**, with capped-game rate <= 0.05.
+- It still beats `random-legal` and `simple-legal` decisively (no regression).
+- The winning checkpoint was produced by **self-play training** (model-free RL), not pure
+  behavior cloning. `max-damage` is an **eval-only** opponent: it must **not** appear in the
+  training opponent pool or as the initial policy (enforced by `reject_eval_only_specs`), so
+  beating it measures genuine generalization, not overfitting to the eval.
+- Every claim is backed by a targeted shared-opponent benchmark (not wrapper aggregates).
+
+### Why `max-damage` is the right bar — and why it is beatable
+`max-damage` is strong but **deterministic and exploitable**: it always clicks the
+highest-damage move on its current active Pokemon, and it **never switches, never uses
+status/recovery/setup, and never plays around your switches**. A competent learned policy
+should exploit exactly that: switch into resists/immunities so its big move is wasted, set
+up (Swords Dance / Calm Mind) on a mon it cannot threaten, and stall/status it. Crucially,
+these are the *same skills self-play is supposed to discover* (switch timing, opponent
+prediction, setup, HP preservation) — so `max-damage` is both a meaningful bar and a clean
+signal that self-play is learning real tactics. >80% is an ambitious-but-reachable target
+against a no-switch/no-status opponent.
+
+## Hypotheses (ranked) — what should move win-rate vs `max-damage`
+
+Each is a falsifiable hypothesis with an experiment and the signal that confirms/refutes it.
+They draw on the design menu in the later sections (candidate network bodies, operators,
+privileged supervision, etc.).
+
+- **H1 — Self-play RL is the necessary unlock (highest expected impact).** Supervised BC
+  caps at imitating the teacher; exceeding `max-damage` requires learning from *outcomes*.
+  *Experiment:* build a model-free RL loop (PPO / V-trace) that fine-tunes the BC-bootstrapped
+  compact transformer through self-play against a frozen-checkpoint + random/simple/teacher
+  pool, benchmarking vs `max-damage` each iteration. *Signal:* vs-`max-damage` win rate climbs
+  past 0.80 over training; refuted if it plateaus well below 0.80 despite stable learning.
+- **H2 — Temporal memory enables anticipatory switching.** A recurrent core (LSTM/GRU/small
+  state-space) over per-turn embeddings should beat the fixed 4-turn window because exploiting
+  `max-damage` is a *sequential* read (it keeps clicking the same predictable move). Now cheap
+  given the param headroom. *Experiment:* ablate recurrent vs windowed under the same RL setup.
+  *Signal:* higher vs-`max-damage` win rate and better long-game switch timing.
+- **H3 — Opponent-action prediction (privileged self-play supervision) sharpens switches.**
+  Train the opponent head against self-play ground truth. Against deterministic `max-damage`
+  the opponent's next move is near-perfectly predictable, so the agent can pre-switch to a
+  resist/immunity. *Experiment:* sweep the opponent-loss weight (incl. 0); measure
+  vs-`max-damage` win rate and opponent-prediction accuracy. *Signal:* win-rate gain that
+  tracks prediction accuracy.
+- **H4 — Pointer/attention action head over move semantics.** Replace the positional
+  9-slot head with attention over the action-candidate tokens (move type / base power /
+  category / status), so move choice reasons about *effects* not slot index. *Experiment:*
+  ablate pointer head vs positional under fixed training. *Signal:* better tactical selection
+  (more setup/switch lines, higher win rate).
+- **H5 — Grow the trunk now that it is affordable.** Embedding dim 128 -> 256, layers 2 ->
+  4-6, heads 4 -> 8 keeps the model at a few M params (still tiny vs the old 128M). *Experiment:*
+  width/depth sweep, watching CPU inference cost and overfitting. *Signal:* higher ceiling
+  on vs-`max-damage` win rate without inference becoming the bottleneck.
+- **H6 — Belief-conditioned inputs from the known finite sets.** Feed the deterministic
+  randbat belief posterior (possible moves/items/abilities per revealed slot) so switch/threat
+  assessment uses what a player could infer. *Experiment:* ablate belief features. *Signal:*
+  safer switches, fewer losses to a revealed coverage move.
+- **H7 — Reward shaping + value head for long-horizon credit.** Faint/HP-fraction-differential
+  shaping plus a trained value head should speed RL convergence to stall/setup lines (the win
+  often comes many turns after the decisive switch). *Experiment:* ablate shaping/value weight.
+  *Signal:* faster, more stable climb vs `max-damage`.
+- **H8 — Diverse opponent pool / light league for robustness.** Train against self + frozen
+  checkpoints + random/simple/scripted-teacher (never `max-damage`). *Experiment:* pool-
+  composition ablation. *Signal:* generalization — beating the *unseen* `max-damage` rather
+  than overfitting any single opponent.
+
+## Recommended Experiment Sequence (goal task order)
+
+1. **Build the model-free RL self-play loop (H1).** This is the precondition for everything
+   else and the single most likely unlock. Bootstrap from the compact BC checkpoint; reuse the
+   existing rollout/promotion/benchmark/audit harness; add max-damage as a fixed
+   *benchmark-reference* (eval) opponent each iteration. CPU proof-of-life first (does
+   vs-`max-damage` win rate rise at all?), then scale.
+2. **Add temporal memory + opponent-prediction + pointer head (H2, H3, H4)** on top of the RL
+   loop, one ablation at a time, each gated by a benchmark vs `max-damage`.
+3. **Scale the trunk and tune (H5, H7)** once the structure helps, watching CPU inference cost
+   (the env is already the throughput bottleneck — see Infrastructure) and promote to GPU for
+   the longer strength runs.
+4. **Belief inputs and pool diversity (H6, H8)** as supporting gains and robustness.
+5. **Confirm and reproduce** any checkpoint that clears 80% (two seed bands, clean capped
+   health), per the Definition of Done.
+
+Treat each step as a goal-loop task: pick the next hypothesis, implement on a `scott/` branch,
+benchmark the candidate vs `max-damage` + `random-legal` + `simple-legal` across two seed
+bands, record the result in `docs/cpu_self_play_roadmap.md`, get Codex sign-off on code PRs,
+merge, and continue. Stop and report if the next step needs GPU, a missing prerequisite, or if
+evidence shows a hypothesis is a dead end (record it as negative evidence and move to the next).
+
+### Constraints
+- CPU-first for proof-of-life (does the signal move?); GPU + env throughput for strength runs.
+  The Showdown harness is the throughput bottleneck (~91% per-turn sim) — see Infrastructure;
+  `--workers` defaults to 16.
+- `max-damage` is eval-only and must never enter training (initial policy or opponent pool).
+- No strength claim without a targeted shared-opponent benchmark; validation/imitation
+  accuracy is health only, never a strength signal.
 
 ## Why The Linear Baseline Is Not Enough
 
