@@ -479,6 +479,7 @@ def _candidate_from_neural_selfplay_manifest(
             iterations,
             manifest_path=manifest_path,
         ),
+        benchmark_reference_policy_ids=_benchmark_reference_policy_ids(latest, manifest_path=manifest_path),
     )
 
 
@@ -565,6 +566,8 @@ def _policy_id_from_policy_spec(value: Any, *, manifest_path: Path) -> str | Non
         return None
     if lowered == "scripted-teacher":
         return "scripted-teacher"
+    if lowered == "max-damage":
+        return "max-damage"
     linear_prefix = "linear:"
     if not lowered.startswith(linear_prefix):
         return None
