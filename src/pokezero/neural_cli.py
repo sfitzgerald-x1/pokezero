@@ -16,9 +16,12 @@ from .cli_audit import (
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
+    DEFAULT_CATEGORY_OOV_BUCKETS,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
+    collect_categorical_ids,
     load_transformer_policy,
+    require_torch,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
@@ -68,6 +71,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     train.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
     train.add_argument("--policy-id", default="entity-transformer", help="Policy id stored in the checkpoint config.")
+    train.add_argument(
+        "--category-oov-buckets",
+        type=int,
+        default=DEFAULT_CATEGORY_OOV_BUCKETS,
+        help="Reserved out-of-vocabulary rows in the compact category embedding.",
+    )
+    train.add_argument(
+        "--category-vocab-from",
+        type=Path,
+        nargs="*",
+        default=None,
+        help="Rollout JSONL files used to derive the compact category vocabulary. Defaults to --data.",
+    )
+    train.add_argument(
+        "--legacy-category-hash",
+        action="store_true",
+        help="Use the full hash-bucket category embedding instead of a compact vocabulary.",
+    )
     train.set_defaults(func=_train)
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
@@ -214,6 +235,8 @@ def _describe(args: argparse.Namespace) -> int:
 
 
 def _train(args: argparse.Namespace) -> int:
+    # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
+    require_torch()
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -227,7 +250,7 @@ def _train(args: argparse.Namespace) -> int:
         max_batches=args.max_batches,
         device=args.device,
     )
-    model_config = TransformerPolicyConfig(
+    model_config_kwargs = dict(
         policy_id=args.policy_id,
         window_size=args.window_size,
         embedding_dim=args.embedding_dim,
@@ -236,6 +259,23 @@ def _train(args: argparse.Namespace) -> int:
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
     )
+    if args.legacy_category_hash:
+        model_config = TransformerPolicyConfig(**model_config_kwargs)
+    else:
+        vocab_paths = args.category_vocab_from or args.data
+        category_vocab = collect_categorical_ids(vocab_paths)
+        if not category_vocab:
+            raise ValueError("No categorical ids found to build a compact vocabulary; pass --legacy-category-hash to opt out.")
+        model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=category_vocab,
+            category_oov_buckets=args.category_oov_buckets,
+            **model_config_kwargs,
+        )
+        print(
+            f"category vocab: {len(category_vocab):,} ids + {args.category_oov_buckets:,} oov "
+            f"-> embedding rows {model_config.categorical_vocab_size:,} "
+            f"(was {1_000_001:,})"
+        )
     model, result = train_transformer_policy(args.data, model_config=model_config, training_config=training_config)
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
