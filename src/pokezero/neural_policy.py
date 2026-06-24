@@ -132,8 +132,10 @@ class TransformerPolicyConfig:
         # Normalize to an immutable tuple of ints so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
         object.__setattr__(self, "category_vocab", tuple(int(value) for value in self.category_vocab))
+        # Sort by alias id: the model's remap uses torch.searchsorted, which requires
+        # sorted alias keys regardless of how the config was constructed.
         object.__setattr__(
-            self, "category_aliases", tuple((int(alias), int(base)) for alias, base in self.category_aliases)
+            self, "category_aliases", tuple(sorted((int(alias), int(base)) for alias, base in self.category_aliases))
         )
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
