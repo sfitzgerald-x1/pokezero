@@ -390,6 +390,8 @@ def _benchmark(args: argparse.Namespace) -> int:
 
 
 def _iterate(args: argparse.Namespace) -> int:
+    # Surface the missing-neural-extra message before any Showdown file I/O (vocab build).
+    require_torch()
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:

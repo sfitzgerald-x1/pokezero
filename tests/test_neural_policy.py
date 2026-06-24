@@ -1,7 +1,9 @@
 import contextlib
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 from typing import Any
 import unittest
@@ -27,7 +29,7 @@ from pokezero.neural_policy import (
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
-from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, CATEGORY_ID_BUCKETS, DEFAULT_REPLAY_OBSERVATION_SPEC
+from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -99,6 +101,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
     def test_transformer_policy_config_requires_category_vocab(self) -> None:
         with self.assertRaisesRegex(ValueError, "category_vocab is required"):
             TransformerPolicyConfig()
+
+    def test_validate_initial_model_config_detects_warm_start_vocab_mismatch(self) -> None:
+        from pokezero.neural_policy import _validate_initial_model_config
+
+        base = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
+        other = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3, 4), category_oov_buckets=4)
+        # Same config except policy_id is allowed (warm-start of the same embedding).
+        _validate_initial_model_config(SimpleNamespace(config=replace(base, policy_id="warm")), base)
+        # A different category vocabulary must be rejected (the retired-format resume guard).
+        with self.assertRaises(ValueError):
+            _validate_initial_model_config(SimpleNamespace(config=other), base)
+        # Models without a config (e.g. a non-neural collector) are skipped, not rejected.
+        _validate_initial_model_config(SimpleNamespace(config=None), base)
+        _validate_initial_model_config(object(), base)
 
     def test_transformer_policy_config_validates_attention_shape(self) -> None:
         with self.assertRaisesRegex(ValueError, "divisible"):
