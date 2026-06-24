@@ -21,7 +21,6 @@ from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
 from .showdown import (
     ACTION_CANDIDATE_TOKEN_OFFSET,
-    CATEGORY_ID_BUCKETS,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
 )
 
@@ -36,7 +35,6 @@ except ModuleNotFoundError:  # pragma: no cover - covered through require_torch.
 NEURAL_POLICY_SCHEMA_VERSION = "pokezero.neural_policy.v0"
 NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
-DEFAULT_CATEGORY_VOCAB_SIZE = CATEGORY_ID_BUCKETS + 1
 DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
 DEFAULT_CATEGORY_OOV_BUCKETS = 4096
 
@@ -85,7 +83,7 @@ class TransformerPolicyConfig:
 
     policy_id: str = "entity-transformer"
     window_size: int = 4
-    categorical_vocab_size: int = DEFAULT_CATEGORY_VOCAB_SIZE
+    categorical_vocab_size: int = 2
     token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
     categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
     numeric_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count
@@ -165,34 +163,33 @@ class TransformerPolicyConfig:
             raise ValueError("feedforward_dim must be positive.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
-        if self.category_vocab:
-            if self.category_oov_buckets < 1:
-                raise ValueError("category_oov_buckets must be >= 1 when category_vocab is set.")
-            ids = self.category_vocab
-            if ids[0] < 1:
-                raise ValueError("category_vocab ids must be >= 1.")
-            if any(earlier >= later for earlier, later in zip(ids, ids[1:])):
-                raise ValueError("category_vocab must be sorted and unique.")
-            expected = 1 + len(ids) + self.category_oov_buckets
-            if self.categorical_vocab_size != expected:
-                raise ValueError(
-                    "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
-                )
-            vocab_set = set(ids)
-            alias_keys = [alias for alias, _ in self.category_aliases]
-            if len(alias_keys) != len(set(alias_keys)):
-                raise ValueError("category_aliases must have unique alias ids.")
-            for alias, base in self.category_aliases:
-                if alias <= 0 or base <= 0:
-                    raise ValueError("category_aliases ids must be >= 1.")
-                if base not in vocab_set:
-                    raise ValueError("category_aliases base id must be in category_vocab.")
-                if alias in vocab_set:
-                    raise ValueError("category_aliases alias id must not be a category_vocab entry.")
-        elif self.category_oov_buckets != 0:
-            raise ValueError("category_oov_buckets must be 0 when category_vocab is empty.")
-        elif self.category_aliases:
-            raise ValueError("category_aliases require a non-empty category_vocab.")
+        # The legacy hash-bucket embedding is retired: a compact category vocabulary is
+        # required. Build configs via TransformerPolicyConfig.compact_category(...).
+        if not self.category_vocab:
+            raise ValueError("category_vocab is required; build configs with compact_category(...).")
+        if self.category_oov_buckets < 1:
+            raise ValueError("category_oov_buckets must be >= 1 when category_vocab is set.")
+        ids = self.category_vocab
+        if ids[0] < 1:
+            raise ValueError("category_vocab ids must be >= 1.")
+        if any(earlier >= later for earlier, later in zip(ids, ids[1:])):
+            raise ValueError("category_vocab must be sorted and unique.")
+        expected = 1 + len(ids) + self.category_oov_buckets
+        if self.categorical_vocab_size != expected:
+            raise ValueError(
+                "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
+            )
+        vocab_set = set(ids)
+        alias_keys = [alias for alias, _ in self.category_aliases]
+        if len(alias_keys) != len(set(alias_keys)):
+            raise ValueError("category_aliases must have unique alias ids.")
+        for alias, base in self.category_aliases:
+            if alias <= 0 or base <= 0:
+                raise ValueError("category_aliases ids must be >= 1.")
+            if base not in vocab_set:
+                raise ValueError("category_aliases base id must be in category_vocab.")
+            if alias in vocab_set:
+                raise ValueError("category_aliases alias id must not be a category_vocab entry.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -202,7 +199,7 @@ class TransformerPolicyConfig:
         return cls(
             policy_id=_str_field(payload, "policy_id", "entity-transformer"),
             window_size=_int_field(payload, "window_size", 4),
-            categorical_vocab_size=_int_field(payload, "categorical_vocab_size", DEFAULT_CATEGORY_VOCAB_SIZE),
+            categorical_vocab_size=_int_field(payload, "categorical_vocab_size", 2),
             token_type_vocab_size=_int_field(payload, "token_type_vocab_size", DEFAULT_TOKEN_TYPE_VOCAB_SIZE),
             categorical_feature_count=_int_field(
                 payload,
@@ -336,30 +333,29 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             self.policy_head = nn.Linear(config.embedding_dim, 1)
             self.value_head = nn.Linear(config.embedding_dim, 1)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
-            self._category_compact = bool(config.category_vocab)
-            if self._category_compact:
-                # Non-persistent: rebuilt from config on load, so the checkpoint only
-                # stores the small vocab list rather than this lookup tensor.
+            # The category embedding is always a compact vocabulary (the legacy hash
+            # embedding is retired). The remap lookup is a non-persistent buffer rebuilt
+            # from config on load, so the checkpoint only stores the small vocab list.
+            self.register_buffer(
+                "category_vocab_sorted",
+                torch.tensor(config.category_vocab, dtype=torch.long),
+                persistent=False,
+            )
+            self._category_oov_buckets = int(config.category_oov_buckets)
+            self._category_vocab_len = len(config.category_vocab)
+            self._category_has_aliases = bool(config.category_aliases)
+            if self._category_has_aliases:
+                # Aliases collapse cosmetic-forme ids onto a base-species vocab id
+                # (sorted by alias id for searchsorted membership).
                 self.register_buffer(
-                    "category_vocab_sorted",
-                    torch.tensor(config.category_vocab, dtype=torch.long),
+                    "category_alias_keys",
+                    torch.tensor([alias for alias, _ in config.category_aliases], dtype=torch.long),
                     persistent=False,
                 )
-                self._category_oov_buckets = int(config.category_oov_buckets)
-                self._category_vocab_len = len(config.category_vocab)
-                self._category_has_aliases = bool(config.category_aliases)
-                if self._category_has_aliases:
-                    # Aliases collapse cosmetic-forme ids onto a base-species vocab id
-                    # (sorted by alias id for searchsorted membership).
-                    self.register_buffer(
-                        "category_alias_keys",
-                        torch.tensor([alias for alias, _ in config.category_aliases], dtype=torch.long),
-                        persistent=False,
-                    )
-                    self.register_buffer(
-                        "category_alias_values",
-                        torch.tensor([base for _, base in config.category_aliases], dtype=torch.long),
-                        persistent=False,
+                self.register_buffer(
+                    "category_alias_values",
+                    torch.tensor([base for _, base in config.category_aliases], dtype=torch.long),
+                    persistent=False,
                     )
 
         def _remap_category_ids(self, ids: Any) -> Any:
@@ -391,9 +387,7 @@ if nn is not None:  # pragma: no cover - optional dependency path.
         ) -> TransformerPolicyOutput:
             _validate_tensor_shapes(categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask, self.config)
             batch_size, window_size, token_count, _ = categorical_ids.shape
-            category_ids = categorical_ids.long()
-            if self._category_compact:
-                category_ids = self._remap_category_ids(category_ids)
+            category_ids = self._remap_category_ids(categorical_ids.long())
             clipped_categories = category_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1)
             category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
             token_embeddings = self.token_type_embedding(
@@ -590,7 +584,9 @@ def train_transformer_policy(
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
-    resolved_model_config = model_config or TransformerPolicyConfig(window_size=resolved_training_config.window_size)
+    if model_config is None:
+        raise ValueError("model_config is required (build it with TransformerPolicyConfig.compact_category).")
+    resolved_model_config = model_config
     device = resolved_training_config.device or ("cuda" if torch_module.cuda.is_available() else "cpu")
     if initial_model is None:
         model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
