@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .dex import load_showdown_dex_cached
 from .showdown import _normalize_identifier, stable_category_id

@@ -29,6 +29,7 @@ from .neural_policy import (
     load_transformer_policy,
     require_torch,
     save_transformer_checkpoint,
+    _validate_initial_model_config,
     train_transformer_policy,
 )
 from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
@@ -295,6 +296,10 @@ def run_neural_selfplay_iterations(
         training_rollout_history = []
         first_iteration = 1
         next_seed_start = seed_start
+    if current_model is not None:
+        # Fail fast on a warm-start/resume embedding mismatch (e.g. resuming a compact
+        # randbat-dex run without re-passing the flag) before collecting any rollouts.
+        _validate_initial_model_config(current_model, model_config)
     _require_promoted_opponent_pool(
         promoted_checkpoint_specs,
         promotion_pool_registry_path=promotion_pool_registry_path,

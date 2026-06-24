@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from typing import Any
 import unittest
 from unittest.mock import patch
 
@@ -365,6 +366,79 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark_opponent_coverage)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
+
+    @staticmethod
+    def _fake_iterate_result():
+        fake_epoch = type("FakeEpoch", (), {"loss": 0.25, "policy_accuracy": 0.75})()
+        fake_iteration = type(
+            "FakeIteration",
+            (),
+            {
+                "iteration": 1,
+                "metrics": type("FakeMetrics", (), {"games": 2})(),
+                "checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "training": type("FakeTraining", (), {"final_metrics": fake_epoch})(),
+                "benchmark": None,
+            },
+        )()
+        return type(
+            "FakeResult",
+            (),
+            {
+                "run_dir": Path("run"),
+                "iterations": (fake_iteration,),
+                "latest_checkpoint_path": Path("run/iteration-0001/transformer-policy.pt"),
+                "to_dict": lambda self: {"ok": True},
+            },
+        )()
+
+    def _run_iterate_capturing_model_config(self, extra_args: list[str]) -> Any:
+        captured: dict[str, Any] = {}
+
+        def _capture(**kwargs):
+            captured["model_config"] = kwargs["model_config"]
+            return self._fake_iterate_result()
+
+        with (
+            patch("pokezero.neural_cli.run_neural_selfplay_iterations", side_effect=_capture),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                ["iterate", "--run-dir", "run", "--iterations", "1", "--games-per-iteration", "2",
+                 "--initial-policy", "simple-legal"] + extra_args
+            )
+        self.assertEqual(exit_code, 0)
+        return captured["model_config"]
+
+    def test_neural_cli_iterate_defaults_to_legacy_hash_category_vocab(self) -> None:
+        model_config = self._run_iterate_capturing_model_config(["--showdown-root", "/tmp/showdown"])
+        self.assertEqual(model_config.category_vocab, ())
+        self.assertEqual(model_config.category_aliases, ())
+
+    def test_neural_cli_iterate_randbat_dex_requires_showdown_root(self) -> None:
+        with (
+            patch("pokezero.neural_cli.run_neural_selfplay_iterations") as run,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                ["iterate", "--run-dir", "run", "--iterations", "1", "--games-per-iteration", "2",
+                 "--initial-policy", "simple-legal", "--category-vocab-source", "randbat-dex"]
+            )
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+
+    def test_neural_cli_iterate_randbat_dex_builds_compact_config(self) -> None:
+        with (
+            patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30)),
+            patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),)),
+        ):
+            model_config = self._run_iterate_capturing_model_config(
+                ["--showdown-root", "/tmp/showdown", "--category-vocab-source", "randbat-dex", "--category-oov-buckets", "4"]
+            )
+        self.assertEqual(model_config.category_vocab, (10, 20, 30))
+        self.assertEqual(model_config.category_aliases, ((999, 10),))
+        self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 4)
 
     def test_neural_cli_iterate_uses_named_post_iteration_audit_profile(self) -> None:
         fake_epoch = type(
