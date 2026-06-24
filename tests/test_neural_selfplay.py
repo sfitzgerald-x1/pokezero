@@ -359,6 +359,43 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertAlmostEqual(scalars["winrate/max-damage"], 0.25)
         self.assertEqual(scalars["train/advanced"], 1.0)
 
+    def test_tensorboard_logger_closed_when_iteration_raises(self) -> None:
+        closed: list[bool] = []
+
+        class FakeLogger:
+            def __init__(self, log_dir):
+                self.open = True
+                self._instance = self
+
+            def log(self, scalars, *, step):
+                pass
+
+            def close(self):
+                self.open = False
+                closed.append(True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies():
+                with patch("pokezero.neural_selfplay._TensorBoardLogger", FakeLogger), patch(
+                    "pokezero.neural_selfplay.collect_selfplay_rollouts",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        run_neural_selfplay_iterations(
+                            run_dir=run_dir,
+                            iterations=1,
+                            games_per_iteration=1,
+                            env_factory=lambda: None,  # type: ignore[return-value]
+                            rollout_config=RolloutConfig(max_decision_rounds=5),
+                            model_config=_entity_test_model_config(),
+                            training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                            tensorboard_log_dir=run_dir / "tb",
+                        )
+
+        # The SummaryWriter must be closed even though the iteration raised.
+        self.assertEqual(closed, [True])
+
     def test_run_neural_selfplay_iterations_does_not_advance_failed_candidate(self) -> None:
         collected = []
 

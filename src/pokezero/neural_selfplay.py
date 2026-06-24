@@ -351,196 +351,198 @@ def run_neural_selfplay_iterations(
         _TensorBoardLogger(tensorboard_log_dir) if tensorboard_log_dir is not None else None
     )
 
-    for offset in range(iterations):
-        iteration = first_iteration + offset
-        iteration_dir = run_dir / f"iteration-{iteration:04d}"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        rollout_path = iteration_dir / "rollouts.jsonl"
-        training_rollout_path = iteration_dir / "training-rollouts.jsonl"
-        checkpoint_path = iteration_dir / "transformer-policy.pt"
-        iteration_manifest_path = iteration_dir / "manifest.json"
-        iteration_seed_start = next_seed_start + (offset * games_per_iteration)
-        opponent_policy_specs = _opponent_pool(
-            fixed_policy_specs=fixed_opponents,
-            checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
-            current_policy_spec=current_policy_spec,
-            max_historical_opponents=max_historical_opponents,
-        )
-
-        metrics = collect_selfplay_rollouts(
-            output_path=rollout_path,
-            training_output_path=training_rollout_path,
-            games=games_per_iteration,
-            env_factory=env_factory,
-            rollout_config=rollout_config,
-            seed_start=iteration_seed_start,
-            current_policy_spec=current_policy_spec,
-            opponent_policy_specs=opponent_policy_specs,
-            worker_count=worker_count,
-        )
-        training_rollout_history.append(training_rollout_path)
-        iteration_model_config = replace(
-            model_config,
-            policy_id=f"{model_config.policy_id}-iter-{iteration:04d}",
-        )
-        model, training = train_transformer_policy(
-            tuple(training_rollout_history),
-            model_config=iteration_model_config,
-            training_config=training_config,
-            initial_model=current_model,
-        )
-        save_transformer_checkpoint(checkpoint_path, model, result=training)
-        benchmark = None
-        if evaluation_games:
-            benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
-                fallback_policy_spec=current_policy_spec,
-                promotion_config=auto_promotion_config,
+    try:
+        for offset in range(iterations):
+            iteration = first_iteration + offset
+            iteration_dir = run_dir / f"iteration-{iteration:04d}"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            rollout_path = iteration_dir / "rollouts.jsonl"
+            training_rollout_path = iteration_dir / "training-rollouts.jsonl"
+            checkpoint_path = iteration_dir / "transformer-policy.pt"
+            iteration_manifest_path = iteration_dir / "manifest.json"
+            iteration_seed_start = next_seed_start + (offset * games_per_iteration)
+            opponent_policy_specs = _opponent_pool(
+                fixed_policy_specs=fixed_opponents,
+                checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
+                current_policy_spec=current_policy_spec,
+                max_historical_opponents=max_historical_opponents,
             )
-            benchmark = _benchmark_checkpoint(
-                checkpoint_path=checkpoint_path,
-                incumbent_policy_spec=benchmark_incumbent_policy_spec,
+
+            metrics = collect_selfplay_rollouts(
+                output_path=rollout_path,
+                training_output_path=training_rollout_path,
+                games=games_per_iteration,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
-                games=evaluation_games,
-                seed_start=evaluation_seed_start + (offset * evaluation_games),
-                device=training_config.device,
-                benchmark_reference_policy_specs=benchmark_references,
+                seed_start=iteration_seed_start,
+                current_policy_spec=current_policy_spec,
+                opponent_policy_specs=opponent_policy_specs,
+                worker_count=worker_count,
             )
-        if auto_promotion_config is None:
-            advancement = _advancement_decision(
-                benchmark=benchmark,
-                candidate_policy_id=training.model_config.policy_id,
-                incumbent_policy_spec=current_policy_spec,
+            training_rollout_history.append(training_rollout_path)
+            iteration_model_config = replace(
+                model_config,
+                policy_id=f"{model_config.policy_id}-iter-{iteration:04d}",
             )
-        else:
-            advancement = NeuralAdvancementDecision(
-                advance_collector=False,
-                reason="pending_promotion_gate",
-                candidate_policy_id=training.model_config.policy_id,
-                incumbent_policy_spec=_benchmark_incumbent_policy_spec(
+            model, training = train_transformer_policy(
+                tuple(training_rollout_history),
+                model_config=iteration_model_config,
+                training_config=training_config,
+                initial_model=current_model,
+            )
+            save_transformer_checkpoint(checkpoint_path, model, result=training)
+            benchmark = None
+            if evaluation_games:
+                benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
                     fallback_policy_spec=current_policy_spec,
                     promotion_config=auto_promotion_config,
-                ),
-            )
-
-        result = NeuralSelfPlayIterationResult(
-            iteration=iteration,
-            rollout_path=rollout_path,
-            training_rollout_path=training_rollout_path,
-            checkpoint_path=checkpoint_path,
-            manifest_path=iteration_manifest_path,
-            current_policy_spec=current_policy_spec,
-            opponent_policy_specs=opponent_policy_specs,
-            training_rollout_paths=tuple(training_rollout_history),
-            seed_start=iteration_seed_start,
-            worker_count=worker_count,
-            metrics=metrics,
-            training=training,
-            benchmark=benchmark,
-            advancement=advancement,
-            opponent_pool_config=opponent_pool_manifest_config,
-            invocation_config=invocation_config,
-            benchmark_reference_policy_specs=benchmark_references,
-            source=source_metadata,
-        )
-        _write_json(iteration_manifest_path, result.to_manifest_dict())
-        results.append(result)
-        run_manifest_path = run_dir / "manifest.json"
-        _write_json(
-            run_manifest_path,
-            NeuralSelfPlayRunResult(
-                run_dir=run_dir,
-                iterations=tuple(results),
-                prior_iteration_manifests=tuple(prior_iteration_manifests),
-                invocation_config=invocation_config,
-                prior_invocation_configs=prior_invocation_configs,
-                source=source_metadata,
-            ).to_dict(),
-        )
-        post_iteration_audit_result = None
-        if (
-            post_iteration_audit_config is not None
-            and not post_iteration_audit_config.require_latest_promotion
-        ):
-            post_iteration_audit_result = _enforce_post_iteration_audit(
-                run_manifest_path,
-                post_iteration_audit_config,
-                failure_mode=post_iteration_audit_failure_mode,
-            )
-        if auto_promotion_config is not None:
-            promotion = _record_auto_promotion(
-                manifest_path=run_manifest_path,
-                promotion_config=auto_promotion_config,
-                iteration=iteration,
-            )
-            accepted_policy_spec = (
-                promotion.registry.selection_checkpoint_policy_spec_for_entry(promotion.entry)
-                if promotion.recorded and promotion.entry is not None
-                else None
-            )
-            advancement = _promotion_advancement_decision(
-                promotion=promotion,
-                candidate_policy_id=training.model_config.policy_id,
-                incumbent_policy_spec=_benchmark_incumbent_policy_spec(
-                    fallback_policy_spec=current_policy_spec,
-                    promotion_config=auto_promotion_config,
-                ),
-            )
-            result = replace(
-                result,
-                promotion=promotion,
-                advancement=advancement,
-                accepted_policy_spec=accepted_policy_spec,
-            )
-            results[-1] = result
-            _write_json(iteration_manifest_path, result.to_manifest_dict())
-            if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                promoted_checkpoint_specs = list(promotion.registry.selection_checkpoint_policy_specs())
-        if advancement.advance_collector:
-            next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
-            checkpoint_history.append(str(next_policy_spec))
-            current_policy_spec = str(next_policy_spec)
-            current_model = model
-        if tensorboard_logger is not None:
-            tensorboard_logger.log(
-                _tensorboard_scalars(
-                    candidate_policy_id=training.model_config.policy_id,
-                    training=training,
+                )
+                benchmark = _benchmark_checkpoint(
+                    checkpoint_path=checkpoint_path,
+                    incumbent_policy_spec=benchmark_incumbent_policy_spec,
+                    env_factory=env_factory,
+                    rollout_config=rollout_config,
+                    games=evaluation_games,
+                    seed_start=evaluation_seed_start + (offset * evaluation_games),
+                    device=training_config.device,
+                    benchmark_reference_policy_specs=benchmark_references,
+                )
+            if auto_promotion_config is None:
+                advancement = _advancement_decision(
                     benchmark=benchmark,
-                    advancement=advancement,
-                ),
-                step=iteration,
-            )
-        _write_json(
-            run_dir / "manifest.json",
-            NeuralSelfPlayRunResult(
-                run_dir=run_dir,
-                iterations=tuple(results),
-                prior_iteration_manifests=tuple(prior_iteration_manifests),
+                    candidate_policy_id=training.model_config.policy_id,
+                    incumbent_policy_spec=current_policy_spec,
+                )
+            else:
+                advancement = NeuralAdvancementDecision(
+                    advance_collector=False,
+                    reason="pending_promotion_gate",
+                    candidate_policy_id=training.model_config.policy_id,
+                    incumbent_policy_spec=_benchmark_incumbent_policy_spec(
+                        fallback_policy_spec=current_policy_spec,
+                        promotion_config=auto_promotion_config,
+                    ),
+                )
+
+            result = NeuralSelfPlayIterationResult(
+                iteration=iteration,
+                rollout_path=rollout_path,
+                training_rollout_path=training_rollout_path,
+                checkpoint_path=checkpoint_path,
+                manifest_path=iteration_manifest_path,
+                current_policy_spec=current_policy_spec,
+                opponent_policy_specs=opponent_policy_specs,
+                training_rollout_paths=tuple(training_rollout_history),
+                seed_start=iteration_seed_start,
+                worker_count=worker_count,
+                metrics=metrics,
+                training=training,
+                benchmark=benchmark,
+                advancement=advancement,
+                opponent_pool_config=opponent_pool_manifest_config,
                 invocation_config=invocation_config,
-                prior_invocation_configs=prior_invocation_configs,
+                benchmark_reference_policy_specs=benchmark_references,
                 source=source_metadata,
-            ).to_dict(),
-        )
-        if (
-            post_iteration_audit_config is not None
-            and (
-                post_iteration_audit_config.require_latest_promotion
-                or auto_promotion_config is not None
             )
-        ):
-            post_iteration_audit_result = _enforce_post_iteration_audit(
+            _write_json(iteration_manifest_path, result.to_manifest_dict())
+            results.append(result)
+            run_manifest_path = run_dir / "manifest.json"
+            _write_json(
                 run_manifest_path,
-                post_iteration_audit_config,
+                NeuralSelfPlayRunResult(
+                    run_dir=run_dir,
+                    iterations=tuple(results),
+                    prior_iteration_manifests=tuple(prior_iteration_manifests),
+                    invocation_config=invocation_config,
+                    prior_invocation_configs=prior_invocation_configs,
+                    source=source_metadata,
+                ).to_dict(),
+            )
+            post_iteration_audit_result = None
+            if (
+                post_iteration_audit_config is not None
+                and not post_iteration_audit_config.require_latest_promotion
+            ):
+                post_iteration_audit_result = _enforce_post_iteration_audit(
+                    run_manifest_path,
+                    post_iteration_audit_config,
+                    failure_mode=post_iteration_audit_failure_mode,
+                )
+            if auto_promotion_config is not None:
+                promotion = _record_auto_promotion(
+                    manifest_path=run_manifest_path,
+                    promotion_config=auto_promotion_config,
+                    iteration=iteration,
+                )
+                accepted_policy_spec = (
+                    promotion.registry.selection_checkpoint_policy_spec_for_entry(promotion.entry)
+                    if promotion.recorded and promotion.entry is not None
+                    else None
+                )
+                advancement = _promotion_advancement_decision(
+                    promotion=promotion,
+                    candidate_policy_id=training.model_config.policy_id,
+                    incumbent_policy_spec=_benchmark_incumbent_policy_spec(
+                        fallback_policy_spec=current_policy_spec,
+                        promotion_config=auto_promotion_config,
+                    ),
+                )
+                result = replace(
+                    result,
+                    promotion=promotion,
+                    advancement=advancement,
+                    accepted_policy_spec=accepted_policy_spec,
+                )
+                results[-1] = result
+                _write_json(iteration_manifest_path, result.to_manifest_dict())
+                if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
+                    promoted_checkpoint_specs = list(promotion.registry.selection_checkpoint_policy_specs())
+            if advancement.advance_collector:
+                next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
+                checkpoint_history.append(str(next_policy_spec))
+                current_policy_spec = str(next_policy_spec)
+                current_model = model
+            if tensorboard_logger is not None:
+                tensorboard_logger.log(
+                    _tensorboard_scalars(
+                        candidate_policy_id=training.model_config.policy_id,
+                        training=training,
+                        benchmark=benchmark,
+                        advancement=advancement,
+                    ),
+                    step=iteration,
+                )
+            _write_json(
+                run_dir / "manifest.json",
+                NeuralSelfPlayRunResult(
+                    run_dir=run_dir,
+                    iterations=tuple(results),
+                    prior_iteration_manifests=tuple(prior_iteration_manifests),
+                    invocation_config=invocation_config,
+                    prior_invocation_configs=prior_invocation_configs,
+                    source=source_metadata,
+                ).to_dict(),
+            )
+            if (
+                post_iteration_audit_config is not None
+                and (
+                    post_iteration_audit_config.require_latest_promotion
+                    or auto_promotion_config is not None
+                )
+            ):
+                post_iteration_audit_result = _enforce_post_iteration_audit(
+                    run_manifest_path,
+                    post_iteration_audit_config,
+                    failure_mode=post_iteration_audit_failure_mode,
+                )
+            _report_post_iteration_audit_warnings(
+                post_iteration_audit_result,
                 failure_mode=post_iteration_audit_failure_mode,
             )
-        _report_post_iteration_audit_warnings(
-            post_iteration_audit_result,
-            failure_mode=post_iteration_audit_failure_mode,
-        )
 
-    if tensorboard_logger is not None:
-        tensorboard_logger.close()
+    finally:
+        if tensorboard_logger is not None:
+            tensorboard_logger.close()
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,
