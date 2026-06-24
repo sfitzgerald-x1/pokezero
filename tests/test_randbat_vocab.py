@@ -75,6 +75,23 @@ class Gen3RandbatVocabTests(unittest.TestCase):
         for value in ("species:Mr. Mime", "move:Aerial Ace", "species:Ho-Oh", "move:Struggle"):
             self.assertIn(stable_category_id(value), vocab)
 
+    def test_canonicalize_collapses_unown_keeps_normal_and_deoxys(self) -> None:
+        from pokezero.randbat_vocab import canonicalize_with_cosmetic_aliases
+
+        unown_l = stable_category_id("species:Unown-L")
+        base = stable_category_id("species:Unown")
+        venusaur = stable_category_id("species:Venusaur")
+        deoxys_attack = stable_category_id("species:Deoxys-Attack")
+        vocab, aliases = canonicalize_with_cosmetic_aliases(
+            [unown_l, venusaur, deoxys_attack], SHOWDOWN_ROOT
+        )
+        self.assertNotIn(unown_l, vocab)  # cosmetic forme dropped from vocab
+        self.assertIn(base, vocab)  # base species ensured present
+        self.assertIn(venusaur, vocab)  # ordinary species preserved
+        self.assertIn(deoxys_attack, vocab)  # functional forme preserved (not aliased)
+        self.assertIn((unown_l, base), set(aliases))
+        self.assertNotIn(deoxys_attack, {alias for alias, _ in aliases})
+
     def test_no_intra_group_hash_collisions(self) -> None:
         # stable_category_id lowercases+strips, so id/display forms of the same entity share
         # a key (intentional). A true collision is two DISTINCT keys mapping to the same id.
