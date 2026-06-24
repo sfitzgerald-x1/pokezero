@@ -1,9 +1,9 @@
 """Neural self-play iteration harness.
 
 This module is the neural counterpart to the dependency-free linear self-play
-loop. It still trains from collected rollout records rather than PPO updates,
-but it closes the first transformer iteration loop: collect with the current
-policy, train a neural checkpoint, benchmark it, and write auditable manifests.
+loop: collect with the current policy, train a neural checkpoint (behavior
+cloning or PPO, per the training config objective), benchmark it (including
+eval-only references such as max-damage), and write auditable manifests.
 """
 
 from __future__ import annotations
