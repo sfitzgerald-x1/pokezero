@@ -281,18 +281,22 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     rollout_config=RolloutConfig(max_decision_rounds=5),
                     model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
-                    benchmark_reference_policy_specs=(reference_spec,),
+                    # Duplicate reference must collapse to a single spec.
+                    benchmark_reference_policy_specs=(reference_spec, reference_spec),
                     evaluation_games=2,
                     evaluation_seed_start=100,
                 )
 
         labels = [matchup.label for matchup in captured_benchmarks[0]["matchups"]]
-        # The eval-only reference is benchmarked in both orientations.
-        self.assertIn("entity-test-iter-0001 vs entity-test", labels)
-        self.assertIn("entity-test vs entity-test-iter-0001", labels)
+        # The eval-only reference is benchmarked in both orientations (and only once).
+        self.assertEqual(labels.count("entity-test-iter-0001 vs entity-test"), 1)
+        self.assertEqual(labels.count("entity-test vs entity-test-iter-0001"), 1)
         # ...but it never enters rollout collection as a training opponent.
         self.assertNotIn(reference_spec, collected[0]["opponent_policy_specs"])
-        # ...and is recorded in the invocation config for auditability.
+        # ...and is recorded TOP-LEVEL in the iteration manifest (deduped) so the promotion
+        # gate can identify and exclude it; invocation_config carries it too.
+        iteration_manifest = result.iterations[0].to_manifest_dict()
+        self.assertEqual(iteration_manifest["benchmark_reference_policy_specs"], [reference_spec])
         self.assertEqual(
             result.invocation_config["benchmark_reference_policy_specs"], [reference_spec]
         )

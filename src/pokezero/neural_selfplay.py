@@ -102,6 +102,7 @@ class NeuralSelfPlayIterationResult:
     accepted_policy_spec: str | None = None
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
+    benchmark_reference_policy_specs: tuple[str, ...] = ()
     source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -121,6 +122,7 @@ class NeuralSelfPlayIterationResult:
             "opponent_policy_specs": list(self.opponent_policy_specs),
             "opponent_pool_config": dict(self.opponent_pool_config),
             "invocation_config": dict(self.invocation_config),
+            "benchmark_reference_policy_specs": list(self.benchmark_reference_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
             "seed_start": self.seed_start,
             "worker_count": self.worker_count,
@@ -434,6 +436,7 @@ def run_neural_selfplay_iterations(
             advancement=advancement,
             opponent_pool_config=opponent_pool_manifest_config,
             invocation_config=invocation_config,
+            benchmark_reference_policy_specs=benchmark_references,
             source=source_metadata,
         )
         _write_json(iteration_manifest_path, result.to_manifest_dict())
