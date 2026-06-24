@@ -40,7 +40,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--iterations", type=int, required=True, help="Number of collect/train/evaluate iterations.")
     iterate.add_argument("--resume", action="store_true", help="Continue an existing run directory from its latest manifest.")
     iterate.add_argument("--games-per-iteration", type=int, required=True, help="Rollout games collected before each train step.")
-    iterate.add_argument("--workers", type=int, default=1, help="Parallel rollout collection workers per iteration.")
+    iterate.add_argument("--workers", type=int, default=16, help="Parallel rollout collection workers per iteration (capped at the game count).")
     iterate.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     iterate.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     iterate.add_argument("--seed-start", type=int, default=1, help="First deterministic self-play seed.")
