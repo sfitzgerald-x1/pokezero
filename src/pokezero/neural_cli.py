@@ -89,6 +89,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the full hash-bucket category embedding instead of a compact vocabulary.",
     )
+    train.add_argument(
+        "--category-vocab-source",
+        choices=("training-data", "randbat-dex"),
+        default="training-data",
+        help="Build the compact category vocab from the training rollouts (default) or the full Gen 3 randbat dex universe.",
+    )
+    train.add_argument(
+        "--showdown-root",
+        type=Path,
+        default=None,
+        help="Built Pokemon Showdown checkout root (required for --category-vocab-source randbat-dex).",
+    )
     train.set_defaults(func=_train)
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
@@ -262,8 +274,17 @@ def _train(args: argparse.Namespace) -> int:
     if args.legacy_category_hash:
         model_config = TransformerPolicyConfig(**model_config_kwargs)
     else:
-        vocab_paths = args.category_vocab_from or args.data
-        category_vocab = collect_categorical_ids(vocab_paths)
+        if args.category_vocab_source == "randbat-dex":
+            if args.showdown_root is None:
+                raise ValueError("--category-vocab-source randbat-dex requires --showdown-root.")
+            from .randbat_vocab import build_gen3_randbat_category_vocabulary
+
+            category_vocab = build_gen3_randbat_category_vocabulary(args.showdown_root)
+            vocab_label = "randbat-dex universe"
+        else:
+            vocab_paths = args.category_vocab_from or args.data
+            category_vocab = collect_categorical_ids(vocab_paths)
+            vocab_label = "training data"
         if not category_vocab:
             raise ValueError("No categorical ids found to build a compact vocabulary; pass --legacy-category-hash to opt out.")
         model_config = TransformerPolicyConfig.compact_category(
@@ -272,7 +293,7 @@ def _train(args: argparse.Namespace) -> int:
             **model_config_kwargs,
         )
         print(
-            f"category vocab: {len(category_vocab):,} ids + {args.category_oov_buckets:,} oov "
+            f"category vocab ({vocab_label}): {len(category_vocab):,} ids + {args.category_oov_buckets:,} oov "
             f"-> embedding rows {model_config.categorical_vocab_size:,} "
             f"(was {1_000_001:,})"
         )
