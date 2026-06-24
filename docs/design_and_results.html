@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PokeZero — Design &amp; Results</title>
+<style>
+  :root {
+    --fg: #1b1f23; --muted: #5b6670; --bg: #ffffff; --soft: #f5f7fa;
+    --line: #e1e6eb; --accent: #2f6feb; --good: #197a3d; --bad: #b42318; --warn: #9a6700;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: #1b1f23; background: #f0f2f5;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #1f2a44 0%, #2f6feb 100%); color: #fff;
+    padding: 48px 0 40px; margin-bottom: 36px;
+  }
+  header.hero .wrap { padding-bottom: 0; }
+  header.hero h1 { margin: 0 0 6px; font-size: 34px; letter-spacing: -0.5px; }
+  header.hero p { margin: 0; opacity: .9; font-size: 17px; }
+  header.hero .meta { margin-top: 16px; font-size: 13px; opacity: .8; }
+  h2 { margin: 40px 0 12px; font-size: 23px; letter-spacing: -0.3px; border-bottom: 2px solid #e1e6eb; padding-bottom: 6px; }
+  h3 { margin: 26px 0 8px; font-size: 18px; }
+  p, li { color: #25292e; }
+  code { background: #eef1f5; padding: 1px 6px; border-radius: 4px; font-size: 13.5px;
+         font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #1b1f23; color: #e6edf3; padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+        font-size: 13px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .card { background: #fff; border: 1px solid #e1e6eb; border-radius: 12px; padding: 22px 26px; margin: 18px 0;
+          box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .toc { font-size: 14.5px; }
+  .toc a { color: #2f6feb; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #e8ebf0; }
+  th { background: #f5f7fa; font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .good { color: #197a3d; font-weight: 600; }
+  .bad  { color: #b42318; font-weight: 600; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+  .pill.done { background: #e3f6e9; color: #197a3d; }
+  .pill.open { background: #fff3d6; color: #9a6700; }
+  .callout { border-left: 4px solid #2f6feb; background: #f3f7ff; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .callout.win { border-color: #197a3d; background: #f0f9f3; }
+  .callout.warn { border-color: #9a6700; background: #fff8e8; }
+  .muted { color: #5b6670; }
+  .small { font-size: 13px; }
+  ul.tight li { margin: 3px 0; }
+  footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #e1e6eb; color: #5b6670; font-size: 13px; }
+  .kpi-row { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 4px; }
+  .kpi { flex: 1 1 180px; background: #fff; border: 1px solid #e1e6eb; border-radius: 10px; padding: 14px 16px; }
+  .kpi .big { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+  .kpi .lbl { font-size: 12.5px; color: #5b6670; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>PokeZero — Design &amp; Results</h1>
+    <p>A CPU-first self-play stack for Gen&nbsp;3 random battles, inspired by AlphaGo&nbsp;Zero.</p>
+    <div class="meta">Status report · 2026-06-23 · prepared from the repository's design docs and benchmark artifacts</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="card toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#overview">Overview &amp; goal</a></li>
+      <li><a href="#headline">Headline result</a></li>
+      <li><a href="#env">System design: environment &amp; observations</a></li>
+      <li><a href="#models">Policy classes: linear vs. transformer</a></li>
+      <li><a href="#arch">Learning architecture direction</a></li>
+      <li><a href="#loop">Autonomous development loop</a></li>
+      <li><a href="#results">Results in detail</a></li>
+      <li><a href="#caveats">Caveats &amp; next steps</a></li>
+      <li><a href="#refs">References</a></li>
+    </ol>
+  </div>
+
+  <h2 id="overview">1. Overview &amp; goal</h2>
+  <p>PokeZero trains a model to play Pokémon Showdown <strong>Gen&nbsp;3 random battles</strong> through
+  repeated self-play, using AlphaGo&nbsp;Zero as <em>conceptual</em> inspiration — the self-play learning
+  loop, a shared policy/value network, and learning from game outcomes with no hand-coded strategy.</p>
+  <p>The current milestone is deliberately CPU-only. The active goal for this report was concrete and
+  measurable:</p>
+  <div class="callout">
+    <strong>Goal.</strong> Produce a <strong>CPU-trained policy that meaningfully beats the
+    <code>simple-legal</code> strategy</strong>, demonstrated with reproducible shared-opponent benchmark
+    evidence — Wilson&nbsp;95% lower bound&nbsp;≥&nbsp;0.55 over ≥&nbsp;240 mirrored games, reproduced across
+    two independent seed bands, with clean capped-game health.
+  </div>
+
+  <h2 id="headline">2. Headline result <span class="pill done">GOAL MET</span></h2>
+  <div class="kpi-row">
+    <div class="kpi"><div class="big good">0.77</div><div class="lbl">Transformer vs <code>simple-legal</code><br/>(pooled, 369/480; Wilson LB ≈ 0.73)</div></div>
+    <div class="kpi"><div class="big">0.50</div><div class="lbl">Linear baseline vs <code>simple-legal</code><br/>(240/480 — statistically tied)</div></div>
+    <div class="kpi"><div class="big good">0.93–0.94</div><div class="lbl">Transformer vs <code>random-legal</code></div></div>
+  </div>
+  <div class="callout win">
+    <strong>The key finding.</strong> Trained on the <em>identical</em> 64-game scripted-teacher dataset, a
+    small entity-token <strong>transformer beats <code>simple-legal</code> decisively</strong> where the
+    <strong>linear policy only ties</strong> it. Same data, different model — direct empirical support for
+    the thesis that the gain comes from <em>representation</em>, not more data or tuning.
+  </div>
+
+  <h2 id="env">3. System design: environment &amp; observations</h2>
+  <p>The simulator owns full battle state (including hidden teams, moves, items, abilities). The policy only
+  ever sees an information state a real player could know.</p>
+  <ul class="tight">
+    <li><strong>Player-relative normalization.</strong> Every observation is framed as <code>self_*</code> vs
+      <code>opponent_*</code> regardless of the raw Showdown <code>p1</code>/<code>p2</code> seat, so the same
+      position observed by either side yields mirrored inputs. This is mandatory for self-play and two-bot
+      evaluation.</li>
+    <li><strong>Fixed 9-action space.</strong> Slots <code>0–3</code> are active moves, <code>4–8</code> are
+      switches in canonical team order; an explicit legal-action mask gates illegal/disabled/trapped choices.</li>
+    <li><strong>Belief tracking.</strong> A deterministic, source-backed Gen&nbsp;3 randbat belief engine
+      narrows the candidate sets for each revealed opponent slot from public events. Compact belief features
+      (possible abilities/items/moves, counts, uncertainty) are exposed in the observation.</li>
+    <li><strong>Rollout format.</strong> Trajectories are recorded as JSONL with observations, legal masks,
+      chosen actions, opponent-action labels, terminal outcomes, capped-game markers, and policy identifiers.
+      Games end normally or at a provisional 250-turn cap.</li>
+  </ul>
+  <div class="callout">
+    <strong>Why random battles are a tractable target.</strong> Unlike human team-built formats, every
+    Pokémon is drawn from a <em>known generator with a small, enumerable set</em> of possible
+    moves/items/abilities. Opponent uncertainty is therefore a posterior over a finite, listable space — which
+    makes belief modeling, opponent prediction, and any future search far cheaper.
+  </div>
+
+  <h2 id="models">4. Policy classes: linear vs. transformer</h2>
+  <h3>Linear baseline (scaffolding)</h3>
+  <p>A dependency-free, CPU-only masked linear softmax policy over hashed features, trainable by behavior
+  cloning or reward-weighting. It validated the full harness — environment boundary, trajectory format,
+  checkpoints, self-play loop, promotion gates, benchmarking — but cannot model interactions between board
+  state, the active matchup, and a candidate move. As shown below, it plateaus at parity with
+  <code>simple-legal</code>.</p>
+
+  <h3>Entity-token transformer (the model that cleared the goal)</h3>
+  <p>A small PyTorch transformer over entity / action / history tokens, behind the optional <code>[neural]</code>
+  extra. It embeds categorical ids (species, moves, items, abilities, statuses, weather), numeric features
+  (HP, boosts, turn progress, set counts, uncertainty), token types, and history position; a transformer
+  encoder feeds three heads: <strong>policy</strong> (9 action logits), <strong>value</strong> (scalar), and an
+  auxiliary <strong>opponent-action</strong> prediction head over a shared trunk.</p>
+  <table>
+    <tr><th>Configuration used for the goal run</th><th>Value</th></tr>
+    <tr><td>Training data</td><td>Same 64-game scripted-teacher bootstrap set (1,922 decision examples)</td></tr>
+    <tr><td>Objective</td><td>Behavior cloning + value head (<code>value-loss-weight 0.25</code>)</td></tr>
+    <tr><td>Embedding dim / heads / history window</td><td>128 / 4 / 4</td></tr>
+    <tr><td>Epochs</td><td>3 (train policy accuracy 0.34 → 0.58)</td></tr>
+    <tr><td>Hardware</td><td>CPU only</td></tr>
+  </table>
+
+  <h2 id="arch">5. Learning architecture direction</h2>
+  <p>AlphaGo&nbsp;Zero does not transfer literally: Pokémon is <strong>imperfect-information</strong> (hidden
+  teams), <strong>stochastic</strong> (damage rolls, accuracy, crits, secondaries), uses
+  <strong>simultaneous moves</strong>, and has no cheap perfect forward model (the simulator is a subprocess).
+  So we keep the self-play loop and value head, and treat search as an optional later accelerator. The chosen
+  direction:</p>
+  <ul class="tight">
+    <li><strong>Operator:</strong> model-free self-play RL (PPO / V-trace) first; AlphaZero-style search
+      (determinized / information-set MCTS) only later, and only if a fast forward model exists and search is
+      shown to help.</li>
+    <li><strong>Network:</strong> per-turn set-encoder over entities → recurrent core across turns →
+      policy / value / opponent-action / opponent-belief heads.</li>
+    <li><strong>Temporal opponent inference:</strong> history must inform hidden-card prediction (e.g. an
+      opponent repeatedly switching out of a matchup implies it can't threaten you → predict the switch and
+      punish it).</li>
+    <li><strong>Privileged self-play supervision:</strong> because self-play gives ground truth for both
+      teams, belief/opponent heads can be supervised directly at training time while the policy stays
+      public-information-only at inference.</li>
+    <li><strong>Open tension (to be settled by ablation, not assumption):</strong> whether an explicit belief
+      head is needed or whether opponent inference emerges in a recurrent state — treated as a tunable loss
+      weight that can anneal to zero.</li>
+    <li><strong>Compute:</strong> CPU proves the design is correct (this report); GPU plus environment
+      throughput is what buys strength. At proof-of-concept scale the workload is environment-bound, not
+      compute-bound.</li>
+    <li><strong>Observability:</strong> TensorBoard for now (local, free live curves); a custom dashboard
+      deferred until Pokémon-specific views (battle replay, belief-probe visualization) are needed.</li>
+  </ul>
+
+  <h2 id="loop">6. Autonomous development loop</h2>
+  <p>Work is produced by an inverted, cross-model loop so that review is genuinely independent:</p>
+  <ul class="tight">
+    <li><strong>Executor — Claude Code.</strong> Selects tasks, implements, tests, opens PRs, applies review
+      findings, merges per policy. Runs from an isolated git worktree to avoid working-tree collisions.</li>
+    <li><strong>Reviewer — Codex (GPT-5.5, xhigh reasoning).</strong> Adversarial, read-only review of every
+      code PR; cannot modify files or merge (enforced by a read-only sandbox).</li>
+    <li><strong>Merge policy.</strong> Serial; under an explicit goal, a code PR merges once it passes local
+      verification <em>and</em> Codex signs off with no blocking findings. Documentation-only PRs merge
+      without a Codex review.</li>
+  </ul>
+  <p class="small muted">This loop was validated end-to-end during this milestone: the one code change
+  (declaring <code>numpy</code> in the <code>[neural]</code> extra) was reviewed by Codex — "no blocking
+  issues found" — and merged automatically.</p>
+
+  <h2 id="results">7. Results in detail</h2>
+  <p>All rows are mirrored shared-opponent benchmarks through the local Showdown harness, zero/near-zero capped
+  games. <code>--games N</code> is per orientation, so each row below is 240 games (two seat orientations).</p>
+
+  <h3>Baseline — strongest linear reference (<code>expanded-teacher-bootstrap-linear-iter-0001</code>)</h3>
+  <table>
+    <tr><th>Opponent</th><th class="num">Win rate</th><th class="num">Record</th><th>Notes</th></tr>
+    <tr><td><code>random-legal</code></td><td class="num">0.825</td><td class="num">396 / 480</td><td>strong</td></tr>
+    <tr><td><code>simple-legal</code></td><td class="num bad">0.500</td><td class="num">240 / 480</td><td>Wilson 95% CI ≈ [0.455, 0.545] — <span class="bad">tied</span></td></tr>
+  </table>
+
+  <h3>Neural transformer (<code>neural-teacher-bc-probe</code>) — two independent seed bands</h3>
+  <table>
+    <tr><th>Opponent</th><th class="num">Band 1 (seed 11000001)</th><th class="num">Band 2 (seed 12000001)</th><th class="num">Pooled</th></tr>
+    <tr><td><code>simple-legal</code></td><td class="num good">0.808 (194/240)</td><td class="num good">0.729 (175/240)</td><td class="num good">0.769 (369/480)</td></tr>
+    <tr><td><code>random-legal</code></td><td class="num">0.942 (226/240)</td><td class="num">0.929 (223/240)</td><td class="num">0.935 (449/480)</td></tr>
+  </table>
+  <p class="small muted">Pooled Wilson 95% lower bound vs <code>simple-legal</code> ≈ 0.73, well above the
+  0.55 goal bar. Zero capped games across all four rows.</p>
+
+  <table>
+    <tr><th>Definition-of-Done criterion</th><th>Status</th></tr>
+    <tr><td>Baseline bar established</td><td><span class="good">✓</span></td></tr>
+    <tr><td>Beats <code>simple-legal</code>, Wilson LB ≥ 0.55 over ≥ 240 games, capped ≤ 0.05</td><td><span class="good">✓</span></td></tr>
+    <tr><td>Reproducible across two independent seed bands</td><td><span class="good">✓</span></td></tr>
+    <tr><td>Still beats <code>random-legal</code> decisively; clean run-health</td><td><span class="good">✓</span></td></tr>
+    <tr><td>Every claim backed by a targeted shared-opponent benchmark</td><td><span class="good">✓</span></td></tr>
+  </table>
+
+  <h2 id="caveats">8. Caveats &amp; next steps</h2>
+  <div class="callout warn">
+    This was the <strong>cheapest credible neural attempt</strong>, so scope is bounded:
+    <ul class="tight" style="margin-bottom:0">
+      <li>It is <strong>supervised behavior-cloning + value</strong>, not the self-play RL loop of full Stage&nbsp;1.</li>
+      <li>Strength is measured only against <code>random-legal</code> / <code>simple-legal</code>, not against
+        <code>scripted-teacher</code> or the linear reference head-to-head.</li>
+      <li>Band-to-band variance is real (0.81 vs 0.73); larger samples are warranted before treating it as a
+        tuned incumbent.</li>
+    </ul>
+  </div>
+  <p><strong>Natural next milestones:</strong> (1) benchmark the transformer vs <code>scripted-teacher</code>
+  and the linear reference directly; (2) scale data/model and re-measure; (3) build the actual model-free RL
+  Stage&nbsp;1 loop with the temporal opponent-inference network and privileged belief supervision.</p>
+
+  <h2 id="refs">9. References</h2>
+  <ul class="tight small">
+    <li><code>docs/goals.md</code> — project goals.</li>
+    <li><code>docs/first_iteration_design.md</code> — environment boundary, observation shape, action space.</li>
+    <li><code>docs/bootstrap_strategy.md</code> — teacher-bootstrap vs cold self-play data strategy.</li>
+    <li><code>docs/learning_architecture_exploration.md</code> — post-linear architecture direction (PR&nbsp;#185).</li>
+    <li><code>docs/cpu_self_play_roadmap.md</code> — CPU loop state, strength bars, progress log.</li>
+    <li><code>docs/autonomous_task_loop.md</code> — executor/reviewer loop mechanics (PR&nbsp;#187).</li>
+    <li><code>docs/goal_cpu_past_simple_legal.md</code> — the goal specification for this report (PR&nbsp;#188).</li>
+    <li>Evidence PRs: #189 (baseline), #190 (neural extra, Codex-reviewed), #191 (neural result).</li>
+  </ul>
+
+  <footer>
+    PokeZero design &amp; results · generated 2026-06-23 · benchmark artifacts kept local under
+    <code>runs/</code> (gitignored). Win rates are point estimates from mirrored shared-opponent benchmarks;
+    treat them as evidence, not final strength claims.
+  </footer>
+
+</div>
+</body>
+</html>
