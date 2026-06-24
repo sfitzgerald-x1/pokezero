@@ -238,8 +238,21 @@ class TransformerTrainingConfig:
     opponent_action_loss_weight: float = 0.1
     max_batches: int | None = None
     device: str | None = None
+    # Training objective: "behavior-cloning" (supervised cross-entropy to the chosen action)
+    # or "ppo" (clipped policy-gradient using recorded behavior-policy probabilities and the
+    # value head as a baseline). PPO is the self-play RL operator.
+    objective: str = "behavior-cloning"
+    clip_epsilon: float = 0.2
+    entropy_coef: float = 0.0
+    normalize_advantage: bool = True
 
     def __post_init__(self) -> None:
+        if self.objective not in ("behavior-cloning", "ppo"):
+            raise ValueError("objective must be 'behavior-cloning' or 'ppo'.")
+        if self.clip_epsilon <= 0.0:
+            raise ValueError("clip_epsilon must be positive.")
+        if self.entropy_coef < 0.0:
+            raise ValueError("entropy_coef must be non-negative.")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive.")
         if self.epochs <= 0:
@@ -429,6 +442,8 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "returns": torch_module.tensor(batch.returns, dtype=torch_module.float32, device=device),
         "opponent_action_indices": torch_module.tensor(batch.opponent_action_indices, dtype=torch_module.long, device=device),
         "opponent_action_mask": torch_module.tensor(batch.opponent_action_mask, dtype=torch_module.bool, device=device),
+        "action_probabilities": torch_module.tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
+        "action_probability_mask": torch_module.tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
     }
     return tensors
 
@@ -733,23 +748,56 @@ class _TorchMetricTotals:
         )
 
 
+def _opponent_loss_terms(output: TransformerPolicyOutput, tensors: Mapping[str, Any], config: TransformerTrainingConfig):
+    """Auxiliary opponent-action cross-entropy over examples with a recorded opponent label."""
+    torch_module = require_torch()
+    examples = int(tensors["opponent_action_mask"].sum().item())
+    if not examples or not config.opponent_action_loss_weight:
+        return None, 0.0, 0, examples
+    logits = output.opponent_action_logits[tensors["opponent_action_mask"]]
+    targets = tensors["opponent_action_indices"][tensors["opponent_action_mask"]]
+    loss = torch_module.nn.functional.cross_entropy(logits, targets)
+    correct = int((logits.argmax(dim=1) == targets).sum().item())
+    return loss, float(loss.detach().item()), correct, examples
+
+
 def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any], config: TransformerTrainingConfig) -> tuple[Any, dict[str, float | int]]:
     torch_module = require_torch()
+    functional = torch_module.nn.functional
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
-    policy_loss = torch_module.nn.functional.cross_entropy(masked_policy_logits, tensors["action_indices"])
-    predictions = masked_policy_logits.argmax(dim=1)
-    policy_correct = int((predictions == tensors["action_indices"]).sum().item())
-    value_loss = torch_module.nn.functional.mse_loss(output.value, tensors["returns"])
-    loss = policy_loss + (config.value_loss_weight * value_loss)
-    opponent_loss_value = 0.0
-    opponent_correct = 0
-    opponent_examples = int(tensors["opponent_action_mask"].sum().item())
-    if opponent_examples and config.opponent_action_loss_weight:
-        opponent_logits = output.opponent_action_logits[tensors["opponent_action_mask"]]
-        opponent_targets = tensors["opponent_action_indices"][tensors["opponent_action_mask"]]
-        opponent_loss = torch_module.nn.functional.cross_entropy(opponent_logits, opponent_targets)
-        opponent_loss_value = float(opponent_loss.detach().item())
-        opponent_correct = int((opponent_logits.argmax(dim=1) == opponent_targets).sum().item())
+    policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
+    value_loss = functional.mse_loss(output.value, tensors["returns"])
+
+    if config.objective == "ppo":
+        # Clipped policy-gradient (PPO): importance-weight the chosen action's log-prob by a
+        # value-baselined advantage, using the recorded behavior-policy probability. Only
+        # examples with a recorded action probability contribute to the policy term.
+        log_probs = functional.log_softmax(masked_policy_logits, dim=1)
+        chosen_log_prob = log_probs.gather(1, tensors["action_indices"].unsqueeze(1)).squeeze(1)
+        # Only examples with a recorded, strictly-positive behavior probability are valid for
+        # importance sampling; a zero/missing behavior prob has an undefined ratio, so exclude it.
+        mask = (tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)).float()
+        behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
+        denom = mask.sum().clamp(min=1.0)
+        advantage = tensors["returns"] - output.value.detach()
+        if config.normalize_advantage and float(denom.item()) > 1.0:
+            masked_mean = (advantage * mask).sum() / denom
+            masked_var = (((advantage - masked_mean) ** 2) * mask).sum() / denom
+            advantage = (advantage - masked_mean) / (masked_var.sqrt() + 1e-8)
+        ratio = (chosen_log_prob - behavior_log_prob).exp()
+        surrogate = torch_module.min(
+            ratio * advantage,
+            ratio.clamp(1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantage,
+        )
+        policy_loss = -(surrogate * mask).sum() / denom
+        entropy_mean = (-(log_probs.exp() * log_probs).sum(dim=1) * mask).sum() / denom
+        loss = policy_loss + (config.value_loss_weight * value_loss) - (config.entropy_coef * entropy_mean)
+    else:
+        policy_loss = functional.cross_entropy(masked_policy_logits, tensors["action_indices"])
+        loss = policy_loss + (config.value_loss_weight * value_loss)
+
+    opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = _opponent_loss_terms(output, tensors, config)
+    if opponent_loss is not None:
         loss = loss + (config.opponent_action_loss_weight * opponent_loss)
     return loss, {
         "loss": float(loss.detach().item()),
@@ -818,7 +866,10 @@ def _behavior_probability(
         exploit_probability = 1.0 - exploration_epsilon if action_index == greedy_action else 0.0
         explore_probability = exploration_epsilon / len(legal)
         return exploit_probability + explore_probability
-    return probabilities[action_index]
+    # Sampling branch: behavior policy mixes softmax sampling with epsilon-uniform exploration,
+    # so the true probability is (1 - epsilon) * pi(a) + epsilon / |legal| (reduces to pi(a) when
+    # epsilon == 0). PPO importance ratios rely on this being the actual behavior probability.
+    return (1.0 - exploration_epsilon) * probabilities[action_index] + (exploration_epsilon / len(legal))
 
 
 def _observation_player_key(observation: PokeZeroObservationV0) -> str:
