@@ -276,6 +276,49 @@ class PromotionGateTest(unittest.TestCase):
         self.assertEqual(result.incumbent_policy_id, "entity-test-iter-0001")
         self.assertEqual(result.gate_mode, "absolute_floor+incumbent_delta")
 
+    def test_gate_excludes_eval_only_reference_for_neural_manifest(self) -> None:
+        # max-damage is an eval-only benchmark reference: it must not be gated against,
+        # even though it appears in the candidate's benchmark with a low win rate.
+        manifest = neural_selfplay_manifest()
+        previous_iteration = json.loads(json.dumps(manifest["iterations"][0]))
+        latest_iteration = json.loads(json.dumps(manifest["iterations"][0]))
+        previous_iteration["iteration"] = 1
+        previous_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0001"
+        latest_iteration["iteration"] = 2
+        latest_iteration["current_policy_spec"] = previous_iteration["next_current_policy_spec"]
+        latest_iteration["training"]["model_config"]["policy_id"] = "entity-test-iter-0002"
+        latest_iteration["benchmark_reference_policy_specs"] = ["max-damage"]
+        latest_iteration["benchmark"] = benchmark_payload(
+            policy_id="entity-test-iter-0002",
+            rows=(
+                ("random-legal", 13, 7, 0),
+                ("entity-test-iter-0001", 18, 2, 0),
+                ("max-damage", 4, 16, 0),  # 0.20 — would fail the floor if not excluded
+            ),
+        )
+        manifest["iterations"] = [previous_iteration, latest_iteration]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = evaluate_promotion_gate(
+                manifest_path,
+                config=PromotionGateConfig(
+                    min_benchmark_win_rate=0.60,
+                    min_incumbent_win_rate=0.55,
+                    min_benchmark_games=20,
+                    min_incumbent_games=20,
+                    max_collection_capped_rate=0.20,
+                ),
+            )
+
+        # Gate passes because max-damage (0.20) is excluded from the per-opponent floor
+        # checks; it is still reported in benchmark_opponents for visibility.
+        self.assertTrue(result.passed)
+        checked_names = {check.name for check in result.checks}
+        self.assertNotIn("benchmark_win_rate:max-damage", checked_names)
+        self.assertIn("benchmark_win_rate:random-legal", checked_names)
+
     def test_gate_rejects_statistically_thin_incumbent_point_estimate(self) -> None:
         manifest = selfplay_manifest()
         manifest["iterations"][0]["benchmark"] = benchmark_payload(
