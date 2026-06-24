@@ -230,6 +230,7 @@ def run_neural_selfplay_iterations(
     seed_start: int = 1,
     initial_policy_spec: str = "random-legal",
     fixed_opponent_policy_specs: Iterable[str] = ("random-legal", "simple-legal"),
+    benchmark_reference_policy_specs: Iterable[str] = (),
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
@@ -262,6 +263,9 @@ def run_neural_selfplay_iterations(
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
+    # Eval-only references (e.g. max-damage) are benchmarked against the candidate each
+    # iteration but never enter rollout collection or the training opponent pool.
+    benchmark_references = tuple(dict.fromkeys(str(spec) for spec in benchmark_reference_policy_specs))
     if model_config.window_size != training_config.window_size:
         raise ValueError("model_config window_size must match training_config window_size.")
     promotion_pool_registry_path = promotion_registry_path or (
@@ -328,6 +332,7 @@ def run_neural_selfplay_iterations(
         "worker_count": worker_count,
         "source": source_metadata,
         "post_iteration_audit_failure_mode": post_iteration_audit_failure_mode,
+        "benchmark_reference_policy_specs": list(benchmark_references),
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -393,6 +398,7 @@ def run_neural_selfplay_iterations(
                 games=evaluation_games,
                 seed_start=evaluation_seed_start + (offset * evaluation_games),
                 device=training_config.device,
+                benchmark_reference_policy_specs=benchmark_references,
             )
         if auto_promotion_config is None:
             advancement = _advancement_decision(
@@ -555,6 +561,7 @@ def _benchmark_checkpoint(
     games: int,
     seed_start: int,
     device: str | None,
+    benchmark_reference_policy_specs: tuple[str, ...] = (),
 ) -> BenchmarkReport:
     model_policy = load_transformer_policy(checkpoint_path, deterministic=True, device=device)
     policy_id = str(model_policy.policy_id)
@@ -570,6 +577,27 @@ def _benchmark_checkpoint(
                 model_policy,
             ),
         )
+    # Eval-only reference matchups (e.g. max-damage). Resolved fresh per orientation so each
+    # side gets its own policy instance, and skipped if the reference id collides with the
+    # candidate or a built-in baseline already covered above.
+    covered_ids = {policy_id, "random-legal", "simple-legal", incumbent_policy_id}
+    reference_matchups: list[BenchmarkMatchup] = []
+    for reference_spec in benchmark_reference_policy_specs:
+        reference_policy = _policy_from_spec_for_evaluation(reference_spec, device=device)
+        reference_id = str(reference_policy.policy_id)
+        if reference_id in covered_ids:
+            continue
+        covered_ids.add(reference_id)
+        reference_matchups.append(
+            BenchmarkMatchup(f"{policy_id} vs {reference_id}", model_policy, reference_policy)
+        )
+        reference_matchups.append(
+            BenchmarkMatchup(
+                f"{reference_id} vs {policy_id}",
+                _policy_from_spec_for_evaluation(reference_spec, device=device),
+                model_policy,
+            )
+        )
     return benchmark_rollouts(
         games=games,
         env_factory=env_factory,
@@ -581,6 +609,7 @@ def _benchmark_checkpoint(
             BenchmarkMatchup(f"{policy_id} vs simple-legal", model_policy, SimpleLegalPolicy()),
             BenchmarkMatchup(f"simple-legal vs {policy_id}", SimpleLegalPolicy(), model_policy),
             *incumbent_matchups,
+            *reference_matchups,
         ),
     )
 

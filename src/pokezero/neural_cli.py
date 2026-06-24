@@ -135,6 +135,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
+    iterate.add_argument(
+        "--benchmark-reference-policy",
+        action="append",
+        default=None,
+        help=(
+            "Eval-only policy spec (e.g. max-damage) benchmarked against the candidate each "
+            "iteration. May be repeated. Never used for rollout collection or training opponents."
+        ),
+    )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
     iterate.add_argument(
         "--promotion-registry",
@@ -476,6 +485,11 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, args.showdown_root)
         for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
     )
+    # Eval-only references (e.g. max-damage) are allowed here but never seed training above.
+    benchmark_references = tuple(
+        policy_spec_with_showdown_root(spec, args.showdown_root)
+        for spec in (args.benchmark_reference_policy or ())
+    )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,
@@ -488,6 +502,7 @@ def _iterate(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         initial_policy_spec=initial_policy,
         fixed_opponent_policy_specs=opponent_policies,
+        benchmark_reference_policy_specs=benchmark_references,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
