@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable, Iterable, Iterator, Mapping, TextIO
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
-from .policy import Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
+from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
 
@@ -538,6 +538,9 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
     if lowered == "scripted-teacher":
         teacher_options = _scripted_teacher_options(options)
         return lambda: ScriptedTeacherPolicy(**teacher_options)
+    if lowered == "max-damage":
+        max_damage_options = _max_damage_options(options)
+        return lambda: MaxDamagePolicy(**max_damage_options)
     if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
         from .linear_policy import LinearSoftmaxPolicy, load_linear_model
 
@@ -556,7 +559,7 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         neural_options = _neural_policy_options(options)
         return lambda: load_transformer_policy(Path(checkpoint), **neural_options)
     raise ValueError(
-        f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, "
+        f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, max-damage, "
         "scripted-teacher, linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
     )
 
@@ -569,7 +572,7 @@ def policy_spec_with_showdown_root(spec: str, showdown_root: Path | str | None) 
     if showdown_root is None:
         return spec
     policy_body, options = _split_policy_spec_options(spec.strip())
-    if policy_body.lower() != "scripted-teacher" or "showdown_root" in options:
+    if policy_body.lower() not in ("scripted-teacher", "max-damage") or "showdown_root" in options:
         return spec
     options = {**options, "showdown_root": str(showdown_root)}
     return f"{policy_body}?{urlencode(options)}"
@@ -687,6 +690,16 @@ def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
     if allow_unknown_moves is not None:
         teacher_options["allow_unknown_moves"] = allow_unknown_moves
     return teacher_options
+
+
+def _max_damage_options(options: Mapping[str, str]) -> dict[str, object]:
+    unknown = sorted(set(options) - {"showdown_root"})
+    if unknown:
+        raise ValueError(f"Unsupported max-damage option(s): {', '.join(unknown)}.")
+    max_damage_options: dict[str, object] = {}
+    if options.get("showdown_root"):
+        max_damage_options["showdown_root"] = Path(options["showdown_root"])
+    return max_damage_options
 
 
 def _optional_bool(options: Mapping[str, str], key: str) -> bool | None:

@@ -255,6 +255,114 @@ class ScriptedTeacherPolicy:
         return self.dex
 
 
+@dataclass
+class MaxDamagePolicy:
+    """Fixed baseline that always selects the highest estimated-damage legal move.
+
+    Damage is estimated the same way the scripted teacher scores damaging moves
+    (base power x type effectiveness x STAB x accuracy, with priority/recoil/selfdestruct
+    adjustments). Status / zero-power moves count as 0 damage. When no move is legal
+    (forced switch) it picks a legal switch. Intended as an evaluation/benchmark opponent
+    only -- a tougher reference than random-legal -- not for training-data generation.
+    """
+
+    policy_id: str = "max-damage"
+    showdown_root: Path | str | None = None
+    dex: ShowdownDex | None = None
+
+    def select_action(
+        self,
+        observation: PokeZeroObservationV0,
+        *,
+        rng: random.Random,
+    ) -> PolicyDecision:
+        dex = self._dex()
+        if dex is None:
+            raise ValueError(
+                "max-damage policy requires a Showdown dex; pass showdown_root or set POKEZERO_SHOWDOWN_ROOT."
+            )
+        if not observation.metadata:
+            return self._random_fallback(observation, rng=rng, reason="missing observation metadata")
+        candidates = _legal_candidate_metadata(observation)
+        if not candidates:
+            return self._random_fallback(observation, rng=rng, reason="missing legal candidate metadata")
+
+        self_types = _metadata_species_types(observation.metadata.get("self_active"), dex)
+        opponent_types = _metadata_species_types(observation.metadata.get("opponent_active"), dex)
+        hp_fraction = _metadata_hp_fraction(observation.metadata.get("self_active"), default=1.0)
+        move_candidates = tuple(c for c in candidates if c.get("kind") == "move")
+        switch_candidates = tuple(c for c in candidates if c.get("kind") == "switch")
+
+        if move_candidates:
+            scored = [
+                (
+                    int(c["action_index"]),
+                    _max_damage_estimate(c, dex, self_types, opponent_types, hp_fraction),
+                )
+                for c in move_candidates
+            ]
+            best = max(score for _, score in scored)
+            tied = [index for index, score in scored if abs(score - best) < 1e-9]
+            action_index = rng.choice(tied)
+            return PolicyDecision(
+                action_index=action_index,
+                policy_id=self.policy_id,
+                action_probability=1.0 / len(tied),
+                metadata={"policy_family": "max-damage", "branch": "max_damage_move", "damage_estimate": best},
+            )
+        if switch_candidates:
+            switch_indices = [int(c["action_index"]) for c in switch_candidates]
+            action_index = rng.choice(switch_indices)
+            return PolicyDecision(
+                action_index=action_index,
+                policy_id=self.policy_id,
+                action_probability=1.0 / len(switch_indices),
+                metadata={"policy_family": "max-damage", "branch": "forced_switch"},
+            )
+        return self._random_fallback(observation, rng=rng, reason="no legal move or switch candidates")
+
+    def _random_fallback(self, observation: PokeZeroObservationV0, *, rng: random.Random, reason: str) -> PolicyDecision:
+        legal = legal_action_indices(observation.legal_action_mask)
+        action_index = rng.choice(legal)
+        return PolicyDecision(
+            action_index=action_index,
+            policy_id=self.policy_id,
+            action_probability=1.0 / len(legal),
+            metadata={"policy_family": "max-damage", "branch": "fallback", "reason": reason},
+        )
+
+    def _dex(self) -> ShowdownDex | None:
+        if self.dex is not None:
+            return self.dex
+        root = self.showdown_root or os.environ.get("POKEZERO_SHOWDOWN_ROOT")
+        if root is None:
+            return None
+        self.dex = load_showdown_dex_cached(root)
+        return self.dex
+
+
+def _max_damage_estimate(
+    candidate: Mapping[str, Any],
+    dex: ShowdownDex,
+    self_types: tuple[str, ...],
+    opponent_types: tuple[str, ...],
+    hp_fraction: float,
+) -> float:
+    """Estimated damage for a legal move candidate; status / 0-power moves count as 0."""
+    raw_move_name = str(candidate.get("move_id") or candidate.get("move_name") or "")
+    move_id = normalize_id(raw_move_name)
+    if move_id in _FORCED_PSEUDO_MOVE_IDS:
+        return 1.0  # e.g. recharge: only chosen when it is the sole legal move
+    move = dex.move_info(raw_move_name)
+    if move is None:
+        return 0.0  # unknown move: cannot estimate damage, rank lowest
+    if move.gen3_category == "Status" or move.base_power <= 0:
+        return 0.0
+    return _damaging_move_score(
+        int(candidate["action_index"]), move, dex, self_types, opponent_types, hp_fraction
+    ).score
+
+
 @dataclass(frozen=True)
 class _ActionScore:
     action_index: int
