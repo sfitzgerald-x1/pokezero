@@ -16,6 +16,7 @@ dependencies = [
 neural = [
   "torch>=2.4,<3",
   "numpy>=1.26",
+  "tensorboard>=2.14",
 ]
 
 [project.scripts]

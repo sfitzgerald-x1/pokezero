@@ -302,6 +302,100 @@ class NeuralSelfPlayTest(unittest.TestCase):
         )
         self.assertEqual(result.iterations[0].benchmark.games_per_matchup, 2)
 
+    def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_selfplay import _tensorboard_scalars
+
+        candidate = "cand-iter-0002"
+        epoch = TransformerEpochMetrics(
+            epoch=1,
+            examples=10,
+            loss=0.5,
+            policy_loss=0.4,
+            policy_accuracy=0.6,
+            value_loss=0.1,
+            opponent_loss=0.05,
+            opponent_accuracy=0.5,
+        )
+
+        def matchup(label, p1, p2, p1_wins, games=10):
+            return BenchmarkMatchupResult(
+                label=label,
+                p1_policy_id=p1,
+                p2_policy_id=p2,
+                seed_start=1,
+                metrics=CollectionMetrics(
+                    games=games,
+                    elapsed_seconds=1.0,
+                    total_decision_rounds=games,
+                    total_simulator_turns=games,
+                    p1_wins=p1_wins,
+                    p2_wins=games - p1_wins,
+                    ties=0,
+                    capped_games=0,
+                ),
+            )
+
+        benchmark = BenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=5,
+            games_per_matchup=10,
+            matchups=(
+                # candidate wins 2/10 as p1 and 3/10 as p2 -> combined 5/20 = 0.25
+                matchup(f"{candidate} vs max-damage", candidate, "max-damage", 2),
+                matchup(f"max-damage vs {candidate}", "max-damage", candidate, 7),
+            ),
+        )
+        scalars = _tensorboard_scalars(
+            candidate_policy_id=candidate,
+            training=SimpleNamespace(epochs=(epoch,)),
+            benchmark=benchmark,
+            advancement=SimpleNamespace(advance_collector=True),
+        )
+        self.assertEqual(scalars["train/loss"], 0.5)
+        self.assertEqual(scalars["train/policy_accuracy"], 0.6)
+        self.assertEqual(scalars["train/value_loss"], 0.1)
+        self.assertAlmostEqual(scalars["winrate/max-damage"], 0.25)
+        self.assertEqual(scalars["train/advanced"], 1.0)
+
+    def test_tensorboard_logger_closed_when_iteration_raises(self) -> None:
+        closed: list[bool] = []
+
+        class FakeLogger:
+            def __init__(self, log_dir):
+                self.open = True
+                self._instance = self
+
+            def log(self, scalars, *, step):
+                pass
+
+            def close(self):
+                self.open = False
+                closed.append(True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies():
+                with patch("pokezero.neural_selfplay._TensorBoardLogger", FakeLogger), patch(
+                    "pokezero.neural_selfplay.collect_selfplay_rollouts",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        run_neural_selfplay_iterations(
+                            run_dir=run_dir,
+                            iterations=1,
+                            games_per_iteration=1,
+                            env_factory=lambda: None,  # type: ignore[return-value]
+                            rollout_config=RolloutConfig(max_decision_rounds=5),
+                            model_config=_entity_test_model_config(),
+                            training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                            tensorboard_log_dir=run_dir / "tb",
+                        )
+
+        # The SummaryWriter must be closed even though the iteration raised.
+        self.assertEqual(closed, [True])
+
     def test_run_neural_selfplay_iterations_does_not_advance_failed_candidate(self) -> None:
         collected = []
 
