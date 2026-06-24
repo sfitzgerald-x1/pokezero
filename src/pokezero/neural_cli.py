@@ -13,7 +13,7 @@ from .cli_audit import (
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
 )
-from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root
+from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root, reject_eval_only_specs
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
     DEFAULT_CATEGORY_OOV_BUCKETS,
@@ -392,6 +392,9 @@ def _benchmark(args: argparse.Namespace) -> int:
 def _iterate(args: argparse.Namespace) -> int:
     # Surface the missing-neural-extra message before any Showdown file I/O (vocab build).
     require_torch()
+    # Fail fast: eval-only baselines (max-damage) cannot seed self-play training.
+    reject_eval_only_specs([args.initial_policy], role="self-play initial policy")
+    reject_eval_only_specs(args.opponent_policy or (), role="self-play training opponent")
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:

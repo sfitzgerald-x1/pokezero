@@ -2,6 +2,7 @@ import random
 import unittest
 
 from pokezero.policy import (
+    MaxDamagePolicy,
     Policy,
     PolicyDecision,
     RandomLegalPolicy,
@@ -11,6 +12,7 @@ from pokezero.policy import (
     legal_move_action_indices,
     legal_switch_action_indices,
 )
+from pokezero.collection import policy_factory_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
 from pokezero.dex import showdown_dex_from_payload
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 
@@ -148,6 +150,128 @@ class PolicyBaselineTest(unittest.TestCase):
 
         self.assertEqual(decision.action_index, 4)
         self.assertEqual(decision.metadata["action_family"], "switch")
+
+    def test_max_damage_prefers_damaging_move_over_status(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "toxic", "move_name": "Toxic"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "flamethrower", "move_name": "Flamethrower"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertEqual(decision.action_index, 1)  # damaging move, not the status move
+        self.assertEqual(decision.metadata["policy_family"], "max-damage")
+        self.assertEqual(decision.metadata["branch"], "max_damage_move")
+
+    def test_max_damage_prefers_higher_damage_move(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "flamethrower", "move_name": "Flamethrower"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "shadowball", "move_name": "Shadow Ball"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        # Shadow Ball is super-effective vs Xatu (Psychic) -> higher estimated damage.
+        self.assertEqual(decision.action_index, 1)
+        self.assertGreater(decision.metadata["damage_estimate"], 0.0)
+
+    def test_max_damage_switches_when_no_move_is_legal(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (False, False, False, False, True, True, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 0.5, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 4, "kind": "switch", "legal": True, "pokemon": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"}},
+                    {"action_index": 5, "kind": "switch", "legal": True, "pokemon": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"}},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertIn(decision.action_index, (4, 5))
+        self.assertEqual(decision.metadata["branch"], "forced_switch")
+
+    def test_max_damage_requires_dex(self) -> None:
+        policy = MaxDamagePolicy()
+        obs = observation((True, False, False, False, False, False, False, False, False))
+        with self.assertRaisesRegex(ValueError, "requires a Showdown dex"):
+            policy.select_action(obs, rng=random.Random(1))
+
+    def test_max_damage_spec_resolves_and_injects_showdown_root(self) -> None:
+        self.assertIsInstance(policy_factory_from_spec("max-damage")(), MaxDamagePolicy)
+        with self.assertRaisesRegex(ValueError, "Unsupported max-damage option"):
+            policy_factory_from_spec("max-damage?bogus=1")
+        rooted = policy_spec_with_showdown_root("max-damage", "/tmp/showdown")
+        self.assertIn("showdown_root", rooted)
+        policy = policy_factory_from_spec(rooted)()
+        self.assertEqual(str(policy.showdown_root), "/tmp/showdown")
+
+    def test_max_damage_unknown_move_scores_zero(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "notarealmove", "move_name": "Not Real"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "flamethrower", "move_name": "Flamethrower"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertEqual(decision.action_index, 1)  # unknown move scores 0, damaging move wins
+
+    def test_max_damage_all_status_moves_pick_a_legal_move(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "toxic", "move_name": "Toxic"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "thunderwave", "move_name": "Thunder Wave"},
+                ],
+            },
+        )
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertIn(decision.action_index, (0, 1))
+        self.assertEqual(decision.metadata["branch"], "max_damage_move")
+        self.assertEqual(decision.metadata["damage_estimate"], 0.0)
+
+    def test_max_damage_falls_back_without_candidate_metadata(self) -> None:
+        policy = MaxDamagePolicy(dex=teacher_dex())
+        obs = observation((True, False, True, False, False, False, False, False, False))
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertIn(decision.action_index, (0, 2))
+        self.assertEqual(decision.metadata["branch"], "fallback")
+
+    def test_reject_eval_only_specs_blocks_max_damage_for_training(self) -> None:
+        with self.assertRaisesRegex(ValueError, "evaluation-only"):
+            reject_eval_only_specs(["max-damage"], role="self-play training opponent")
+        with self.assertRaisesRegex(ValueError, "evaluation-only"):
+            reject_eval_only_specs(["max-damage?showdown_root=/x"], role="self-play initial policy")
+        # Ordinary training opponents/specs pass through untouched (including None).
+        reject_eval_only_specs(["random-legal", "simple-legal", "linear:foo.json", None], role="opponent")
+
+    def test_scripted_teacher_root_injection_preserves_existing_options(self) -> None:
+        rooted = policy_spec_with_showdown_root("scripted-teacher?allow_fallback=true", "/tmp/showdown")
+        self.assertIn("showdown_root", rooted)
+        self.assertIn("allow_fallback", rooted)
 
     def test_scripted_teacher_fails_loudly_without_dex_by_default(self) -> None:
         policy = ScriptedTeacherPolicy()
