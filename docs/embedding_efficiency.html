@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PokeZero — Embedding Space &amp; Efficiency Targets</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; color: #1b1f23; background: #f0f2f5;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 80px; }
+  header.hero { background: linear-gradient(135deg, #3a1f44 0%, #b4308e 100%); color: #fff; padding: 48px 0 40px; margin-bottom: 36px; }
+  header.hero .wrap { padding-bottom: 0; }
+  header.hero h1 { margin: 0 0 6px; font-size: 32px; letter-spacing: -0.5px; }
+  header.hero p { margin: 0; opacity: .9; font-size: 17px; }
+  header.hero .meta { margin-top: 16px; font-size: 13px; opacity: .8; }
+  h2 { margin: 40px 0 12px; font-size: 23px; letter-spacing: -0.3px; border-bottom: 2px solid #e1e6eb; padding-bottom: 6px; }
+  h3 { margin: 24px 0 8px; font-size: 18px; }
+  code { background: #eef1f5; padding: 1px 6px; border-radius: 4px; font-size: 13.5px; font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #1b1f23; color: #e6edf3; padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .card { background: #fff; border: 1px solid #e1e6eb; border-radius: 12px; padding: 22px 26px; margin: 18px 0; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .toc { font-size: 14.5px; } .toc a { color: #b4308e; text-decoration: none; } .toc a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #e8ebf0; }
+  th { background: #f5f7fa; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .good { color: #197a3d; font-weight: 600; } .bad { color: #b42318; font-weight: 600; }
+  .callout { border-left: 4px solid #b4308e; background: #fbf2f8; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .callout.warn { border-color: #9a6700; background: #fff8e8; }
+  .callout.win { border-color: #197a3d; background: #f0f9f3; }
+  .muted { color: #5b6670; } .small { font-size: 13px; }
+  ul.tight li { margin: 3px 0; }
+  .bar { height: 26px; border-radius: 5px; display:flex; overflow:hidden; font-size: 12px; color:#fff; font-weight:600; }
+  .bar .emb { background:#b4308e; display:flex; align-items:center; justify-content:center; }
+  .bar .trunk { background:#2f6feb; display:flex; align-items:center; justify-content:center; }
+  .rank { display:inline-block; width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; background:#b4308e; color:#fff; font-weight:700; font-size:14px; margin-right:8px; }
+  footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid #e1e6eb; color: #5b6670; font-size: 13px; }
+  .kpi-row { display:flex; gap:14px; flex-wrap:wrap; margin:8px 0; }
+  .kpi { flex:1 1 170px; background:#fff; border:1px solid #e1e6eb; border-radius:10px; padding:14px 16px; }
+  .kpi .big { font-size:24px; font-weight:700; letter-spacing:-0.5px; } .kpi .lbl { font-size:12.5px; color:#5b6670; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Embedding Space &amp; Efficiency Targets</h1>
+    <p>Where PokeZero's neural parameters actually live — and how to spend them better.</p>
+    <div class="meta">Analysis · 2026-06-23 · based on the goal-run checkpoint <code>neural-teacher-bc-probe</code> and <code>src/pokezero/showdown.py</code></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <strong>TL;DR.</strong> The model is reported as <strong>128.3M parameters / 513&nbsp;MB</strong>, but
+    <strong>99.8% of that is one embedding table</strong> — a generic 1,000,001-bucket hash shared across every
+    categorical feature. The actual transformer is only <strong>~270K params</strong>. The hash table is
+    enormous, semantically structureless, almost entirely untrained on 1,922 examples, and it throws away Gen&nbsp;3
+    random battle's biggest advantage: a <em>small, known, finite vocabulary</em>. Replacing it with explicit
+    per-field embeddings is a <strong>~100× size reduction</strong> that should also <em>improve</em> learning.
+  </div>
+
+  <div class="card toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#where">Where the parameters live</a></li>
+      <li><a href="#how">How the embedding space works today</a></li>
+      <li><a href="#why">Why it is inefficient</a></li>
+      <li><a href="#targets">Efficiency targets (ranked)</a></li>
+      <li><a href="#impact">Projected impact</a></li>
+      <li><a href="#tradeoffs">Trade-offs &amp; caveats</a></li>
+      <li><a href="#refs">References</a></li>
+    </ol>
+  </div>
+
+  <h2 id="where">1. Where the parameters live</h2>
+  <div class="kpi-row">
+    <div class="kpi"><div class="big">128,270,731</div><div class="lbl">total parameters</div></div>
+    <div class="kpi"><div class="big bad">128,000,128</div><div class="lbl">single hash embedding (99.79%)</div></div>
+    <div class="kpi"><div class="big good">~270,603</div><div class="lbl">actual transformer + heads (0.21%)</div></div>
+    <div class="kpi"><div class="big">513&nbsp;MB</div><div class="lbl">checkpoint on disk (fp32)</div></div>
+  </div>
+  <div class="bar" title="parameter share">
+    <div class="emb" style="width:99.8%">category_embedding — 128.0M (99.8%)</div>
+    <div class="trunk" style="width:0.2%">&nbsp;</div>
+  </div>
+  <p class="small muted">The blue sliver (~0.2%) is the entire transformer: 2 encoder layers, embedding dim 128,
+  4 heads, feedforward 256, plus the policy / value / opponent-action heads and the small token-type, history,
+  and numeric-projection layers.</p>
+
+  <table>
+    <tr><th>Component</th><th class="num">Params</th><th class="num">Share</th><th>Note</th></tr>
+    <tr><td><code>category_embedding.weight</code></td><td class="num">128,000,128</td><td class="num">99.79%</td><td>1,000,001 rows × 128</td></tr>
+    <tr><td>2× transformer encoder layers</td><td class="num">~232,000</td><td class="num">0.18%</td><td>attention + FFN + norms</td></tr>
+    <tr><td>policy / value / opponent heads</td><td class="num">~33,000</td><td class="num">0.03%</td><td>small linear heads</td></tr>
+    <tr><td>token-type / history / numeric proj.</td><td class="num">~4,200</td><td class="num">&lt;0.01%</td><td>tiny</td></tr>
+  </table>
+
+  <h2 id="how">2. How the embedding space works today</h2>
+  <p>Every categorical value in an observation — a species, move, item, ability, status, weather, belief fact,
+  etc. — is turned into an integer id by a single shared hash encoder:</p>
+  <pre><code>def stable_category_id(value, *, buckets=1_000_000):
+    normalized = str(value or "").strip().lower()
+    if not normalized: return 0                      # 0 = padding
+    digest = hashlib.blake2b(normalized.encode(), digest_size=8).digest()
+    return (int.from_bytes(digest, "big") % buckets) + 1   # 1 .. 1,000,000</code></pre>
+  <p>That id indexes one <code>nn.Embedding(1_000_001, 128)</code> table. The observation is
+  <strong>46 tokens</strong> (1 field + 6 self + 6 opponent + 9 action candidates + 24 recent events) ×
+  <strong>84 categorical columns</strong> each (4 base fields + 80 belief-fact buckets) × a 4-turn history
+  window — and <em>every one of those columns looks up the same shared table.</em></p>
+  <div class="callout">
+    The source even labels this as temporary: <em>“a stable hash-bucket encoder for early experiments. Explicit
+    vocabularies can replace it once the observation vocabulary is finalized.”</em>
+    (<code>showdown.py:341</code>) — this document is that follow-up.
+  </div>
+
+  <h2 id="why">3. Why it is inefficient</h2>
+  <ul class="tight">
+    <li><strong>Wildly over-provisioned for the data.</strong> 1,000,001 rows trained on 1,922 examples: the
+      vast majority of rows were never touched and sit at their initialization. The 513&nbsp;MB checkpoint is
+      mostly dead weight.</li>
+    <li><strong>No semantic structure.</strong> Hashing scatters related concepts to unrelated random rows —
+      "Charizard" and "Blastoise", or "Surf" and "Hydro Pump", share nothing. Every concept must be learned from
+      scratch with no inductive sharing.</li>
+    <li><strong>Collisions.</strong> A 64-bit blake2b reduced mod 1,000,000 can map distinct values to the same
+      row; the model cannot tell those apart.</li>
+    <li><strong>It discards the format's core advantage.</strong> Gen&nbsp;3 random battle entities come from a
+      <em>known, finite generator</em>. We are paying for an open-vocabulary hash in a closed-vocabulary game.</li>
+    <li><strong>Belief columns dominate width.</strong> 80 of the 84 categorical columns per token are
+      belief-fact buckets, multiplying lookups into the same oversized table.</li>
+  </ul>
+  <p>The true vocabulary is tiny and enumerable (Gen&nbsp;3 totals; random-battle pools use subsets):</p>
+  <table>
+    <tr><th>Field</th><th class="num">Approx. distinct values</th></tr>
+    <tr><td>Species</td><td class="num">≤ 386 (randbat subset ~300)</td></tr>
+    <tr><td>Moves</td><td class="num">~354 (subset ~250)</td></tr>
+    <tr><td>Abilities</td><td class="num">76</td></tr>
+    <tr><td>Items</td><td class="num">~30–60 used</td></tr>
+    <tr><td>Types</td><td class="num">18</td></tr>
+    <tr><td>Statuses</td><td class="num">~7</td></tr>
+    <tr><td>Weather</td><td class="num">~5</td></tr>
+    <tr><td><strong>Union of all categorical values</strong></td><td class="num"><strong>≈ 1–2K, well under 10K</strong></td></tr>
+  </table>
+  <p class="muted small">i.e. the real vocabulary is roughly <strong>0.1–0.2%</strong> of the 1,000,001 rows
+  currently allocated.</p>
+
+  <h2 id="targets">4. Efficiency targets (ranked)</h2>
+
+  <h3><span class="rank">1</span>Explicit finite-vocabulary embeddings <span class="good">(biggest win)</span></h3>
+  <p>Replace the single shared hash table with small, typed embeddings keyed on real ids — one table per field
+  family (species, move, item, ability, status, type, …), each sized to its true cardinality plus padding/OOV.
+  Total embedding rows drop from 1,000,001 to roughly a few thousand: a <strong>~100–1000× reduction</strong> in
+  embedding parameters. Every row now sees training signal (denser, better-trained representations), collisions
+  vanish, and related fields can <em>share</em> a table (e.g. all four move slots use one move embedding) for
+  inductive generalization. This directly operationalizes the "known finite set space" thesis from the
+  architecture doc — and should improve sample efficiency, not just shrink the file.</p>
+
+  <h3><span class="rank">2</span>Shrink the hash space <span class="muted">(cheap interim)</span></h3>
+  <p>If keeping the hash encoder short-term, drop <code>buckets</code> from 1,000,000 to ~32K–65K. That still
+  over-covers the true vocabulary by 30×+, but cuts the table ~15–30× immediately with a one-line change and a
+  retrain. A stopgap, not the destination.</p>
+
+  <h3><span class="rank">3</span>Rethink the 80 belief-fact bucket columns</h3>
+  <p>Belief facts are 80 of 84 categorical columns per token. Consider a compact learned belief embedding (or
+  pooling possible-set ids through the shared field embeddings) instead of 80 wide bucket columns, reducing both
+  lookups and observation width while preserving the belief signal.</p>
+
+  <h3><span class="rank">4</span>Checkpoint &amp; precision hygiene <span class="muted">(secondary)</span></h3>
+  <p>Today's 513&nbsp;MB file persists ~1M mostly-empty fp32 rows. With a real vocabulary the checkpoint falls to
+  single-digit MB on its own. Lower-precision storage or persisting only touched rows are band-aids that target 1's
+  by-product rather than the cause; prefer 1.</p>
+
+  <div class="callout warn">
+    <strong>Separate axis — do not conflate.</strong> Growing the <em>transformer trunk</em> (more layers,
+    larger dim, longer history window) is a different decision driven by data volume and opponent strength, and
+    it carries CPU-inference cost. The embedding cleanup here is about <em>spending parameters well</em>, not
+    about adding capacity.
+  </div>
+
+  <h2 id="impact">5. Projected impact</h2>
+  <table>
+    <tr><th>Variant</th><th class="num">Embedding params</th><th class="num">Total params</th><th class="num">Checkpoint</th></tr>
+    <tr><td>Current (1M hash buckets)</td><td class="num">128.0M</td><td class="num">128.3M</td><td class="num">~513 MB</td></tr>
+    <tr><td>Target 2: 32K hash buckets</td><td class="num">~4.1M</td><td class="num">~4.4M</td><td class="num">~17 MB</td></tr>
+    <tr><td class="good">Target 1: real vocab (~8K rows total)</td><td class="num good">~1.0M</td><td class="num good">~1.3M</td><td class="num good">~5 MB</td></tr>
+  </table>
+  <p class="small muted">All at embedding dim 128, fp32. Trunk (~270K) and accuracy-vs-<code>simple-legal</code>
+  are expected to hold or improve; smaller, denser embeddings typically help in low-data regimes.</p>
+
+  <h2 id="tradeoffs">6. Trade-offs &amp; caveats</h2>
+  <ul class="tight">
+    <li><strong>Out-of-vocabulary handling.</strong> Explicit vocabularies need a defined OOV/unknown id and a
+      maintenance path when the dex or randbat pool changes. The hash "just works" for any string — that
+      convenience is exactly what we trade for structure. In a fixed Gen&nbsp;3 format this is a good trade.</li>
+    <li><strong>Checkpoint compatibility.</strong> Changing the embedding scheme breaks existing neural
+      checkpoints (a new schema/fingerprint). Acceptable — there is only one probe checkpoint today.</li>
+    <li><strong>Efficiency ≠ guaranteed strength.</strong> The primary, near-certain win is size and
+      trainability; the strength upside (denser embeddings, sharing) is likely but must be confirmed by the same
+      shared-opponent benchmark methodology, against the current 0.77-vs-<code>simple-legal</code> result.</li>
+    <li><strong>Validate, don't assume.</strong> Treat any change as a measured experiment: retrain on the same
+      data, benchmark vs <code>simple-legal</code>/<code>random-legal</code> across two seed bands, compare.</li>
+  </ul>
+
+  <h2 id="refs">7. References</h2>
+  <ul class="tight small">
+    <li><code>src/pokezero/showdown.py:341</code> — <code>stable_category_id()</code> hash encoder (with the
+      "explicit vocabularies can replace it" note).</li>
+    <li><code>src/pokezero/showdown.py:42</code> — <code>CATEGORY_ID_BUCKETS = 1_000_000</code>.</li>
+    <li><code>src/pokezero/neural_policy.py</code> — <code>category_embedding = nn.Embedding(1_000_001, 128)</code>
+      and the transformer trunk/heads.</li>
+    <li><code>docs/learning_architecture_exploration.md</code> — the finite-set-space advantage this targets.</li>
+    <li><code>docs/design_and_results.html</code> — the goal result this analysis follows from.</li>
+  </ul>
+
+  <footer>
+    PokeZero embedding analysis · 2026-06-23 · parameter counts read directly from the
+    <code>neural-teacher-bc-probe</code> checkpoint; vocabulary sizes are Gen&nbsp;3 totals (random-battle pools
+    use subsets) and are approximate. Projected sizes are estimates to guide prioritization, not committed
+    benchmarks.
+  </footer>
+
+</div>
+</body>
+</html>
