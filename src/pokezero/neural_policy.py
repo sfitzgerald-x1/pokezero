@@ -774,8 +774,10 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         # examples with a recorded action probability contribute to the policy term.
         log_probs = functional.log_softmax(masked_policy_logits, dim=1)
         chosen_log_prob = log_probs.gather(1, tensors["action_indices"].unsqueeze(1)).squeeze(1)
+        # Only examples with a recorded, strictly-positive behavior probability are valid for
+        # importance sampling; a zero/missing behavior prob has an undefined ratio, so exclude it.
+        mask = (tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)).float()
         behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
-        mask = tensors["action_probability_mask"].float()
         denom = mask.sum().clamp(min=1.0)
         advantage = tensors["returns"] - output.value.detach()
         if config.normalize_advantage and float(denom.item()) > 1.0:
@@ -864,7 +866,10 @@ def _behavior_probability(
         exploit_probability = 1.0 - exploration_epsilon if action_index == greedy_action else 0.0
         explore_probability = exploration_epsilon / len(legal)
         return exploit_probability + explore_probability
-    return probabilities[action_index]
+    # Sampling branch: behavior policy mixes softmax sampling with epsilon-uniform exploration,
+    # so the true probability is (1 - epsilon) * pi(a) + epsilon / |legal| (reduces to pi(a) when
+    # epsilon == 0). PPO importance ratios rely on this being the actual behavior probability.
+    return (1.0 - exploration_epsilon) * probabilities[action_index] + (exploration_epsilon / len(legal))
 
 
 def _observation_player_key(observation: PokeZeroObservationV0) -> str:

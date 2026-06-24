@@ -172,6 +172,72 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         bc_loss, bc_metrics = _transformer_loss(output, tensors, TransformerTrainingConfig())
         self.assertGreater(bc_metrics["policy_loss"], 0.0)
 
+    def test_ppo_clips_large_positive_advantage_ratio(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        # Current policy strongly favors action 0 (prob ~1) while the behavior prob was 0.01,
+        # so ratio ~100. With clip 0.2 and advantage +1, the surrogate must be clipped to
+        # (1+0.2)*1 = 1.2 -> policy_loss ~ -1.2, NOT the unclipped ~-100.
+        logits = torch.zeros(1, 9)
+        logits[0, 0] = 20.0
+        output = TransformerPolicyOutput(policy_logits=logits, value=torch.zeros(1), opponent_action_logits=torch.zeros(1, 9))
+        tensors = {
+            "legal_action_mask": torch.ones(1, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0], dtype=torch.long),
+            "returns": torch.ones(1),
+            "action_probabilities": torch.full((1,), 0.01),
+            "action_probability_mask": torch.ones(1, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(1, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(1, dtype=torch.long),
+        }
+        config = TransformerTrainingConfig(objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0, clip_epsilon=0.2)
+        _, metrics = _transformer_loss(output, tensors, config)
+        self.assertAlmostEqual(metrics["policy_loss"], -1.2, places=2)
+
+    def test_ppo_masks_examples_without_positive_behavior_prob(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(policy_logits=torch.zeros(2, 9), value=torch.zeros(2), opponent_action_logits=torch.zeros(2, 9))
+        config = TransformerTrainingConfig(objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0)
+        base = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.ones(2),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+        # All examples masked out (no recorded prob) -> zero policy loss, finite total loss.
+        all_masked = {**base, "action_probabilities": torch.full((2,), 1.0 / 9.0), "action_probability_mask": torch.zeros(2, dtype=torch.bool)}
+        loss, metrics = _transformer_loss(output, all_masked, config)
+        self.assertEqual(metrics["policy_loss"], 0.0)
+        self.assertTrue(torch.isfinite(loss))
+        # A zero behavior probability is excluded even if its mask flag is set.
+        zero_prob = {**base, "action_probabilities": torch.tensor([0.0, 1.0 / 9.0]), "action_probability_mask": torch.ones(2, dtype=torch.bool)}
+        loss2, _ = _transformer_loss(output, zero_prob, config)
+        self.assertTrue(torch.isfinite(loss2))
+
+    def test_behavior_probability_mixes_epsilon_for_sampling(self) -> None:
+        from pokezero.neural_policy import _behavior_probability
+
+        # Sampling branch: (1 - eps) * pi(a) + eps / |legal|.
+        self.assertAlmostEqual(
+            _behavior_probability(action_index=0, probabilities=[0.5, 0.5], legal=[0, 1], deterministic=False, greedy_action=0, exploration_epsilon=0.2),
+            0.8 * 0.5 + 0.2 / 2,
+        )
+        # epsilon == 0 reduces to pi(a).
+        self.assertAlmostEqual(
+            _behavior_probability(action_index=0, probabilities=[0.7, 0.3], legal=[0, 1], deterministic=False, greedy_action=0, exploration_epsilon=0.0),
+            0.7,
+        )
+
     def test_require_torch_fails_loudly_without_neural_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
