@@ -144,6 +144,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "iteration. May be repeated. Never used for rollout collection or training opponents."
         ),
     )
+    iterate.add_argument(
+        "--tensorboard-logdir",
+        type=Path,
+        default=None,
+        help="Write per-iteration TensorBoard scalars (loss, accuracy, win rate vs each benchmarked opponent, advancement) to this directory. Requires the tensorboard package (in the neural extra).",
+    )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
     iterate.add_argument(
         "--promotion-registry",
@@ -503,6 +509,7 @@ def _iterate(args: argparse.Namespace) -> int:
         initial_policy_spec=initial_policy,
         fixed_opponent_policy_specs=opponent_policies,
         benchmark_reference_policy_specs=benchmark_references,
+        tensorboard_log_dir=args.tensorboard_logdir,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,

@@ -242,6 +242,7 @@ def run_neural_selfplay_iterations(
     auto_promotion_config: NeuralSelfPlayPromotionConfig | None = None,
     post_iteration_audit_config: "RunAuditConfig | None" = None,
     post_iteration_audit_failure_mode: str = "strict",
+    tensorboard_log_dir: Path | str | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -346,6 +347,9 @@ def run_neural_selfplay_iterations(
         ),
     }
     results: list[NeuralSelfPlayIterationResult] = []
+    tensorboard_logger = (
+        _TensorBoardLogger(tensorboard_log_dir) if tensorboard_log_dir is not None else None
+    )
 
     for offset in range(iterations):
         iteration = first_iteration + offset
@@ -497,6 +501,16 @@ def run_neural_selfplay_iterations(
             checkpoint_history.append(str(next_policy_spec))
             current_policy_spec = str(next_policy_spec)
             current_model = model
+        if tensorboard_logger is not None:
+            tensorboard_logger.log(
+                _tensorboard_scalars(
+                    candidate_policy_id=training.model_config.policy_id,
+                    training=training,
+                    benchmark=benchmark,
+                    advancement=advancement,
+                ),
+                step=iteration,
+            )
         _write_json(
             run_dir / "manifest.json",
             NeuralSelfPlayRunResult(
@@ -524,6 +538,9 @@ def run_neural_selfplay_iterations(
             post_iteration_audit_result,
             failure_mode=post_iteration_audit_failure_mode,
         )
+
+    if tensorboard_logger is not None:
+        tensorboard_logger.close()
 
     return NeuralSelfPlayRunResult(
         run_dir=run_dir,
@@ -553,6 +570,57 @@ def _enforce_post_iteration_audit(
         if not runtime_health_failed_check_names(failed_names):
             return result
     raise RunAuditFailure(result)
+
+
+def _tensorboard_scalars(
+    *,
+    candidate_policy_id: str,
+    training: TransformerTrainingResult,
+    benchmark: "BenchmarkReport | None",
+    advancement: "NeuralAdvancementDecision | None",
+) -> dict[str, float]:
+    """Flatten one iteration's training + benchmark metrics into TensorBoard scalars.
+
+    Pure and torch-free so it can be unit tested without a SummaryWriter.
+    """
+    scalars: dict[str, float] = {}
+    if training.epochs:
+        last = training.epochs[-1]
+        if last.loss is not None:
+            scalars["train/loss"] = float(last.loss)
+        if last.policy_accuracy is not None:
+            scalars["train/policy_accuracy"] = float(last.policy_accuracy)
+        if last.value_loss is not None:
+            scalars["train/value_loss"] = float(last.value_loss)
+    if benchmark is not None:
+        for result in benchmark.head_to_head_results:
+            if result.first_policy_id == candidate_policy_id:
+                opponent, win_rate = result.second_policy_id, result.first_policy_win_rate
+            elif result.second_policy_id == candidate_policy_id:
+                opponent, win_rate = result.first_policy_id, result.second_policy_win_rate
+            else:
+                continue
+            scalars[f"winrate/{opponent}"] = float(win_rate)
+    if advancement is not None:
+        scalars["train/advanced"] = 1.0 if advancement.advance_collector else 0.0
+    return scalars
+
+
+class _TensorBoardLogger:
+    """Thin lazy wrapper around torch's SummaryWriter (imported on demand)."""
+
+    def __init__(self, log_dir: Path | str) -> None:
+        from torch.utils.tensorboard import SummaryWriter
+
+        self._writer = SummaryWriter(log_dir=str(log_dir))
+
+    def log(self, scalars: Mapping[str, float], *, step: int) -> None:
+        for tag, value in scalars.items():
+            self._writer.add_scalar(tag, value, step)
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()
 
 
 def _benchmark_checkpoint(
