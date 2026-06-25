@@ -19,6 +19,7 @@ from .collection import (
     CollectionMetrics,
     benchmark_rollouts,
     policy_factory_from_spec,
+    _split_policy_spec_options,
 )
 from .env import PokeZeroEnv
 from .neural_policy import (
@@ -901,18 +902,6 @@ def _deterministic_policy_spec(policy_spec: str) -> str:
     from urllib.parse import urlencode
 
     return f"{body}?{urlencode(options)}"
-
-
-def _split_policy_spec_options(policy_spec: str) -> tuple[str, dict[str, str]]:
-    body, separator, query = policy_spec.strip().partition("?")
-    if not separator:
-        return body, {}
-    from urllib.parse import parse_qsl
-
-    # Lowercase option keys to match the resolver's normalization (collection._split_policy_spec_
-    # options), so callers that add/remove options (e.g. mirror temperature, deterministic spec)
-    # operate on the same canonical keys the policy factory will see.
-    return body, {key.strip().lower(): value.strip() for key, value in parse_qsl(query, keep_blank_values=True)}
 
 
 def _with_collection_temperature(policy_spec: str, temperature: float) -> str:

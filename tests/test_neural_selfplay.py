@@ -338,6 +338,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # (the prior implementation raised here). neural specs build the factory lazily, so no
         # checkpoint file is needed to validate option parsing.
         self.assertTrue(callable(policy_factory_from_spec(spec)))
+        # Duplicate normalized option keys are rejected (same as the canonical resolver), rather
+        # than silently collapsed.
+        with self.assertRaises(ValueError):
+            _with_collection_temperature("neural:/m.pt?Sample=true&sample=false", 1.5)
 
     def test_collection_temperature_keeps_canonical_spec_clean_in_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
