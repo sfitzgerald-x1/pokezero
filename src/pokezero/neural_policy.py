@@ -36,7 +36,12 @@ NEURAL_POLICY_SCHEMA_VERSION = "pokezero.neural_policy.v0"
 NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
 DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
-DEFAULT_CATEGORY_OOV_BUCKETS = 4096
+# Small safety net for graceful degradation only. Gen 3 randbats are a closed universe and
+# the lean encoding drops every dynamic/unactionable string (HP text, usernames, winner,
+# free-form event payloads), so in practice nothing actionable should reach the OOV block;
+# the spy audit found zero uncovered bounded categories. Sized for collision comfort, not as
+# a real feature (was 4096, which dominated the embedding table with ~524K dead params).
+DEFAULT_CATEGORY_OOV_BUCKETS = 16
 
 
 def collect_categorical_ids(

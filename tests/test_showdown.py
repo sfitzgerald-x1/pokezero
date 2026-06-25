@@ -11,6 +11,8 @@ from pokezero.observation import (
 )
 from pokezero.showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    PlayerRelativePublicEvent,
+    _event_detail_category,
     detect_showdown_slot,
     normalize_for_player,
     observation_from_player_state,
@@ -19,6 +21,24 @@ from pokezero.showdown import (
     showdown_submission_for_action,
     stable_category_id,
 )
+
+
+class EventDetailCategoryTest(unittest.TestCase):
+    def _event(self, event_type: str, primary: str) -> PlayerRelativePublicEvent:
+        return PlayerRelativePublicEvent(event_type=event_type, raw_line="", primary=primary)
+
+    def test_enumerable_details_emit_in_vocab_tokens(self) -> None:
+        self.assertEqual(_event_detail_category(self._event("move", "Flamethrower")), "move:Flamethrower")
+        self.assertEqual(_event_detail_category(self._event("switch", "Snorlax")), "species:Snorlax")
+        self.assertEqual(_event_detail_category(self._event("-status", "par")), "status:par")
+
+    def test_unactionable_details_are_dropped(self) -> None:
+        # HP strings, usernames, winner identity, and free-form payloads -> None (padding slot).
+        self.assertIsNone(_event_detail_category(self._event("-damage", "70/100")))
+        self.assertIsNone(_event_detail_category(self._event("-heal", "200/267 tox")))
+        self.assertIsNone(_event_detail_category(self._event("player", "SomeUsername")))
+        self.assertIsNone(_event_detail_category(self._event("win", "SomeUsername")))
+        self.assertIsNone(_event_detail_category(self._event("-weather", "Sandstorm")))
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown"
@@ -254,10 +274,9 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             observation.categorical_ids[event_offset + damage_event_index][0],
             stable_category_id("event:-damage"),
         )
-        self.assertEqual(
-            observation.categorical_ids[event_offset + damage_event_index][1],
-            stable_category_id("condition:70/100"),
-        )
+        # Lean encoding: the -damage detail (raw HP string "70/100") is unactionable — HP is
+        # captured numerically and status via -status events — so the SECONDARY slot is padding.
+        self.assertEqual(observation.categorical_ids[event_offset + damage_event_index][1], 0)
         self.assertEqual(
             observation.categorical_ids[event_offset + damage_event_index][3],
             stable_category_id("event_target:opponent"),
