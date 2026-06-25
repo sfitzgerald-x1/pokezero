@@ -82,23 +82,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Reserved out-of-vocabulary rows in the compact category embedding.",
     )
     train.add_argument(
-        "--category-vocab-from",
-        type=Path,
-        nargs="*",
-        default=None,
-        help="Rollout JSONL files used to derive the compact category vocabulary. Defaults to --data.",
-    )
-    train.add_argument(
-        "--category-vocab-source",
-        choices=("training-data", "randbat-dex"),
-        default="training-data",
-        help="Build the compact category vocab from the training rollouts (default) or the full Gen 3 randbat dex universe.",
-    )
-    train.add_argument(
         "--showdown-root",
         type=Path,
         default=None,
-        help="Built Pokemon Showdown checkout root (required for --category-vocab-source randbat-dex).",
+        help="Built Pokemon Showdown checkout root (required: the category vocabulary is the closed Gen 3 randbat universe).",
     )
     train.set_defaults(func=_train)
 
@@ -363,6 +350,8 @@ def _train(args: argparse.Namespace) -> int:
 
 
 def _benchmark(args: argparse.Namespace) -> int:
+    # Benchmark loads arbitrary checkpoints; the env builds the vocabulary from showdown_root
+    # (the closed-universe default), which matches any checkpoint trained on the same root.
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -431,9 +420,15 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         minimum_benchmark_matchups=MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS,
     )
+    # Build the category vocabulary ONCE and share it between the env (encode-time rows) and the
+    # model config (embedding) so rows can never drift.
+    from .randbat_vocab import gen3_category_vocabulary
+
+    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
+        category_vocab=category_vocab,
     )
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
