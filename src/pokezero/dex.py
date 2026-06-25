@@ -32,6 +32,8 @@ class MoveInfo:
     boosts: Mapping[str, int]
     target: str
     selfdestruct: bool
+    secondary_chance: int = 0  # strongest secondary-effect chance in percent (0-100)
+    secondary_effect: str = ""  # effect class of that secondary (frz / flinch / lower_def / ...)
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,41 @@ const {TypeChart} = require(root + '/dist/data/typechart.js');
 const out = {moves: {}, species: {}, typeChart: {}};
 for (const [id, move] of Object.entries(Moves)) {
   const boosts = move.boosts || (move.secondary && move.secondary.boosts) || {};
+  // Secondary-effect TYPE + chance. A secondary object without an explicit chance is guaranteed
+  // (100%). We summarize the strongest secondary as a single effect label (status / flinch /
+  // confusion / stat change) so the model can distinguish e.g. a freeze chance from an
+  // attack-raise chance; secondaryChance carries its probability.
+  // Stat-change labels are target-explicit: a secondary's `boosts` hits the foe, while `self.boosts`
+  // hits the user — so Psychic's 10% -SpD is lower_foe_spd, but Meteor Mash's 20% +Atk is
+  // raise_self_atk. Statuses/flinch/confusion are always foe-targeted (no direction needed).
+  const statLabel = (boosts, who) => {
+    for (const [stat, val] of Object.entries(boosts || {})) {
+      if (val < 0) return 'lower_' + who + '_' + stat;
+      if (val > 0) return 'raise_' + who + '_' + stat;
+    }
+    return '';
+  };
+  const effectLabel = (s) => {
+    if (!s) return '';
+    if (s.volatileStatus) return String(s.volatileStatus);   // flinch, confusion, ...
+    if (s.status) return String(s.status);                   // brn, par, frz, psn, slp, tox
+    return statLabel(s.boosts, 'foe') || (s.self && statLabel(s.self.boosts, 'self')) || 'other';
+  };
+  const secondaries = [];
+  if (move.secondary) secondaries.push(move.secondary);
+  if (Array.isArray(move.secondaries)) secondaries.push(...move.secondaries);
+  let secondaryChance = 0, secondaryEffect = '';
+  for (const s of secondaries) {
+    if (!s) continue;
+    const c = (typeof s.chance === 'number') ? s.chance : 100;
+    if (c >= secondaryChance) { secondaryChance = c; secondaryEffect = effectLabel(s); }
+  }
+  // Guaranteed self-stat drawbacks (Overheat -2 SpA, Superpower -1 Atk/-1 Def, ...) live in
+  // move.self.boosts at 100% rather than in a probabilistic secondary — capture them too.
+  if (!secondaryEffect && move.self && move.self.boosts) {
+    const l = statLabel(move.self.boosts, 'self');
+    if (l) { secondaryEffect = l; secondaryChance = 100; }
+  }
   out.moves[id] = {
     id,
     name: move.name,
@@ -121,6 +158,8 @@ for (const [id, move] of Object.entries(Moves)) {
     heal: Boolean(move.heal),
     status: move.status || (move.secondary && move.secondary.status) || null,
     boosts,
+    secondaryChance,
+    secondaryEffect,
     target: move.target || '',
     selfdestruct: Boolean(move.selfdestruct)
   };
@@ -211,6 +250,8 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
         },
         target=str(payload.get("target") or ""),
         selfdestruct=bool(payload.get("selfdestruct")),
+        secondary_chance=int(payload.get("secondaryChance") or 0),
+        secondary_effect=str(payload.get("secondaryEffect") or ""),
     )
 
 

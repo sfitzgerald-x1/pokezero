@@ -100,6 +100,32 @@ class Gen3RandbatVocabTests(unittest.TestCase):
             ids = {stable_category_id(key) for key in keys}
             self.assertEqual(len(keys), len(ids), f"hash collision within group {name}")
 
+    def test_belief_bucket_sizes_cover_per_species_maxima(self) -> None:
+        # The belief columns are sized to the Gen 3 per-species maxima and place values
+        # positionally, so a species whose distinct abilities/items/possible-moves exceed the
+        # bucket count would be silently clipped. Guard the invariant so dex/randbat drift fails
+        # loudly here instead of quietly dropping belief facts in the observation.
+        from pokezero.randbat import Gen3RandbatSource
+        from pokezero.showdown import (
+            BELIEF_ABILITY_BUCKET_COUNT,
+            BELIEF_ITEM_BUCKET_COUNT,
+            BELIEF_MOVE_BUCKET_COUNT,
+        )
+
+        source = Gen3RandbatSource.from_showdown_root(SHOWDOWN_ROOT, use_cache=True)
+        max_abilities = max_items = max_moves = 0
+        for universe in source.universes.values():
+            abilities = {v.ability for v in universe.variants if v.ability}
+            items = {v.item for v in universe.variants if v.item}
+            moves = {move for v in universe.variants for move in v.moves}
+            max_abilities = max(max_abilities, len(abilities))
+            max_items = max(max_items, len(items))
+            max_moves = max(max_moves, len(moves))
+
+        self.assertLessEqual(max_abilities, BELIEF_ABILITY_BUCKET_COUNT, "ability bucket too small")
+        self.assertLessEqual(max_items, BELIEF_ITEM_BUCKET_COUNT, "item bucket too small")
+        self.assertLessEqual(max_moves, BELIEF_MOVE_BUCKET_COUNT, "move bucket too small")
+
 
 @unittest.skipUnless(_HAS_GEN3_SETS, "requires a local Pokemon Showdown checkout with gen3 randbat data")
 class Gen3RandbatVocabCoverageTests(unittest.TestCase):
@@ -113,8 +139,8 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
     # Bounded structural/entity prefixes that MUST be covered by the full-universe vocab.
     _REQUIRED_PREFIXES = (
         "species:", "move:", "belief:", "status:", "request_kind:", "pokemon:",
-        "event:", "event_actor:", "event_target:", "self_slot:", "opponent_slot:",
-        "move_slot:", "switch_slot:",
+        "event:", "event_actor:", "event_target:",
+        "move_slot:", "switch_slot:", "move_effect:", "volatile:",
     )
 
     def test_live_games_have_no_required_oov(self) -> None:

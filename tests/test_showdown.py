@@ -10,8 +10,29 @@ from pokezero.observation import (
     SELF_POKEMON_TOKEN_COUNT,
 )
 from pokezero.category_vocab import build_category_vocabulary
+from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo
 from pokezero.showdown import (
+    CATEGORY_MOVE_EFFECT,
+    CATEGORY_SECONDARY,
+    CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    NUMERIC_MOVE_PP_FRACTION,
+    NUMERIC_SECONDARY_CHANCE,
+    NUMERIC_TURN_COUNT,
+    _move_pp_fraction,
+    NUMERIC_BASE_ATK,
+    NUMERIC_BASE_DEF,
+    NUMERIC_BASE_HP,
+    NUMERIC_BASE_SPA,
+    NUMERIC_BASE_SPD,
+    NUMERIC_BASE_SPE,
+    NUMERIC_BOOST_ATK,
+    NUMERIC_BOOST_SPE,
+    NUMERIC_LEVEL,
+    NUMERIC_OPP_HAZARDS,
+    NUMERIC_OPP_SCREENS,
+    NUMERIC_SELF_HAZARDS,
+    NUMERIC_SELF_SCREENS,
     PlayerRelativePublicEvent,
     _event_detail_category,
     detect_showdown_slot,
@@ -21,6 +42,8 @@ from pokezero.showdown import (
     showdown_choice_for_action,
     showdown_submission_for_action,
 )
+
+FIELD_TOKEN_OFFSET = 0
 
 # Shared string→row vocabulary for observation-encoding assertions. Contains every token the
 # tests assert on, so each maps to a distinct row; both the encoder and the expected values use
@@ -36,8 +59,28 @@ _TEST_VOCAB = build_category_vocabulary(
         "belief:possible_item:leftovers",
         "belief:possible_move:psychic", "belief:possible_move:thunderwave", "belief:possible_move:wish",
         "belief:possible_moves:psychic|thunderwave|wish",
+        "weather:raindance",
+        "move_effect:brn",
+        "volatile:confusion", "volatile:leechseed",
     ]
 )
+
+
+def _phase2_fake_dex() -> ShowdownDex:
+    """Minimal dex with the fixture's active self mon (Charizard) + Flamethrower for encoding tests."""
+    charizard = SpeciesInfo(
+        id="charizard",
+        name="Charizard",
+        types=("Fire", "Flying"),
+        base_stats={"hp": 78, "atk": 84, "def": 78, "spa": 109, "spd": 85, "spe": 100},
+    )
+    flamethrower = MoveInfo(
+        id="flamethrower", name="Flamethrower", type="Fire", category="Special",
+        gen3_category="Special", base_power=95, accuracy=100.0, priority=0,
+        recoil=False, drain=False, heal=False, status=None, boosts={},
+        target="normal", selfdestruct=False, secondary_chance=10, secondary_effect="brn",
+    )
+    return ShowdownDex(moves={"flamethrower": flamethrower}, species={"charizard": charizard}, type_chart={})
 
 
 def stable_category_id(value: str) -> int:
@@ -214,15 +257,16 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.metadata["opponent_side_conditions"], [])
 
     def test_side_condition_layer_counts_are_player_relative_in_metadata(self) -> None:
+        # Spikes is the only multi-layer side condition in Gen 3 and caps at 3 layers; a
+        # 4th -sidestart must not push the count past 3. Reflect is single-layer.
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],
             "|-sidestart|p1: HumanFriend|Spikes",
             "|-sidestart|p1: HumanFriend|Spikes",
-            "|-sidestart|p1: HumanFriend|Toxic Spikes",
-            "|-sidestart|p1: HumanFriend|Toxic Spikes",
-            "|-sidestart|p1: HumanFriend|Toxic Spikes",
+            "|-sidestart|p1: HumanFriend|Spikes",
+            "|-sidestart|p1: HumanFriend|Spikes",
             "|-sidestart|p2: PokeZeroBot|Spikes",
-            "|-sidestart|p2: PokeZeroBot|move: Stealth Rock",
+            "|-sidestart|p2: PokeZeroBot|Reflect",
             *fixture_lines("p2_seat_replay.txt")[5:],
         ]
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
@@ -230,12 +274,12 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
         observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
 
-        self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
-        self.assertEqual(state.opponent_side_conditions, ("spikes", "toxicspikes"))
-        self.assertEqual(state.self_side_condition_counts, {"spikes": 1, "stealthrock": 1})
-        self.assertEqual(state.opponent_side_condition_counts, {"spikes": 2, "toxicspikes": 2})
-        self.assertEqual(observation.metadata["self_side_condition_counts"], {"spikes": 1, "stealthrock": 1})
-        self.assertEqual(observation.metadata["opponent_side_condition_counts"], {"spikes": 2, "toxicspikes": 2})
+        self.assertEqual(state.self_side_conditions, ("reflect", "spikes"))
+        self.assertEqual(state.opponent_side_conditions, ("spikes",))
+        self.assertEqual(state.self_side_condition_counts, {"reflect": 1, "spikes": 1})
+        self.assertEqual(state.opponent_side_condition_counts, {"spikes": 3})
+        self.assertEqual(observation.metadata["self_side_condition_counts"], {"reflect": 1, "spikes": 1})
+        self.assertEqual(observation.metadata["opponent_side_condition_counts"], {"spikes": 3})
 
     def test_observation_encodes_player_relative_content(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
@@ -391,6 +435,243 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(damage_event.actor_role, "none")
         self.assertEqual(damage_event.target_role, "opponent")
         self.assertEqual(damage_event.primary, "70/100")
+
+
+class Phase2DynamicStateTest(unittest.TestCase):
+    """Phase 2 dynamic decision-critical state: level, base stats, boosts, weather, hazards."""
+
+    SELF_ACTIVE_OFFSET = FIELD_TOKEN_COUNT  # token 1: first self mon (active Charizard).
+    ACTION_OFFSET = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT
+
+    def _replay_with(self, extra_lines: list[str]):
+        lines = [
+            *fixture_lines("p2_seat_replay.txt")[:5],
+            *extra_lines,
+            *fixture_lines("p2_seat_replay.txt")[5:],
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        return normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+    def test_level_and_base_stats_on_active_self_mon(self) -> None:
+        state = self._replay_with([])
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+        )
+        numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
+        self.assertAlmostEqual(numeric[NUMERIC_LEVEL], 0.78)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_HP], 78 / 200)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_ATK], 84 / 200)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_DEF], 78 / 200)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_SPA], 109 / 200)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_SPD], 85 / 200)
+        self.assertAlmostEqual(numeric[NUMERIC_BASE_SPE], 100 / 200)
+
+    def test_level_present_without_dex_but_base_stats_padding(self) -> None:
+        state = self._replay_with([])
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
+        self.assertAlmostEqual(numeric[NUMERIC_LEVEL], 0.78)  # parsed from details, no dex needed
+        self.assertEqual(numeric[NUMERIC_BASE_SPA], 0.0)  # base stats need the dex
+
+    def test_weather_parsed_and_encoded_on_field_token(self) -> None:
+        state = self._replay_with(["|-weather|RainDance"])
+        self.assertEqual(state.weather, "raindance")
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        self.assertEqual(
+            observation.categorical_ids[FIELD_TOKEN_OFFSET][CATEGORY_SECONDARY],
+            stable_category_id("weather:raindance"),
+        )
+
+    def test_weather_none_clears(self) -> None:
+        state = self._replay_with(["|-weather|RainDance", "|-weather|none"])
+        self.assertIsNone(state.weather)
+
+    def test_boosts_accumulate_on_active_mon(self) -> None:
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|2",
+                "|-boost|p2a: Charizard|atk|1",
+                "|-unboost|p2a: Charizard|spe|1",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"atk": 3, "spe": -1})
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+        )
+        numeric = observation.numeric_features[self.SELF_ACTIVE_OFFSET]
+        self.assertAlmostEqual(numeric[NUMERIC_BOOST_ATK], 3 / 6)
+        self.assertAlmostEqual(numeric[NUMERIC_BOOST_SPE], -1 / 6)
+
+    def test_boosts_clamp_and_reset_on_switch(self) -> None:
+        # +8 worth of boosts clamps to +6; a later switch-in wipes the slot back to zero.
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|6",
+                "|-boost|p2a: Charizard|atk|2",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"atk": 6})
+
+        reset_state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|6",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+                "|switch|p2a: Charizard|Charizard, L78|100/100",
+            ]
+        )
+        self.assertEqual(reset_state.self_active_boosts, {})
+
+    def test_baton_pass_carries_boosts_to_incoming_mon(self) -> None:
+        # Charizard sets +2 Atk then Baton Passes to Snorlax: Snorlax inherits the boost.
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|2",
+                "|move|p2a: Charizard|Baton Pass",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"atk": 2})
+
+    def test_baton_pass_via_switch_from_tag_carries_boosts(self) -> None:
+        # Some replays only tag the switch line ("[from] Baton Pass") without a flag-setting
+        # move line in the recent window; that tag alone must still carry boosts.
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|spe|2",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100|[from] Baton Pass",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"spe": 2})
+
+    def test_psych_up_copies_opponent_boosts(self) -> None:
+        # -copyboost: the self mon (p2) copies the opponent's (p1) boost stages.
+        state = self._replay_with(
+            [
+                "|-boost|p1a: Xatu|spa|2",
+                "|-boost|p1a: Xatu|spd|1",
+                "|-copyboost|p2a: Charizard|p1a: Xatu|[from] move: Psych Up",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"spa": 2, "spd": 1})
+        self.assertEqual(state.opponent_active_boosts, {"spa": 2, "spd": 1})
+
+    def test_normal_switch_after_unrelated_move_resets_boosts(self) -> None:
+        # A non-Baton-Pass move before the switch must NOT carry boosts.
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|2",
+                "|move|p2a: Charizard|Earthquake|p1a: Xatu",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {})
+
+    def test_setboost_overwrites_stage(self) -> None:
+        state = self._replay_with(
+            [
+                "|-boost|p2a: Charizard|atk|2",
+                "|-setboost|p2a: Charizard|atk|6",  # Belly Drum-style absolute set
+            ]
+        )
+        self.assertEqual(state.self_active_boosts, {"atk": 6})
+
+    def test_move_secondary_effect_type_and_chance(self) -> None:
+        state = self._replay_with([])
+        observation = observation_from_player_state(
+            state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
+        )
+        move_token = self.ACTION_OFFSET  # first move action token (Flamethrower).
+        self.assertEqual(
+            observation.categorical_ids[move_token][CATEGORY_MOVE_EFFECT],
+            stable_category_id("move_effect:brn"),
+        )
+        self.assertAlmostEqual(
+            observation.numeric_features[move_token][NUMERIC_SECONDARY_CHANCE], 0.10
+        )
+
+    def test_move_pp_fraction_helper(self) -> None:
+        self.assertAlmostEqual(_move_pp_fraction({"pp": 8, "maxpp": 8}), 1.0)
+        self.assertAlmostEqual(_move_pp_fraction({"pp": 1, "maxpp": 8}), 0.125)
+        self.assertAlmostEqual(_move_pp_fraction({"pp": 0, "maxpp": 8}), 0.0)
+        self.assertAlmostEqual(_move_pp_fraction({}), 1.0)  # absent PP data -> assume full
+        self.assertAlmostEqual(_move_pp_fraction({"pp": 5, "maxpp": 0}), 1.0)  # guard div-by-zero
+
+    def test_move_pp_fraction_defaults_full_without_request_pp(self) -> None:
+        # The fixture request omits pp/maxpp, so the encoded fraction defaults to full (1.0).
+        state = self._replay_with([])
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        self.assertAlmostEqual(
+            observation.numeric_features[self.ACTION_OFFSET][NUMERIC_MOVE_PP_FRACTION], 1.0
+        )
+
+    def test_turn_count_on_field_token(self) -> None:
+        state = self._replay_with(["|turn|7"])
+        self.assertEqual(state.turn_number, 7)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        self.assertAlmostEqual(
+            observation.numeric_features[FIELD_TOKEN_OFFSET][NUMERIC_TURN_COUNT], 7 / 1000
+        )
+
+    def test_volatiles_tracked_and_encoded_on_active_mon(self) -> None:
+        state = self._replay_with(
+            [
+                "|-start|p2a: Charizard|confusion",
+                "|-start|p2a: Charizard|move: Leech Seed",
+            ]
+        )
+        self.assertEqual(state.self_active_volatiles, ("confusion", "leechseed"))
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        volatile_cols = observation.categorical_ids[self.SELF_ACTIVE_OFFSET][
+            CATEGORY_VOLATILE_OFFSET : CATEGORY_VOLATILE_OFFSET + 6
+        ]
+        self.assertIn(stable_category_id("volatile:confusion"), volatile_cols)
+        self.assertIn(stable_category_id("volatile:leechseed"), volatile_cols)
+
+    def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
+        # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
+        # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.
+        state = self._replay_with(
+            [
+                "|-start|p2a: Charizard|ability: Flash Fire",
+                "|-start|p2a: Charizard|typechange|Fire",
+            ]
+        )
+        self.assertEqual(state.self_active_volatiles, ("flashfire",))
+
+    def test_volatiles_cleared_on_end_and_switch(self) -> None:
+        ended = self._replay_with(
+            [
+                "|-start|p2a: Charizard|confusion",
+                "|-end|p2a: Charizard|confusion",
+            ]
+        )
+        self.assertEqual(ended.self_active_volatiles, ())
+
+        switched = self._replay_with(
+            [
+                "|-start|p2a: Charizard|confusion",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(switched.self_active_volatiles, ())
+
+    def test_hazards_and_screens_on_field_token(self) -> None:
+        # Bot is p2 (self). Opponent (p1) sets 3 Spikes; self sets Reflect + Light Screen.
+        state = self._replay_with(
+            [
+                "|-sidestart|p1: HumanFriend|Spikes",
+                "|-sidestart|p1: HumanFriend|Spikes",
+                "|-sidestart|p1: HumanFriend|Spikes",
+                "|-sidestart|p2: PokeZeroBot|Reflect",
+                "|-sidestart|p2: PokeZeroBot|Light Screen",
+            ]
+        )
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        numeric = observation.numeric_features[FIELD_TOKEN_OFFSET]
+        self.assertAlmostEqual(numeric[NUMERIC_OPP_HAZARDS], 1.0)  # 3 spikes / 3
+        self.assertAlmostEqual(numeric[NUMERIC_SELF_HAZARDS], 0.0)
+        self.assertAlmostEqual(numeric[NUMERIC_SELF_SCREENS], 1.0)  # reflect + light screen / 2
+        self.assertAlmostEqual(numeric[NUMERIC_OPP_SCREENS], 0.0)
 
 
 if __name__ == "__main__":

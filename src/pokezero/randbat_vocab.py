@@ -25,12 +25,38 @@ from typing import Iterable, Mapping
 
 from .category_vocab import CategoryVocabulary, build_category_vocabulary, normalize_category_value
 from .dex import PHYSICAL_TYPES, SPECIAL_TYPES, load_showdown_dex_cached
-from .showdown import _normalize_identifier, stable_category_id
+from .showdown import TRACKED_VOLATILES, _normalize_identifier, stable_category_id
 
 # The 17 Gen 3 types (no Fairy) and the three damage classes the encoder emits as raw type
 # facts (type:<t> on pokemon/move tokens, move_category:<c> on move tokens).
 GEN3_TYPES = tuple(sorted(PHYSICAL_TYPES | SPECIAL_TYPES))
 GEN3_MOVE_CATEGORIES = ("Physical", "Special", "Status")
+
+# Gen 3 weathers the encoder surfaces on the field token (weather:<id>, normalized ids).
+GEN3_WEATHERS = ("raindance", "sunnyday", "sandstorm", "hail")
+
+# The complete Gen 3 move secondary-effect type space (move_effect:<id>): the six majors statuses,
+# the two damaging-move volatiles, and a lower_/raise_ label per boostable stat, plus an "other"
+# catch-all. Enumerated statically so every plausible effect has a stable embedding row even if it
+# is absent from the current randbat data; the encoder's actually-emitted labels are unioned on
+# top of this (see gen3_randbat_category_strings), and the live-coverage test guards against drift.
+_BOOSTABLE_STATS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
+GEN3_SECONDARY_EFFECTS = (
+    "brn", "par", "frz", "psn", "tox", "slp",
+    "flinch", "confusion",
+    # Stat changes are target-explicit (foe vs self) so the model can tell a foe-debuff (Psychic's
+    # -SpD) from a self-buff (Meteor Mash's +Atk) or self-drawback (Overheat's -SpA).
+    *(f"lower_foe_{stat}" for stat in _BOOSTABLE_STATS),
+    *(f"raise_foe_{stat}" for stat in _BOOSTABLE_STATS),
+    *(f"lower_self_{stat}" for stat in _BOOSTABLE_STATS),
+    *(f"raise_self_{stat}" for stat in _BOOSTABLE_STATS),
+    "other",
+)
+
+# Active-mon volatile statuses the encoder surfaces (volatile:<id>, from |-start|/|-end|). Sourced
+# from the encoder's closed TRACKED_VOLATILES set so every emitted token has an enumerated row
+# (the encoder ignores any -start payload outside this set, so there is no volatile OOV path).
+GEN3_VOLATILES = tuple(sorted(TRACKED_VOLATILES))
 
 # Items the Gen 3 random-battle generator can assign, from
 # data/random-battles/gen3/teams.ts getItem().
@@ -173,7 +199,9 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
 
     structural: list[str] = ["field", "action", "pokemon:self", "pokemon:opponent", "action:move", "action:switch", "winner:none"]
     structural += [f"request_kind:{kind}" for kind in REQUEST_KINDS]
-    structural += [f"self_slot:{i}" for i in range(6)] + [f"opponent_slot:{i}" for i in range(6)]
+    # NOTE: party-slot tokens (self_slot/opponent_slot) are intentionally NOT enumerated — the
+    # encoder no longer emits them (team order is arbitrary in randbats). The action SLOT column
+    # still uses move_slot/switch_slot below.
     structural += [f"move_slot:{i}" for i in range(1, 5)] + [f"switch_slot:{i}" for i in range(1, 6)]
     structural += [f"event:{event_type}" for event_type in EVENT_TYPES]
     structural += [f"event_actor:{role}" for role in EVENT_ROLES] + [f"event_target:{role}" for role in EVENT_ROLES]
@@ -186,6 +214,22 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
         [f"type:{type_name}" for type_name in GEN3_TYPES]
         + [f"move_category:{category}" for category in GEN3_MOVE_CATEGORIES]
     )
+
+    # Weather surfaced on the field token (closed set; encoder normalizes the protocol id).
+    groups["weather"] = [f"weather:{weather}" for weather in GEN3_WEATHERS]
+
+    # Move secondary-effect type labels the encoder emits on move tokens (move_effect:<id>). The
+    # complete static Gen 3 effect space is unioned with whatever the dex actually derives over the
+    # closed randbat move universe, so coverage is both exhaustive and exact (no missed label).
+    move_effects: set[str] = set(GEN3_SECONDARY_EFFECTS)
+    for move in (*entities["moves"], *UNIVERSAL_MOVES):
+        info = dex.move_info(move)
+        if info is not None and info.secondary_effect:
+            move_effects.add(info.secondary_effect)
+    groups["move_effects"] = [f"move_effect:{effect}" for effect in sorted(move_effects)]
+
+    # Active-mon volatile statuses the encoder surfaces (volatile:<id>).
+    groups["volatiles"] = [f"volatile:{name}" for name in GEN3_VOLATILES]
 
     return groups
 
