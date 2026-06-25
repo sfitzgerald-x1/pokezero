@@ -135,12 +135,12 @@ NUMERIC_OPP_FUTURE_SIGHT = 36
 # Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
 # (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
 NUMERIC_TOXIC_STAGE = 37
-# Field token: OBSERVED speed-order belief for the current active matchup — +1 if the player's
-# active is known faster, -1 if known slower, 0 if not yet observed. Inferred from the order of
-# equal-priority moves between the two actives (raw turn-order evidence the model can't get from
-# base speed alone — it reflects actual EVs / nature / paralysis / boosts). Confidence is implicit
-# in the magnitude (0 = unobserved). See _observed_speed_advantage.
-NUMERIC_SPEED_ADVANTAGE = 38
+# Field token: OBSERVED speed-order relation for the current active matchup — a ternary value:
+# +1 if the player's active was observed faster, -1 if slower, 0 if not (yet) observed. Inferred
+# from the order of equal-priority moves between the two actives (raw turn-order evidence the model
+# can't get from base speed alone — it reflects actual EVs / nature / paralysis / boosts), under
+# the current speed regime. See _observed_speed_order.
+NUMERIC_OBSERVED_SPEED_ORDER = 38
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -969,28 +969,53 @@ def _encode_field_token(
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_FUTURE_SIGHT, min(1.0, state.self_future_sight_turns / 2.0))
     if state.opponent_future_sight_turns:
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
-    speed_advantage = _observed_speed_advantage(state, dex)
-    if speed_advantage:
-        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SPEED_ADVANTAGE, speed_advantage)
+    speed_order = _observed_speed_order(state, dex)
+    if speed_order:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OBSERVED_SPEED_ORDER, speed_order)
 
 
-def _observed_speed_advantage(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> float:
-    """Observed speed order for the current active matchup: +1 self faster, -1 slower, 0 unknown.
+def _is_speed_regime_boundary(event: PlayerRelativePublicEvent) -> bool:
+    """True if an event changes who-is-faster, so earlier move-order observations no longer hold.
+
+    Covers a new active (switch/drag/replace), a Speed boost/unboost (Agility, Dragon Dance,
+    Scary Face, …), and paralysis being applied or cured (¼ Speed in Gen 3). Weather is deliberately
+    excluded — it only matters for Swift Swim / Chlorophyll (abilities we can't see) and its per-turn
+    upkeep event would otherwise reset the signal every turn.
+    """
+    event_type = event.event_type
+    primary = (event.primary or "").lower()
+    if event_type in {"switch", "drag", "replace"} and event.actor_role in {"self", "opponent"}:
+        return True
+    if event_type in {"-boost", "-unboost"} and primary == "spe":
+        return True
+    if event_type in {"-status", "-curestatus"} and primary == "par":
+        return True
+    return False
+
+
+def _is_quick_claw_activation(event: PlayerRelativePublicEvent) -> bool:
+    """True if Quick Claw fired — it lets an equal-priority move go first regardless of speed."""
+    return event.event_type == "-activate" and "quick claw" in (event.primary or "").lower()
+
+
+def _observed_speed_order(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> float:
+    """Observed speed order for the current matchup: +1 self faster, -1 slower, 0 unknown.
 
     Inference over raw turn-order evidence: in a turn where both actives used moves of EQUAL
-    priority, whichever moved first had the higher effective speed (which already reflects the
-    opponent's hidden EVs / nature, plus paralysis and boosts — none of which base speed reveals).
-    Only the current matchup counts, so observations before the latest switch-in of either side are
-    ignored; the most recent qualifying turn wins. Priority-decided orders carry no speed signal.
+    priority, whichever moved first had the higher effective speed (which reflects the opponent's
+    hidden EVs / nature, plus paralysis and boosts that base speed can't reveal). It is only valid
+    under the *current* speed regime, so observations before the most recent speed-regime boundary
+    (switch-in, Speed boost/unboost, paralysis applied/cured) are ignored — otherwise an Agility or
+    Thunder Wave could leave the encoded order backwards. The most recent qualifying turn wins;
+    priority-decided orders and Quick-Claw turns carry no speed signal.
     """
     if dex is None:
         return 0.0
     events = state.recent_events
-    # The current matchup begins after the most recent switch-in of either side.
-    start = 0
+    regime_start = 0
     for index, event in enumerate(events):
-        if event.event_type in {"switch", "drag", "replace"} and event.actor_role in {"self", "opponent"}:
-            start = index + 1
+        if _is_speed_regime_boundary(event):
+            regime_start = index + 1
 
     def _segment_result(segment: list[tuple[str, str]]) -> float | None:
         self_move = next((name for role, name in segment if role == "self"), None)
@@ -1005,16 +1030,24 @@ def _observed_speed_advantage(state: PlayerRelativeBattleState, dex: "ShowdownDe
 
     result = 0.0
     segment: list[tuple[str, str]] = []
-    for event in events[start:]:
+    quick_claw_turn = False
+    for event in events[regime_start:]:
         if event.event_type == "turn":
-            outcome = _segment_result(segment)
-            if outcome is not None:
-                result = outcome  # keep the most recent observed turn
+            if not quick_claw_turn:
+                outcome = _segment_result(segment)
+                if outcome is not None:
+                    result = outcome  # keep the most recent observed turn
             segment = []
+            quick_claw_turn = False
         elif event.event_type == "move" and event.actor_role in {"self", "opponent"} and event.primary:
             segment.append((event.actor_role, event.primary))
-    trailing = _segment_result(segment)
-    return trailing if trailing is not None else result
+        elif _is_quick_claw_activation(event):
+            quick_claw_turn = True
+    if not quick_claw_turn:
+        trailing = _segment_result(segment)
+        if trailing is not None:
+            result = trailing
+    return result
 
 
 # Gen 3 has a single entry hazard (Spikes, max 3 layers); Toxic Spikes / Stealth Rock are
