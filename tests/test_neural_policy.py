@@ -76,14 +76,14 @@ def rollout_record() -> RolloutRecord:
 
 class NeuralPolicyScaffoldTest(unittest.TestCase):
     def setUp(self) -> None:
-        # Self-play (iterate) builds the compact randbat-dex vocab from --showdown-root;
-        # stub the dex lookups so CLI tests stay fast without a real Showdown checkout.
-        vocab_patch = patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30))
-        alias_patch = patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),))
+        # Self-play (iterate) builds the string->row CategoryVocabulary from --showdown-root;
+        # stub it so CLI tests stay fast without a real Showdown checkout.
+        from pokezero.category_vocab import build_category_vocabulary
+
+        fake_vocab = build_category_vocabulary(["species:a", "species:b", "move:c"], oov_buckets=16)
+        vocab_patch = patch("pokezero.randbat_vocab.gen3_category_vocabulary", return_value=fake_vocab)
         vocab_patch.start()
-        alias_patch.start()
         self.addCleanup(vocab_patch.stop)
-        self.addCleanup(alias_patch.stop)
 
     def test_transformer_policy_config_defaults_match_replay_observation_shape(self) -> None:
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
@@ -547,13 +547,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         return captured["model_config"]
 
     def test_neural_cli_iterate_builds_compact_randbat_dex_config(self) -> None:
-        # setUp stubs the randbat-dex builders to vocab (10, 20, 30) + alias (999 -> 10).
+        # setUp stubs gen3_category_vocabulary to a 3-token string vocab (oov_buckets=16).
         model_config = self._run_iterate_capturing_model_config(
             ["--showdown-root", "/tmp/showdown", "--category-oov-buckets", "4"]
         )
-        self.assertEqual(model_config.category_vocab, (10, 20, 30))
-        self.assertEqual(model_config.category_aliases, ((999, 10),))
-        self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 4)
+        self.assertEqual(model_config.category_vocab, ("move:c", "species:a", "species:b"))
+        self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 16)
 
     def test_neural_cli_iterate_requires_showdown_root(self) -> None:
         with (

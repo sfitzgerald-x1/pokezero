@@ -14,8 +14,10 @@ import threading
 import time
 from typing import Any, Mapping, Optional, TextIO
 
+from .dex import load_showdown_dex_cached
 from .env import BattleFormat, PlayerId, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
+from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
@@ -102,7 +104,14 @@ class LocalShowdownEnv:
 
     def observe(self, player: PlayerId) -> PokeZeroObservationV0:
         state = self._state_for_player(player)
-        return observation_from_player_state(state, spec=self.config.observation_spec)
+        root = self.config.resolved_showdown_root()
+        # Both cached: rows align deterministically with the model's vocab built from the same root.
+        return observation_from_player_state(
+            state,
+            category_vocab=gen3_category_vocabulary(root),
+            spec=self.config.observation_spec,
+            dex=load_showdown_dex_cached(root),
+        )
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:
         return self.observe(player).legal_action_mask

@@ -13,6 +13,7 @@ import re
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
+    from .category_vocab import CategoryVocabulary
     from .dex import ShowdownDex
 
 from .actions import (
@@ -313,14 +314,16 @@ def normalize_for_player(
 def observation_from_player_state(
     state: PlayerRelativeBattleState,
     *,
+    category_vocab: "CategoryVocabulary",
     spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC,
     dex: "ShowdownDex | None" = None,
 ) -> PokeZeroObservationV0:
     """Encode normalized replay state into fixed-shape observation rows.
 
-    When ``dex`` is supplied, raw mechanical facts (Pokemon types; move type / damage class /
-    base power / priority / accuracy) are populated into the type/mechanic feature slots. When
-    it is None those slots stay padding (callers without a dex still produce a valid tensor).
+    Categorical slots are encoded as raw token strings and converted to compact embedding rows
+    via ``category_vocab`` (required) in a single pass. When ``dex`` is supplied, raw mechanical
+    facts (Pokemon types; move type / damage class / base power / priority / accuracy) are
+    populated into the type/mechanic feature slots; without it those slots stay padding.
     """
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
@@ -347,10 +350,12 @@ def observation_from_player_state(
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_recent_event_tokens(categorical_ids, numeric_features, state, spec)
+    # Convert the raw category strings to compact embedding rows in one pass.
+    categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
     token_type_ids = _token_type_ids(spec)
     attention_mask = _attention_mask(state, spec)
     return PokeZeroObservationV0(
-        categorical_ids=tuple(tuple(row) for row in categorical_ids),
+        categorical_ids=tuple(tuple(row) for row in categorical_rows),
         numeric_features=tuple(tuple(row) for row in numeric_features),
         token_type_ids=token_type_ids,
         attention_mask=attention_mask,
@@ -604,8 +609,10 @@ def _opponent_team_from_public_state(
     return tuple(replay.public_revealed.get(opponent_slot, ()))
 
 
-def _blank_categorical_rows(spec: ObservationSpec) -> list[list[int]]:
-    return [[0] * spec.categorical_feature_count for _ in range(spec.token_count)]
+def _blank_categorical_rows(spec: ObservationSpec) -> list[list[str]]:
+    # Categorical slots hold the raw token *strings* during encoding; observation_from_player_
+    # state converts them to compact embedding rows via the CategoryVocabulary in one pass.
+    return [[""] * spec.categorical_feature_count for _ in range(spec.token_count)]
 
 
 def _blank_numeric_rows(spec: ObservationSpec) -> list[list[float]]:
@@ -871,9 +878,9 @@ def _condition_features(condition: str | None) -> _ConditionFeatures:
     return _ConditionFeatures(hp_fraction=hp_fraction, status=status, fainted=fainted)
 
 
-def _set_category(row: list[int], index: int, value: str) -> None:
+def _set_category(row: list[str], index: int, value: str) -> None:
     if index < len(row):
-        row[index] = stable_category_id(value)
+        row[index] = value
 
 
 def _set_numeric(row: list[float], index: int, value: float) -> None:
@@ -887,15 +894,24 @@ def _known_or_possible_values(known: str | None, possible: Sequence[str]) -> tup
     return _compact_belief_values(possible)
 
 
-def _encode_belief_fact_categories(row: list[int], fact_kind: str, values: Sequence[str]) -> None:
+def _belief_bucket_position(fact_kind: str, normalized: str, bucket_count: int) -> int:
+    """Deterministic position in [0, bucket_count) for a belief fact within its token block."""
+    digest = hashlib.blake2b(f"belief_bucket:{fact_kind}:{normalized}".encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % bucket_count
+
+
+def _encode_belief_fact_categories(row: list[str], fact_kind: str, values: Sequence[str]) -> None:
     offset, bucket_count = _belief_bucket_range(fact_kind)
     for value in _compact_belief_values(values):
         normalized = _normalize_identifier(value)
-        bucket = stable_category_id(f"belief_bucket:{fact_kind}:{normalized}", buckets=bucket_count) - 1
+        # The bucket *position* (which of the N belief columns) is a small positional hash; the
+        # stored value is the category string, converted to a vocab row later. (This is not a
+        # row id, so it does not use the retired 1M-bucket id space.)
+        bucket = _belief_bucket_position(fact_kind, normalized, bucket_count)
         column = offset + bucket
         if column >= len(row) or row[column]:
             continue
-        row[column] = stable_category_id(f"belief:{fact_kind}:{normalized}")
+        row[column] = f"belief:{fact_kind}:{normalized}"
 
 
 def _belief_bucket_range(fact_kind: str) -> tuple[int, int]:

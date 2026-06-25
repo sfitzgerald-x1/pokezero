@@ -9,6 +9,7 @@ from pokezero.observation import (
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
 )
+from pokezero.category_vocab import build_category_vocabulary
 from pokezero.showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativePublicEvent,
@@ -19,8 +20,29 @@ from pokezero.showdown import (
     parse_showdown_replay,
     showdown_choice_for_action,
     showdown_submission_for_action,
-    stable_category_id,
 )
+
+# Shared string→row vocabulary for observation-encoding assertions. Contains every token the
+# tests assert on, so each maps to a distinct row; both the encoder and the expected values use
+# this same vocab (so assertions hold regardless of exact row numbers).
+_TEST_VOCAB = build_category_vocabulary(
+    [
+        "request_kind:move",
+        "species:Charizard", "species:Arcanine", "species:Xatu", "species:Snorlax", "species:Blissey",
+        "move:flamethrower", "move:dragonclaw", "move:Flamethrower",
+        "event:player", "event:move", "event:-damage",
+        "event_actor:self", "event_target:opponent",
+        "belief:possible_ability:earlybird", "belief:possible_ability:synchronize",
+        "belief:possible_item:leftovers",
+        "belief:possible_move:psychic", "belief:possible_move:thunderwave", "belief:possible_move:wish",
+        "belief:possible_moves:psychic|thunderwave|wish",
+    ]
+)
+
+
+def stable_category_id(value: str) -> int:
+    """Test shim: resolve a token string to its row in the shared test vocabulary."""
+    return _TEST_VOCAB.encode(value)
 
 
 class EventDetailCategoryTest(unittest.TestCase):
@@ -161,7 +183,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
-        observation = observation_from_player_state(state)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
 
         observation.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
         self.assertEqual(observation.perspective.showdown_slot, "p2")
@@ -184,7 +206,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
 
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
-        observation = observation_from_player_state(state)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
 
         self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
         self.assertEqual(state.opponent_side_conditions, ())
@@ -206,7 +228,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
 
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
-        observation = observation_from_player_state(state)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
 
         self.assertEqual(state.self_side_conditions, ("spikes", "stealthrock"))
         self.assertEqual(state.opponent_side_conditions, ("spikes", "toxicspikes"))
@@ -219,7 +241,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
         state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
 
-        observation = observation_from_player_state(state)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
         self_offset = FIELD_TOKEN_COUNT
         opponent_offset = self_offset + SELF_POKEMON_TOKEN_COUNT
         action_offset = opponent_offset + OPPONENT_POKEMON_TOKEN_COUNT
@@ -292,7 +314,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             set_source=FakeSetSource(),
         )
 
-        observation = observation_from_player_state(state)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
         opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
         xatu_offset = opponent_offset + 1
 
@@ -321,7 +343,7 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             format_id="gen3randombattle",
             set_source=ReorderedFakeSetSource(),
         )
-        reordered = observation_from_player_state(reordered_state)
+        reordered = observation_from_player_state(reordered_state, category_vocab=_TEST_VOCAB)
         self.assertEqual(
             observation.categorical_ids[xatu_offset],
             reordered.categorical_ids[xatu_offset],

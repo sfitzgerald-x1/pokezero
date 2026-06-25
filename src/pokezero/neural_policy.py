@@ -100,46 +100,38 @@ class TransformerPolicyConfig:
     dropout: float = 0.1
     action_schema_version: str = ACTION_SCHEMA_VERSION
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
-    category_vocab: tuple[int, ...] = ()
+    category_vocab: tuple[str, ...] = ()
     category_oov_buckets: int = 0
-    category_aliases: tuple[tuple[int, int], ...] = ()
 
     @classmethod
     def compact_category(
         cls,
         *,
-        category_vocab: Iterable[int],
+        category_vocab: Iterable[str],
         category_oov_buckets: int = DEFAULT_CATEGORY_OOV_BUCKETS,
-        category_aliases: Iterable[tuple[int, int]] = (),
         **kwargs: Any,
     ) -> "TransformerPolicyConfig":
-        """Build a config whose category embedding is a compact vocabulary.
+        """Build a config whose category embedding is a direct string→row vocabulary.
 
-        ``category_vocab`` is the set of original (hashed) categorical ids that should
-        keep a dedicated, collision-free embedding row; ids outside it fold into
-        ``category_oov_buckets`` reserved rows. The full embedding has
-        ``1 + len(vocab) + oov_buckets`` rows (row 0 is padding).
+        ``category_vocab`` is the sorted closed-universe token strings (row = index+1); strings
+        outside it fold into ``category_oov_buckets`` reserved rows. The full embedding has
+        ``1 + len(vocab) + oov_buckets`` rows (row 0 is padding). The encoder pre-converts
+        strings to rows via the matching CategoryVocabulary, so the model embeds rows directly
+        (no remap). Stored here for reproducibility + embedding-size validation.
         """
-        ids = tuple(sorted({int(value) for value in category_vocab if int(value) > 0}))
-        size = 1 + len(ids) + int(category_oov_buckets)
-        aliases = tuple(sorted({(int(alias), int(base)) for alias, base in category_aliases}))
+        tokens = tuple(sorted({str(value).strip().lower() for value in category_vocab if str(value).strip()}))
+        size = 1 + len(tokens) + int(category_oov_buckets)
         return cls(
             categorical_vocab_size=size,
-            category_vocab=ids,
+            category_vocab=tokens,
             category_oov_buckets=int(category_oov_buckets),
-            category_aliases=aliases,
             **kwargs,
         )
 
     def __post_init__(self) -> None:
-        # Normalize to an immutable tuple of ints so a frozen config stays hashable and
+        # Normalize to an immutable tuple of strings so a frozen config stays hashable and
         # to_dict()/from_dict() round-trips regardless of whether a list or tuple was passed.
-        object.__setattr__(self, "category_vocab", tuple(int(value) for value in self.category_vocab))
-        # Sort by alias id: the model's remap uses torch.searchsorted, which requires
-        # sorted alias keys regardless of how the config was constructed.
-        object.__setattr__(
-            self, "category_aliases", tuple(sorted((int(alias), int(base)) for alias, base in self.category_aliases))
-        )
+        object.__setattr__(self, "category_vocab", tuple(str(value) for value in self.category_vocab))
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
@@ -174,27 +166,16 @@ class TransformerPolicyConfig:
             raise ValueError("category_vocab is required; build configs with compact_category(...).")
         if self.category_oov_buckets < 1:
             raise ValueError("category_oov_buckets must be >= 1 when category_vocab is set.")
-        ids = self.category_vocab
-        if ids[0] < 1:
-            raise ValueError("category_vocab ids must be >= 1.")
-        if any(earlier >= later for earlier, later in zip(ids, ids[1:])):
-            raise ValueError("category_vocab must be sorted and unique.")
-        expected = 1 + len(ids) + self.category_oov_buckets
+        tokens = self.category_vocab
+        if any(not str(token).strip() for token in tokens):
+            raise ValueError("category_vocab tokens must be non-empty.")
+        if any(earlier >= later for earlier, later in zip(tokens, tokens[1:])):
+            raise ValueError("category_vocab must be sorted and unique (normalized).")
+        expected = 1 + len(tokens) + self.category_oov_buckets
         if self.categorical_vocab_size != expected:
             raise ValueError(
                 "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
             )
-        vocab_set = set(ids)
-        alias_keys = [alias for alias, _ in self.category_aliases]
-        if len(alias_keys) != len(set(alias_keys)):
-            raise ValueError("category_aliases must have unique alias ids.")
-        for alias, base in self.category_aliases:
-            if alias <= 0 or base <= 0:
-                raise ValueError("category_aliases ids must be >= 1.")
-            if base not in vocab_set:
-                raise ValueError("category_aliases base id must be in category_vocab.")
-            if alias in vocab_set:
-                raise ValueError("category_aliases alias id must not be a category_vocab entry.")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -224,9 +205,8 @@ class TransformerPolicyConfig:
             dropout=_float_field(payload, "dropout", 0.1),
             action_schema_version=_str_field(payload, "action_schema_version", ACTION_SCHEMA_VERSION),
             observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
-            category_vocab=tuple(int(value) for value in (payload.get("category_vocab") or ())),
+            category_vocab=tuple(str(value) for value in (payload.get("category_vocab") or ())),
             category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
-            category_aliases=tuple((int(pair[0]), int(pair[1])) for pair in (payload.get("category_aliases") or ())),
         )
 
 
@@ -351,48 +331,9 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             self.policy_head = nn.Linear(config.embedding_dim, 1)
             self.value_head = nn.Linear(config.embedding_dim, 1)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
-            # The category embedding is always a compact vocabulary (the legacy hash
-            # embedding is retired). The remap lookup is a non-persistent buffer rebuilt
-            # from config on load, so the checkpoint only stores the small vocab list.
-            self.register_buffer(
-                "category_vocab_sorted",
-                torch.tensor(config.category_vocab, dtype=torch.long),
-                persistent=False,
-            )
-            self._category_oov_buckets = int(config.category_oov_buckets)
-            self._category_vocab_len = len(config.category_vocab)
-            self._category_has_aliases = bool(config.category_aliases)
-            if self._category_has_aliases:
-                # Aliases collapse cosmetic-forme ids onto a base-species vocab id
-                # (sorted by alias id for searchsorted membership).
-                self.register_buffer(
-                    "category_alias_keys",
-                    torch.tensor([alias for alias, _ in config.category_aliases], dtype=torch.long),
-                    persistent=False,
-                )
-                self.register_buffer(
-                    "category_alias_values",
-                    torch.tensor([base for _, base in config.category_aliases], dtype=torch.long),
-                    persistent=False,
-                    )
-
-        def _remap_category_ids(self, ids: Any) -> Any:
-            # Map original hashed ids -> compact rows. In-vocab ids get a unique,
-            # collision-free row (lossless); unseen ids fold into the reserved OOV
-            # block; padding (0) stays 0.
-            if getattr(self, "_category_has_aliases", False):
-                # Collapse cosmetic-forme ids onto their base-species id before lookup.
-                alias_keys = self.category_alias_keys
-                alias_pos = torch.searchsorted(alias_keys, ids).clamp(max=alias_keys.numel() - 1)
-                is_alias = alias_keys[alias_pos] == ids
-                ids = torch.where(is_alias, self.category_alias_values[alias_pos], ids)
-            sorted_ids = self.category_vocab_sorted
-            position = torch.searchsorted(sorted_ids, ids).clamp(max=sorted_ids.numel() - 1)
-            in_vocab = (sorted_ids[position] == ids) & (ids > 0)
-            vocab_compact = position + 1
-            oov_compact = (1 + self._category_vocab_len) + ids.remainder(self._category_oov_buckets)
-            compact = torch.where(in_vocab, vocab_compact, oov_compact)
-            return torch.where(ids > 0, compact, torch.zeros_like(ids))
+            # The observation already stores compact embedding rows (the encoder converts token
+            # strings to rows via the matching CategoryVocabulary), so the embedding is indexed
+            # directly — no in-model hash→row remap.
 
         def forward(
             self,
@@ -405,8 +346,7 @@ if nn is not None:  # pragma: no cover - optional dependency path.
         ) -> TransformerPolicyOutput:
             _validate_tensor_shapes(categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask, self.config)
             batch_size, window_size, token_count, _ = categorical_ids.shape
-            category_ids = self._remap_category_ids(categorical_ids.long())
-            clipped_categories = category_ids.clamp(min=0, max=self.config.categorical_vocab_size - 1)
+            clipped_categories = categorical_ids.long().clamp(min=0, max=self.config.categorical_vocab_size - 1)
             category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
             token_embeddings = self.token_type_embedding(
                 token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
