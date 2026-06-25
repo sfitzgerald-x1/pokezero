@@ -27,6 +27,10 @@ more than 80% of the time**, reached by *self-play learning* rather than imitati
   no loss in benchmark strength. **The trunk is now ~270K params of ~1.3M total — there is
   large headroom to grow the network and add structure while staying small enough for
   CPU proof-of-life and a consumer GPU.** This is what makes the hypotheses below affordable.
+- The RL infrastructure (PPO objective, eval-only benchmark-reference, TensorBoard) is built and
+  a first self-play pilot ran but **plateaued vs `max-damage` at ~0.24** — for reasons that are
+  about the *loop*, not the thesis. See "Findings So Far & The Self-Play Concern" below before
+  reading the hypotheses.
 
 ### Definition of Done
 - A checkpoint beats `max-damage` in a mirrored shared-opponent benchmark with **Wilson 95%
@@ -50,6 +54,73 @@ prediction, setup, HP preservation) — so `max-damage` is both a meaningful bar
 signal that self-play is learning real tactics. >80% is an ambitious-but-reachable target
 against a no-switch/no-status opponent.
 
+## Findings So Far & The Self-Play Concern (first pilot)
+
+The RL infrastructure now exists end-to-end: a PPO clipped-surrogate training objective
+(PR #208), an eval-only `--benchmark-reference-policy` so each iteration is scored vs
+`max-damage` without it entering training (PR #209), and TensorBoard scalars including
+`winrate/max-damage` (PR #210). The first BC-bootstrapped PPO self-play pilot has run on CPU.
+**It plateaued well below the bar — and the diagnosis matters more than the number.**
+
+- **Setup:** rebuilt a randbat-dex-vocab behavior-cloning bootstrap from the scripted teacher
+  (0.96 vs `random-legal`, 0.78 vs `simple-legal`, **0.21 vs `max-damage`**), then ran 10
+  iterations of PPO self-play against a diverse pool (self + `simple-legal` + `scripted-teacher`),
+  150 games/iteration.
+- **Result:** the policy kept improving against its pool-mates but **plateaued vs `max-damage`
+  at ~0.24 (best 0.30), no upward trend.**
+
+### Why it plateaued — and why this does *not* yet refute self-play
+
+The pilot manifests show the loop **barely did self-play, and what little it did froze fast**.
+This is the central concern to fix before drawing any conclusion about whether self-play can
+beat `max-damage`:
+
+1. **No mirror matches early.** This loop's "self-play" is *current-vs-(fixed pool + promoted
+   history)*, and the history pool starts empty — a self snapshot only enters after a checkpoint
+   is *promoted*. So iterations 1–5 trained **only against `simple-legal` + `scripted-teacher`**:
+   the same conventional distribution the BC bootstrap already cloned. There was no
+   current-vs-current game at all until iteration 6.
+2. **The collector froze.** The candidate advanced only at iterations 3 and 5; from iteration 6
+   on, candidate-vs-incumbent sat at ~0.45–0.50 (`failed_to_beat_incumbent` every time). 0.5 vs
+   its own snapshot *is* the self-play fixed point — the arms race stalled almost immediately and
+   the policy just jittered inside the BC basin.
+3. **No search + weak exploration.** Unlike AGZ (whose escalation comes from MCTS-amplified
+   targets over millions of games), this is model-free policy gradient on a small net exploring
+   only via softmax sampling + a tiny entropy bonus. The population never *generates*
+   `max-damage`'s hyper-aggressive "never switch, always nuke" corner strategy — and you cannot
+   learn to counter a strategy your self-play never produces.
+4. **Self-play optimizes its own equilibrium, not robustness to an external exploiter.** A
+   converged self-play policy is robust against the strategies it *encountered*; it carries no
+   guarantee of beating an out-of-distribution fixed opponent that plays a specific
+   exploitable-but-effective style the population never explored. (Well-known self-play failure
+   mode: strong vs self, still loses to a simple unseen exploiter.)
+5. **Tiny scale.** 150 games/iteration × 10 iterations on a ~1.3M-param net is far short of what
+   a model-free self-play arms race needs to discover and stabilize new tactics.
+
+**Conclusion: H1 is not refuted — we never ran a genuine self-play arms race.** The plateau is
+consistent with "the loop reinforced the bootstrap distribution and froze," not with "self-play
+cannot beat `max-damage`."
+
+### Revised plan: fix self-play *first*, seed aggression only as a fallback
+
+Before concluding self-play is insufficient (and falling back to curriculum), make the loop
+actually function as an arms race and re-test the emergence thesis directly:
+
+- **Mirror matches from iteration 1** — include current-vs-current self-play in collection from
+  the start, instead of waiting for a promotion to seed the history pool.
+- **Real exploration** — expose/raise collection temperature and entropy so the policy explores
+  outward instead of jittering in the BC basin; consider a softer advancement gate or a small
+  population so the collector keeps moving.
+- **Scale the run** — more iterations and, once it helps, a bigger trunk (H5), watching
+  `winrate/max-damage` live on TensorBoard.
+
+**Only if a genuine self-play run still flatlines** do we seed a `max-damage`-*like* aggressive
+opponent into the **training** pool (H8 as curriculum), with the real `max-damage` held strictly
+eval-only. That is the warranted fallback, but it is curriculum design, not emergence — and it
+risks overfitting to the aggressive style rather than learning general tactics, so it is the
+second choice, not the first. The honest experiment is: does a *real* self-play arms race
+discover the counter to relentless aggression on its own?
+
 ## Hypotheses (ranked) — what should move win-rate vs `max-damage`
 
 Each is a falsifiable hypothesis with an experiment and the signal that confirms/refutes it.
@@ -58,10 +129,15 @@ privileged supervision, etc.).
 
 - **H1 — Self-play RL is the necessary unlock (highest expected impact).** Supervised BC
   caps at imitating the teacher; exceeding `max-damage` requires learning from *outcomes*.
-  *Experiment:* build a model-free RL loop (PPO / V-trace) that fine-tunes the BC-bootstrapped
-  compact transformer through self-play against a frozen-checkpoint + random/simple/teacher
-  pool, benchmarking vs `max-damage` each iteration. *Signal:* vs-`max-damage` win rate climbs
-  past 0.80 over training; refuted if it plateaus well below 0.80 despite stable learning.
+  The PPO loop is built and a first pilot ran, but it **did not actually test H1** — the
+  collector froze and the first half had no mirror matches (see "Findings So Far & The
+  Self-Play Concern"). *Experiment (corrected):* run a **genuine self-play arms race** —
+  current-vs-current mirror matches from iteration 1, real exploration (temperature/entropy),
+  and enough iterations that the collector keeps advancing — benchmarking vs `max-damage` each
+  iteration. *Signal:* vs-`max-damage` win rate climbs past 0.80. *Refuted only if* it
+  plateaus well below 0.80 **while the collector is still advancing and exploring** (i.e. a
+  healthy arms race that still can't beat the external exploiter) — not, as in the first
+  pilot, while frozen at a self-play fixed point.
 - **H2 — Temporal memory enables anticipatory switching.** A recurrent core (LSTM/GRU/small
   state-space) over per-turn embeddings should beat the fixed 4-turn window because exploiting
   `max-damage` is a *sequential* read (it keeps clicking the same predictable move). Now cheap
@@ -93,15 +169,23 @@ privileged supervision, etc.).
 - **H8 — Diverse opponent pool / light league for robustness.** Train against self + frozen
   checkpoints + random/simple/scripted-teacher (never `max-damage`). *Experiment:* pool-
   composition ablation. *Signal:* generalization — beating the *unseen* `max-damage` rather
-  than overfitting any single opponent.
+  than overfitting any single opponent. *Note:* the first pilot used exactly this conventional
+  pool and did **not** transfer to `max-damage` (~0.24) — but with a frozen collector and no
+  early mirror matches, so it tested the *loop*, not the pool. The open question is whether a
+  healthy self-play arms race over this pool generates aggression on its own, or whether the
+  pool must be *seeded* with a `max-damage`-like aggressor (curriculum) for the equilibrium to
+  account for relentless aggression.
 
 ## Recommended Experiment Sequence (goal task order)
 
-1. **Build the model-free RL self-play loop (H1).** This is the precondition for everything
-   else and the single most likely unlock. Bootstrap from the compact BC checkpoint; reuse the
-   existing rollout/promotion/benchmark/audit harness; add max-damage as a fixed
-   *benchmark-reference* (eval) opponent each iteration. CPU proof-of-life first (does
-   vs-`max-damage` win rate rise at all?), then scale.
+1. **Build the model-free RL self-play loop (H1). [DONE — infra built, first pilot plateaued.]**
+   The PPO objective, eval-only benchmark-reference, and TensorBoard are merged, and a CPU
+   proof-of-life ran. It plateaued vs `max-damage` because the loop barely self-played (see
+   "Findings So Far"). **Next: make it a real arms race** — current-vs-current mirror matches
+   from iteration 1, exploration knobs (temperature/entropy), and a longer run — then re-read
+   `winrate/max-damage`. Only if a genuine arms race still flatlines, fall back to seeding a
+   `max-damage`-like aggressive *training* opponent (H8 as curriculum; real `max-damage` stays
+   eval-only).
 2. **Add temporal memory + opponent-prediction + pointer head (H2, H3, H4)** on top of the RL
    loop, one ablation at a time, each gated by a benchmark vs `max-damage`.
 3. **Scale the trunk and tune (H5, H7)** once the structure helps, watching CPU inference cost
