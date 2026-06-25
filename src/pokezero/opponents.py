@@ -79,9 +79,18 @@ def opponent_pool_policy_specs(
     checkpoint_history: Iterable[str],
     current_policy_spec: str,
     max_historical_opponents: int,
+    include_current_policy: bool = False,
 ) -> tuple[str, ...]:
-    return tuple(fixed_policy_specs) + historical_opponent_policy_specs(
+    pool = tuple(fixed_policy_specs) + historical_opponent_policy_specs(
         checkpoint_history,
         current_policy_spec=current_policy_spec,
         max_historical_opponents=max_historical_opponents,
     )
+    if include_current_policy:
+        # Mirror match: the current policy plays a copy of itself (current-vs-current),
+        # so self-play happens from iteration 1 rather than only once a checkpoint has been
+        # promoted into the history pool. Skip if an identical spec is already in the pool.
+        current_identity = policy_spec_identity(current_policy_spec)
+        if not any(policy_spec_identity(spec) == current_identity for spec in pool):
+            pool = pool + (current_policy_spec,)
+    return pool
