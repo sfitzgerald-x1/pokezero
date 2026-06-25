@@ -1,5 +1,6 @@
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.belief import CandidateSetSummary
@@ -21,10 +22,12 @@ from pokezero.showdown import (
     NUMERIC_OPP_FUTURE_SIGHT,
     NUMERIC_SELF_FUTURE_SIGHT,
     NUMERIC_SELF_HP_COST,
+    NUMERIC_SPEED_ADVANTAGE,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
     _encode_move_mechanics,
     _move_pp_fraction,
+    _observed_speed_advantage,
     NUMERIC_BASE_ATK,
     NUMERIC_BASE_DEF,
     NUMERIC_BASE_HP,
@@ -86,6 +89,28 @@ def _phase2_fake_dex() -> ShowdownDex:
         target="normal", selfdestruct=False, effect_chance=10, effect_label="brn",
     )
     return ShowdownDex(moves={"flamethrower": flamethrower}, species={"charizard": charizard}, type_chart={})
+
+
+def _speed_fake_dex() -> ShowdownDex:
+    """Dex with a few moves of known priorities for speed-order belief tests."""
+    def _move(move_id: str, priority: int) -> MoveInfo:
+        return MoveInfo(
+            id=move_id, name=move_id, type="Normal", category="Physical", gen3_category="Physical",
+            base_power=60, accuracy=100.0, priority=priority, recoil=False, drain=False, heal=False,
+            status=None, boosts={}, target="normal", selfdestruct=False,
+        )
+    return ShowdownDex(
+        moves={"tackle": _move("tackle", 0), "psychic": _move("psychic", 0), "quickattack": _move("quickattack", 1)},
+        species={}, type_chart={},
+    )
+
+
+def _events(*specs) -> "tuple":
+    """Build a recent-events tuple from (event_type, actor_role, primary) triples."""
+    return tuple(
+        PlayerRelativePublicEvent(event_type=et, raw_line="", actor_role=role, primary=primary)
+        for et, role, primary in specs
+    )
 
 
 def stable_category_id(value: str) -> int:
@@ -753,6 +778,84 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertAlmostEqual(numeric[NUMERIC_SELF_HAZARDS], 0.0)
         self.assertAlmostEqual(numeric[NUMERIC_SELF_SCREENS], 1.0)  # reflect + light screen / 2
         self.assertAlmostEqual(numeric[NUMERIC_OPP_SCREENS], 0.0)
+
+
+class SpeedBeliefTest(unittest.TestCase):
+    """Observed speed-order belief inferred from equal-priority move order in recent events."""
+
+    def _advantage(self, events) -> float:
+        return _observed_speed_advantage(SimpleNamespace(recent_events=events), _speed_fake_dex())
+
+    def test_self_first_equal_priority_is_faster(self) -> None:
+        adv = self._advantage(_events(("move", "self", "tackle"), ("move", "opponent", "psychic")))
+        self.assertEqual(adv, 1.0)
+
+    def test_opponent_first_equal_priority_is_slower(self) -> None:
+        adv = self._advantage(_events(("move", "opponent", "psychic"), ("move", "self", "tackle")))
+        self.assertEqual(adv, -1.0)
+
+    def test_unequal_priority_carries_no_speed_signal(self) -> None:
+        # Opponent's Quick Attack (+1) moving first says nothing about base speed.
+        adv = self._advantage(_events(("move", "opponent", "quickattack"), ("move", "self", "tackle")))
+        self.assertEqual(adv, 0.0)
+
+    def test_one_sided_turn_is_unknown(self) -> None:
+        adv = self._advantage(_events(("move", "self", "tackle")))
+        self.assertEqual(adv, 0.0)
+
+    def test_switch_in_resets_the_matchup(self) -> None:
+        # An observation before the opponent's switch-in belongs to a different matchup.
+        adv = self._advantage(
+            _events(("move", "self", "tackle"), ("move", "opponent", "psychic"), ("switch", "opponent", "Blissey"))
+        )
+        self.assertEqual(adv, 0.0)
+
+    def test_most_recent_turn_wins(self) -> None:
+        adv = self._advantage(
+            _events(
+                ("move", "self", "tackle"), ("move", "opponent", "psychic"),  # turn A: self first (+1)
+                ("turn", "none", None),
+                ("move", "opponent", "psychic"), ("move", "self", "tackle"),  # turn B: opp first (-1)
+            )
+        )
+        self.assertEqual(adv, -1.0)
+
+    def test_no_dex_is_unknown(self) -> None:
+        events = _events(("move", "self", "tackle"), ("move", "opponent", "psychic"))
+        self.assertEqual(_observed_speed_advantage(SimpleNamespace(recent_events=events), None), 0.0)
+
+    def test_encoded_on_field_token(self) -> None:
+        # End-to-end: bot is p2; a turn where Charizard (self) out-speeds Xatu (opp) at equal
+        # priority sets +1 on the field token's speed-advantage slot.
+        lines = [
+            *fixture_lines("p2_seat_replay.txt")[:5],
+            "|turn|1",
+            "|move|p2a: Charizard|Tackle|p1a: Xatu",
+            "|move|p1a: Xatu|Psychic|p2a: Charizard",
+            "|turn|2",
+            *fixture_lines("p2_seat_replay.txt")[5:],
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+        dex = ShowdownDex(
+            moves={
+                "tackle": MoveInfo(
+                    id="tackle", name="Tackle", type="Normal", category="Physical",
+                    gen3_category="Physical", base_power=35, accuracy=100.0, priority=0,
+                    recoil=False, drain=False, heal=False, status=None, boosts={},
+                    target="normal", selfdestruct=False,
+                ),
+                "psychic": MoveInfo(
+                    id="psychic", name="Psychic", type="Psychic", category="Special",
+                    gen3_category="Special", base_power=90, accuracy=100.0, priority=0,
+                    recoil=False, drain=False, heal=False, status=None, boosts={},
+                    target="normal", selfdestruct=False,
+                ),
+            },
+            species={}, type_chart={},
+        )
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB, dex=dex)
+        self.assertEqual(observation.numeric_features[FIELD_TOKEN_OFFSET][NUMERIC_SPEED_ADVANTAGE], 1.0)
 
 
 if __name__ == "__main__":

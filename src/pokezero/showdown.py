@@ -50,7 +50,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=38,
+    numeric_feature_count=39,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -135,6 +135,12 @@ NUMERIC_OPP_FUTURE_SIGHT = 36
 # Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
 # (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
 NUMERIC_TOXIC_STAGE = 37
+# Field token: OBSERVED speed-order belief for the current active matchup — +1 if the player's
+# active is known faster, -1 if known slower, 0 if not yet observed. Inferred from the order of
+# equal-priority moves between the two actives (raw turn-order evidence the model can't get from
+# base speed alone — it reflects actual EVs / nature / paralysis / boosts). Confidence is implicit
+# in the magnitude (0 = unobserved). See _observed_speed_advantage.
+NUMERIC_SPEED_ADVANTAGE = 38
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -459,7 +465,7 @@ def observation_from_player_state(
     """
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
-    _encode_field_token(categorical_ids, numeric_features, state)
+    _encode_field_token(categorical_ids, numeric_features, state, dex=dex)
     _encode_pokemon_tokens(
         categorical_ids,
         numeric_features,
@@ -940,6 +946,8 @@ def _encode_field_token(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
     state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None" = None,
 ) -> None:
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_PRIMARY, f"request_kind:{state.request_kind}")
     # Winner identity is deliberately NOT encoded: it is constant ("none") at every decision
@@ -961,6 +969,52 @@ def _encode_field_token(
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_FUTURE_SIGHT, min(1.0, state.self_future_sight_turns / 2.0))
     if state.opponent_future_sight_turns:
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
+    speed_advantage = _observed_speed_advantage(state, dex)
+    if speed_advantage:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SPEED_ADVANTAGE, speed_advantage)
+
+
+def _observed_speed_advantage(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> float:
+    """Observed speed order for the current active matchup: +1 self faster, -1 slower, 0 unknown.
+
+    Inference over raw turn-order evidence: in a turn where both actives used moves of EQUAL
+    priority, whichever moved first had the higher effective speed (which already reflects the
+    opponent's hidden EVs / nature, plus paralysis and boosts — none of which base speed reveals).
+    Only the current matchup counts, so observations before the latest switch-in of either side are
+    ignored; the most recent qualifying turn wins. Priority-decided orders carry no speed signal.
+    """
+    if dex is None:
+        return 0.0
+    events = state.recent_events
+    # The current matchup begins after the most recent switch-in of either side.
+    start = 0
+    for index, event in enumerate(events):
+        if event.event_type in {"switch", "drag", "replace"} and event.actor_role in {"self", "opponent"}:
+            start = index + 1
+
+    def _segment_result(segment: list[tuple[str, str]]) -> float | None:
+        self_move = next((name for role, name in segment if role == "self"), None)
+        opp_move = next((name for role, name in segment if role == "opponent"), None)
+        if not self_move or not opp_move:
+            return None
+        self_info, opp_info = dex.move_info(self_move), dex.move_info(opp_move)
+        if self_info is None or opp_info is None or self_info.priority != opp_info.priority:
+            return None  # different priority -> order reflects the bracket, not speed
+        first = next(role for role, _ in segment if role in {"self", "opponent"})
+        return 1.0 if first == "self" else -1.0
+
+    result = 0.0
+    segment: list[tuple[str, str]] = []
+    for event in events[start:]:
+        if event.event_type == "turn":
+            outcome = _segment_result(segment)
+            if outcome is not None:
+                result = outcome  # keep the most recent observed turn
+            segment = []
+        elif event.event_type == "move" and event.actor_role in {"self", "opponent"} and event.primary:
+            segment.append((event.actor_role, event.primary))
+    trailing = _segment_result(segment)
+    return trailing if trailing is not None else result
 
 
 # Gen 3 has a single entry hazard (Spikes, max 3 layers); Toxic Spikes / Stealth Rock are

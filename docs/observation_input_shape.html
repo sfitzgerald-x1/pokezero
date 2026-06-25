@@ -43,10 +43,10 @@
   <div class="shape">
     <div class="stat"><div class="v">46</div><div class="l">tokens (sequence)</div></div>
     <div class="stat"><div class="v">39</div><div class="l">categorical ids / token</div></div>
-    <div class="stat"><div class="v">38</div><div class="l">numeric features / token</div></div>
+    <div class="stat"><div class="v">39</div><div class="l">numeric features / token</div></div>
     <div class="stat"><div class="v">903</div><div class="l">embedding rows</div></div>
   </div>
-  <p class="sub">Input tensor per turn: <code>46 &times; (39 categorical ids + 38 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (886 closed-vocab tokens + 16 OOV + padding = 903 rows). The 39 categorical columns: 9 fixed (primary / secondary / role / slot / type×2 / move-category / move-effect / move-priority) + 24 belief buckets (2 ability, 6 item, 16 move) + 6 active-mon volatile columns.</p>
+  <p class="sub">Input tensor per turn: <code>46 &times; (39 categorical ids + 39 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (886 closed-vocab tokens + 16 OOV + padding = 903 rows). The 39 categorical columns: 9 fixed (primary / secondary / role / slot / type×2 / move-category / move-effect / move-priority) + 24 belief buckets (2 ability, 6 item, 16 move) + 6 active-mon volatile columns.</p>
 
   <div class="note">
     <b>How a categorical id works (string → row, no hash).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are human-readable <em>keys</em>; each maps by <b>direct lookup</b> in the enumerated closed-universe vocabulary to a small embedding-row index. The model embeds the <b>row</b> directly — the legacy 1,000,000-bucket blake2b hash + in-model remap are retired:
@@ -159,7 +159,7 @@
     So the window reads, in order: <em>"I clicked Flamethrower at their Skarmory → they switched to Blissey → Skarmory took damage → my Charizard got burned."</em> This is the temporal signal that lets the model notice patterns like "the opponent keeps pivoting out of my Charizard" — the basis for anticipatory switching (hypothesis H2). Note the numeric magnitude of damage and exact HP live in the <em>numeric</em> features of the Pokémon tokens, not here.
   </div>
 
-  <h2>The 38 numeric features</h2>
+  <h2>The 39 numeric features</h2>
   <table>
     <tr><th>#</th><th>Feature</th><th>Meaning</th></tr>
     <tr><td>0</td><td><code>HP_FRACTION</code></td><td>current HP as fraction [0,1]</td></tr>
@@ -183,6 +183,7 @@
     <tr><td>34</td><td><code>SELF_HP_COST</code></td><td>fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25, Explosion 1.0) — a deterrent</td></tr>
     <tr><td>35–36</td><td><code>SELF/OPP_FUTURE_SIGHT</code></td><td>turns until a pending delayed attack (Future Sight / Doom Desire) lands on each side / 2 (field token)</td></tr>
     <tr><td>37</td><td><code>TOXIC_STAGE</code></td><td>badly-poisoned ramp stage / 15 on the active mon (escalating 1/16, 2/16, …; resets on switch) — both sides</td></tr>
+    <tr><td>38</td><td><code>SPEED_ADVANTAGE</code></td><td>observed speed-order <b>belief</b> for the current matchup (field token): +1 self faster, −1 slower, 0 unobserved — inferred from equal-priority move order, not base speed</td></tr>
   </table>
   <div class="note"><b>Encode-time resolution.</b> A few moves are context-dependent and resolved from the acting mon's state when the observation is built (a mon's type/HP are stable enough within a turn): <b>base power</b> for HP-variable moves (Reversal / Flail scale inversely with the user's HP; Eruption / Water Spout directly), and <b>Curse</b>'s effect by the user's type (Ghost → <code>move_effect:curse</code> + 0.5 HP cost; non-Ghost → <code>move_effect:curse_setup</code>).</div>
   <div class="note">The model now sees <b>who</b> (species/move ids + types), <b>how hurt</b> (HP/status), <b>what's still uncertain</b> (belief), <b>how hard / how fast</b> (base power, base stats, level), <b>the dynamic board</b> (boosts, weather, hazards/screens, turn count, volatiles), and <b>per-move tactics</b> (PP scarcity, secondary-effect type + chance).</div>
@@ -235,6 +236,7 @@
     <tr><td><b>turn count</b></td><td>field token</td><td>num [33]: turn/1000</td><td>tempo / stall</td></tr>
     <tr><td><b>move priority</b></td><td>move tokens</td><td>cat [8]: <code>move_priority:&lt;n&gt;</code> + num [13]</td><td><b>discrete turn-order bracket</b> — a higher bracket moves first regardless of speed (Quick Attack +1, Focus Punch -3)</td></tr>
     <tr><td><b>future sight</b></td><td>field token (player-relative)</td><td>num [35–36]: turns/2</td><td>a delayed attack incoming to / outgoing from the player's side (brace, switch, or set up around it)</td></tr>
+    <tr><td><b>speed-order belief</b></td><td>field token</td><td>num [38]: +1/−1/0 (signed confidence)</td><td><b>inference, not a precompute:</b> who is faster in the current matchup, learned from observed equal-priority move order — reveals actual EVs/nature/paralysis/boosts that base speed can't. Like the ability/item belief, this is accumulated evidence over observables, not a static judgment.</td></tr>
     <tr><td><b>toxic ramp stage</b></td><td>active mon token (both sides)</td><td>num [37]: stage/15</td><td>badly-poisoned escalating damage — distinct from the <code>status:tox</code> type; drives stall / switch timing</td></tr>
     <tr><td><b>PP</b></td><td>move tokens</td><td>num [31]: pp/maxpp</td><td>scarcity — avoid relying on a near-empty move (last-PP Hydro Pump)</td></tr>
     <tr><td><b>move effect (type + chance)</b></td><td>move tokens</td><td>cat [7]: <code>move_effect:&lt;id&gt;</code> + num [32]: chance</td><td><b>primary OR secondary</b>, one unified label: status (<code>par</code>), volatile (<code>substitute</code>, <code>leechseed</code>), or a target-explicit, magnitude-enumerated stat change (<code>raise_self_atk_sharply</code> Swords Dance, <code>raise_self_all</code> Ancient Power, <code>lower_foe_def_sharply</code> Screech = halve, <code>lower_self_atkdef</code> Superpower). Setup/status moves (Calm Mind, Thunder Wave) are now captured, at chance 1.0.</td></tr>
