@@ -853,6 +853,24 @@ class SpeedBeliefTest(unittest.TestCase):
         )
         self.assertEqual(order, 0.0)
 
+    def test_transform_and_cureteam_invalidate_observation(self) -> None:
+        # Transform changes the active's base Speed; Heal Bell (-cureteam) can cure active
+        # paralysis without a -curestatus|par event. Both must reset the observation.
+        transformed = self._order(
+            _events(
+                ("move", "self", "tackle"), ("move", "opponent", "psychic"),
+                ("-transform", "opponent", "Charizard"),
+            )
+        )
+        self.assertEqual(transformed, 0.0)
+        healbelled = self._order(
+            _events(
+                ("move", "self", "tackle"), ("move", "opponent", "psychic"),
+                ("-cureteam", "opponent", None),
+            )
+        )
+        self.assertEqual(healbelled, 0.0)
+
     def test_boost_clear_invalidates_observation(self) -> None:
         # Haze (-clearallboost) can remove an Agility / Speed drop, changing who is faster — it must
         # reset the observation even though it names no stat.

@@ -986,19 +986,29 @@ _SPEED_BOOST_CLEAR_EVENTS = frozenset({
 def _is_speed_regime_boundary(event: PlayerRelativePublicEvent) -> bool:
     """True if an event changes who-is-faster, so earlier move-order observations no longer hold.
 
-    Covers a new active (switch/drag/replace), a Speed boost/unboost/setboost (Agility, Dragon
-    Dance, Scary Face, …), any stat-agnostic boost reset/copy/restore (Haze, Psych Up, White Herb),
-    and paralysis applied or cured (¼ Speed in Gen 3). Weather is deliberately excluded — it only
-    matters for Swift Swim / Chlorophyll (abilities we can't see) and its per-turn upkeep event
-    would otherwise reset the signal every turn.
+    Covers a new active (switch/drag/replace), Transform (copies the target's base Speed), a Speed
+    boost/unboost/setboost (Agility, Dragon Dance, Scary Face, …), any stat-agnostic boost
+    reset/copy/restore (Haze, Psych Up, White Herb), and paralysis applied or cured — including
+    team-wide cures (Heal Bell / Aromatherapy emit -cureteam, not -curestatus|par). ¼ Speed from
+    paralysis is the only status that matters in Gen 3.
+
+    Known, deliberately-unhandled edges (low-harm: the model also sees the live status / boost /
+    base-speed features, so a stale ±1 is just one noisy signal): weather (only Swift Swim /
+    Chlorophyll, and the per-turn upkeep event would reset every turn); Rest replacing paralysis
+    with sleep without a -curestatus|par; and item-driven Speed changes (Macho Brace is not in the
+    Gen 3 randbat item pool, so it can't be held or Tricked in).
     """
     event_type = event.event_type
     primary = (event.primary or "").lower()
     if event_type in {"switch", "drag", "replace"} and event.actor_role in {"self", "opponent"}:
         return True
+    if event_type == "-transform":
+        return True
     if event_type in {"-boost", "-unboost", "-setboost"} and primary == "spe":
         return True
     if event_type in _SPEED_BOOST_CLEAR_EVENTS:
+        return True
+    if event_type == "-cureteam":
         return True
     if event_type in {"-status", "-curestatus"} and primary == "par":
         return True
