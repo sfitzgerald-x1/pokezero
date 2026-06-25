@@ -18,12 +18,19 @@ excluded (left to the OOV block).
 
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from .dex import load_showdown_dex_cached
+from .category_vocab import CategoryVocabulary, build_category_vocabulary, normalize_category_value
+from .dex import PHYSICAL_TYPES, SPECIAL_TYPES, load_showdown_dex_cached
 from .showdown import _normalize_identifier, stable_category_id
+
+# The 17 Gen 3 types (no Fairy) and the three damage classes the encoder emits as raw type
+# facts (type:<t> on pokemon/move tokens, move_category:<c> on move tokens).
+GEN3_TYPES = tuple(sorted(PHYSICAL_TYPES | SPECIAL_TYPES))
+GEN3_MOVE_CATEGORIES = ("Physical", "Special", "Status")
 
 # Items the Gen 3 random-battle generator can assign, from
 # data/random-battles/gen3/teams.ts getItem().
@@ -174,6 +181,12 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     structural += [f"move:slot:{i}" for i in range(1, 5)] + [f"species:slot:{i}" for i in range(1, 6)]
     groups["structural"] = structural
 
+    # Raw mechanical type facts the encoder emits for pokemon/move tokens (closed + tiny).
+    groups["types"] = (
+        [f"type:{type_name}" for type_name in GEN3_TYPES]
+        + [f"move_category:{category}" for category in GEN3_MOVE_CATEGORIES]
+    )
+
     return groups
 
 
@@ -221,6 +234,30 @@ def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int,
         if alias_id != base_id:
             aliases.append((alias_id, base_id))
     return tuple(sorted(set(aliases)))
+
+
+def gen3_category_string_aliases(showdown_root: str | Path) -> dict[str, str]:
+    """Cosmetic-forme aliases as category strings: {"species:Unown-L": "species:Unown", ...}."""
+    entities = gen3_randbat_entities(showdown_root)
+    if not any(_normalize_identifier(species) == "unown" for species in entities["species"]):
+        return {}
+    return {f"species:{forme}": "species:Unown" for forme in UNOWN_FORMES}
+
+
+@lru_cache(maxsize=8)
+def _cached_category_vocabulary(showdown_root_key: str, oov_buckets: int) -> CategoryVocabulary:
+    strings = [s for group in gen3_randbat_category_strings(showdown_root_key).values() for s in group]
+    aliases = gen3_category_string_aliases(showdown_root_key)
+    return build_category_vocabulary(strings, oov_buckets=oov_buckets, aliases=aliases)
+
+
+def gen3_category_vocabulary(showdown_root: str | Path, *, oov_buckets: int = 16) -> CategoryVocabulary:
+    """Build (cached) the string->row CategoryVocabulary for the closed Gen 3 randbat universe.
+
+    This is the single source of truth used at BOTH observation-encode time (the env) and for
+    the model's embedding size/config, so rows align deterministically from the closed universe.
+    """
+    return _cached_category_vocabulary(str(Path(showdown_root).expanduser().resolve()), oov_buckets)
 
 
 def canonicalize_with_cosmetic_aliases(
