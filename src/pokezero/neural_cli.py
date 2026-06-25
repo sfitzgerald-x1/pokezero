@@ -154,6 +154,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     iterate.add_argument(
+        "--collection-temperature",
+        type=float,
+        default=1.0,
+        help=(
+            "Softmax sampling temperature for the self-play collector (>1 explores more). Applies "
+            "only to rollout collection; benchmark/advancement use the deterministic policy. "
+            "Default 1.0 (unchanged)."
+        ),
+    )
+    iterate.add_argument(
         "--tensorboard-logdir",
         type=Path,
         default=None,
@@ -519,6 +529,7 @@ def _iterate(args: argparse.Namespace) -> int:
         fixed_opponent_policy_specs=opponent_policies,
         benchmark_reference_policy_specs=benchmark_references,
         mirror_match=args.mirror_match,
+        collection_temperature=args.collection_temperature,
         tensorboard_log_dir=args.tensorboard_logdir,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,
