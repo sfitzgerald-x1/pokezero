@@ -302,6 +302,27 @@ class NeuralSelfPlayTest(unittest.TestCase):
         )
         self.assertEqual(result.iterations[0].benchmark.games_per_matchup, 2)
 
+    def test_mirror_match_adds_current_policy_to_collection_opponents(self) -> None:
+        collected: list = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies(collected=collected):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                    mirror_match=True,
+                )
+        # Iteration 1 collection includes the current policy as an opponent (mirror match),
+        # so self-play happens from the start rather than only after a promotion.
+        self.assertIn("neural:/tmp/bootstrap.pt", collected[0]["opponent_policy_specs"])
+
     def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
         from types import SimpleNamespace
 

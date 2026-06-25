@@ -145,6 +145,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     iterate.add_argument(
+        "--mirror-match",
+        action="store_true",
+        help=(
+            "Add the current policy to the collection opponent pool so it plays copies of "
+            "itself (current-vs-current self-play) from iteration 1, rather than self-play only "
+            "starting once a checkpoint is promoted into the history pool."
+        ),
+    )
+    iterate.add_argument(
         "--tensorboard-logdir",
         type=Path,
         default=None,
@@ -509,6 +518,7 @@ def _iterate(args: argparse.Namespace) -> int:
         initial_policy_spec=initial_policy,
         fixed_opponent_policy_specs=opponent_policies,
         benchmark_reference_policy_specs=benchmark_references,
+        mirror_match=args.mirror_match,
         tensorboard_log_dir=args.tensorboard_logdir,
         max_historical_opponents=args.max_historical_opponents,
         evaluation_games=args.evaluation_games,

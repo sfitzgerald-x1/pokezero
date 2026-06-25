@@ -233,6 +233,7 @@ def run_neural_selfplay_iterations(
     initial_policy_spec: str = "random-legal",
     fixed_opponent_policy_specs: Iterable[str] = ("random-legal", "simple-legal"),
     benchmark_reference_policy_specs: Iterable[str] = (),
+    mirror_match: bool = False,
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
@@ -336,6 +337,7 @@ def run_neural_selfplay_iterations(
         "source": source_metadata,
         "post_iteration_audit_failure_mode": post_iteration_audit_failure_mode,
         "benchmark_reference_policy_specs": list(benchmark_references),
+        "mirror_match": mirror_match,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -366,6 +368,7 @@ def run_neural_selfplay_iterations(
                 checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
                 current_policy_spec=current_policy_spec,
                 max_historical_opponents=max_historical_opponents,
+                include_current_policy=mirror_match,
             )
 
             metrics = collect_selfplay_rollouts(
@@ -905,12 +908,14 @@ def _opponent_pool(
     checkpoint_history: Iterable[str],
     current_policy_spec: str,
     max_historical_opponents: int,
+    include_current_policy: bool = False,
 ) -> tuple[str, ...]:
     return opponent_pool_policy_specs(
         fixed_policy_specs=fixed_policy_specs,
         checkpoint_history=checkpoint_history,
         current_policy_spec=current_policy_spec,
         max_historical_opponents=max_historical_opponents,
+        include_current_policy=include_current_policy,
     )
 
 
