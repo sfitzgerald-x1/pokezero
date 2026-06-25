@@ -596,7 +596,9 @@ def _encode_field_token(
     state: PlayerRelativeBattleState,
 ) -> None:
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_PRIMARY, f"request_kind:{state.request_kind}")
-    _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_SECONDARY, f"winner:{state.winner or 'none'}")
+    # Winner identity is deliberately NOT encoded: it is constant ("none") at every decision
+    # point (the rollout records observations only while the game is live) and would otherwise
+    # be the game outcome leaking into the model input. The SECONDARY slot stays padding.
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_ROLE, "field")
     _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_PRESENT, 1.0)
 
@@ -699,7 +701,9 @@ def _encode_recent_event_tokens(
     for event_index, event in enumerate(state.recent_events[: spec.recent_event_token_count]):
         token_index = RECENT_EVENT_TOKEN_OFFSET + event_index
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"event:{event.event_type}")
-        _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, _event_detail_category(event))
+        event_detail = _event_detail_category(event)
+        if event_detail is not None:
+            _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, event_detail)
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"event_actor:{event.actor_role}")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"event_target:{event.target_role}")
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0)
@@ -944,21 +948,26 @@ def _request_move_name(move: Mapping[str, Any]) -> str:
     return "unknown"
 
 
-def _event_detail_category(event: PlayerRelativePublicEvent) -> str:
+def _event_detail_category(event: PlayerRelativePublicEvent) -> str | None:
+    """Enumerable detail token for a recent event, or None to leave the slot as padding.
+
+    Only emits closed-vocabulary tokens (move / species / status, which reuse the same ids as
+    the action and pokemon tokens). The previously-emitted dynamic strings are dropped, since
+    they are unactionable in randbats and were the only things landing in the OOV block:
+      - -damage/-heal carried the raw HP string ("234/267 tox") -> HP is already numeric
+        (NUMERIC_HP_FRACTION) and any status is conveyed by -status events;
+      - player/win carried usernames, which are meaningless in random battles;
+      - the fallback carried free-form payloads (noise).
+    The event *type* is still encoded in CATEGORY_PRIMARY, so no actionable signal is lost.
+    """
     primary = event.primary or "none"
     if event.event_type == "move":
         return f"move:{primary}"
     if event.event_type in {"switch", "drag", "replace"}:
         return f"species:{primary}"
-    if event.event_type in {"-damage", "-heal"}:
-        return f"condition:{primary}"
     if event.event_type in {"-status", "-curestatus"}:
         return f"status:{primary}"
-    if event.event_type == "player":
-        return f"player:{primary}"
-    if event.event_type == "win":
-        return f"winner:{primary}"
-    return f"detail:{primary}"
+    return None
 
 
 def _request_side_id(request: Mapping[str, Any]) -> str | None:
