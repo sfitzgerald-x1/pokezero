@@ -10,7 +10,10 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
-from typing import Any, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
+
+if TYPE_CHECKING:
+    from .dex import ShowdownDex
 
 from .actions import (
     ACTION_COUNT,
@@ -36,15 +39,22 @@ BELIEF_ITEM_BUCKET_COUNT = 8
 BELIEF_MOVE_BUCKET_COUNT = 64
 BELIEF_FACT_BUCKET_COUNT = BELIEF_ABILITY_BUCKET_COUNT + BELIEF_ITEM_BUCKET_COUNT + BELIEF_MOVE_BUCKET_COUNT
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
-    categorical_feature_count=4 + BELIEF_FACT_BUCKET_COUNT,
-    numeric_feature_count=12,
+    categorical_feature_count=7 + BELIEF_FACT_BUCKET_COUNT,
+    numeric_feature_count=15,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
 CATEGORY_SECONDARY = 1
 CATEGORY_ROLE = 2
 CATEGORY_SLOT = 3
-CATEGORY_BELIEF_ABILITY_OFFSET = 4
+# Raw mechanical type facts (dex-derived). For pokemon/switch tokens: the mon's two types
+# (TYPE_2 padding if mono-type). For move tokens: the move's type in TYPE_1, its damage class
+# (physical/special/status) in MOVE_CATEGORY. These let the type chart + effectiveness emerge
+# in the embedding space rather than being hand-computed.
+CATEGORY_TYPE_1 = 4
+CATEGORY_TYPE_2 = 5
+CATEGORY_MOVE_CATEGORY = 6
+CATEGORY_BELIEF_ABILITY_OFFSET = 7
 CATEGORY_BELIEF_ITEM_OFFSET = CATEGORY_BELIEF_ABILITY_OFFSET + BELIEF_ABILITY_BUCKET_COUNT
 CATEGORY_BELIEF_MOVE_OFFSET = CATEGORY_BELIEF_ITEM_OFFSET + BELIEF_ITEM_BUCKET_COUNT
 NUMERIC_HP_FRACTION = 0
@@ -59,6 +69,10 @@ NUMERIC_POSSIBLE_ITEM_COUNT = 8
 NUMERIC_POSSIBLE_MOVE_COUNT = 9
 NUMERIC_REVEALED_ABILITY = 10
 NUMERIC_REVEALED_ITEM = 11
+# Raw move mechanics (dex-derived), populated on move action tokens.
+NUMERIC_BASE_POWER = 12  # normalized base power (bp/200, clamped)
+NUMERIC_PRIORITY = 13  # move priority bracket (normalized)
+NUMERIC_ACCURACY = 14  # accuracy [0,1]; 1.0 for never-miss
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -300,8 +314,14 @@ def observation_from_player_state(
     state: PlayerRelativeBattleState,
     *,
     spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC,
+    dex: "ShowdownDex | None" = None,
 ) -> PokeZeroObservationV0:
-    """Encode normalized replay state into fixed-shape observation rows."""
+    """Encode normalized replay state into fixed-shape observation rows.
+
+    When ``dex`` is supplied, raw mechanical facts (Pokemon types; move type / damage class /
+    base power / priority / accuracy) are populated into the type/mechanic feature slots. When
+    it is None those slots stay padding (callers without a dex still produce a valid tensor).
+    """
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
     _encode_field_token(categorical_ids, numeric_features, state)
@@ -312,6 +332,7 @@ def observation_from_player_state(
         state.self_team,
         role="self",
         limit=SELF_POKEMON_TOKEN_COUNT,
+        dex=dex,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
     _encode_pokemon_tokens(
@@ -322,8 +343,9 @@ def observation_from_player_state(
         role="opponent",
         limit=OPPONENT_POKEMON_TOKEN_COUNT,
         beliefs_by_species=opponent_beliefs,
+        dex=dex,
     )
-    _encode_action_tokens(categorical_ids, numeric_features, state)
+    _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_recent_event_tokens(categorical_ids, numeric_features, state, spec)
     token_type_ids = _token_type_ids(spec)
     attention_mask = _attention_mask(state, spec)
@@ -603,6 +625,35 @@ def _encode_field_token(
     _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_PRESENT, 1.0)
 
 
+def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", species: str | None) -> None:
+    """Set the two type slots for a Pokemon token from the dex (no-op without a dex)."""
+    if dex is None or not species:
+        return
+    info = dex.species_info(species)
+    if info is None:
+        return
+    if len(info.types) >= 1:
+        _set_category(row, CATEGORY_TYPE_1, f"type:{info.types[0]}")
+    if len(info.types) >= 2:
+        _set_category(row, CATEGORY_TYPE_2, f"type:{info.types[1]}")
+
+
+def _encode_move_mechanics(
+    cat_row: list[int], num_row: list[float], dex: "ShowdownDex | None", move_name: str
+) -> None:
+    """Set move type / damage class (categorical) + base power / priority / accuracy (numeric)."""
+    if dex is None:
+        return
+    move = dex.move_info(move_name)
+    if move is None:
+        return
+    _set_category(cat_row, CATEGORY_TYPE_1, f"type:{move.type}")
+    _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"move_category:{move.gen3_category}")
+    _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(move.base_power) / 200.0))
+    _set_numeric(num_row, NUMERIC_PRIORITY, max(-1.0, min(1.0, float(move.priority) / 5.0)))
+    _set_numeric(num_row, NUMERIC_ACCURACY, (float(move.accuracy) / 100.0) if move.accuracy else 1.0)
+
+
 def _encode_pokemon_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -612,6 +663,7 @@ def _encode_pokemon_tokens(
     role: str,
     limit: int,
     beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
+    dex: "ShowdownDex | None" = None,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
@@ -628,6 +680,7 @@ def _encode_pokemon_tokens(
         candidate_set_count = belief.candidate_set_count if belief is not None else None
         uncertainty = belief.uncertainty if belief is not None else 1.0
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
+        _encode_species_type_categories(categorical_ids[token_index], dex, candidate.species)
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
@@ -653,6 +706,8 @@ def _encode_action_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
     state: PlayerRelativeBattleState,
+    *,
+    dex: "ShowdownDex | None" = None,
 ) -> None:
     active_request = _active_request(state.request)
     moves = active_request.get("moves") if isinstance(active_request, Mapping) else None
@@ -665,6 +720,8 @@ def _encode_action_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:move")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"move_slot:{move_index + 1}")
+        if isinstance(move, Mapping):
+            _encode_move_mechanics(categorical_ids[token_index], numeric_features[token_index], dex, move_name)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 1.0 if state.legal_action_mask[move_index] else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if isinstance(move, Mapping) else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 0.0 if disabled else 1.0)
@@ -683,6 +740,8 @@ def _encode_action_tokens(
         condition = _condition_features(pokemon.condition if pokemon is not None else None)
         species = pokemon.species if pokemon is not None else f"slot:{switch_slot + 1}"
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{species}")
+        if pokemon is not None:
+            _encode_species_type_categories(categorical_ids[token_index], dex, pokemon.species)
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:switch")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"switch_slot:{switch_slot + 1}")
