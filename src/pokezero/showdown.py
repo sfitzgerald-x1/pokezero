@@ -50,7 +50,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=37,
+    numeric_feature_count=38,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -132,6 +132,9 @@ NUMERIC_SELF_HP_COST = 34
 # player's own outgoing attack landing on the foe.
 NUMERIC_SELF_FUTURE_SIGHT = 35
 NUMERIC_OPP_FUTURE_SIGHT = 36
+# Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
+# (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
+NUMERIC_TOXIC_STAGE = 37
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -162,6 +165,7 @@ class ShowdownReplayState:
     boosts: Mapping[str, Mapping[str, int]]
     volatiles: Mapping[str, tuple[str, ...]]
     future_sight: Mapping[str, int]
+    toxic_stage: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -215,6 +219,8 @@ class PlayerRelativeBattleState:
     opponent_active_boosts: Mapping[str, int]
     self_active_volatiles: tuple[str, ...]
     opponent_active_volatiles: tuple[str, ...]
+    self_toxic_stage: int
+    opponent_toxic_stage: int
     belief_view: PlayerBeliefView
     legal_action_mask: tuple[bool, ...]
     recent_events: tuple[PlayerRelativePublicEvent, ...]
@@ -244,6 +250,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
     volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
     future_sight: dict[str, int] = {}
+    toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
     pending_baton_pass: set[str] = set()
     public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
@@ -293,6 +300,8 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
                 # (Baton Pass passes some volatiles, but conservatively resetting is the simple,
                 # rarely-wrong choice and keeps the volatile set honest about the current mon).
                 volatiles[pokemon.showdown_slot] = set()
+                # Gen 3 resets the toxic counter when a mon leaves the field.
+                toxic_stage[pokemon.showdown_slot] = 0
             public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
@@ -306,11 +315,16 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
                 turn_number = int(parts[2])
             except (TypeError, ValueError):
                 pass
+            # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
+            for slot, stage in toxic_stage.items():
+                if stage:
+                    toxic_stage[slot] = min(15, stage + 1)
         _update_side_conditions(parts, side_condition_counts)
         weather = _update_weather(parts, weather)
         _update_boosts(parts, boosts)
         _update_volatiles(parts, volatiles)
         _update_future_sight(parts, future_sight, turn_number)
+        _update_toxic_stage(parts, toxic_stage)
         _flag_baton_pass(parts, pending_baton_pass)
         public_events.append(_public_event_from_line(line))
         public_lines.append(line)
@@ -329,6 +343,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         boosts={slot: dict(sorted(stages.items())) for slot, stages in boosts.items()},
         volatiles={slot: tuple(sorted(names)) for slot, names in volatiles.items()},
         future_sight=dict(future_sight),
+        toxic_stage=dict(toxic_stage),
         public_events=tuple(public_events),
         public_lines=tuple(public_lines),
         weather=weather,
@@ -414,6 +429,8 @@ def normalize_for_player(
         opponent_active_boosts=dict(replay.boosts.get(opponent_slot, {})),
         self_active_volatiles=tuple(replay.volatiles.get(showdown_slot, ())),
         opponent_active_volatiles=tuple(replay.volatiles.get(opponent_slot, ())),
+        self_toxic_stage=int(replay.toxic_stage.get(showdown_slot, 0)),
+        opponent_toxic_stage=int(replay.toxic_stage.get(opponent_slot, 0)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
@@ -452,6 +469,7 @@ def observation_from_player_state(
         limit=SELF_POKEMON_TOKEN_COUNT,
         active_boosts=state.self_active_boosts,
         active_volatiles=state.self_active_volatiles,
+        active_toxic_stage=state.self_toxic_stage,
         dex=dex,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
@@ -465,6 +483,7 @@ def observation_from_player_state(
         beliefs_by_species=opponent_beliefs,
         active_boosts=state.opponent_active_boosts,
         active_volatiles=state.opponent_active_volatiles,
+        active_toxic_stage=state.opponent_toxic_stage,
         dex=dex,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
@@ -637,6 +656,24 @@ def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], tur
         future_sight[target_side] = turn_number + _FUTURE_SIGHT_DELAY
     else:
         future_sight.pop(slot, None)
+
+
+def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
+    """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| lines.
+
+    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
+    status clears it. The counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in toxic_stage:
+        return
+    if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+        toxic_stage[slot] = 1
+    elif event_type == "-curestatus":
+        toxic_stage[slot] = 0
 
 
 def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
@@ -1062,6 +1099,7 @@ def _encode_pokemon_tokens(
     beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     active_boosts: Mapping[str, int] | None = None,
     active_volatiles: Sequence[str] = (),
+    active_toxic_stage: int = 0,
     dex: "ShowdownDex | None" = None,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
@@ -1084,6 +1122,8 @@ def _encode_pokemon_tokens(
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
             _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
+            if active_toxic_stage:
+                _set_numeric(numeric_features[token_index], NUMERIC_TOXIC_STAGE, min(1.0, active_toxic_stage / 15.0))
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
@@ -1217,6 +1257,8 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_active_volatiles": list(state.opponent_active_volatiles),
         "self_future_sight_turns": state.self_future_sight_turns,
         "opponent_future_sight_turns": state.opponent_future_sight_turns,
+        "self_toxic_stage": state.self_toxic_stage,
+        "opponent_toxic_stage": state.opponent_toxic_stage,
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],

@@ -74,6 +74,10 @@ class MoveEffectLabelTest(unittest.TestCase):
         self.assertEqual(resolve_move_base_power(reversal, 0.5), 40)
         self.assertEqual(resolve_move_base_power(reversal, 1.0), 20)
         self.assertEqual(resolve_move_base_power(reversal, None), 0)  # unknown HP -> static
+        # Gen 3 buckets floor(48*HP/maxHP); values just above a boundary must floor down, not up.
+        self.assertEqual(resolve_move_base_power(reversal, 3 / 96), 200)  # 48*=1.5 -> floor 1
+        self.assertEqual(resolve_move_base_power(reversal, 9 / 96), 150)  # 48*=4.5 -> floor 4
+        self.assertEqual(resolve_move_base_power(reversal, 19 / 96), 100)  # 48*=9.5 -> floor 9
         eruption = _move_effect("eruption", category="Special", basePower=150)
         self.assertEqual(resolve_move_base_power(eruption, 1.0), 150)  # direct scaling
         self.assertEqual(resolve_move_base_power(eruption, 0.5), 75)

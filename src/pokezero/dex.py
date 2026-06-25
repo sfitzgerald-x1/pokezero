@@ -347,7 +347,8 @@ def resolve_move_base_power(move: "MoveInfo", user_hp_fraction: float | None = N
         return move.base_power
     fraction = max(0.0, min(1.0, user_hp_fraction))
     if move.id in _HP_BASE_POWER_LOW:
-        scaled = 48 * fraction
+        # Gen 3 buckets the floored value p = floor(48 * curHP / maxHP), not the raw ratio.
+        scaled = int(48 * fraction)
         if scaled <= 1:
             return 200
         if scaled <= 4:

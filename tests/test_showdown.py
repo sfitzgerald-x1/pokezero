@@ -21,6 +21,7 @@ from pokezero.showdown import (
     NUMERIC_OPP_FUTURE_SIGHT,
     NUMERIC_SELF_FUTURE_SIGHT,
     NUMERIC_SELF_HP_COST,
+    NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
     _encode_move_mechanics,
     _move_pp_fraction,
@@ -642,6 +643,35 @@ class Phase2DynamicStateTest(unittest.TestCase):
         numeric = observation.numeric_features[FIELD_TOKEN_OFFSET]
         self.assertAlmostEqual(numeric[NUMERIC_OPP_FUTURE_SIGHT], 1.0)  # 2 turns / 2
         self.assertAlmostEqual(numeric[NUMERIC_SELF_FUTURE_SIGHT], 0.0)
+
+    def test_future_sight_survives_switch(self) -> None:
+        # Future Sight is a side-level slot condition: the user switching out must NOT clear it.
+        state = self._replay_with(
+            [
+                "|turn|5",
+                "|move|p2a: Charizard|Future Sight|p1a: Xatu",
+                "|-start|p2a: Charizard|move: Future Sight",
+                "|switch|p2a: Snorlax|Snorlax, L78|100/100",
+            ]
+        )
+        self.assertEqual(state.opponent_future_sight_turns, 2)
+
+    def test_toxic_stage_escalates_resets_and_ignores_regular_poison(self) -> None:
+        # tox escalates each turn (1 on apply, +1 per turn); both sides are tracked the same way.
+        state = self._replay_with(["|-status|p2a: Charizard|tox", "|turn|6", "|turn|7"])
+        self.assertEqual(state.self_toxic_stage, 3)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        self.assertAlmostEqual(
+            observation.numeric_features[self.SELF_ACTIVE_OFFSET][NUMERIC_TOXIC_STAGE], 3 / 15
+        )
+        # Regular poison does not escalate.
+        psn = self._replay_with(["|-status|p2a: Charizard|psn", "|turn|6", "|turn|7"])
+        self.assertEqual(psn.self_toxic_stage, 0)
+        # Switching out resets the toxic counter (Gen 3).
+        reset = self._replay_with(
+            ["|-status|p2a: Charizard|tox", "|turn|6", "|switch|p2a: Snorlax|Snorlax, L78|100/100"]
+        )
+        self.assertEqual(reset.self_toxic_stage, 0)
 
     def test_future_sight_cleared_when_it_lands(self) -> None:
         landed = self._replay_with(
