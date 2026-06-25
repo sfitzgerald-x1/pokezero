@@ -119,43 +119,43 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
 
     def test_live_games_have_no_required_oov(self) -> None:
         try:
-            import pokezero.showdown as sd
             from pokezero.collection import BenchmarkMatchup, benchmark_rollouts
             from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
             from pokezero.policy import RandomLegalPolicy
+            from pokezero.randbat_vocab import gen3_category_vocabulary
             from pokezero.rollout import RolloutConfig
         except Exception as exc:  # pragma: no cover - environment guard
             self.skipTest(f"runtime deps unavailable: {exc}")
 
+        # Instrument the *actual* encode path: wrap CategoryVocabulary.encode and record every
+        # (token string -> row) the encoder produces during live games. A required token is
+        # "covered" iff it resolves to a real vocab row (below the OOV band).
+        base_vocab = gen3_category_vocabulary(SHOWDOWN_ROOT)
+        oov_offset = 1 + len(base_vocab.tokens)
         seen: dict[str, int] = {}
-        original = sd.stable_category_id
 
-        def spy(value, *, buckets=sd.CATEGORY_ID_BUCKETS):
-            result = original(value, buckets=buckets)
-            if buckets == sd.CATEGORY_ID_BUCKETS:
-                seen[str(value)] = result
-            return result
+        class _SpyVocab:
+            def encode(self, value):
+                row = base_vocab.encode(value)
+                if value:
+                    seen[str(value)] = row
+                return row
 
-        sd.stable_category_id = spy
-        try:
-            benchmark_rollouts(
-                games=12,
-                env_factory=lambda: LocalShowdownEnv(LocalShowdownConfig(showdown_root=SHOWDOWN_ROOT)),
-                rollout_config=RolloutConfig(max_decision_rounds=250),
-                seed_start=9100001,
-                matchups=[BenchmarkMatchup("r", RandomLegalPolicy(), RandomLegalPolicy())],
-            )
-        finally:
-            sd.stable_category_id = original
+        benchmark_rollouts(
+            games=12,
+            env_factory=lambda: LocalShowdownEnv(
+                LocalShowdownConfig(showdown_root=SHOWDOWN_ROOT, category_vocab=_SpyVocab())
+            ),
+            rollout_config=RolloutConfig(max_decision_rounds=250),
+            seed_start=9100001,
+            matchups=[BenchmarkMatchup("r", RandomLegalPolicy(), RandomLegalPolicy())],
+        )
 
-        # A required category is "covered" if it is a vocab id OR a cosmetic-forme alias
-        # (which the model remaps onto a base-species vocab row).
-        covered = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
-        covered |= {alias for alias, _ in gen3_randbat_cosmetic_aliases(SHOWDOWN_ROOT)}
+        self.assertTrue(seen, "encoder produced no category tokens; spy did not run")
         uncovered = [
             value
-            for value, cid in seen.items()
-            if cid not in covered and value.startswith(self._REQUIRED_PREFIXES)
+            for value, row in seen.items()
+            if row >= oov_offset and value.startswith(self._REQUIRED_PREFIXES)
         ]
         self.assertEqual(uncovered, [], f"required categories fell into OOV: {sorted(uncovered)[:20]}")
 

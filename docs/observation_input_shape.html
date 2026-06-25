@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PokeZero — Current Model Input Shape</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171c24; --line:#2a323d; --txt:#e6edf3; --muted:#9aa7b4;
+    --present:#1f6f43; --present2:#2ea36a; --missing:#7a2230; --missing2:#d6455e;
+    --belief:#3a2f6b; --num:#1d4e6b; --accent:#e3b341;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:32px;max-width:1180px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:32px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .sub{color:var(--muted);margin:0 0 20px}
+  .shape{display:flex;gap:18px;flex-wrap:wrap;margin:18px 0}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px;min-width:150px}
+  .stat .v{font-size:26px;font-weight:700;color:var(--accent)} .stat .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#1b212b;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  tr:last-child td{border-bottom:none}
+  code{background:#0c1117;border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:#a6c8ff;font-size:12.5px}
+  .tokmap{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0}
+  .tok{height:34px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:600;padding:0 8px;border:1px solid rgba(255,255,255,.12)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0;color:var(--muted);font-size:12.5px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:13px;height:13px;border-radius:3px;display:inline-block}
+  .present{background:var(--present)} .missing{background:var(--missing)} .belief{background:var(--belief)} .numblk{background:var(--num)}
+  .field{background:#5a4a1f} .self{background:#1f5a4a} .opp{background:#5a1f3a} .act{background:#1f3a5a} .evt{background:#3a3a3a}
+  .tag{display:inline-block;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600}
+  .tag.p{background:var(--present);color:#cfeeda} .tag.m{background:var(--missing);color:#f4c2cc}
+  .pad{color:var(--muted);font-style:italic}
+  ul{margin:6px 0 0;padding-left:20px} li{margin:3px 0}
+  .note{background:#16202b;border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 8px 8px 0;color:var(--muted);margin:12px 0}
+</style>
+</head>
+<body>
+  <h1>PokeZero — Current Model Input Shape</h1>
+  <p class="sub">What the neural policy actually <em>sees</em> per decision, after the lean-encoding cleanup (PR&nbsp;#215). Generated for visual review of the matchup-feature enrichment (task&nbsp;#10).</p>
+
+  <div class="shape">
+    <div class="stat"><div class="v">46</div><div class="l">tokens (sequence)</div></div>
+    <div class="stat"><div class="v">87</div><div class="l">categorical ids / token</div></div>
+    <div class="stat"><div class="v">15</div><div class="l">numeric features / token</div></div>
+    <div class="stat"><div class="v">832</div><div class="l">embedding rows</div></div>
+  </div>
+  <p class="sub">Input tensor per turn: <code>46 &times; (87 categorical ids + 15 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (815 closed-vocab tokens + 16 OOV + padding = 832 rows).</p>
+
+  <div class="note">
+    <b>How a categorical id works (string → row, no hash).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are human-readable <em>keys</em>; each maps by <b>direct lookup</b> in the enumerated closed-universe vocabulary to a small embedding-row index. The model embeds the <b>row</b> directly — the legacy 1,000,000-bucket blake2b hash + in-model remap are retired:
+    <div style="margin-top:8px"><code>"move:flamethrower"</code> → <code>CategoryVocabulary</code> lookup → <code>row 364</code> → 128-d embedding</div>
+  </div>
+
+  <div class="note">
+    <b>What is the "field" token?</b> Token 0 is a single <b>global / context token</b> (like a <code>[CLS]</code>) for battle-wide info not attached to a specific mon or move. Today it carries only <code>request_kind</code> (move / force-switch / team-preview / wait), so it is nearly empty — and it is the natural home for the Phase&nbsp;2 globals: <b>weather, turn count, hazards/screens</b>.
+  </div>
+
+  <h2>Token sequence (the 46 tokens, in order)</h2>
+  <div class="tokmap">
+    <div class="tok field" style="flex:1 0 70px">0 · field</div>
+    <div class="tok self" style="flex:6 0 220px">1–6 · self team (6)</div>
+    <div class="tok opp" style="flex:6 0 220px">7–12 · opponent team (6)</div>
+    <div class="tok act" style="flex:9 0 220px">13–21 · action candidates (4 moves + 5 switches)</div>
+    <div class="tok evt" style="flex:24 0 300px">22–45 · recent events (24)</div>
+  </div>
+  <div class="legend">
+    <span><span class="sw field"></span>field</span>
+    <span><span class="sw self"></span>self Pokémon</span>
+    <span><span class="sw opp"></span>opponent Pokémon</span>
+    <span><span class="sw act"></span>action candidates</span>
+    <span><span class="sw evt"></span>recent events</span>
+  </div>
+
+  <h2>What each token carries (categorical slots + numeric)</h2>
+  <table>
+    <tr><th>Section</th><th>Tokens</th><th>PRIMARY [0]</th><th>SECONDARY [1]</th><th>ROLE [2]</th><th>SLOT [3]</th><th>Belief buckets [7–86]</th><th>Active numeric</th></tr>
+    <tr>
+      <td><b>Field</b></td><td>0</td>
+      <td><code>request_kind:&lt;kind&gt;</code></td>
+      <td class="pad">padding (winner removed)</td>
+      <td><code>field</code></td><td class="pad">—</td><td class="pad">—</td>
+      <td>PRESENT</td>
+    </tr>
+    <tr>
+      <td><b>Self Pokémon</b></td><td>1–6</td>
+      <td><code>species:&lt;name&gt;</code></td>
+      <td><code>status:&lt;s&gt;</code></td>
+      <td><code>pokemon:self</code></td><td><code>self_slot:&lt;i&gt;</code></td>
+      <td class="pad">—</td>
+      <td>HP_FRACTION, ACTIVE, LEGAL, PRESENT</td>
+    </tr>
+    <tr>
+      <td><b>Opponent Pokémon</b></td><td>7–12</td>
+      <td><code>species:&lt;name&gt;</code></td>
+      <td><code>status:&lt;s&gt;</code></td>
+      <td><code>pokemon:opponent</code></td><td><code>opponent_slot:&lt;i&gt;</code></td>
+      <td><b>belief:</b> possible abilities (8) · items (8) · moves (64)</td>
+      <td>HP_FRACTION, ACTIVE, PRESENT, REVEALED_MOVE/ABILITY/ITEM_COUNT, POSSIBLE_*_COUNT, CANDIDATE_SET_COUNT, UNCERTAINTY</td>
+    </tr>
+    <tr>
+      <td><b>Action — moves</b></td><td>13–16</td>
+      <td><code>move:&lt;name&gt;</code></td>
+      <td><code>action:move</code></td>
+      <td><code>action</code></td><td><code>move_slot:&lt;i&gt;</code></td><td class="pad">—</td>
+      <td>LEGAL, ACTIVE (not-disabled), PRESENT</td>
+    </tr>
+    <tr>
+      <td><b>Action — switches</b></td><td>17–21</td>
+      <td><code>species:&lt;name&gt;</code></td>
+      <td><code>action:switch</code></td>
+      <td><code>action</code></td><td><code>switch_slot:&lt;i&gt;</code></td><td class="pad">—</td>
+      <td>LEGAL, PRESENT</td>
+    </tr>
+    <tr>
+      <td><b>Recent events</b></td><td>22–45</td>
+      <td><code>event:&lt;type&gt;</code></td>
+      <td><code>move/species/status:&lt;v&gt;</code> <span class="pad">or padding (HP/user/winner dropped)</span></td>
+      <td><code>event_actor:&lt;role&gt;</code></td><td><code>event_target:&lt;role&gt;</code></td><td class="pad">—</td>
+      <td>PRESENT</td>
+    </tr>
+  </table>
+
+  <h2>Recent events — worked example</h2>
+  <p class="sub">The last 24 public protocol lines become 24 tokens — the model's short-term memory of the battle flow (what was used, who switched, damage/status). Assume <b>we are p1</b>, so <code>p1</code>=self, <code>p2</code>=opponent. Each raw line maps to one event token:</p>
+  <table>
+    <tr><th>Raw Showdown protocol line</th><th>PRIMARY [0]<br>(event type)</th><th>SECONDARY [1]<br>(detail)</th><th>ROLE [2]<br>(actor)</th><th>SLOT [3]<br>(target)</th></tr>
+    <tr>
+      <td><code>|move|p1a: Charizard|Flamethrower|p2a: Skarmory</code></td>
+      <td><code>event:move</code><br><span class="pad">→ 291</span></td>
+      <td><code>move:Flamethrower</code><br><span class="pad">→ 364</span></td>
+      <td><code>event_actor:self</code><br><span class="pad">→ 314</span></td>
+      <td><code>event_target:opponent</code><br><span class="pad">→ 316</span></td>
+    </tr>
+    <tr>
+      <td><code>|switch|p2a: Blissey|Blissey, L83|271/271</code></td>
+      <td><code>event:switch</code><br><span class="pad">→ 301</span></td>
+      <td><code>species:Blissey</code><br><span class="pad">→ 579</span></td>
+      <td><code>event_actor:opponent</code></td>
+      <td class="pad">event_target:none</td>
+    </tr>
+    <tr>
+      <td><code>|-damage|p2a: Skarmory|55/100</code></td>
+      <td><code>event:-damage</code><br><span class="pad">→ 230</span></td>
+      <td class="pad">padding (0) — raw HP "55/100" dropped (lean encoding); HP is numeric, the magnitude isn't an actionable token</td>
+      <td class="pad">event_actor:none</td>
+      <td><code>event_target:opponent</code></td>
+    </tr>
+    <tr>
+      <td><code>|-status|p1a: Charizard|brn</code></td>
+      <td><code>event:-status</code><br><span class="pad">→ 262</span></td>
+      <td><code>status:brn</code><br><span class="pad">→ 785</span></td>
+      <td class="pad">event_actor:none</td>
+      <td><code>event_target:self</code></td>
+    </tr>
+  </table>
+  <div class="note">
+    So the window reads, in order: <em>"I clicked Flamethrower at their Skarmory → they switched to Blissey → Skarmory took damage → my Charizard got burned."</em> This is the temporal signal that lets the model notice patterns like "the opponent keeps pivoting out of my Charizard" — the basis for anticipatory switching (hypothesis H2). Note the numeric magnitude of damage and exact HP live in the <em>numeric</em> features of the Pokémon tokens, not here.
+  </div>
+
+  <h2>The 12 numeric features</h2>
+  <table>
+    <tr><th>#</th><th>Feature</th><th>Meaning</th></tr>
+    <tr><td>0</td><td><code>HP_FRACTION</code></td><td>current HP as fraction [0,1]</td></tr>
+    <tr><td>1</td><td><code>ACTIVE</code></td><td>is this the active mon / a usable move</td></tr>
+    <tr><td>2</td><td><code>LEGAL</code></td><td>not fainted / legal action</td></tr>
+    <tr><td>3</td><td><code>PRESENT</code></td><td>token slot populated</td></tr>
+    <tr><td>4</td><td><code>REVEALED_MOVE_COUNT</code></td><td># opponent moves seen</td></tr>
+    <tr><td>5</td><td><code>CANDIDATE_SET_COUNT</code></td><td># randbat sets still possible</td></tr>
+    <tr><td>6</td><td><code>UNCERTAINTY</code></td><td>belief uncertainty scalar</td></tr>
+    <tr><td>7–9</td><td><code>POSSIBLE_ABILITY/ITEM/MOVE_COUNT</code></td><td>belief set sizes</td></tr>
+    <tr><td>10–11</td><td><code>REVEALED_ABILITY/ITEM</code></td><td>has ability/item been revealed (0/1)</td></tr>
+  </table>
+  <div class="note">Notice the theme: the model knows <b>who</b> (species/move ids), <b>how hurt</b> (HP/status), and <b>what's still uncertain</b> (belief) — but nothing about <b>game mechanics</b>.</div>
+
+  <h2>✅ Now included (Phase 1): raw type &amp; move mechanics</h2>
+  <p class="sub">Three new categorical slots and three new numeric features, populated from the dex, let the type chart + effectiveness emerge in the embedding space (no hand-computed multipliers):</p>
+  <table>
+    <tr><th>Slot</th><th>Index</th><th>On which tokens</th><th>Value</th></tr>
+    <tr><td><code>TYPE_1</code> (cat)</td><td>4</td><td>every Pokémon + switch-candidate token (mon's 1st type); move tokens (move's type)</td><td><code>type:&lt;t&gt;</code></td></tr>
+    <tr><td><code>TYPE_2</code> (cat)</td><td>5</td><td>Pokémon/switch tokens (2nd type; padding if mono-type)</td><td><code>type:&lt;t&gt;</code></td></tr>
+    <tr><td><code>MOVE_CATEGORY</code> (cat)</td><td>6</td><td>move tokens</td><td><code>move_category:&lt;physical/special/status&gt;</code></td></tr>
+    <tr><td><code>BASE_POWER</code> (num)</td><td>12</td><td>move tokens</td><td>bp/200, clamped</td></tr>
+    <tr><td><code>PRIORITY</code> (num)</td><td>13</td><td>move tokens</td><td>priority/5, clamped</td></tr>
+    <tr><td><code>ACCURACY</code> (num)</td><td>14</td><td>move tokens</td><td>accuracy [0,1]</td></tr>
+  </table>
+
+  <h2>Example encodings (with real row ids)</h2>
+  <p class="sub">Two tokens from a live observation. Categorical slots show <code>string → row</code>; numeric slots show their value. Empty slots are padding (row 0).</p>
+  <table>
+    <tr><th>Slot</th><th>Self-Pokémon token — <b>Charizard</b> (active, full HP)</th><th>Move token — <b>Flamethrower</b> (slot 1)</th></tr>
+    <tr><td>PRIMARY [0]</td><td><code>species:Charizard → 586</code></td><td><code>move:flamethrower → 364</code></td></tr>
+    <tr><td>SECONDARY [1]</td><td><code>status:none → 788</code></td><td><code>action:move → 2</code></td></tr>
+    <tr><td>ROLE [2]</td><td><code>pokemon:self → 547</code></td><td><code>action → …</code></td></tr>
+    <tr><td>SLOT [3]</td><td><code>self_slot:0 → 554</code></td><td><code>move_slot:1 → 536</code></td></tr>
+    <tr><td><b>TYPE_1 [4]</b></td><td><code>type:fire → 803</code></td><td><code>type:fire → 803</code></td></tr>
+    <tr><td><b>TYPE_2 [5]</b></td><td><code>type:flying → 804</code></td><td class="pad">— (padding)</td></tr>
+    <tr><td><b>MOVE_CATEGORY [6]</b></td><td class="pad">— (padding)</td><td><code>move_category:special → 534</code></td></tr>
+    <tr><td>belief [7–86]</td><td class="pad">— (self: known)</td><td class="pad">—</td></tr>
+    <tr><td>numeric: HP / ACTIVE</td><td>1.0 / 1.0</td><td>— / 1.0 (legal)</td></tr>
+    <tr><td><b>numeric: BASE_POWER/PRIORITY/ACCURACY</b></td><td class="pad">—</td><td>0.475 / 0.0 / 1.0</td></tr>
+  </table>
+  <div class="note">Note the shared <code>type:fire</code> row (803) on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model can use to learn STAB and effectiveness across every Fire mon/move at once.</div>
+
+  <h2>⚠️ Still missing — Phase 2 (dynamic state, from the protocol/bridge)</h2>
+  <table>
+    <tr><th>Tier</th><th>Missing primitive</th><th>Why it matters</th><th>Source</th><th>Plan</th></tr>
+    <tr><td><span class="tag m">1</span></td><td><b>stats — esp. SPEED</b></td><td><b>turn order</b> — can't tell who moves first</td><td>protocol / dex</td><td>Phase 2</td></tr>
+    <tr><td><span class="tag m">1</span></td><td><b>stat boosts (stages)</b></td><td><b>setup-sweep</b> — can't see its own +Atk worked</td><td>protocol</td><td>Phase 2</td></tr>
+    <tr><td><span class="tag m">2</span></td><td>weather</td><td>damage / ability modifiers</td><td>protocol</td><td>Phase 2</td></tr>
+    <tr><td><span class="tag m">2</span></td><td>side conditions / hazards / screens</td><td>switch cost, damage reduction</td><td>protocol</td><td>Phase 2</td></tr>
+    <tr><td><span class="tag m">2</span></td><td>level</td><td>stat / damage scaling</td><td>protocol</td><td>Phase 2</td></tr>
+    <tr><td><span class="tag m">3</span></td><td>PP, secondary-effect chances</td><td>stall, risk</td><td>dex</td><td>later</td></tr>
+  </table>
+  <div class="note">
+    <b>Principle (per review):</b> surface <b>raw observable facts</b> (move type, stats, boosts) — not <b>computed judgments</b> (e.g. an effectiveness multiplier, which would be brittle for ability immunities like Levitate / Wonder Guard). The model learns the type chart and effectiveness <em>emergently</em> from the raw primitives + the existing ability/item belief, so it can't inherit a hand-coded error.
+  </div>
+</body>
+</html>

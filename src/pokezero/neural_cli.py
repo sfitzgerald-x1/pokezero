@@ -82,23 +82,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Reserved out-of-vocabulary rows in the compact category embedding.",
     )
     train.add_argument(
-        "--category-vocab-from",
-        type=Path,
-        nargs="*",
-        default=None,
-        help="Rollout JSONL files used to derive the compact category vocabulary. Defaults to --data.",
-    )
-    train.add_argument(
-        "--category-vocab-source",
-        choices=("training-data", "randbat-dex"),
-        default="training-data",
-        help="Build the compact category vocab from the training rollouts (default) or the full Gen 3 randbat dex universe.",
-    )
-    train.add_argument(
         "--showdown-root",
         type=Path,
         default=None,
-        help="Built Pokemon Showdown checkout root (required for --category-vocab-source randbat-dex).",
+        help="Built Pokemon Showdown checkout root (required: the category vocabulary is the closed Gen 3 randbat universe).",
     )
     train.set_defaults(func=_train)
 
@@ -271,9 +258,9 @@ def main(argv: list[str] | None = None) -> int:
 def _describe(args: argparse.Namespace) -> int:
     # The category embedding is a compact vocabulary built at train time; use a minimal
     # placeholder here just to surface the architecture defaults.
-    config = TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1)
+    config = TransformerPolicyConfig.compact_category(category_vocab=("placeholder",), category_oov_buckets=1)
     model_config = config.to_dict()
-    for key in ("category_vocab", "categorical_vocab_size", "category_oov_buckets", "category_aliases"):
+    for key in ("category_vocab", "categorical_vocab_size", "category_oov_buckets"):
         model_config.pop(key, None)
     model_config["category_embedding"] = "compact vocabulary built at train time (legacy hash embedding retired)"
     payload = {
@@ -324,41 +311,21 @@ def _train(args: argparse.Namespace) -> int:
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
     )
-    category_aliases: tuple[tuple[int, int], ...] = ()
-    if args.category_vocab_source == "randbat-dex":
-        if args.showdown_root is None:
-            raise ValueError("--category-vocab-source randbat-dex requires --showdown-root.")
-        from .randbat_vocab import (
-            build_gen3_randbat_category_vocabulary,
-            gen3_randbat_cosmetic_aliases,
-        )
+    # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
+    # the env builds at encode time, so rows align deterministically. (The legacy training-data
+    # vocab source is retired: observations now store rows, not collectible hash ids.)
+    if args.showdown_root is None:
+        raise ValueError("neural training requires --showdown-root for the Gen 3 randbat category vocabulary.")
+    from .randbat_vocab import gen3_category_vocabulary
 
-        category_vocab = build_gen3_randbat_category_vocabulary(args.showdown_root)
-        category_aliases = gen3_randbat_cosmetic_aliases(args.showdown_root)
-        vocab_label = "randbat-dex universe"
-    else:
-        vocab_paths = args.category_vocab_from or args.data
-        category_vocab = collect_categorical_ids(vocab_paths)
-        vocab_label = "training data"
-        # Collapse cosmetic formes (Unown) onto the base species when a Showdown root is
-        # available, so the training-data vocab gets the same cleanup as randbat-dex.
-        if args.showdown_root is not None and category_vocab:
-            from .randbat_vocab import canonicalize_with_cosmetic_aliases
-
-            category_vocab, category_aliases = canonicalize_with_cosmetic_aliases(
-                category_vocab, args.showdown_root
-            )
-            vocab_label = "training data (cosmetic-collapsed)"
-    if not category_vocab:
-        raise ValueError("No categorical ids found to build a compact category vocabulary.")
+    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
     model_config = TransformerPolicyConfig.compact_category(
-        category_vocab=category_vocab,
-        category_oov_buckets=args.category_oov_buckets,
-        category_aliases=category_aliases,
+        category_vocab=category_vocab.tokens,
+        category_oov_buckets=category_vocab.oov_buckets,
         **model_config_kwargs,
     )
     print(
-        f"category vocab ({vocab_label}): {len(category_vocab):,} ids + {args.category_oov_buckets:,} oov "
+        f"category vocab (randbat-dex universe): {len(category_vocab.tokens):,} tokens + {args.category_oov_buckets:,} oov "
         f"-> embedding rows {model_config.categorical_vocab_size:,}",
         file=sys.stderr,
     )
@@ -383,6 +350,8 @@ def _train(args: argparse.Namespace) -> int:
 
 
 def _benchmark(args: argparse.Namespace) -> int:
+    # Benchmark loads arbitrary checkpoints; the env builds the vocabulary from showdown_root
+    # (the closed-universe default), which matches any checkpoint trained on the same root.
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -451,9 +420,18 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         minimum_benchmark_matchups=MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS,
     )
+    # Self-play always uses the compact full Gen 3 randbat dex universe embedding. Build the
+    # vocabulary ONCE and share it between the env (encode-time rows) and the model config
+    # (embedding) so rows can never drift.
+    if args.showdown_root is None:
+        raise ValueError("neural self-play requires --showdown-root (used for the category vocabulary and the env).")
+    from .randbat_vocab import gen3_category_vocabulary
+
+    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
+        category_vocab=category_vocab,
     )
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
@@ -485,23 +463,15 @@ def _iterate(args: argparse.Namespace) -> int:
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
     )
-    # Self-play always uses the compact full Gen 3 randbat dex universe embedding.
-    if args.showdown_root is None:
-        raise ValueError("neural self-play requires --showdown-root (used for the category vocabulary and the env).")
-    from .randbat_vocab import (
-        build_gen3_randbat_category_vocabulary,
-        gen3_randbat_cosmetic_aliases,
-    )
-
-    category_vocab = build_gen3_randbat_category_vocabulary(args.showdown_root)
+    # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
+    # model learns are exactly the rows the env encodes.
     model_config = TransformerPolicyConfig.compact_category(
-        category_vocab=category_vocab,
-        category_oov_buckets=args.category_oov_buckets,
-        category_aliases=gen3_randbat_cosmetic_aliases(args.showdown_root),
+        category_vocab=category_vocab.tokens,
+        category_oov_buckets=category_vocab.oov_buckets,
         **iterate_model_config_kwargs,
     )
     print(
-        f"category vocab (randbat-dex universe): {len(category_vocab):,} ids + "
+        f"category vocab (randbat-dex universe): {len(category_vocab.tokens):,} tokens + "
         f"{args.category_oov_buckets:,} oov -> embedding rows {model_config.categorical_vocab_size:,}",
         file=sys.stderr,
     )

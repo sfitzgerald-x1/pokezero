@@ -12,10 +12,15 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Mapping, Optional, TextIO
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TextIO
 
+if TYPE_CHECKING:
+    from .category_vocab import CategoryVocabulary
+
+from .dex import load_showdown_dex_cached
 from .env import BattleFormat, PlayerId, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
+from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
@@ -40,6 +45,10 @@ class LocalShowdownConfig:
     bridge_path: Path | str = BRIDGE_PATH
     node_binary: str = "node"
     observation_spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    # Category vocabulary used to convert token strings to embedding rows. When None it is built
+    # from showdown_root; callers that pair the env with a specific model MUST pass the model's
+    # vocabulary here so encode-time rows match the embedding exactly (no silent row drift).
+    category_vocab: "CategoryVocabulary | None" = None
     read_timeout_seconds: float = 10.0
 
     def resolved_showdown_root(self) -> Path:
@@ -102,7 +111,15 @@ class LocalShowdownEnv:
 
     def observe(self, player: PlayerId) -> PokeZeroObservationV0:
         state = self._state_for_player(player)
-        return observation_from_player_state(state, spec=self.config.observation_spec)
+        root = self.config.resolved_showdown_root()
+        # Prefer the explicitly-paired model vocabulary; otherwise build it from the root.
+        vocab = self.config.category_vocab or gen3_category_vocabulary(root)
+        return observation_from_player_state(
+            state,
+            category_vocab=vocab,
+            spec=self.config.observation_spec,
+            dex=load_showdown_dex_cached(root),
+        )
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:
         return self.observe(player).legal_action_mask

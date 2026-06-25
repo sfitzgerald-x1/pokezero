@@ -43,14 +43,14 @@ def _entity_test_model_config(**overrides):
 
 class NeuralSelfPlayTest(unittest.TestCase):
     def setUp(self) -> None:
-        # Self-play builds the compact randbat-dex vocab from --showdown-root; stub the dex
-        # lookups so CLI tests stay fast and do not need a real Showdown checkout.
-        vocab_patch = patch("pokezero.randbat_vocab.build_gen3_randbat_category_vocabulary", return_value=(10, 20, 30))
-        alias_patch = patch("pokezero.randbat_vocab.gen3_randbat_cosmetic_aliases", return_value=((999, 10),))
+        # Self-play builds the string->row CategoryVocabulary from --showdown-root; stub it so
+        # CLI tests stay fast and do not need a real Showdown checkout.
+        from pokezero.category_vocab import build_category_vocabulary
+
+        fake_vocab = build_category_vocabulary(["species:a", "species:b", "move:c"], oov_buckets=16)
+        vocab_patch = patch("pokezero.randbat_vocab.gen3_category_vocabulary", return_value=fake_vocab)
         vocab_patch.start()
-        alias_patch.start()
         self.addCleanup(vocab_patch.stop)
-        self.addCleanup(alias_patch.stop)
 
     def test_run_neural_selfplay_iterations_requires_torch_before_collecting(self) -> None:
         if torch_available():
