@@ -42,15 +42,15 @@
 
   <div class="shape">
     <div class="stat"><div class="v">46</div><div class="l">tokens (sequence)</div></div>
-    <div class="stat"><div class="v">84</div><div class="l">categorical ids / token</div></div>
-    <div class="stat"><div class="v">12</div><div class="l">numeric features / token</div></div>
-    <div class="stat"><div class="v">~0.37M</div><div class="l">params (812 cat rows)</div></div>
+    <div class="stat"><div class="v">87</div><div class="l">categorical ids / token</div></div>
+    <div class="stat"><div class="v">15</div><div class="l">numeric features / token</div></div>
+    <div class="stat"><div class="v">832</div><div class="l">embedding rows</div></div>
   </div>
-  <p class="sub">Input tensor per turn: <code>46 &times; (84 categorical ids + 12 numeric)</code> + a token-type id and attention mask per token. Categorical ids index a shared embedding table (795 vocab + 16 OOV + padding).</p>
+  <p class="sub">Input tensor per turn: <code>46 &times; (87 categorical ids + 15 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (815 closed-vocab tokens + 16 OOV + padding = 832 rows).</p>
 
   <div class="note">
-    <b>How a categorical id works (string → int row).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are only human-readable <em>keys</em>. Each is lowercased and hashed to a stable int, then remapped to a small embedding-row index — the model embeds the <b>int row</b>, never the string:
-    <div style="margin-top:8px"><code>"move:Flamethrower"</code> → <code>stable_category_id()</code> → <code>613319</code> → compact vocab → <code>row&nbsp;#&lt;1–795 or OOV&gt;</code> → 128-d embedding</div>
+    <b>How a categorical id works (string → row, no hash).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are human-readable <em>keys</em>; each maps by <b>direct lookup</b> in the enumerated closed-universe vocabulary to a small embedding-row index. The model embeds the <b>row</b> directly — the legacy 1,000,000-bucket blake2b hash + in-model remap are retired:
+    <div style="margin-top:8px"><code>"move:flamethrower"</code> → <code>CategoryVocabulary</code> lookup → <code>row 364</code> → 128-d embedding</div>
   </div>
 
   <div class="note">
@@ -75,7 +75,7 @@
 
   <h2>What each token carries (categorical slots + numeric)</h2>
   <table>
-    <tr><th>Section</th><th>Tokens</th><th>PRIMARY [0]</th><th>SECONDARY [1]</th><th>ROLE [2]</th><th>SLOT [3]</th><th>Belief buckets [4–83]</th><th>Active numeric</th></tr>
+    <tr><th>Section</th><th>Tokens</th><th>PRIMARY [0]</th><th>SECONDARY [1]</th><th>ROLE [2]</th><th>SLOT [3]</th><th>Belief buckets [7–86]</th><th>Active numeric</th></tr>
     <tr>
       <td><b>Field</b></td><td>0</td>
       <td><code>request_kind:&lt;kind&gt;</code></td>
@@ -128,29 +128,29 @@
     <tr><th>Raw Showdown protocol line</th><th>PRIMARY [0]<br>(event type)</th><th>SECONDARY [1]<br>(detail)</th><th>ROLE [2]<br>(actor)</th><th>SLOT [3]<br>(target)</th></tr>
     <tr>
       <td><code>|move|p1a: Charizard|Flamethrower|p2a: Skarmory</code></td>
-      <td><code>event:move</code><br><span class="pad">→ 333807</span></td>
-      <td><code>move:Flamethrower</code><br><span class="pad">→ 613319</span></td>
-      <td><code>event_actor:self</code><br><span class="pad">→ 616574</span></td>
-      <td><code>event_target:opponent</code><br><span class="pad">→ 933431</span></td>
+      <td><code>event:move</code><br><span class="pad">→ 291</span></td>
+      <td><code>move:Flamethrower</code><br><span class="pad">→ 364</span></td>
+      <td><code>event_actor:self</code><br><span class="pad">→ 314</span></td>
+      <td><code>event_target:opponent</code><br><span class="pad">→ 316</span></td>
     </tr>
     <tr>
       <td><code>|switch|p2a: Blissey|Blissey, L83|271/271</code></td>
-      <td><code>event:switch</code><br><span class="pad">→ 493034</span></td>
-      <td><code>species:Blissey</code><br><span class="pad">→ 600310</span></td>
+      <td><code>event:switch</code><br><span class="pad">→ 301</span></td>
+      <td><code>species:Blissey</code><br><span class="pad">→ 579</span></td>
       <td><code>event_actor:opponent</code></td>
       <td class="pad">event_target:none</td>
     </tr>
     <tr>
       <td><code>|-damage|p2a: Skarmory|55/100</code></td>
-      <td><code>event:-damage</code><br><span class="pad">→ 855286</span></td>
+      <td><code>event:-damage</code><br><span class="pad">→ 230</span></td>
       <td class="pad">padding (0) — raw HP "55/100" dropped (lean encoding); HP is numeric, the magnitude isn't an actionable token</td>
       <td class="pad">event_actor:none</td>
       <td><code>event_target:opponent</code></td>
     </tr>
     <tr>
       <td><code>|-status|p1a: Charizard|brn</code></td>
-      <td><code>event:-status</code><br><span class="pad">→ 20717</span></td>
-      <td><code>status:brn</code><br><span class="pad">→ 616608</span></td>
+      <td><code>event:-status</code><br><span class="pad">→ 262</span></td>
+      <td><code>status:brn</code><br><span class="pad">→ 785</span></td>
       <td class="pad">event_actor:none</td>
       <td><code>event_target:self</code></td>
     </tr>
@@ -174,17 +174,40 @@
   </table>
   <div class="note">Notice the theme: the model knows <b>who</b> (species/move ids), <b>how hurt</b> (HP/status), and <b>what's still uncertain</b> (belief) — but nothing about <b>game mechanics</b>.</div>
 
-  <h2>⚠️ Missing — actionable raw data the model cannot currently see</h2>
+  <h2>✅ Now included (Phase 1): raw type &amp; move mechanics</h2>
+  <p class="sub">Three new categorical slots and three new numeric features, populated from the dex, let the type chart + effectiveness emerge in the embedding space (no hand-computed multipliers):</p>
+  <table>
+    <tr><th>Slot</th><th>Index</th><th>On which tokens</th><th>Value</th></tr>
+    <tr><td><code>TYPE_1</code> (cat)</td><td>4</td><td>every Pokémon + switch-candidate token (mon's 1st type); move tokens (move's type)</td><td><code>type:&lt;t&gt;</code></td></tr>
+    <tr><td><code>TYPE_2</code> (cat)</td><td>5</td><td>Pokémon/switch tokens (2nd type; padding if mono-type)</td><td><code>type:&lt;t&gt;</code></td></tr>
+    <tr><td><code>MOVE_CATEGORY</code> (cat)</td><td>6</td><td>move tokens</td><td><code>move_category:&lt;physical/special/status&gt;</code></td></tr>
+    <tr><td><code>BASE_POWER</code> (num)</td><td>12</td><td>move tokens</td><td>bp/200, clamped</td></tr>
+    <tr><td><code>PRIORITY</code> (num)</td><td>13</td><td>move tokens</td><td>priority/5, clamped</td></tr>
+    <tr><td><code>ACCURACY</code> (num)</td><td>14</td><td>move tokens</td><td>accuracy [0,1]</td></tr>
+  </table>
+
+  <h2>Example encodings (with real row ids)</h2>
+  <p class="sub">Two tokens from a live observation. Categorical slots show <code>string → row</code>; numeric slots show their value. Empty slots are padding (row 0).</p>
+  <table>
+    <tr><th>Slot</th><th>Self-Pokémon token — <b>Charizard</b> (active, full HP)</th><th>Move token — <b>Flamethrower</b> (slot 1)</th></tr>
+    <tr><td>PRIMARY [0]</td><td><code>species:Charizard → 586</code></td><td><code>move:flamethrower → 364</code></td></tr>
+    <tr><td>SECONDARY [1]</td><td><code>status:none → 788</code></td><td><code>action:move → 2</code></td></tr>
+    <tr><td>ROLE [2]</td><td><code>pokemon:self → 547</code></td><td><code>action → …</code></td></tr>
+    <tr><td>SLOT [3]</td><td><code>self_slot:0 → 554</code></td><td><code>move_slot:1 → 536</code></td></tr>
+    <tr><td><b>TYPE_1 [4]</b></td><td><code>type:fire → 803</code></td><td><code>type:fire → 803</code></td></tr>
+    <tr><td><b>TYPE_2 [5]</b></td><td><code>type:flying → 804</code></td><td class="pad">— (padding)</td></tr>
+    <tr><td><b>MOVE_CATEGORY [6]</b></td><td class="pad">— (padding)</td><td><code>move_category:special → 534</code></td></tr>
+    <tr><td>belief [7–86]</td><td class="pad">— (self: known)</td><td class="pad">—</td></tr>
+    <tr><td>numeric: HP / ACTIVE</td><td>1.0 / 1.0</td><td>— / 1.0 (legal)</td></tr>
+    <tr><td><b>numeric: BASE_POWER/PRIORITY/ACCURACY</b></td><td class="pad">—</td><td>0.475 / 0.0 / 1.0</td></tr>
+  </table>
+  <div class="note">Note the shared <code>type:fire</code> row (803) on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model can use to learn STAB and effectiveness across every Fire mon/move at once.</div>
+
+  <h2>⚠️ Still missing — Phase 2 (dynamic state, from the protocol/bridge)</h2>
   <table>
     <tr><th>Tier</th><th>Missing primitive</th><th>Why it matters</th><th>Source</th><th>Plan</th></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>move type</b></td><td>type effectiveness</td><td>dex</td><td>Phase 1</td></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>move category</b> (phys/special)</td><td>which damage path / defensive stat</td><td>dex</td><td>Phase 1</td></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>move base power</b></td><td>damage magnitude</td><td>dex</td><td>Phase 1</td></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>types on ALL Pokémon</b> (self bench, opponent team, <em>and</em> switch candidates — not just the active defender)</td><td>pick a switch-in that resists the move you want to use</td><td>dex</td><td>Phase 1</td></tr>
     <tr><td><span class="tag m">1</span></td><td><b>stats — esp. SPEED</b></td><td><b>turn order</b> — can't tell who moves first</td><td>protocol / dex</td><td>Phase 2</td></tr>
     <tr><td><span class="tag m">1</span></td><td><b>stat boosts (stages)</b></td><td><b>setup-sweep</b> — can't see its own +Atk worked</td><td>protocol</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">2</span></td><td>move priority</td><td>revenge / speed</td><td>dex</td><td>Phase 1</td></tr>
-    <tr><td><span class="tag m">2</span></td><td>move accuracy</td><td>risk</td><td>dex</td><td>Phase 1</td></tr>
     <tr><td><span class="tag m">2</span></td><td>weather</td><td>damage / ability modifiers</td><td>protocol</td><td>Phase 2</td></tr>
     <tr><td><span class="tag m">2</span></td><td>side conditions / hazards / screens</td><td>switch cost, damage reduction</td><td>protocol</td><td>Phase 2</td></tr>
     <tr><td><span class="tag m">2</span></td><td>level</td><td>stat / damage scaling</td><td>protocol</td><td>Phase 2</td></tr>
