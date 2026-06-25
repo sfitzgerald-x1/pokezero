@@ -15,7 +15,7 @@ from pathlib import Path
 import random
 from typing import Any, Iterable, Mapping, Sequence
 
-from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
+from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
 from .policy import PolicyDecision, legal_action_indices
@@ -221,19 +221,23 @@ class TransformerTrainingConfig:
     capped_terminal_value: float = 0.0
     value_loss_weight: float = 0.25
     opponent_action_loss_weight: float = 0.1
+    switch_action_loss_weight: float = 1.0
+    action_family_loss_weight: float = 0.0
+    switch_target_loss_weight: float = 0.0
     max_batches: int | None = None
     device: str | None = None
-    # Training objective: "behavior-cloning" (supervised cross-entropy to the chosen action)
-    # or "ppo" (clipped policy-gradient using recorded behavior-policy probabilities and the
-    # value head as a baseline). PPO is the self-play RL operator.
+    # Training objective: "behavior-cloning" (supervised cross-entropy to the chosen action),
+    # "reward-weighted" (same CE, but only positive-return examples contribute to the policy
+    # term), or "ppo" (clipped policy-gradient using recorded behavior-policy probabilities
+    # and the value head as a baseline). PPO is the self-play RL operator.
     objective: str = "behavior-cloning"
     clip_epsilon: float = 0.2
     entropy_coef: float = 0.0
     normalize_advantage: bool = True
 
     def __post_init__(self) -> None:
-        if self.objective not in ("behavior-cloning", "ppo"):
-            raise ValueError("objective must be 'behavior-cloning' or 'ppo'.")
+        if self.objective not in ("behavior-cloning", "reward-weighted", "ppo"):
+            raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', or 'ppo'.")
         if self.clip_epsilon <= 0.0:
             raise ValueError("clip_epsilon must be positive.")
         if self.entropy_coef < 0.0:
@@ -256,6 +260,12 @@ class TransformerTrainingConfig:
             raise ValueError("value_loss_weight must be non-negative.")
         if self.opponent_action_loss_weight < 0.0:
             raise ValueError("opponent_action_loss_weight must be non-negative.")
+        if self.switch_action_loss_weight <= 0.0:
+            raise ValueError("switch_action_loss_weight must be positive.")
+        if self.action_family_loss_weight < 0.0:
+            raise ValueError("action_family_loss_weight must be non-negative.")
+        if self.switch_target_loss_weight < 0.0:
+            raise ValueError("switch_target_loss_weight must be non-negative.")
         if self.max_batches is not None and self.max_batches <= 0:
             raise ValueError("max_batches must be positive when set.")
 
@@ -273,6 +283,10 @@ class TransformerEpochMetrics:
     value_loss: float | None = None
     opponent_loss: float | None = None
     opponent_accuracy: float | None = None
+    action_family_loss: float | None = None
+    action_family_accuracy: float | None = None
+    switch_target_loss: float | None = None
+    switch_target_accuracy: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -435,6 +449,7 @@ class TransformerSoftmaxPolicy:
     deterministic: bool = True
     exploration_epsilon: float = 0.0
     sampling_temperature: float = 1.0
+    family_gated_selection: bool = False
     device: str | Any | None = None
     policy_id: str | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
@@ -445,6 +460,8 @@ class TransformerSoftmaxPolicy:
             raise ValueError("exploration_epsilon must be between 0 and 1.")
         if self.sampling_temperature <= 0.0:
             raise ValueError("sampling_temperature must be positive.")
+        if self.family_gated_selection and not self.deterministic:
+            raise ValueError("family_gated_selection currently requires deterministic selection.")
         if self.policy_id is None:
             self.policy_id = self.result.model_config.policy_id
         if self._history_by_player is None:
@@ -488,7 +505,11 @@ class TransformerSoftmaxPolicy:
                 temperature=self.sampling_temperature,
             )
         legal = legal_action_indices(observation.legal_action_mask)
-        greedy_action = max(legal, key=lambda index: (float(probabilities[index].item()), -index))
+        greedy_action = _greedy_action_index(
+            probabilities=tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)),
+            legal=legal,
+            family_gated=self.family_gated_selection,
+        )
         random_exploration = self.exploration_epsilon and rng.random() < self.exploration_epsilon
         if random_exploration:
             action_index = rng.choice(legal)
@@ -512,6 +533,7 @@ class TransformerSoftmaxPolicy:
                 "deterministic": self.deterministic,
                 "exploration_epsilon": self.exploration_epsilon,
                 "sampling_temperature": self.sampling_temperature,
+                "family_gated_selection": self.family_gated_selection,
             },
         )
 
@@ -522,6 +544,7 @@ def load_transformer_policy(
     deterministic: bool = True,
     exploration_epsilon: float = 0.0,
     sampling_temperature: float = 1.0,
+    family_gated_selection: bool = False,
     device: str | Any | None = None,
 ) -> TransformerSoftmaxPolicy:
     model, result = load_transformer_checkpoint(path, map_location=device)
@@ -531,6 +554,7 @@ def load_transformer_policy(
         deterministic=deterministic,
         exploration_epsilon=exploration_epsilon,
         sampling_temperature=sampling_temperature,
+        family_gated_selection=family_gated_selection,
         device=device,
     )
 
@@ -650,6 +674,10 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 value_loss=_optional_float(metrics.get("value_loss")),
                 opponent_loss=_optional_float(metrics.get("opponent_loss")),
                 opponent_accuracy=_optional_float(metrics.get("opponent_accuracy")),
+                action_family_loss=_optional_float(metrics.get("action_family_loss")),
+                action_family_accuracy=_optional_float(metrics.get("action_family_accuracy")),
+                switch_target_loss=_optional_float(metrics.get("switch_target_loss")),
+                switch_target_accuracy=_optional_float(metrics.get("switch_target_accuracy")),
             )
             for metrics in payload.get("epochs", ())
         ),
@@ -667,6 +695,12 @@ class _TorchMetricTotals:
     opponent_loss: float = 0.0
     opponent_correct: int = 0
     opponent_examples: int = 0
+    action_family_loss: float = 0.0
+    action_family_correct: int = 0
+    action_family_examples: int = 0
+    switch_target_loss: float = 0.0
+    switch_target_correct: int = 0
+    switch_target_examples: int = 0
 
     def add(self, batch_size: int, pieces: Mapping[str, float | int]) -> None:
         self.examples += batch_size
@@ -679,6 +713,16 @@ class _TorchMetricTotals:
             self.opponent_examples += opponent_examples
             self.opponent_loss += float(pieces["opponent_loss"]) * opponent_examples
             self.opponent_correct += int(pieces["opponent_correct"])
+        action_family_examples = int(pieces["action_family_examples"])
+        if action_family_examples:
+            self.action_family_examples += action_family_examples
+            self.action_family_loss += float(pieces["action_family_loss"]) * action_family_examples
+            self.action_family_correct += int(pieces["action_family_correct"])
+        switch_target_examples = int(pieces["switch_target_examples"])
+        if switch_target_examples:
+            self.switch_target_examples += switch_target_examples
+            self.switch_target_loss += float(pieces["switch_target_loss"]) * switch_target_examples
+            self.switch_target_correct += int(pieces["switch_target_correct"])
 
     def to_epoch_metrics(self, epoch: int) -> TransformerEpochMetrics:
         return TransformerEpochMetrics(
@@ -690,6 +734,10 @@ class _TorchMetricTotals:
             value_loss=self.value_loss / self.examples,
             opponent_loss=(self.opponent_loss / self.opponent_examples) if self.opponent_examples else None,
             opponent_accuracy=(self.opponent_correct / self.opponent_examples) if self.opponent_examples else None,
+            action_family_loss=(self.action_family_loss / self.action_family_examples) if self.action_family_examples else None,
+            action_family_accuracy=(self.action_family_correct / self.action_family_examples) if self.action_family_examples else None,
+            switch_target_loss=(self.switch_target_loss / self.switch_target_examples) if self.switch_target_examples else None,
+            switch_target_accuracy=(self.switch_target_correct / self.switch_target_examples) if self.switch_target_examples else None,
         )
 
 
@@ -737,13 +785,35 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         policy_loss = -(surrogate * mask).sum() / denom
         entropy_mean = (-(log_probs.exp() * log_probs).sum(dim=1) * mask).sum() / denom
         loss = policy_loss + (config.value_loss_weight * value_loss) - (config.entropy_coef * entropy_mean)
+    elif config.objective == "reward-weighted":
+        per_example_policy_loss = functional.cross_entropy(
+            masked_policy_logits,
+            tensors["action_indices"],
+            reduction="none",
+        )
+        weights = tensors["returns"].clamp(min=0.0) * _action_family_loss_weights(tensors, config)
+        denom = weights.sum().clamp(min=1.0)
+        policy_loss = (per_example_policy_loss * weights).sum() / denom
+        loss = policy_loss + (config.value_loss_weight * value_loss)
     else:
-        policy_loss = functional.cross_entropy(masked_policy_logits, tensors["action_indices"])
+        per_example_policy_loss = functional.cross_entropy(
+            masked_policy_logits,
+            tensors["action_indices"],
+            reduction="none",
+        )
+        weights = _action_family_loss_weights(tensors, config)
+        policy_loss = (per_example_policy_loss * weights).sum() / weights.sum().clamp(min=1.0)
         loss = policy_loss + (config.value_loss_weight * value_loss)
 
     opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = _opponent_loss_terms(output, tensors, config)
     if opponent_loss is not None:
         loss = loss + (config.opponent_action_loss_weight * opponent_loss)
+    family_loss, family_loss_value, family_correct, family_examples = _action_family_loss_terms(masked_policy_logits, tensors, config)
+    if family_loss is not None:
+        loss = loss + (config.action_family_loss_weight * family_loss)
+    switch_loss, switch_loss_value, switch_correct, switch_examples = _switch_target_loss_terms(masked_policy_logits, tensors, config)
+    if switch_loss is not None:
+        loss = loss + (config.switch_target_loss_weight * switch_loss)
     return loss, {
         "loss": float(loss.detach().item()),
         "policy_loss": float(policy_loss.detach().item()),
@@ -752,7 +822,57 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "opponent_loss": opponent_loss_value,
         "opponent_correct": opponent_correct,
         "opponent_examples": opponent_examples,
+        "action_family_loss": family_loss_value,
+        "action_family_correct": family_correct,
+        "action_family_examples": family_examples,
+        "switch_target_loss": switch_loss_value,
+        "switch_target_correct": switch_correct,
+        "switch_target_examples": switch_examples,
     }
+
+
+def _action_family_loss_terms(masked_policy_logits: Any, tensors: Mapping[str, Any], config: TransformerTrainingConfig):
+    """Auxiliary move-vs-switch loss over the model's legal action logits."""
+    if not config.action_family_loss_weight:
+        return None, 0.0, 0, 0
+    torch_module = require_torch()
+    functional = torch_module.nn.functional
+    move_family_logits = torch_module.logsumexp(masked_policy_logits[:, :MOVE_ACTION_COUNT], dim=1)
+    switch_family_logits = torch_module.logsumexp(masked_policy_logits[:, MOVE_ACTION_COUNT:], dim=1)
+    family_logits = torch_module.stack((move_family_logits, switch_family_logits), dim=1)
+    family_targets = (tensors["action_indices"] >= MOVE_ACTION_COUNT).long()
+    loss = functional.cross_entropy(family_logits, family_targets)
+    correct = int((family_logits.argmax(dim=1) == family_targets).sum().item())
+    return loss, float(loss.detach().item()), correct, int(family_targets.numel())
+
+
+def _switch_target_loss_terms(masked_policy_logits: Any, tensors: Mapping[str, Any], config: TransformerTrainingConfig):
+    """Auxiliary conditional switch-target loss over examples whose teacher action switches."""
+    if not config.switch_target_loss_weight:
+        return None, 0.0, 0, 0
+    torch_module = require_torch()
+    functional = torch_module.nn.functional
+    switch_mask = tensors["action_indices"] >= MOVE_ACTION_COUNT
+    examples = int(switch_mask.sum().item())
+    if not examples:
+        return None, 0.0, 0, 0
+    logits = masked_policy_logits[switch_mask, MOVE_ACTION_COUNT:]
+    targets = tensors["action_indices"][switch_mask] - MOVE_ACTION_COUNT
+    loss = functional.cross_entropy(logits, targets)
+    correct = int((logits.argmax(dim=1) == targets).sum().item())
+    return loss, float(loss.detach().item()), correct, examples
+
+
+def _action_family_loss_weights(tensors: Mapping[str, Any], config: TransformerTrainingConfig):
+    torch_module = require_torch()
+    weights = torch_module.ones_like(tensors["returns"])
+    if config.switch_action_loss_weight == 1.0:
+        return weights
+    return torch_module.where(
+        tensors["action_indices"] >= MOVE_ACTION_COUNT,
+        weights * float(config.switch_action_loss_weight),
+        weights,
+    )
 
 
 def _validate_tensor_shapes(
@@ -796,6 +916,19 @@ def _sample_action(probabilities: Sequence[float], legal: Sequence[int], rng: ra
         if threshold <= cumulative:
             return action_index
     return legal[-1]
+
+
+def _greedy_action_index(*, probabilities: Sequence[float], legal: Sequence[int], family_gated: bool) -> int:
+    if not family_gated:
+        return max(legal, key=lambda index: (float(probabilities[index]), -index))
+    legal_moves = tuple(index for index in legal if index < MOVE_ACTION_COUNT)
+    legal_switches = tuple(index for index in legal if index >= MOVE_ACTION_COUNT)
+    if not legal_moves or not legal_switches:
+        return max(legal, key=lambda index: (float(probabilities[index]), -index))
+    move_mass = sum(float(probabilities[index]) for index in legal_moves)
+    switch_mass = sum(float(probabilities[index]) for index in legal_switches)
+    family_legal = legal_switches if switch_mass > move_mass else legal_moves
+    return max(family_legal, key=lambda index: (float(probabilities[index]), -index))
 
 
 def _behavior_probability(

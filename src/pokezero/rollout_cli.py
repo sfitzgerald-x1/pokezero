@@ -31,7 +31,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
     collect.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
     policy_help = (
-        "Policy spec. Supports random-legal, simple-legal, scripted-teacher, "
+        "Policy spec. Supports random-legal, simple-legal, scripted-teacher, aggressive-damage, "
         "linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
     )
     collect.add_argument("--p1-policy", default="random-legal", help=f"Policy for p1. {policy_help}")

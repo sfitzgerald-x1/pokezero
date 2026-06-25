@@ -538,8 +538,10 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
     if lowered == "scripted-teacher":
         teacher_options = _scripted_teacher_options(options)
         return lambda: ScriptedTeacherPolicy(**teacher_options)
-    if lowered == "max-damage":
+    if lowered in {"max-damage", "aggressive-damage"}:
         max_damage_options = _max_damage_options(options)
+        if lowered == "aggressive-damage":
+            max_damage_options["policy_id"] = "aggressive-damage"
         return lambda: MaxDamagePolicy(**max_damage_options)
     if lowered.startswith(LINEAR_POLICY_SPEC_PREFIX):
         from .linear_policy import LinearSoftmaxPolicy, load_linear_model
@@ -560,6 +562,7 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         return lambda: load_transformer_policy(Path(checkpoint), **neural_options)
     raise ValueError(
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, max-damage, "
+        "aggressive-damage, "
         "scripted-teacher, linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
     )
 
@@ -589,7 +592,7 @@ def policy_spec_with_showdown_root(spec: str, showdown_root: Path | str | None) 
     if showdown_root is None:
         return spec
     policy_body, options = _split_policy_spec_options(spec.strip())
-    if policy_body.lower() not in ("scripted-teacher", "max-damage") or "showdown_root" in options:
+    if policy_body.lower() not in ("scripted-teacher", "max-damage", "aggressive-damage") or "showdown_root" in options:
         return spec
     options = {**options, "showdown_root": str(showdown_root)}
     return f"{policy_body}?{urlencode(options)}"
@@ -663,13 +666,14 @@ def _linear_policy_options(options: Mapping[str, str]) -> dict[str, object]:
 
 
 def _neural_policy_options(options: Mapping[str, str]) -> dict[str, object]:
-    supported = {"sample", "deterministic", "epsilon", "temperature", "device"}
+    supported = {"sample", "deterministic", "epsilon", "temperature", "device", "family_gated"}
     unknown = sorted(set(options) - supported)
     if unknown:
         raise ValueError(f"Unsupported neural policy option(s): {', '.join(unknown)}.")
-    policy_options = _linear_policy_options({key: value for key, value in options.items() if key != "device"})
+    policy_options = _linear_policy_options({key: value for key, value in options.items() if key not in {"device", "family_gated"}})
     if options.get("device"):
         policy_options["device"] = options["device"]
+    policy_options["family_gated_selection"] = _optional_bool(options, "family_gated") or False
     return policy_options
 
 
@@ -679,8 +683,11 @@ def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
         "switch_margin",
         "poor_move_threshold",
         "team_status_cure_score",
+        "status_pressure_score",
         "statused_switch_penalty",
         "low_hp_switch_bonus",
+        "active_danger_switch_bonus",
+        "tie_breaker",
         "allow_fallback",
         "allow_unknown_moves",
     }
@@ -696,10 +703,18 @@ def _scripted_teacher_options(options: Mapping[str, str]) -> dict[str, object]:
         teacher_options["poor_move_threshold"] = _optional_float(options, "poor_move_threshold", default=35.0)
     if "team_status_cure_score" in options:
         teacher_options["team_status_cure_score"] = _optional_float(options, "team_status_cure_score", default=64.0)
+    if "status_pressure_score" in options:
+        teacher_options["status_pressure_score"] = _optional_float(options, "status_pressure_score", default=55.0)
     if "statused_switch_penalty" in options:
         teacher_options["statused_switch_penalty"] = _optional_float(options, "statused_switch_penalty", default=10.0)
     if "low_hp_switch_bonus" in options:
         teacher_options["low_hp_switch_bonus"] = _optional_float(options, "low_hp_switch_bonus", default=35.0)
+    if "active_danger_switch_bonus" in options:
+        teacher_options["active_danger_switch_bonus"] = _optional_float(
+            options, "active_danger_switch_bonus", default=45.0
+        )
+    if "tie_breaker" in options:
+        teacher_options["tie_breaker"] = options["tie_breaker"]
     allow_fallback = _optional_bool(options, "allow_fallback")
     if allow_fallback is not None:
         teacher_options["allow_fallback"] = allow_fallback

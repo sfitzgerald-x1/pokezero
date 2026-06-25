@@ -420,7 +420,7 @@ class CollectionTest(unittest.TestCase):
         policy = policy_from_spec(
             "scripted-teacher?showdown_root=/tmp/showdown&switch_margin=3&poor_move_threshold=20"
             "&team_status_cure_score=70&statused_switch_penalty=12&low_hp_switch_bonus=44"
-            "&allow_fallback=true&allow_unknown_moves=true"
+            "&tie_breaker=first&allow_fallback=true&allow_unknown_moves=true"
         )
 
         self.assertIsInstance(policy, ScriptedTeacherPolicy)
@@ -430,6 +430,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(policy.team_status_cure_score, 70.0)
         self.assertEqual(policy.statused_switch_penalty, 12.0)
         self.assertEqual(policy.low_hp_switch_bonus, 44.0)
+        self.assertEqual(policy.tie_breaker, "first")
         self.assertTrue(policy.allow_fallback)
         self.assertTrue(policy.allow_unknown_moves)
 
@@ -486,7 +487,7 @@ class CollectionTest(unittest.TestCase):
         if torch_available():
             self.skipTest("PyTorch checkpoint fixture is not available in this test module.")
         with self.assertRaisesRegex(TorchUnavailableError, "pip install -e"):
-            policy_from_spec("neural:/tmp/model.pt?deterministic=true&epsilon=0.1&temperature=0.9&device=cpu")
+            policy_from_spec("neural:/tmp/model.pt?deterministic=true&epsilon=0.1&temperature=0.9&family_gated=true&device=cpu")
 
     def test_policy_from_spec_rejects_empty_neural_checkpoint_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "after 'neural:'"):

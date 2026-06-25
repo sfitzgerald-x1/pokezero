@@ -122,6 +122,31 @@ class PolicyBaselineTest(unittest.TestCase):
         self.assertEqual(decision.metadata["policy_family"], "scripted-teacher")
         self.assertIn("eff=2", decision.metadata["teacher_reason"])
 
+    def test_scripted_teacher_can_break_score_ties_deterministically(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex(), tie_breaker="first")
+        obs = observation(
+            (True, True, False, False, False, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "bodyslam", "move_name": "Body Slam"},
+                    {"action_index": 1, "kind": "move", "legal": True, "move_id": "bodyslam", "move_name": "Body Slam"},
+                ],
+            },
+        )
+
+        decisions = {policy.select_action(obs, rng=random.Random(seed)).action_index for seed in range(20)}
+
+        self.assertEqual(decisions, {0})
+        decision = policy.select_action(obs, rng=random.Random(1))
+        self.assertEqual(decision.metadata["teacher_tie_count"], 2)
+        self.assertEqual(decision.metadata["teacher_tie_breaker"], "first")
+
+    def test_scripted_teacher_rejects_unknown_tie_breaker(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tie_breaker"):
+            ScriptedTeacherPolicy(dex=teacher_dex(), tie_breaker="middle")
+
     def test_scripted_teacher_uses_switch_when_no_move_is_legal(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
@@ -219,6 +244,22 @@ class PolicyBaselineTest(unittest.TestCase):
         policy = policy_factory_from_spec(rooted)()
         self.assertEqual(str(policy.showdown_root), "/tmp/showdown")
 
+    def test_aggressive_damage_spec_is_training_allowed_max_damage_family(self) -> None:
+        policy = policy_factory_from_spec("aggressive-damage")()
+        self.assertIsInstance(policy, MaxDamagePolicy)
+        self.assertEqual(policy.policy_id, "aggressive-damage")
+
+        rooted = policy_spec_with_showdown_root("aggressive-damage", "/tmp/showdown")
+        self.assertIn("showdown_root", rooted)
+        rooted_policy = policy_factory_from_spec(rooted)()
+        self.assertEqual(rooted_policy.policy_id, "aggressive-damage")
+        self.assertEqual(str(rooted_policy.showdown_root), "/tmp/showdown")
+
+    def test_scripted_teacher_status_pressure_option(self) -> None:
+        policy = policy_factory_from_spec("scripted-teacher?status_pressure_score=75")()
+        self.assertIsInstance(policy, ScriptedTeacherPolicy)
+        self.assertEqual(policy.status_pressure_score, 75.0)
+
     def test_max_damage_unknown_move_scores_zero(self) -> None:
         policy = MaxDamagePolicy(dex=teacher_dex())
         obs = observation(
@@ -266,7 +307,10 @@ class PolicyBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evaluation-only"):
             reject_eval_only_specs(["max-damage?showdown_root=/x"], role="self-play initial policy")
         # Ordinary training opponents/specs pass through untouched (including None).
-        reject_eval_only_specs(["random-legal", "simple-legal", "linear:foo.json", None], role="opponent")
+        reject_eval_only_specs(
+            ["random-legal", "simple-legal", "aggressive-damage", "linear:foo.json", None],
+            role="opponent",
+        )
 
     def test_scripted_teacher_root_injection_preserves_existing_options(self) -> None:
         rooted = policy_spec_with_showdown_root("scripted-teacher?allow_fallback=true", "/tmp/showdown")
@@ -360,6 +404,91 @@ class PolicyBaselineTest(unittest.TestCase):
         decision = policy.select_action(obs, rng=random.Random(1))
 
         self.assertEqual(decision.action_index, 4)
+
+    def test_scripted_teacher_scores_switches_against_possible_opponent_moves(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (False, False, False, False, True, True, False, False, False),
+            metadata={
+                "self_active": {"species": "Snorlax", "hp_fraction": 0.2, "status": "none"},
+                "opponent_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active_possible_moves": ["Flamethrower"],
+                "action_candidates": [
+                    {
+                        "action_index": 4,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                    },
+                    {
+                        "action_index": 5,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                    },
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 4)
+        self.assertIn("source=opponent_moves", decision.metadata["teacher_reason"])
+
+    def test_scripted_teacher_scores_switches_against_incoming_move_power(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (False, False, False, False, True, True, False, False, False),
+            metadata={
+                "self_active": {"species": "Skarmory", "hp_fraction": 0.5, "status": "none"},
+                "opponent_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active_possible_moves": ["Tackle", "Flamethrower"],
+                "action_candidates": [
+                    {
+                        "action_index": 4,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                    },
+                    {
+                        "action_index": 5,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Snorlax", "hp_fraction": 1.0, "status": "none"},
+                    },
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 4)
+        self.assertIn("incoming=67.5", decision.metadata["teacher_reason"])
+
+    def test_scripted_teacher_pivots_from_super_effective_pressure(self) -> None:
+        policy = ScriptedTeacherPolicy(dex=teacher_dex())
+        obs = observation(
+            (True, False, False, False, True, False, False, False, False),
+            metadata={
+                "self_active": {"species": "Skarmory", "hp_fraction": 0.5, "status": "none"},
+                "opponent_active": {"species": "Charizard", "hp_fraction": 1.0, "status": "none"},
+                "opponent_active_possible_moves": ["Flamethrower"],
+                "action_candidates": [
+                    {"action_index": 0, "kind": "move", "legal": True, "move_id": "bodyslam", "move_name": "Body Slam"},
+                    {
+                        "action_index": 4,
+                        "kind": "switch",
+                        "legal": True,
+                        "pokemon": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
+                    },
+                ],
+            },
+        )
+
+        decision = policy.select_action(obs, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 4)
+        self.assertIn("danger=", decision.metadata["teacher_reason"])
 
     def test_scripted_teacher_values_team_status_cure_when_teammate_is_statused(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())

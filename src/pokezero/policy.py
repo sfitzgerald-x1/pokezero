@@ -153,8 +153,15 @@ class ScriptedTeacherPolicy:
     switch_margin: float = 8.0
     poor_move_threshold: float = 35.0
     team_status_cure_score: float = 64.0
+    status_pressure_score: float = 55.0
     statused_switch_penalty: float = 10.0
     low_hp_switch_bonus: float = 35.0
+    active_danger_switch_bonus: float = 45.0
+    tie_breaker: str = "random"
+
+    def __post_init__(self) -> None:
+        if self.tie_breaker not in {"random", "first"}:
+            raise ValueError("tie_breaker must be 'random' or 'first'.")
 
     def select_action(
         self,
@@ -181,6 +188,7 @@ class ScriptedTeacherPolicy:
                 dex,
                 allow_unknown_moves=self.allow_unknown_moves,
                 team_status_cure_score=self.team_status_cure_score,
+                status_pressure_score=self.status_pressure_score,
             )
             for candidate in candidates
             if candidate.get("kind") == "move"
@@ -192,6 +200,7 @@ class ScriptedTeacherPolicy:
                 dex,
                 statused_switch_penalty=self.statused_switch_penalty,
                 low_hp_switch_bonus=self.low_hp_switch_bonus,
+                active_danger_switch_bonus=self.active_danger_switch_bonus,
             )
             for candidate in candidates
             if candidate.get("kind") == "switch"
@@ -212,7 +221,7 @@ class ScriptedTeacherPolicy:
 
         best_score = max(score.score for score in selected_pool)
         tied = tuple(score for score in selected_pool if abs(score.score - best_score) < 1e-9)
-        selected = rng.choice(tied)
+        selected = min(tied, key=lambda score: score.action_index) if self.tie_breaker == "first" else rng.choice(tied)
         return PolicyDecision(
             action_index=selected.action_index,
             policy_id=self.policy_id,
@@ -223,6 +232,8 @@ class ScriptedTeacherPolicy:
                 "teacher_score": selected.score,
                 "teacher_reason": selected.reason,
                 "teacher_branch": selected.branch,
+                "teacher_tie_count": len(tied),
+                "teacher_tie_breaker": self.tie_breaker,
             },
         )
 
@@ -432,6 +443,7 @@ def _move_score(
     *,
     allow_unknown_moves: bool,
     team_status_cure_score: float,
+    status_pressure_score: float,
 ) -> _ActionScore:
     action_index = int(candidate["action_index"])
     raw_move_name = str(candidate.get("move_id") or candidate.get("move_name") or "")
@@ -452,7 +464,15 @@ def _move_score(
     if move_id == "rapidspin":
         return _rapid_spin_score(action_index, move, metadata, dex, self_types, opponent_types, hp_fraction)
     if move.gen3_category == "Status" or move.base_power <= 0:
-        return _status_move_score(action_index, move, metadata, dex, hp_fraction, team_status_cure_score=team_status_cure_score)
+        return _status_move_score(
+            action_index,
+            move,
+            metadata,
+            dex,
+            hp_fraction,
+            team_status_cure_score=team_status_cure_score,
+            status_pressure_score=status_pressure_score,
+        )
 
     return _damaging_move_score(action_index, move, dex, self_types, opponent_types, hp_fraction)
 
@@ -494,6 +514,7 @@ def _status_move_score(
     hp_fraction: float,
     *,
     team_status_cure_score: float,
+    status_pressure_score: float,
 ) -> _ActionScore:
     move_id = normalize_id(move.id or move.name)
     opponent_status = _metadata_status(metadata.get("opponent_active"))
@@ -510,7 +531,7 @@ def _status_move_score(
                 f"{move.name}: status has no effect on {type_label}",
                 "status_no_effect",
             )
-        return _ActionScore(action_index, "move", 55.0, f"{move.name}: status pressure", "status_pressure")
+        return _ActionScore(action_index, "move", status_pressure_score, f"{move.name}: status pressure", "status_pressure")
     if move.heal:
         score = 58.0 if hp_fraction < 0.45 else 8.0
         return _ActionScore(action_index, "move", score, f"{move.name}: recovery", "recovery")
@@ -598,6 +619,7 @@ def _switch_score(
     *,
     statused_switch_penalty: float,
     low_hp_switch_bonus: float,
+    active_danger_switch_bonus: float,
 ) -> _ActionScore:
     action_index = int(candidate["action_index"])
     pokemon = candidate.get("pokemon")
@@ -607,31 +629,114 @@ def _switch_score(
     hp_fraction = _metadata_hp_fraction(pokemon, default=0.0)
     candidate_types = _metadata_species_types(pokemon, dex)
     opponent_types = _metadata_species_types(metadata.get("opponent_active"), dex)
-    incoming = max((dex.effectiveness(opponent_type, candidate_types) for opponent_type in opponent_types), default=1.0)
+    incoming = _opponent_incoming_pressure(metadata, dex, candidate_types, opponent_types)
+    active_types = _metadata_species_types(metadata.get("self_active"), dex)
+    active_incoming = _opponent_incoming_pressure(metadata, dex, active_types, opponent_types)
     matchup_bonus = 0.0
-    if incoming == 0.0:
+    if incoming.effectiveness == 0.0:
         matchup_bonus = 35.0
-    elif incoming < 1.0:
+    elif incoming.pressure <= 45.0:
         matchup_bonus = 20.0
-    elif incoming > 1.0:
-        matchup_bonus = -22.0
+    elif incoming.pressure <= 80.0:
+        matchup_bonus = 10.0
+    elif incoming.pressure >= 140.0:
+        matchup_bonus = -35.0
+    elif incoming.pressure >= 100.0:
+        matchup_bonus = -18.0
     active_hp_fraction = _metadata_hp_fraction(metadata.get("self_active"), default=1.0)
+    active_danger_bonus = _active_danger_switch_score(
+        active_pressure=active_incoming.pressure,
+        switch_pressure=incoming.pressure,
+        active_hp_fraction=active_hp_fraction,
+        max_bonus=active_danger_switch_bonus,
+    )
     preservation_bonus = 0.0
     if active_hp_fraction < 0.35:
         preservation_bonus = ((0.35 - active_hp_fraction) / 0.35) * low_hp_switch_bonus
-        preservation_bonus *= hp_fraction * _switch_preservation_scale(incoming)
+        preservation_bonus *= hp_fraction * _switch_preservation_scale(incoming.pressure, incoming.effectiveness)
     status_penalty = statused_switch_penalty if _has_status(pokemon) else 0.0
-    score = (hp_fraction * 40.0) + matchup_bonus + preservation_bonus - status_penalty
+    score = (hp_fraction * 40.0) + matchup_bonus + active_danger_bonus + preservation_bonus - status_penalty
     return _ActionScore(
         action_index,
         "switch",
         score,
         (
-            f"switch to {species}: hp={hp_fraction:.2f} incoming={incoming:g} "
+            f"switch to {species}: hp={hp_fraction:.2f} incoming={incoming.pressure:.1f} "
+            f"eff={incoming.effectiveness:g} source={incoming.source} "
+            f"active_incoming={active_incoming.pressure:.1f} danger={active_danger_bonus:.1f} "
             f"preserve={preservation_bonus:.1f} status_penalty={status_penalty:.1f}"
         ),
         "switch",
     )
+
+
+def _active_danger_switch_score(
+    *,
+    active_pressure: float,
+    switch_pressure: float,
+    active_hp_fraction: float,
+    max_bonus: float,
+) -> float:
+    if max_bonus <= 0.0 or active_pressure < 80.0 or switch_pressure >= active_pressure:
+        return 0.0
+    # Full-health actives may still need to pivot out of a predicted super-effective
+    # max-damage hit, while low-health actives deserve stronger preservation pressure.
+    hp_pressure = max(0.75, min(1.25, 1.25 - (active_hp_fraction * 0.5)))
+    reduction = min(1.0, (active_pressure - switch_pressure) / 160.0)
+    return max_bonus * reduction * hp_pressure
+
+
+@dataclass(frozen=True)
+class _IncomingPressure:
+    pressure: float
+    effectiveness: float
+    source: str
+
+
+def _opponent_incoming_pressure(
+    metadata: Mapping[str, Any],
+    dex: ShowdownDex,
+    candidate_types: tuple[str, ...],
+    opponent_types: tuple[str, ...],
+) -> _IncomingPressure:
+    move_names = _metadata_move_names(metadata.get("opponent_active_possible_moves")) or _metadata_move_names(
+        metadata.get("opponent_active_revealed_moves")
+    )
+    worst_move: _IncomingPressure | None = None
+    for move_name in move_names:
+        move = dex.move_info(move_name)
+        if move is None or move.gen3_category == "Status" or move.base_power <= 0:
+            continue
+        effectiveness = dex.effectiveness(move.type, candidate_types)
+        stab = 1.5 if move.type in opponent_types else 1.0
+        accuracy = max(0.5, min(1.0, move.accuracy / 100.0 if move.accuracy else 1.0))
+        pressure = move.base_power * effectiveness * stab * accuracy
+        candidate = _IncomingPressure(pressure=pressure, effectiveness=effectiveness, source="opponent_moves")
+        if worst_move is None or candidate.pressure > worst_move.pressure:
+            worst_move = candidate
+    if worst_move is not None:
+        return worst_move
+    if opponent_types:
+        fallback = max(
+            (
+                _IncomingPressure(
+                    pressure=80.0 * dex.effectiveness(opponent_type, candidate_types) * 1.5,
+                    effectiveness=dex.effectiveness(opponent_type, candidate_types),
+                    source="opponent_types",
+                )
+                for opponent_type in opponent_types
+            ),
+            key=lambda candidate: candidate.pressure,
+            default=_IncomingPressure(pressure=80.0, effectiveness=1.0, source="opponent_types"),
+        )
+        return fallback
+    return _IncomingPressure(pressure=80.0, effectiveness=1.0, source="unknown")
+
+
+def _metadata_move_names(raw_moves: Any) -> tuple[str, ...]:
+    if not isinstance(raw_moves, Sequence) or isinstance(raw_moves, (str, bytes)):
+        return ()
+    return tuple(str(move) for move in raw_moves if str(move).strip())
 
 
 def _metadata_species_types(raw_pokemon: Any, dex: ShowdownDex) -> tuple[str, ...]:
@@ -658,9 +763,11 @@ def _metadata_status(raw_pokemon: Any) -> str:
     return status or "none"
 
 
-def _switch_preservation_scale(incoming_effectiveness: float) -> float:
-    if incoming_effectiveness > 1.0:
+def _switch_preservation_scale(incoming_pressure: float, incoming_effectiveness: float) -> float:
+    if incoming_effectiveness > 1.0 or incoming_pressure >= 120.0:
         return 0.0
+    if incoming_pressure >= 75.0:
+        return 0.25
     if incoming_effectiveness == 1.0:
         return 0.5
     return 1.0

@@ -25,6 +25,7 @@ from pokezero.neural_policy import (
     torch_available,
     train_transformer_policy,
     training_batch_to_torch,
+    _greedy_action_index,
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
@@ -130,12 +131,19 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(value_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "opponent_action_loss_weight"):
             TransformerTrainingConfig(opponent_action_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "switch_action_loss_weight"):
+            TransformerTrainingConfig(switch_action_loss_weight=0.0)
+        with self.assertRaisesRegex(ValueError, "action_family_loss_weight"):
+            TransformerTrainingConfig(action_family_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "switch_target_loss_weight"):
+            TransformerTrainingConfig(switch_target_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "objective"):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
             TransformerTrainingConfig(objective="ppo", clip_epsilon=0.0)
         # round-trips through to_dict/from_dict-equivalent (asdict) with RL knobs.
         self.assertEqual(TransformerTrainingConfig(objective="ppo").objective, "ppo")
+        self.assertEqual(TransformerTrainingConfig(objective="reward-weighted").objective, "reward-weighted")
 
     def test_ppo_objective_uses_value_baselined_clipped_surrogate(self) -> None:
         if not torch_available():
@@ -171,6 +179,214 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         # Behavior-cloning objective on the same tensors yields a positive CE policy loss.
         bc_loss, bc_metrics = _transformer_loss(output, tensors, TransformerTrainingConfig())
         self.assertGreater(bc_metrics["policy_loss"], 0.0)
+
+    def test_reward_weighted_objective_ignores_non_positive_returns(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        logits = torch.zeros(2, 9)
+        logits[1, 0] = 20.0  # Badly wrong for target action 1, but this row has negative return.
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.tensor([1.0, -1.0]),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+        _, weighted_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="reward-weighted", opponent_action_loss_weight=0.0),
+        )
+        _, bc_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="behavior-cloning", opponent_action_loss_weight=0.0),
+        )
+
+        self.assertAlmostEqual(weighted_metrics["policy_loss"], torch.log(torch.tensor(9.0)).item(), places=5)
+        self.assertGreater(bc_metrics["policy_loss"], weighted_metrics["policy_loss"])
+
+    def test_behavior_cloning_can_upweight_switch_action_labels(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        logits = torch.zeros(2, 9)
+        logits[1, 0] = 20.0  # Very wrong for switch target action 4.
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 4], dtype=torch.long),
+            "returns": torch.ones(2),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+
+        _, unweighted = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="behavior-cloning", opponent_action_loss_weight=0.0),
+        )
+        _, weighted = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="behavior-cloning",
+                opponent_action_loss_weight=0.0,
+                switch_action_loss_weight=4.0,
+            ),
+        )
+
+        self.assertGreater(weighted["policy_loss"], unweighted["policy_loss"])
+
+    def test_action_family_loss_trains_move_vs_switch_decisions(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        logits = torch.zeros(2, 9)
+        logits[0, 0] = 5.0  # Correct move-family example.
+        logits[1, 0] = 5.0  # Wrong family for switch target action 4.
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 4], dtype=torch.long),
+            "returns": torch.ones(2),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+
+        base_loss, base_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="behavior-cloning", opponent_action_loss_weight=0.0),
+        )
+        family_loss, family_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="behavior-cloning",
+                opponent_action_loss_weight=0.0,
+                action_family_loss_weight=0.5,
+            ),
+        )
+
+        self.assertEqual(base_metrics["action_family_examples"], 0)
+        self.assertEqual(family_metrics["action_family_examples"], 2)
+        self.assertEqual(family_metrics["action_family_correct"], 1)
+        self.assertGreater(family_metrics["action_family_loss"], 0.0)
+        self.assertGreater(float(family_loss.detach().item()), float(base_loss.detach().item()))
+
+    def test_switch_target_loss_trains_conditional_switch_selection(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        logits = torch.zeros(3, 9)
+        logits[0, 4] = 5.0  # Correct switch target.
+        logits[1, 4] = 5.0  # Wrong switch target; teacher chose action 5.
+        logits[2, 0] = 5.0  # Move examples do not contribute to switch-target aux loss.
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.zeros(3),
+            opponent_action_logits=torch.zeros(3, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(3, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([4, 5, 0], dtype=torch.long),
+            "returns": torch.ones(3),
+            "action_probabilities": torch.full((3,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(3, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(3, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(3, dtype=torch.long),
+        }
+
+        base_loss, base_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="behavior-cloning", opponent_action_loss_weight=0.0),
+        )
+        switch_loss, switch_metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="behavior-cloning",
+                opponent_action_loss_weight=0.0,
+                switch_target_loss_weight=0.5,
+            ),
+        )
+
+        self.assertEqual(base_metrics["switch_target_examples"], 0)
+        self.assertEqual(switch_metrics["switch_target_examples"], 2)
+        self.assertEqual(switch_metrics["switch_target_correct"], 1)
+        self.assertGreater(switch_metrics["switch_target_loss"], 0.0)
+        self.assertGreater(float(switch_loss.detach().item()), float(base_loss.detach().item()))
+
+    def test_reward_weighted_objective_has_zero_policy_loss_without_positive_returns(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros(2, 9),
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.tensor([0.0, -1.0]),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+        loss, metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(objective="reward-weighted", opponent_action_loss_weight=0.0),
+        )
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertEqual(metrics["policy_loss"], 0.0)
+
+    def test_family_gated_greedy_selects_family_before_action(self) -> None:
+        probabilities = (0.40, 0.01, 0.01, 0.01, 0.15, 0.14, 0.13, 0.12, 0.03)
+        legal = tuple(range(9))
+
+        self.assertEqual(_greedy_action_index(probabilities=probabilities, legal=legal, family_gated=False), 0)
+        self.assertEqual(_greedy_action_index(probabilities=probabilities, legal=legal, family_gated=True), 4)
 
     def test_ppo_clips_large_positive_advantage_ratio(self) -> None:
         if not torch_available():
@@ -438,6 +654,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "2",
                     "--batch-size",
                     "8",
+                    "--switch-action-loss-weight",
+                    "1.5",
+                    "--action-family-loss-weight",
+                    "0.75",
+                    "--switch-target-loss-weight",
+                    "0.5",
                     "--policy-id",
                     "entity-cli",
                     "--promotion-registry",
@@ -484,6 +706,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].epochs, 2)
         self.assertEqual(kwargs["training_config"].batch_size, 8)
         self.assertEqual(kwargs["training_config"].capped_terminal_value, -0.25)
+        self.assertEqual(kwargs["training_config"].switch_action_loss_weight, 1.5)
+        self.assertEqual(kwargs["training_config"].action_family_loss_weight, 0.75)
+        self.assertEqual(kwargs["training_config"].switch_target_loss_weight, 0.5)
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)
