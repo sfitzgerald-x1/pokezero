@@ -49,7 +49,7 @@ CATEGORY_FIXED_COUNT = 8
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=34,
+    numeric_feature_count=35,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -63,11 +63,12 @@ CATEGORY_SLOT = 3
 CATEGORY_TYPE_1 = 4
 CATEGORY_TYPE_2 = 5
 CATEGORY_MOVE_CATEGORY = 6
-# Move secondary-effect TYPE (move tokens): move_effect:<id> where id is the effect class —
-# a status (brn/par/frz/...), flinch/confusion, or a target-explicit stat change
-# (lower_foe_spd / raise_self_atk / lower_self_spa / ...). This is the semantic of the effect;
-# NUMERIC_SECONDARY_CHANCE carries its probability, so the model can tell e.g. a freeze chance
-# from an attack-raise chance, and a foe-debuff from a self-drawback.
+# Move-effect TYPE (move tokens): move_effect:<id> — the move's primary OR secondary effect as
+# one label: a status (brn/par/frz/...), a volatile (substitute/leechseed/flinch/...), or a
+# target-explicit, magnitude-enumerated stat change (lower_foe_def_sharply / raise_self_atk /
+# raise_self_all / lower_self_atkdef / ...). NUMERIC_EFFECT_CHANCE carries its probability
+# (1.0 = guaranteed), so the model can tell e.g. a 10% freeze from a guaranteed setup, and a
+# foe-debuff from a self-drawback. NUMERIC_SELF_HP_COST carries the move's upfront HP price.
 CATEGORY_MOVE_EFFECT = 7
 CATEGORY_BELIEF_ABILITY_OFFSET = CATEGORY_FIXED_COUNT
 CATEGORY_BELIEF_ITEM_OFFSET = CATEGORY_BELIEF_ABILITY_OFFSET + BELIEF_ABILITY_BUCKET_COUNT
@@ -115,8 +116,11 @@ NUMERIC_BOOST_SPE = 30
 # Weather is encoded categorically on the field token's SECONDARY slot (weather:<id>).
 # Per-move dynamic/mechanical facts on move action tokens (raw, not judgments).
 NUMERIC_MOVE_PP_FRACTION = 31  # remaining PP / max PP from the request (1.0 = full; low = scarce)
-NUMERIC_SECONDARY_CHANCE = 32  # dex secondary-effect chance [0,1]; pairs with the move_effect type
+NUMERIC_EFFECT_CHANCE = 32  # move-effect probability [0,1]; pairs with move_effect (1.0 = guaranteed)
 NUMERIC_TURN_COUNT = 33  # field token: battle turn number / 1000 (clamped) — tempo / stall signal
+# Move tokens: fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25,
+# Explosion 1.0) — a deterrent the model weighs against the effect.
+NUMERIC_SELF_HP_COST = 34
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -970,9 +974,10 @@ def _encode_move_mechanics(
     _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(move.base_power) / 200.0))
     _set_numeric(num_row, NUMERIC_PRIORITY, max(-1.0, min(1.0, float(move.priority) / 5.0)))
     _set_numeric(num_row, NUMERIC_ACCURACY, (float(move.accuracy) / 100.0) if move.accuracy else 1.0)
-    if move.secondary_effect:
-        _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"move_effect:{move.secondary_effect}")
-    _set_numeric(num_row, NUMERIC_SECONDARY_CHANCE, min(1.0, float(move.secondary_chance) / 100.0))
+    if move.effect_label:
+        _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"move_effect:{move.effect_label}")
+    _set_numeric(num_row, NUMERIC_EFFECT_CHANCE, min(1.0, float(move.effect_chance) / 100.0))
+    _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(move.self_hp_cost))))
 
 
 def _encode_pokemon_tokens(

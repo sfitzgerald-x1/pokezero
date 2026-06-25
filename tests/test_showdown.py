@@ -16,8 +16,9 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    NUMERIC_EFFECT_CHANCE,
     NUMERIC_MOVE_PP_FRACTION,
-    NUMERIC_SECONDARY_CHANCE,
+    NUMERIC_SELF_HP_COST,
     NUMERIC_TURN_COUNT,
     _move_pp_fraction,
     NUMERIC_BASE_ATK,
@@ -78,7 +79,7 @@ def _phase2_fake_dex() -> ShowdownDex:
         id="flamethrower", name="Flamethrower", type="Fire", category="Special",
         gen3_category="Special", base_power=95, accuracy=100.0, priority=0,
         recoil=False, drain=False, heal=False, status=None, boosts={},
-        target="normal", selfdestruct=False, secondary_chance=10, secondary_effect="brn",
+        target="normal", selfdestruct=False, effect_chance=10, effect_label="brn",
     )
     return ShowdownDex(moves={"flamethrower": flamethrower}, species={"charizard": charizard}, type_chart={})
 
@@ -575,7 +576,7 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_boosts, {"atk": 6})
 
-    def test_move_secondary_effect_type_and_chance(self) -> None:
+    def test_move_effect_type_chance_and_hp_cost(self) -> None:
         state = self._replay_with([])
         observation = observation_from_player_state(
             state, category_vocab=_TEST_VOCAB, dex=_phase2_fake_dex()
@@ -585,9 +586,8 @@ class Phase2DynamicStateTest(unittest.TestCase):
             observation.categorical_ids[move_token][CATEGORY_MOVE_EFFECT],
             stable_category_id("move_effect:brn"),
         )
-        self.assertAlmostEqual(
-            observation.numeric_features[move_token][NUMERIC_SECONDARY_CHANCE], 0.10
-        )
+        self.assertAlmostEqual(observation.numeric_features[move_token][NUMERIC_EFFECT_CHANCE], 0.10)
+        self.assertAlmostEqual(observation.numeric_features[move_token][NUMERIC_SELF_HP_COST], 0.0)
 
     def test_move_pp_fraction_helper(self) -> None:
         self.assertAlmostEqual(_move_pp_fraction({"pp": 8, "maxpp": 8}), 1.0)

@@ -43,10 +43,10 @@
   <div class="shape">
     <div class="stat"><div class="v">46</div><div class="l">tokens (sequence)</div></div>
     <div class="stat"><div class="v">38</div><div class="l">categorical ids / token</div></div>
-    <div class="stat"><div class="v">34</div><div class="l">numeric features / token</div></div>
-    <div class="stat"><div class="v">898</div><div class="l">embedding rows</div></div>
+    <div class="stat"><div class="v">35</div><div class="l">numeric features / token</div></div>
+    <div class="stat"><div class="v">896</div><div class="l">embedding rows</div></div>
   </div>
-  <p class="sub">Input tensor per turn: <code>46 &times; (38 categorical ids + 34 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (881 closed-vocab tokens + 16 OOV + padding = 898 rows). The 38 categorical columns: 8 fixed (primary / secondary / role / slot / type×2 / move-category / move-effect) + 24 belief buckets (2 ability, 6 item, 16 move) + 6 active-mon volatile columns.</p>
+  <p class="sub">Input tensor per turn: <code>46 &times; (38 categorical ids + 35 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (879 closed-vocab tokens + 16 OOV + padding = 896 rows). The 38 categorical columns: 8 fixed (primary / secondary / role / slot / type×2 / move-category / move-effect) + 24 belief buckets (2 ability, 6 item, 16 move) + 6 active-mon volatile columns.</p>
 
   <div class="note">
     <b>How a categorical id works (string → row, no hash).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are human-readable <em>keys</em>; each maps by <b>direct lookup</b> in the enumerated closed-universe vocabulary to a small embedding-row index. The model embeds the <b>row</b> directly — the legacy 1,000,000-bucket blake2b hash + in-model remap are retired:
@@ -159,7 +159,7 @@
     So the window reads, in order: <em>"I clicked Flamethrower at their Skarmory → they switched to Blissey → Skarmory took damage → my Charizard got burned."</em> This is the temporal signal that lets the model notice patterns like "the opponent keeps pivoting out of my Charizard" — the basis for anticipatory switching (hypothesis H2). Note the numeric magnitude of damage and exact HP live in the <em>numeric</em> features of the Pokémon tokens, not here.
   </div>
 
-  <h2>The 34 numeric features</h2>
+  <h2>The 35 numeric features</h2>
   <table>
     <tr><th>#</th><th>Feature</th><th>Meaning</th></tr>
     <tr><td>0</td><td><code>HP_FRACTION</code></td><td>current HP as fraction [0,1]</td></tr>
@@ -178,8 +178,9 @@
     <tr><td>24–25</td><td><code>SELF_SCREENS / OPP_SCREENS</code></td><td>Reflect+Light Screen active /2 (field token)</td></tr>
     <tr><td>26–30</td><td><code>BOOST_ATK/DEF/SPA/SPD/SPE</code></td><td>current stat-boost stage/6 in [-1,1], <b>active mon only</b> (setup-sweep signal)</td></tr>
     <tr><td>31</td><td><code>MOVE_PP_FRACTION</code></td><td>remaining PP / max PP (move tokens) — 1.0 full, low = scarce (last-PP risk)</td></tr>
-    <tr><td>32</td><td><code>SECONDARY_CHANCE</code></td><td>move secondary-effect chance [0,1] — pairs with the <code>move_effect</code> type</td></tr>
+    <tr><td>32</td><td><code>EFFECT_CHANCE</code></td><td>move-effect probability [0,1] — pairs with the <code>move_effect</code> type (1.0 = guaranteed)</td></tr>
     <tr><td>33</td><td><code>TURN_COUNT</code></td><td>battle turn / 1000 (field token) — tempo / stall signal</td></tr>
+    <tr><td>34</td><td><code>SELF_HP_COST</code></td><td>fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25, Explosion 1.0) — a deterrent</td></tr>
   </table>
   <div class="note">The model now sees <b>who</b> (species/move ids + types), <b>how hurt</b> (HP/status), <b>what's still uncertain</b> (belief), <b>how hard / how fast</b> (base power, base stats, level), <b>the dynamic board</b> (boosts, weather, hazards/screens, turn count, volatiles), and <b>per-move tactics</b> (PP scarcity, secondary-effect type + chance).</div>
 
@@ -214,9 +215,9 @@
     <tr><td><b>numeric: LEVEL</b> [15]</td><td>0.78 (L78)</td><td class="pad">—</td></tr>
     <tr><td><b>numeric: BASE_HP…SPE</b> [16–21]</td><td>0.39 / 0.42 / 0.39 / 0.545 / 0.425 / 0.50</td><td class="pad">—</td></tr>
     <tr><td><b>numeric: BOOST_ATK…SPE</b> [26–30]</td><td>0 (no boosts yet; e.g. 0.5 after a Dragon Dance +Atk)</td><td class="pad">—</td></tr>
-    <tr><td><b>numeric: MOVE_PP_FRACTION / SECONDARY_CHANCE</b> [31–32]</td><td class="pad">—</td><td>1.0 / 0.10</td></tr>
+    <tr><td><b>numeric: MOVE_PP / EFFECT_CHANCE / SELF_HP_COST</b> [31,32,34]</td><td class="pad">—</td><td>1.0 / 0.10 / 0.0</td></tr>
   </table>
-  <div class="note">Note the shared <code>type:fire</code> row on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model uses to learn STAB and effectiveness across every Fire mon/move at once. Base stats + level give the magnitudes for damage and <b>turn order</b>; boosts show its own setup landing; <code>move_effect</code> + <code>SECONDARY_CHANCE</code> tell apart e.g. a freeze chance from an attack-raise chance.</div>
+  <div class="note">Note the shared <code>type:fire</code> row on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model uses to learn STAB and effectiveness across every Fire mon/move at once. Base stats + level give the magnitudes for damage and <b>turn order</b>; boosts show its own setup landing; <code>move_effect</code> + <code>EFFECT_CHANCE</code> tell apart e.g. a 10% freeze from a guaranteed Calm Mind, and a foe-debuff from a self-drawback.</div>
 
   <h2>✅ Now included (Phase 2): dynamic decision-critical state</h2>
   <p class="sub">All raw observable facts (no computed judgments). Level / base stats / move mechanics are dex-derived; boosts, weather, hazards/screens, turn count, volatiles, and PP are tracked from the live protocol stream / request.</p>
@@ -229,7 +230,8 @@
     <tr><td><b>hazards / screens</b></td><td>field token (player-relative)</td><td>num [22–25]: Spikes /3, screens /2</td><td>switch cost, damage reduction</td></tr>
     <tr><td><b>turn count</b></td><td>field token</td><td>num [33]: turn/1000</td><td>tempo / stall</td></tr>
     <tr><td><b>PP</b></td><td>move tokens</td><td>num [31]: pp/maxpp</td><td>scarcity — avoid relying on a near-empty move (last-PP Hydro Pump)</td></tr>
-    <tr><td><b>secondary effect type + chance</b></td><td>move tokens</td><td>cat [7]: <code>move_effect:&lt;id&gt;</code> + num [32]: chance</td><td>distinguishes e.g. a freeze chance from an attack-raise chance, a foe-debuff (<code>lower_foe_spd</code>) from a self-drawback (<code>lower_self_spa</code>, Overheat)</td></tr>
+    <tr><td><b>move effect (type + chance)</b></td><td>move tokens</td><td>cat [7]: <code>move_effect:&lt;id&gt;</code> + num [32]: chance</td><td><b>primary OR secondary</b>, one unified label: status (<code>par</code>), volatile (<code>substitute</code>, <code>leechseed</code>), or a target-explicit, magnitude-enumerated stat change (<code>raise_self_atk_sharply</code> Swords Dance, <code>raise_self_all</code> Ancient Power, <code>lower_foe_def_sharply</code> Screech = halve, <code>lower_self_atkdef</code> Superpower). Setup/status moves (Calm Mind, Thunder Wave) are now captured, at chance 1.0.</td></tr>
+    <tr><td><b>self-HP cost</b></td><td>move tokens</td><td>num [34]: fraction of max HP</td><td>deterrent the model weighs against the effect — Belly Drum 0.5, Substitute 0.25, Explosion 1.0</td></tr>
     <tr><td><b>volatile statuses</b></td><td>active mon token</td><td>cat [32–37]: <code>volatile:&lt;id&gt;</code> (positional)</td><td>confusion / leech seed / substitute / taunt / … — residual damage, locked options (reset on switch)</td></tr>
   </table>
 
@@ -243,7 +245,7 @@
   <h2>⚠️ Still missing — Phase 3 (lower priority)</h2>
   <table>
     <tr><th>Tier</th><th>Missing primitive</th><th>Why it matters</th><th>Source</th><th>Plan</th></tr>
-    <tr><td><span class="tag m">3</span></td><td>multi-stat secondary effects (only the dominant one is labeled)</td><td>rare; secondary effects with 2 stats lose the 2nd</td><td>dex</td><td>later</td></tr>
+    <tr><td><span class="tag m">3</span></td><td>move-effect <b>magnitude beyond ±2</b> is bucketed to <code>_max</code>; non-uniform multi-stat changes assume a shared magnitude</td><td>no Gen 3 cases today; safe for the closed set</td><td>dex</td><td>later</td></tr>
     <tr><td><span class="tag m">3</span></td><td>trapping / future sight timers, exact perish countdown semantics</td><td>tempo edge cases</td><td>protocol</td><td>later</td></tr>
   </table>
   <div class="note">
