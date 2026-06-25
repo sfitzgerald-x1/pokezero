@@ -50,7 +50,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=48,
+    numeric_feature_count=38,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -64,14 +64,12 @@ CATEGORY_SLOT = 3
 CATEGORY_TYPE_1 = 4
 CATEGORY_TYPE_2 = 5
 CATEGORY_MOVE_CATEGORY = 6
-# Candidate effect/status. On move tokens this is move_effect:<id> — the move's primary OR
-# secondary effect as one label: a status (brn/par/frz/...), a volatile
-# (substitute/leechseed/flinch/...), or a target-explicit, magnitude-enumerated stat change
-# (lower_foe_def_sharply / raise_self_atk / raise_self_all / lower_self_atkdef / ...).
-# NUMERIC_EFFECT_CHANCE carries its probability (1.0 = guaranteed), so the model can tell e.g.
-# a 10% freeze from a guaranteed setup, and a foe-debuff from a self-drawback.
-# NUMERIC_SELF_HP_COST carries the move's upfront HP price. On switch tokens this column carries
-# status:<id> for the switch target, binding the target's status to the candidate action row.
+# Move-effect TYPE (move tokens): move_effect:<id> — the move's primary OR secondary effect as
+# one label: a status (brn/par/frz/...), a volatile (substitute/leechseed/flinch/...), or a
+# target-explicit, magnitude-enumerated stat change (lower_foe_def_sharply / raise_self_atk /
+# raise_self_all / lower_self_atkdef / ...). NUMERIC_EFFECT_CHANCE carries its probability
+# (1.0 = guaranteed), so the model can tell e.g. a 10% freeze from a guaranteed setup, and a
+# foe-debuff from a self-drawback. NUMERIC_SELF_HP_COST carries the move's upfront HP price.
 CATEGORY_MOVE_EFFECT = 7
 # Move priority bracket (move tokens): move_priority:<n> for the integer priority (e.g. +1 Quick
 # Attack, -3 Focus Punch). Priority is a discrete turn-order bracket — a higher bracket always
@@ -137,19 +135,6 @@ NUMERIC_OPP_FUTURE_SIGHT = 36
 # Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
 # (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
 NUMERIC_TOXIC_STAGE = 37
-# Action-token matchup summaries. These are compact, player-knowable dex/belief facts that
-# make the candidate action's immediate matchup legible without requiring the small CPU model
-# to relearn every type-chart interaction from sparse rollout labels.
-NUMERIC_MOVE_TARGET_EFFECTIVENESS = 38  # move action: type effectiveness into opponent active / 4
-NUMERIC_MOVE_STAB = 39  # move action: 1 when the move type matches the user's active type
-NUMERIC_SWITCH_INCOMING_EFFECTIVENESS = 40  # switch action: worst known/possible incoming move eff / 4
-NUMERIC_MOVE_EXPECTED_POWER = 41  # move action: bp * effectiveness * STAB * accuracy / 300
-NUMERIC_SWITCH_INCOMING_POWER = 42  # switch action: worst plausible incoming bp * eff * STAB * accuracy / 300
-NUMERIC_STAY_INCOMING_EFFECTIVENESS = 43  # move action: worst plausible incoming move eff into current active / 4
-NUMERIC_STAY_INCOMING_POWER = 44  # move action: worst plausible incoming bp * eff * STAB * accuracy into current active / 300
-NUMERIC_MOVE_ESTIMATED_DAMAGE = 45  # move action: approximate damage fraction into opponent active HP
-NUMERIC_SWITCH_INCOMING_DAMAGE = 46  # switch action: approximate worst incoming damage fraction into switch target HP
-NUMERIC_STAY_INCOMING_DAMAGE = 47  # move action: approximate worst incoming damage fraction into current active HP
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -1103,217 +1088,6 @@ def _encode_move_mechanics(
     _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(self_hp_cost))))
 
 
-def _encode_move_matchup_features(
-    num_row: list[float],
-    dex: "ShowdownDex | None",
-    move_name: str,
-    state: PlayerRelativeBattleState,
-) -> None:
-    """Set immediate move-vs-opponent matchup facts on a move action token."""
-    if dex is None:
-        return
-    move = dex.move_info(move_name)
-    if move is None:
-        return
-    user_types = _self_active_types(state, dex)
-    opponent_types = _opponent_active_types(state, dex)
-    user_hp_fraction = _self_active_hp_fraction(state)
-    effectiveness = dex.effectiveness(move.type, tuple(opponent_types)) if opponent_types else 1.0
-    stab = 1.0 if _normalize_identifier(move.type) in {_normalize_identifier(value) for value in user_types} else 0.0
-    _set_numeric(num_row, NUMERIC_MOVE_TARGET_EFFECTIVENESS, _normalize_effectiveness(effectiveness))
-    _set_numeric(num_row, NUMERIC_MOVE_STAB, stab)
-    _set_numeric(
-        num_row,
-        NUMERIC_MOVE_EXPECTED_POWER,
-        _normalize_expected_power(move, effectiveness=effectiveness, stab=1.5 if stab else 1.0, hp_fraction=user_hp_fraction),
-    )
-    if state.self_active is not None and state.opponent_active is not None:
-        _set_numeric(
-            num_row,
-            NUMERIC_MOVE_ESTIMATED_DAMAGE,
-            _approximate_damage_fraction(
-                dex=dex,
-                move=move,
-                attacker=state.self_active,
-                defender=state.opponent_active,
-                attacker_hp_fraction=user_hp_fraction,
-            ),
-        )
-
-
-def _encode_switch_matchup_features(
-    num_row: list[float],
-    dex: "ShowdownDex | None",
-    state: PlayerRelativeBattleState,
-    pokemon: ShowdownPokemon,
-) -> None:
-    """Set worst known/possible incoming pressure on a switch action token."""
-    if dex is None or state.opponent_active is None:
-        return
-    defender_types = _species_types(dex, pokemon.species)
-    if not defender_types:
-        return
-    incoming_move_names = _opponent_active_known_or_possible_moves(state)
-    if not incoming_move_names:
-        return
-    attacker_types = _opponent_active_types(state, dex)
-    worst_effectiveness = 0.0
-    worst_power = 0.0
-    worst_damage = 0.0
-    for move_name in incoming_move_names:
-        move = dex.move_info(move_name)
-        if move is None or move.gen3_category == "Status" or move.base_power <= 0:
-            continue
-        effectiveness = dex.effectiveness(move.type, defender_types)
-        stab = 1.5 if _normalize_identifier(move.type) in {_normalize_identifier(value) for value in attacker_types} else 1.0
-        worst_effectiveness = max(worst_effectiveness, effectiveness)
-        worst_power = max(
-            worst_power,
-            _normalize_expected_power(move, effectiveness=effectiveness, stab=stab),
-        )
-        worst_damage = max(
-            worst_damage,
-            _approximate_damage_fraction(
-                dex=dex,
-                move=move,
-                attacker=state.opponent_active,
-                defender=pokemon,
-                attacker_hp_fraction=None,
-            ),
-        )
-    _set_numeric(
-        num_row,
-        NUMERIC_SWITCH_INCOMING_EFFECTIVENESS,
-        _normalize_effectiveness(worst_effectiveness),
-    )
-    _set_numeric(num_row, NUMERIC_SWITCH_INCOMING_POWER, worst_power)
-    _set_numeric(num_row, NUMERIC_SWITCH_INCOMING_DAMAGE, worst_damage)
-
-
-def _encode_stay_in_matchup_features(
-    num_row: list[float],
-    dex: "ShowdownDex | None",
-    state: PlayerRelativeBattleState,
-) -> None:
-    """Set worst known/possible incoming move pressure into the current active."""
-    if dex is None or state.self_active is None or state.opponent_active is None:
-        return
-    defender_types = _species_types(dex, state.self_active.species)
-    if not defender_types:
-        return
-    incoming_move_names = _opponent_active_known_or_possible_moves(state)
-    if not incoming_move_names:
-        return
-    attacker_types = _opponent_active_types(state, dex)
-    worst_effectiveness = 0.0
-    worst_power = 0.0
-    worst_damage = 0.0
-    for move_name in incoming_move_names:
-        move = dex.move_info(move_name)
-        if move is None or move.gen3_category == "Status" or move.base_power <= 0:
-            continue
-        effectiveness = dex.effectiveness(move.type, defender_types)
-        stab = 1.5 if _normalize_identifier(move.type) in {_normalize_identifier(value) for value in attacker_types} else 1.0
-        worst_effectiveness = max(worst_effectiveness, effectiveness)
-        worst_power = max(
-            worst_power,
-            _normalize_expected_power(move, effectiveness=effectiveness, stab=stab),
-        )
-        worst_damage = max(
-            worst_damage,
-            _approximate_damage_fraction(
-                dex=dex,
-                move=move,
-                attacker=state.opponent_active,
-                defender=state.self_active,
-                attacker_hp_fraction=None,
-            ),
-        )
-    _set_numeric(num_row, NUMERIC_STAY_INCOMING_EFFECTIVENESS, _normalize_effectiveness(worst_effectiveness))
-    _set_numeric(num_row, NUMERIC_STAY_INCOMING_POWER, worst_power)
-    _set_numeric(num_row, NUMERIC_STAY_INCOMING_DAMAGE, worst_damage)
-
-
-def _approximate_damage_fraction(
-    *,
-    dex: "ShowdownDex",
-    move,
-    attacker: ShowdownPokemon,
-    defender: ShowdownPokemon,
-    attacker_hp_fraction: float | None,
-) -> float:
-    if move.gen3_category == "Status":
-        return 0.0
-    base_power = resolve_move_base_power(move, attacker_hp_fraction)
-    if base_power <= 0:
-        return 0.0
-    attacker_info = dex.species_info(attacker.species)
-    defender_info = dex.species_info(defender.species)
-    if attacker_info is None or defender_info is None:
-        return 0.0
-    attacker_level = _level_from_details(attacker.details) or 80
-    defender_level = _level_from_details(defender.details) or 80
-    attack_key, defense_key = ("atk", "def") if move.gen3_category == "Physical" else ("spa", "spd")
-    attack = _approximate_stat(attacker_info.base_stats.get(attack_key), attacker_level, hp=False)
-    defense = _approximate_stat(defender_info.base_stats.get(defense_key), defender_level, hp=False)
-    defender_hp = _approximate_stat(defender_info.base_stats.get("hp"), defender_level, hp=True)
-    if attack <= 0.0 or defense <= 0.0 or defender_hp <= 0.0:
-        return 0.0
-    effectiveness = dex.effectiveness(move.type, tuple(defender_info.types))
-    if effectiveness == 0.0:
-        return 0.0
-    stab = 1.5 if _normalize_identifier(move.type) in {_normalize_identifier(value) for value in attacker_info.types} else 1.0
-    accuracy = max(0.5, min(1.0, move.accuracy / 100.0 if move.accuracy else 1.0))
-    level_factor = ((2.0 * attacker_level / 5.0) + 2.0)
-    base_damage = (((level_factor * base_power * attack / defense) / 50.0) + 2.0)
-    expected_damage = base_damage * stab * effectiveness * accuracy * 0.925
-    current_hp = defender_hp * (_condition_features(defender.condition).hp_fraction or 1.0)
-    if current_hp <= 0.0:
-        return 0.0
-    return max(0.0, min(1.0, expected_damage / current_hp))
-
-
-def _approximate_stat(base_stat: int | None, level: int, *, hp: bool) -> float:
-    if not base_stat:
-        return 0.0
-    # Gen 3 randbats use fixed-ish spreads; this intentionally ignores nature/items/boosts and
-    # uses a stable public approximation so the feature is a compact survival/KO hint, not a calc.
-    ev_quarter = 21.0  # 85 EVs / 4, rounded down in the real formula.
-    if hp:
-        return ((2.0 * base_stat + 31.0 + ev_quarter) * level / 100.0) + level + 10.0
-    return ((2.0 * base_stat + 31.0 + ev_quarter) * level / 100.0) + 5.0
-
-
-def _opponent_active_known_or_possible_moves(state: PlayerRelativeBattleState) -> tuple[str, ...]:
-    if state.opponent_active is None:
-        return ()
-    belief = _belief_for_species(state.belief_view.opponent_by_species(), state.opponent_active.species)
-    if belief is None:
-        return ()
-    values = belief.possible_moves or belief.revealed_moves
-    return tuple(dict.fromkeys(values))
-
-
-def _normalize_effectiveness(effectiveness: float) -> float:
-    return max(0.0, min(1.0, float(effectiveness) / 4.0))
-
-
-def _normalize_expected_power(
-    move,
-    *,
-    effectiveness: float,
-    stab: float,
-    hp_fraction: float | None = None,
-) -> float:
-    if move.gen3_category == "Status":
-        return 0.0
-    base_power = resolve_move_base_power(move, hp_fraction)
-    if base_power <= 0:
-        return 0.0
-    accuracy = max(0.5, min(1.0, move.accuracy / 100.0 if move.accuracy else 1.0))
-    return max(0.0, min(1.0, (float(base_power) * float(effectiveness) * float(stab) * accuracy) / 300.0))
-
-
 def _encode_pokemon_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -1378,19 +1152,7 @@ def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | Non
     """Types of the acting (self active) mon, for resolving type-dependent move effects."""
     if dex is None or state.self_active is None:
         return ()
-    return _species_types(dex, state.self_active.species)
-
-
-def _opponent_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
-    if dex is None or state.opponent_active is None:
-        return ()
-    return _species_types(dex, state.opponent_active.species)
-
-
-def _species_types(dex: "ShowdownDex | None", species: str | None) -> tuple[str, ...]:
-    if dex is None or not species:
-        return ()
-    info = dex.species_info(species)
+    info = dex.species_info(state.self_active.species)
     return tuple(info.types) if info is not None else ()
 
 
@@ -1428,8 +1190,6 @@ def _encode_action_tokens(
                 categorical_ids[token_index], numeric_features[token_index], dex, move_name,
                 user_types, user_hp_fraction,
             )
-            _encode_move_matchup_features(numeric_features[token_index], dex, move_name, state)
-            _encode_stay_in_matchup_features(numeric_features[token_index], dex, state)
             _set_numeric(numeric_features[token_index], NUMERIC_MOVE_PP_FRACTION, _move_pp_fraction(move))
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 1.0 if state.legal_action_mask[move_index] else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if isinstance(move, Mapping) else 0.0)
@@ -1452,11 +1212,9 @@ def _encode_action_tokens(
         if pokemon is not None:
             _encode_species_type_categories(categorical_ids[token_index], dex, pokemon.species)
             _encode_pokemon_stats(numeric_features[token_index], dex, pokemon.species, pokemon.details)
-            _encode_switch_matchup_features(numeric_features[token_index], dex, state, pokemon)
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:switch")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"switch_slot:{switch_slot + 1}")
-        _set_category(categorical_ids[token_index], CATEGORY_MOVE_EFFECT, f"status:{condition.status}")
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if pokemon is not None and pokemon.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 1.0 if state.legal_action_mask[action_index] else 0.0)
@@ -1481,7 +1239,6 @@ def _encode_recent_event_tokens(
 
 
 def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
-    opponent_active_belief = _opponent_active_belief(state)
     return {
         "battle_id": state.battle_id,
         "player_id": state.player_id,
@@ -1504,23 +1261,11 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_toxic_stage": state.opponent_toxic_stage,
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
-        "opponent_active_revealed_moves": (
-            list(opponent_active_belief.revealed_moves) if opponent_active_belief is not None else []
-        ),
-        "opponent_active_possible_moves": (
-            list(opponent_active_belief.possible_moves) if opponent_active_belief is not None else []
-        ),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],
         "opponent_team": [_pokemon_metadata(pokemon) for pokemon in state.opponent_team],
         "action_candidates": _action_candidate_metadata(state),
         "recent_public_events": list(state.recent_public_events),
     }
-
-
-def _opponent_active_belief(state: PlayerRelativeBattleState) -> RevealedPokemonBelief | None:
-    if state.opponent_active is None:
-        return None
-    return _belief_for_species(state.belief_view.opponent_by_species(), state.opponent_active.species)
 
 
 def _action_candidate_metadata(state: PlayerRelativeBattleState) -> list[dict[str, Any]]:

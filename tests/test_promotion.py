@@ -239,6 +239,7 @@ class PromotionRegistryTest(unittest.TestCase):
             deterministic=False,
             exploration_epsilon=0.0,
             sampling_temperature=1.0,
+            family_gated_selection=False,
         )
 
     def test_record_promotion_prefers_manifest_relative_checkpoint_over_cwd(self) -> None:
