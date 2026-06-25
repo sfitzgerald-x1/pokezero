@@ -255,8 +255,20 @@
     <tr><td><span class="tag m">3</span></td><td>move-effect <b>magnitude beyond ±2</b> is bucketed to <code>_max</code>; non-uniform multi-stat changes assume a shared magnitude</td><td>no Gen 3 cases today; safe for the closed set</td><td>dex</td><td>later</td></tr>
     <tr><td><span class="tag m">3</span></td><td>trapping / future sight timers, exact perish countdown semantics</td><td>tempo edge cases</td><td>protocol</td><td>later</td></tr>
   </table>
-  <div class="note">
-    <b>Principle (per review):</b> surface <b>raw observable facts</b> (move type, stats, boosts, secondary-effect type + chance) — not <b>computed judgments</b> (e.g. an effectiveness multiplier, which would be brittle for ability immunities like Levitate / Wonder Guard). The model learns the type chart, effectiveness, and effect semantics <em>emergently</em> from the raw primitives + the existing ability/item belief, so it can't inherit a hand-coded error.
+  <div class="note" style="border-left:4px solid #c0392b;padding-left:12px">
+    <b>Hard rule — no precomputed judgments in the observation.</b> We surface <b>raw observable facts</b> (types, stats, boosts, status, PP, secondary-effect type + chance, …) and <b>nothing the model can derive from them</b>. The following are <b>explicitly prohibited</b> as observation features, because the model must learn them itself:
+    <ul style="margin:8px 0">
+      <li><b>type effectiveness</b> / weakness multipliers, and <b>STAB</b> — derivable from the raw <code>type:</code> facts the model already sees on every mon and move;</li>
+      <li><b>expected / estimated damage</b>, "expected power" (bp × eff × STAB × acc), KO chance, or any <b>damage-calc</b> scaffolding — derivable from base power + stats + types + the belief;</li>
+      <li>"<b>incoming-threat</b>" / matchup summaries on action tokens (worst incoming effectiveness/power into a switch target or the current active) — the model must infer these from the board.</li>
+    </ul>
+    <b>Why this is a rule, not a preference:</b>
+    <ol style="margin:8px 0">
+      <li><b>Correctness.</b> Any computed effectiveness/damage is <em>brittle</em> — it silently breaks on ability immunities (Levitate, Wonder Guard, Flash Fire, Volt Absorb), items, and weather, baking a hand-coded error the model can never see past.</li>
+      <li><b>It caps the ceiling.</b> A precomputed heuristic feature is only as good as the heuristic; training on it pulls the policy toward that heuristic's quality instead of letting it exceed it.</li>
+      <li><b>It was tried and it did not help.</b> The overnight max-damage exploration added exactly these matchup features (effectiveness/STAB/expected-power/estimated-damage, slots 38–47); those runs did <em>not</em> beat the plain raw-facts DAgger/PPO runs (both plateaued ~0.50 vs max-damage). They were removed — see <code>docs/max_damage_exploration_learnings.md</code>.</li>
+    </ol>
+    The model learns the type chart, effectiveness, damage, and threat assessment <em>emergently</em> from the raw primitives + the ability/item/move belief — so it can't inherit a hand-coded error, and it is free to surpass any heuristic we could have written.
   </div>
 </body>
 </html>

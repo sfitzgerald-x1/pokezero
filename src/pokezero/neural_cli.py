@@ -63,7 +63,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     train.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
-    train.add_argument("--objective", choices=("behavior-cloning", "ppo"), default="behavior-cloning", help="Training objective: supervised behavior cloning (default) or PPO self-play RL.")
+    train.add_argument(
+        "--switch-action-loss-weight",
+        type=float,
+        default=1.0,
+        help="Multiplier for switch-action policy CE examples under behavior-cloning / reward-weighted objectives.",
+    )
+    train.add_argument(
+        "--action-family-loss-weight",
+        type=float,
+        default=0.0,
+        help="Auxiliary move-vs-switch classification loss weight derived from legal action logits.",
+    )
+    train.add_argument(
+        "--switch-target-loss-weight",
+        type=float,
+        default=0.0,
+        help="Auxiliary conditional switch-target classification loss weight over switch-labeled examples.",
+    )
+    train.add_argument(
+        "--objective",
+        choices=("behavior-cloning", "reward-weighted", "ppo"),
+        default="behavior-cloning",
+        help=(
+            "Training objective: supervised behavior cloning (default), reward-weighted "
+            "behavior cloning, or PPO self-play RL."
+        ),
+    )
     train.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
     train.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
     train.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
@@ -212,7 +238,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--capped-terminal-value", type=float, default=-0.25, help="Return assigned to each player in capped games.")
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     iterate.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
-    iterate.add_argument("--objective", choices=("behavior-cloning", "ppo"), default="behavior-cloning", help="Training objective: supervised behavior cloning (default) or PPO self-play RL.")
+    iterate.add_argument(
+        "--switch-action-loss-weight",
+        type=float,
+        default=1.0,
+        help="Multiplier for switch-action policy CE examples under behavior-cloning / reward-weighted objectives.",
+    )
+    iterate.add_argument(
+        "--action-family-loss-weight",
+        type=float,
+        default=0.0,
+        help="Auxiliary move-vs-switch classification loss weight derived from legal action logits.",
+    )
+    iterate.add_argument(
+        "--switch-target-loss-weight",
+        type=float,
+        default=0.0,
+        help="Auxiliary conditional switch-target classification loss weight over switch-labeled examples.",
+    )
+    iterate.add_argument(
+        "--objective",
+        choices=("behavior-cloning", "reward-weighted", "ppo"),
+        default="behavior-cloning",
+        help=(
+            "Training objective: supervised behavior cloning (default), reward-weighted "
+            "behavior cloning, or PPO self-play RL."
+        ),
+    )
     iterate.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
     iterate.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
     iterate.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
@@ -295,6 +347,9 @@ def _train(args: argparse.Namespace) -> int:
         capped_terminal_value=args.capped_terminal_value,
         value_loss_weight=args.value_loss_weight,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
+        switch_action_loss_weight=args.switch_action_loss_weight,
+        action_family_loss_weight=args.action_family_loss_weight,
+        switch_target_loss_weight=args.switch_target_loss_weight,
         max_batches=args.max_batches,
         device=args.device,
         objective=args.objective,
@@ -447,6 +502,9 @@ def _iterate(args: argparse.Namespace) -> int:
         capped_terminal_value=args.capped_terminal_value,
         value_loss_weight=args.value_loss_weight,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
+        switch_action_loss_weight=args.switch_action_loss_weight,
+        action_family_loss_weight=args.action_family_loss_weight,
+        switch_target_loss_weight=args.switch_target_loss_weight,
         max_batches=args.max_batches,
         device=args.device,
         objective=args.objective,
