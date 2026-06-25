@@ -909,7 +909,10 @@ def _split_policy_spec_options(policy_spec: str) -> tuple[str, dict[str, str]]:
         return body, {}
     from urllib.parse import parse_qsl
 
-    return body, {key: value for key, value in parse_qsl(query, keep_blank_values=True)}
+    # Lowercase option keys to match the resolver's normalization (collection._split_policy_spec_
+    # options), so callers that add/remove options (e.g. mirror temperature, deterministic spec)
+    # operate on the same canonical keys the policy factory will see.
+    return body, {key.strip().lower(): value.strip() for key, value in parse_qsl(query, keep_blank_values=True)}
 
 
 def _with_collection_temperature(policy_spec: str, temperature: float) -> str:
@@ -922,17 +925,19 @@ def _with_collection_temperature(policy_spec: str, temperature: float) -> str:
     """
     if temperature == 1.0:
         return policy_spec
-    from urllib.parse import parse_qsl, urlencode
+    from urllib.parse import urlencode
 
-    body, _, query = policy_spec.partition("?")
+    # Parse with the same semantics the resolver uses (lowercased keys, duplicate rejection) so
+    # the injected spec always round-trips through policy_factory_from_spec.
+    body, options = _split_policy_spec_options(policy_spec)
     lowered = body.strip().lower()
     if not (lowered.startswith("neural:") or lowered.startswith("linear:")):
         return policy_spec
-    params = dict(parse_qsl(query))
-    params.pop("deterministic", None)  # sampling is required for temperature to have any effect
-    params["sample"] = "true"
-    params["temperature"] = repr(float(temperature))
-    return f"{body}?{urlencode(params)}"
+    options = dict(options)
+    options.pop("deterministic", None)  # sampling is required for temperature to have any effect
+    options["sample"] = "true"
+    options["temperature"] = repr(float(temperature))
+    return f"{body}?{urlencode(options)}"
 
 
 def _opponent_pool(

@@ -305,6 +305,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
     def test_with_collection_temperature_injects_only_for_checkpoint_specs(self) -> None:
         from urllib.parse import parse_qsl
 
+        from pokezero.collection import policy_factory_from_spec
         from pokezero.neural_selfplay import _with_collection_temperature
 
         # No-op at temperature 1.0.
@@ -319,6 +320,45 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(float(params["temperature"]), 1.5)
         self.assertEqual(params["sample"], "true")
         self.assertNotIn("deterministic", params)
+
+    def test_with_collection_temperature_normalizes_and_round_trips(self) -> None:
+        from pokezero.collection import _split_policy_spec_options, policy_factory_from_spec
+        from pokezero.neural_selfplay import _with_collection_temperature
+
+        # A pre-existing deterministic option (any case) must be removed, not left to collide with
+        # the injected sample=true; other options (epsilon) are preserved.
+        spec = _with_collection_temperature("neural:/tmp/m.pt?Deterministic=true&epsilon=0.1", 1.25)
+        from pokezero.collection import _split_policy_spec_options as _canonical_split
+        _, options = _canonical_split(spec)
+        self.assertNotIn("deterministic", options)
+        self.assertEqual(options["sample"], "true")
+        self.assertEqual(float(options["temperature"]), 1.25)
+        self.assertEqual(options["epsilon"], "0.1")
+        # Must round-trip through the real resolver without a sample/deterministic conflict
+        # (the prior implementation raised here). neural specs build the factory lazily, so no
+        # checkpoint file is needed to validate option parsing.
+        self.assertTrue(callable(policy_factory_from_spec(spec)))
+
+    def test_collection_temperature_keeps_canonical_spec_clean_in_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies():
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                    collection_temperature=2.0,
+                )
+        # The temperature is collection-only: the canonical recorded specs stay clean.
+        manifest = result.iterations[0].to_manifest_dict()
+        self.assertNotIn("temperature", manifest["current_policy_spec"])
+        self.assertNotIn("temperature", manifest["next_current_policy_spec"])
 
     def test_collection_temperature_applies_to_collector_spec(self) -> None:
         collected: list = []
