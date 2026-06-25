@@ -1140,8 +1140,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 evaluation_seed_start=100,
             )
 
-        self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
-        self.assertIsNotNone(result.iterations[0].benchmark)
+            # Assert while the TemporaryDirectory is still open — the saved checkpoint lives under
+            # it, so checking .exists() after the `with` exits would always fail (the dir is gone).
+            self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
+            self.assertIsNotNone(result.iterations[0].benchmark)
 
 
 def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict | None = None) -> None:

@@ -24,6 +24,7 @@ from .actions import (
     is_switch_action,
 )
 from .belief import PlayerBeliefView, PokemonSetSource, PublicBattleBeliefEngine, RevealedPokemonBelief
+from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
@@ -35,13 +36,21 @@ from .observation import (
     opponent_showdown_slot,
 )
 
-BELIEF_ABILITY_BUCKET_COUNT = 8
-BELIEF_ITEM_BUCKET_COUNT = 8
-BELIEF_MOVE_BUCKET_COUNT = 64
+# Belief-fact columns are sized to the Gen 3 closed universe's max distinct values per species
+# (measured from the randbat set universe): at most 2 abilities, 5 items, 14 possible moves. The
+# values are placed positionally (sorted) into these columns — exact and collision-free.
+BELIEF_ABILITY_BUCKET_COUNT = 2
+BELIEF_ITEM_BUCKET_COUNT = 6
+BELIEF_MOVE_BUCKET_COUNT = 16
 BELIEF_FACT_BUCKET_COUNT = BELIEF_ABILITY_BUCKET_COUNT + BELIEF_ITEM_BUCKET_COUNT + BELIEF_MOVE_BUCKET_COUNT
+# Fixed categorical columns (0-8), then belief-fact buckets, then active-mon volatile-status
+# columns. Volatiles (confusion / leech seed / substitute / taunt / ...) are placed positionally
+# like belief facts; 6 columns cover any realistic simultaneous set on one mon.
+CATEGORY_FIXED_COUNT = 9
+VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
-    categorical_feature_count=7 + BELIEF_FACT_BUCKET_COUNT,
-    numeric_feature_count=15,
+    categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
+    numeric_feature_count=38,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -55,9 +64,23 @@ CATEGORY_SLOT = 3
 CATEGORY_TYPE_1 = 4
 CATEGORY_TYPE_2 = 5
 CATEGORY_MOVE_CATEGORY = 6
-CATEGORY_BELIEF_ABILITY_OFFSET = 7
+# Move-effect TYPE (move tokens): move_effect:<id> — the move's primary OR secondary effect as
+# one label: a status (brn/par/frz/...), a volatile (substitute/leechseed/flinch/...), or a
+# target-explicit, magnitude-enumerated stat change (lower_foe_def_sharply / raise_self_atk /
+# raise_self_all / lower_self_atkdef / ...). NUMERIC_EFFECT_CHANCE carries its probability
+# (1.0 = guaranteed), so the model can tell e.g. a 10% freeze from a guaranteed setup, and a
+# foe-debuff from a self-drawback. NUMERIC_SELF_HP_COST carries the move's upfront HP price.
+CATEGORY_MOVE_EFFECT = 7
+# Move priority bracket (move tokens): move_priority:<n> for the integer priority (e.g. +1 Quick
+# Attack, -3 Focus Punch). Priority is a discrete turn-order bracket — a higher bracket always
+# moves first regardless of speed — so a per-bracket embedding captures it better than the scalar
+# NUMERIC_PRIORITY (kept for ordinal grounding).
+CATEGORY_MOVE_PRIORITY = 8
+CATEGORY_BELIEF_ABILITY_OFFSET = CATEGORY_FIXED_COUNT
 CATEGORY_BELIEF_ITEM_OFFSET = CATEGORY_BELIEF_ABILITY_OFFSET + BELIEF_ABILITY_BUCKET_COUNT
 CATEGORY_BELIEF_MOVE_OFFSET = CATEGORY_BELIEF_ITEM_OFFSET + BELIEF_ITEM_BUCKET_COUNT
+# Active-mon volatile-status columns follow the belief blocks (volatile:<name>, positional).
+CATEGORY_VOLATILE_OFFSET = CATEGORY_BELIEF_MOVE_OFFSET + BELIEF_MOVE_BUCKET_COUNT
 NUMERIC_HP_FRACTION = 0
 NUMERIC_ACTIVE = 1
 NUMERIC_LEGAL = 2
@@ -74,6 +97,44 @@ NUMERIC_REVEALED_ITEM = 11
 NUMERIC_BASE_POWER = 12  # normalized base power (bp/200, clamped)
 NUMERIC_PRIORITY = 13  # move priority bracket (normalized)
 NUMERIC_ACCURACY = 14  # accuracy [0,1]; 1.0 for never-miss
+# Phase 2 — dynamic decision-critical state.
+NUMERIC_LEVEL = 15  # per pokemon/switch token: level/100
+# Species base stats (dex-derived, public, consistent scale stat/200) on every pokemon/switch
+# token. With NUMERIC_LEVEL the model can reason about damage and turn order (speed).
+NUMERIC_BASE_HP = 16
+NUMERIC_BASE_ATK = 17
+NUMERIC_BASE_DEF = 18
+NUMERIC_BASE_SPA = 19
+NUMERIC_BASE_SPD = 20
+NUMERIC_BASE_SPE = 21
+# Field token (global), player-relative: hazard layers + screen counts.
+NUMERIC_SELF_HAZARDS = 22  # self-side entry-hazard layers (e.g. spikes) / 3
+NUMERIC_OPP_HAZARDS = 23
+NUMERIC_SELF_SCREENS = 24  # self-side screens active (reflect/lightscreen) / 2
+NUMERIC_OPP_SCREENS = 25
+# Current stat-boost stages (stage/6 in [-1, 1]) on the ACTIVE mon — the setup-sweep signal.
+# Populated only on the active self/opponent pokemon token (boosts reset on switch).
+NUMERIC_BOOST_ATK = 26
+NUMERIC_BOOST_DEF = 27
+NUMERIC_BOOST_SPA = 28
+NUMERIC_BOOST_SPD = 29
+NUMERIC_BOOST_SPE = 30
+# Weather is encoded categorically on the field token's SECONDARY slot (weather:<id>).
+# Per-move dynamic/mechanical facts on move action tokens (raw, not judgments).
+NUMERIC_MOVE_PP_FRACTION = 31  # remaining PP / max PP from the request (1.0 = full; low = scarce)
+NUMERIC_EFFECT_CHANCE = 32  # move-effect probability [0,1]; pairs with move_effect (1.0 = guaranteed)
+NUMERIC_TURN_COUNT = 33  # field token: battle turn number / 1000 (clamped) — tempo / stall signal
+# Move tokens: fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25,
+# Explosion 1.0) — a deterrent the model weighs against the effect.
+NUMERIC_SELF_HP_COST = 34
+# Field token: a pending delayed attack (Future Sight / Doom Desire) landing on each side, as
+# turns-remaining / 2. SELF = incoming to the player (a hit to brace/switch around); OPP = the
+# player's own outgoing attack landing on the foe.
+NUMERIC_SELF_FUTURE_SIGHT = 35
+NUMERIC_OPP_FUTURE_SIGHT = 36
+# Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
+# (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
+NUMERIC_TOXIC_STAGE = 37
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -101,8 +162,14 @@ class ShowdownReplayState:
     public_revealed: Mapping[str, tuple[ShowdownPokemon, ...]]
     side_conditions: Mapping[str, tuple[str, ...]]
     side_condition_counts: Mapping[str, Mapping[str, int]]
+    boosts: Mapping[str, Mapping[str, int]]
+    volatiles: Mapping[str, tuple[str, ...]]
+    future_sight: Mapping[str, int]
+    toxic_stage: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
+    weather: Optional[str] = None
+    turn_number: int = 0
     winner: Optional[str] = None
 
 
@@ -148,10 +215,20 @@ class PlayerRelativeBattleState:
     opponent_side_conditions: tuple[str, ...]
     self_side_condition_counts: Mapping[str, int]
     opponent_side_condition_counts: Mapping[str, int]
+    self_active_boosts: Mapping[str, int]
+    opponent_active_boosts: Mapping[str, int]
+    self_active_volatiles: tuple[str, ...]
+    opponent_active_volatiles: tuple[str, ...]
+    self_toxic_stage: int
+    opponent_toxic_stage: int
     belief_view: PlayerBeliefView
     legal_action_mask: tuple[bool, ...]
     recent_events: tuple[PlayerRelativePublicEvent, ...]
     recent_public_events: tuple[str, ...]
+    weather: Optional[str] = None
+    turn_number: int = 0
+    self_future_sight_turns: int = 0  # turns until a delayed attack lands on the player's side
+    opponent_future_sight_turns: int = 0  # turns until the player's own delayed attack lands
     winner: Optional[str] = None
 
     @property
@@ -170,8 +247,15 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     public_active: dict[str, ShowdownPokemon] = {}
     public_revealed: dict[str, list[ShowdownPokemon]] = {}
     side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+    boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+    volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
+    future_sight: dict[str, int] = {}
+    toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
+    pending_baton_pass: set[str] = set()
     public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
+    weather: Optional[str] = None
+    turn_number = 0
     winner: Optional[str] = None
 
     for raw_line in lines:
@@ -201,6 +285,23 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             if pokemon is not None:
                 public_active[pokemon.showdown_slot] = pokemon
                 _record_public_reveal(public_revealed, pokemon)
+                # A new mon takes the slot with fresh (zero) stat-boost stages — UNLESS it came
+                # in via Baton Pass, which carries the passer's boosts to the incoming mon. Only
+                # a true |switch| can be a Baton Pass; a |drag| (Roar/Whirlwind) never is. We
+                # detect it from the preceding |move|...|Baton Pass (the flag) or a "[from] Baton
+                # Pass" tag on the switch line itself.
+                is_baton_pass = event_type == "switch" and (
+                    pokemon.showdown_slot in pending_baton_pass or _line_mentions_baton_pass(parts)
+                )
+                pending_baton_pass.discard(pokemon.showdown_slot)
+                if not is_baton_pass:
+                    boosts[pokemon.showdown_slot] = {}
+                # Volatile statuses are tied to the mon on the field, so a new mon clears them
+                # (Baton Pass passes some volatiles, but conservatively resetting is the simple,
+                # rarely-wrong choice and keeps the volatile set honest about the current mon).
+                volatiles[pokemon.showdown_slot] = set()
+                # Gen 3 resets the toxic counter when a mon leaves the field.
+                toxic_stage[pokemon.showdown_slot] = 0
             public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
@@ -209,7 +310,22 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             public_events.append(_public_event_from_line(line))
             public_lines.append(line)
             continue
+        if event_type == "turn" and len(parts) >= 3:
+            try:
+                turn_number = int(parts[2])
+            except (TypeError, ValueError):
+                pass
+            # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
+            for slot, stage in toxic_stage.items():
+                if stage:
+                    toxic_stage[slot] = min(15, stage + 1)
         _update_side_conditions(parts, side_condition_counts)
+        weather = _update_weather(parts, weather)
+        _update_boosts(parts, boosts)
+        _update_volatiles(parts, volatiles)
+        _update_future_sight(parts, future_sight, turn_number)
+        _update_toxic_stage(parts, toxic_stage)
+        _flag_baton_pass(parts, pending_baton_pass)
         public_events.append(_public_event_from_line(line))
         public_lines.append(line)
 
@@ -224,8 +340,14 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
             slot: dict(sorted(conditions.items()))
             for slot, conditions in side_condition_counts.items()
         },
+        boosts={slot: dict(sorted(stages.items())) for slot, stages in boosts.items()},
+        volatiles={slot: tuple(sorted(names)) for slot, names in volatiles.items()},
+        future_sight=dict(future_sight),
+        toxic_stage=dict(toxic_stage),
         public_events=tuple(public_events),
         public_lines=tuple(public_lines),
+        weather=weather,
+        turn_number=turn_number,
         winner=winner,
     )
 
@@ -303,10 +425,20 @@ def normalize_for_player(
         opponent_side_conditions=tuple(replay.side_conditions.get(opponent_slot, ())),
         self_side_condition_counts=dict(replay.side_condition_counts.get(showdown_slot, {})),
         opponent_side_condition_counts=dict(replay.side_condition_counts.get(opponent_slot, {})),
+        self_active_boosts=dict(replay.boosts.get(showdown_slot, {})),
+        opponent_active_boosts=dict(replay.boosts.get(opponent_slot, {})),
+        self_active_volatiles=tuple(replay.volatiles.get(showdown_slot, ())),
+        opponent_active_volatiles=tuple(replay.volatiles.get(opponent_slot, ())),
+        self_toxic_stage=int(replay.toxic_stage.get(showdown_slot, 0)),
+        opponent_toxic_stage=int(replay.toxic_stage.get(opponent_slot, 0)),
         belief_view=belief_view,
         legal_action_mask=_legal_action_mask(request),
         recent_events=recent_events,
         recent_public_events=tuple(event.relative_line or event.raw_line for event in recent_events),
+        weather=replay.weather,
+        turn_number=replay.turn_number,
+        self_future_sight_turns=_future_sight_turns_remaining(replay, showdown_slot),
+        opponent_future_sight_turns=_future_sight_turns_remaining(replay, opponent_slot),
         winner=replay.winner,
     )
 
@@ -335,6 +467,9 @@ def observation_from_player_state(
         state.self_team,
         role="self",
         limit=SELF_POKEMON_TOKEN_COUNT,
+        active_boosts=state.self_active_boosts,
+        active_volatiles=state.self_active_volatiles,
+        active_toxic_stage=state.self_toxic_stage,
         dex=dex,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
@@ -346,6 +481,9 @@ def observation_from_player_state(
         role="opponent",
         limit=OPPONENT_POKEMON_TOKEN_COUNT,
         beliefs_by_species=opponent_beliefs,
+        active_boosts=state.opponent_active_boosts,
+        active_volatiles=state.opponent_active_volatiles,
+        active_toxic_stage=state.opponent_toxic_stage,
         dex=dex,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
@@ -459,17 +597,196 @@ def _update_side_conditions(parts: Sequence[str], side_conditions: dict[str, dic
         side_conditions[slot].pop(condition, None)
 
 
+# The volatile statuses we surface (normalized ids). `-start`/`-end` carry many payloads (ability
+# procs, type changes, internal markers); we track only this closed, decision-relevant set so every
+# emitted volatile:<id> token has an enumerated vocab row (no OOV) and is a genuine status. This is
+# the single source of truth — randbat_vocab enumerates volatile:<id> from it.
+TRACKED_VOLATILES = frozenset({
+    "confusion", "leechseed", "substitute", "taunt", "encore", "disable", "torment", "attract",
+    "nightmare", "curse", "ingrain", "foresight", "lockon", "mindreader", "destinybond", "grudge",
+    "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
+    "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
+    "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire",
+})
+
+
+def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> None:
+    """Track active-mon volatile statuses from |-start| / |-end| lines (per Showdown slot).
+
+    Only names in TRACKED_VOLATILES are recorded; other `-start` payloads (ability procs, type
+    changes, internal markers) are ignored, so every emitted token has an enumerated vocab row.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type not in {"-start", "-end"} or len(parts) < 4:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in volatiles:
+        return
+    name = _side_condition_identifier(parts[3])  # strips move:/ability:/item: prefix + normalizes
+    if name not in TRACKED_VOLATILES:
+        return
+    if event_type == "-start":
+        volatiles[slot].add(name)
+    else:
+        volatiles[slot].discard(name)
+
+
+# Delayed-damage moves (Future Sight / Doom Desire): used on one turn, they land on the target's
+# side ~2 turns later. Tracked as a per-side landing turn so the model sees an incoming/outgoing hit.
+_FUTURE_MOVES = frozenset({"futuresight", "doomdesire"})
+_FUTURE_SIGHT_DELAY = 2
+
+
+def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], turn_number: int) -> None:
+    """Track pending delayed attacks per side from |-start| (use) / |-end| (land) lines.
+
+    Showdown puts the |-start| on the USER and the |-end| on the side that takes the hit, so a use
+    schedules a landing on the user's OPPONENT side; the landing |-end| clears it.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type not in {"-start", "-end"} or len(parts) < 4:
+        return
+    if _side_condition_identifier(parts[3]) not in _FUTURE_MOVES:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in {"p1", "p2"}:
+        return
+    if event_type == "-start":
+        target_side = "p2" if slot == "p1" else "p1"
+        future_sight[target_side] = turn_number + _FUTURE_SIGHT_DELAY
+    else:
+        future_sight.pop(slot, None)
+
+
+def _update_toxic_stage(parts: Sequence[str], toxic_stage: dict[str, int]) -> None:
+    """Track the badly-poisoned (tox) ramp stage per side from |-status| / |-curestatus| lines.
+
+    A `tox` status starts the counter at 1 (per-turn escalation is applied on |turn|); any cured
+    status clears it. The counter is also reset on switch (Gen 3 behavior) in the parse loop.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in toxic_stage:
+        return
+    if event_type == "-status" and len(parts) >= 4 and _normalize_identifier(parts[3]) == "tox":
+        toxic_stage[slot] = 1
+    elif event_type == "-curestatus":
+        toxic_stage[slot] = 0
+
+
+def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
+    """Turns until a pending delayed attack lands on ``slot``'s side (0 if none/overdue)."""
+    landing = replay.future_sight.get(slot)
+    if landing is None:
+        return 0
+    return max(0, landing - replay.turn_number)
+
+
+def _update_weather(parts: Sequence[str], weather: Optional[str]) -> Optional[str]:
+    """Track the active weather from |-weather| lines ('none'/absent clears it)."""
+    if (parts[1] if len(parts) > 1 else "") != "-weather":
+        return weather
+    raw = parts[2].strip() if len(parts) > 2 else ""
+    identifier = _normalize_identifier(raw)
+    if not identifier or identifier == "none":
+        return None
+    return identifier
+
+
+def _flag_baton_pass(parts: Sequence[str], pending_baton_pass: set[str]) -> None:
+    """Track whether a side is mid-Baton-Pass so the next switch-in inherits its boosts.
+
+    A |move|...|Baton Pass sets the flag; any *other* move by that side clears a stale flag (so a
+    failed/interrupted Baton Pass that never produced a switch can't carry boosts into a later
+    unrelated switch). The flag is otherwise consumed by the following switch.
+    """
+    if (parts[1] if len(parts) > 1 else "") != "move" or len(parts) < 4:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in {"p1", "p2"}:
+        return
+    if _normalize_identifier(parts[3]) == "batonpass":
+        pending_baton_pass.add(slot)
+    else:
+        pending_baton_pass.discard(slot)
+
+
+def _line_mentions_baton_pass(parts: Sequence[str]) -> bool:
+    """True if a switch line carries a '[from] Baton Pass' tag (trailing protocol fields)."""
+    return any("baton pass" in part.lower() for part in parts[4:])
+
+
+_BOOST_STAGE_LIMIT = 6
+
+
+def _update_boosts(parts: Sequence[str], boosts: dict[str, dict[str, int]]) -> None:
+    """Accumulate per-active-slot stat-boost stages from boost protocol lines."""
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type == "-clearallboost":
+        for slot in boosts:
+            boosts[slot].clear()
+        return
+    if event_type == "-copyboost" and len(parts) >= 4:
+        # Psych Up: SOURCE (parts[2]) copies the boost stages of TARGET (parts[3]).
+        source = _slot_from_ident(parts[2])
+        target = _slot_from_ident(parts[3])
+        if source in boosts and target in boosts:
+            boosts[source] = dict(boosts[target])
+        return
+    if event_type not in {
+        "-boost", "-unboost", "-setboost", "-clearboost",
+        "-clearpositiveboost", "-clearnegativeboost", "-restoreboost",
+    } or len(parts) < 3:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in boosts:
+        return
+    stages = boosts[slot]
+    if event_type == "-clearboost" or event_type == "-restoreboost":
+        stages.clear()
+        return
+    if event_type == "-clearpositiveboost":
+        for stat in [s for s, stage in stages.items() if stage > 0]:
+            stages.pop(stat, None)
+        return
+    if event_type == "-clearnegativeboost":
+        for stat in [s for s, stage in stages.items() if stage < 0]:
+            stages.pop(stat, None)
+        return
+    if len(parts) < 5:
+        return
+    stat = parts[3].strip()
+    try:
+        amount = int(parts[4])
+    except (TypeError, ValueError):
+        return
+    if event_type == "-setboost":
+        new_stage = amount
+    elif event_type == "-unboost":
+        new_stage = stages.get(stat, 0) - amount
+    else:  # -boost
+        new_stage = stages.get(stat, 0) + amount
+    new_stage = max(-_BOOST_STAGE_LIMIT, min(_BOOST_STAGE_LIMIT, new_stage))
+    if new_stage == 0:
+        stages.pop(stat, None)
+    else:
+        stages[stat] = new_stage
+
+
 def _side_condition_max_layers(condition: str) -> int:
+    # Spikes is the only multi-layer side condition in Gen 3 (max 3 layers).
     if condition == "spikes":
         return 3
-    if condition == "toxicspikes":
-        return 2
     return 1
 
 
 def _side_condition_identifier(raw_condition: str) -> str:
+    # Strip the source prefix Showdown attaches to some effects (e.g. "move: Leech Seed",
+    # "ability: Flash Fire", "item: ...") so the normalized id is the bare effect name.
     condition = raw_condition.strip()
-    if condition.lower().startswith("move:"):
+    if ":" in condition and condition.split(":", 1)[0].strip().lower() in {"move", "ability", "item"}:
         condition = condition.split(":", 1)[1].strip()
     return _normalize_identifier(condition)
 
@@ -630,6 +947,60 @@ def _encode_field_token(
     # be the game outcome leaking into the model input. The SECONDARY slot stays padding.
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_ROLE, "field")
     _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_PRESENT, 1.0)
+    if state.weather:
+        _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_SECONDARY, f"weather:{state.weather}")
+    self_haz, self_scr = _side_condition_features(state.self_side_condition_counts)
+    opp_haz, opp_scr = _side_condition_features(state.opponent_side_condition_counts)
+    _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_HAZARDS, self_haz)
+    _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_HAZARDS, opp_haz)
+    _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_SCREENS, self_scr)
+    _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_SCREENS, opp_scr)
+    if state.turn_number:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_TURN_COUNT, min(1.0, state.turn_number / 1000.0))
+    if state.self_future_sight_turns:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_FUTURE_SIGHT, min(1.0, state.self_future_sight_turns / 2.0))
+    if state.opponent_future_sight_turns:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
+
+
+# Gen 3 has a single entry hazard (Spikes, max 3 layers); Toxic Spikes / Stealth Rock are
+# Gen 4+. Screens are Reflect + Light Screen.
+_HAZARD_CONDITIONS = ("spikes",)
+_SCREEN_CONDITIONS = ("reflect", "lightscreen")
+# Boost stats encoded on the active mon, in (Showdown stat key, numeric slot) order.
+_BOOST_STAT_SLOTS = (
+    ("atk", NUMERIC_BOOST_ATK),
+    ("def", NUMERIC_BOOST_DEF),
+    ("spa", NUMERIC_BOOST_SPA),
+    ("spd", NUMERIC_BOOST_SPD),
+    ("spe", NUMERIC_BOOST_SPE),
+)
+
+
+def _side_condition_features(counts: Mapping[str, int]) -> tuple[float, float]:
+    """(hazard layers /3, screens active /2) for one side's condition counts."""
+    hazards = sum(int(counts.get(name, 0)) for name in _HAZARD_CONDITIONS)
+    screens = sum(1 for name in _SCREEN_CONDITIONS if counts.get(name))
+    return min(1.0, hazards / 3.0), min(1.0, screens / 2.0)
+
+
+def _encode_active_boosts(num_row: list[float], boosts: Mapping[str, int] | None) -> None:
+    """Set the five stat-boost-stage slots (stage/6, clamped to [-1, 1]) for an active mon."""
+    if not boosts:
+        return
+    for stat_key, slot in _BOOST_STAT_SLOTS:
+        stage = boosts.get(stat_key)
+        if stage:
+            _set_numeric(num_row, slot, max(-1.0, min(1.0, float(stage) / 6.0)))
+
+
+def _encode_active_volatiles(cat_row: list[str], volatiles: Sequence[str]) -> None:
+    """Place active-mon volatile statuses (sorted) positionally into the volatile columns."""
+    for index, name in enumerate(sorted(set(volatiles))[:VOLATILE_BUCKET_COUNT]):
+        column = CATEGORY_VOLATILE_OFFSET + index
+        if column >= len(cat_row):
+            break
+        cat_row[column] = f"volatile:{_normalize_identifier(name)}"
 
 
 def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", species: str | None) -> None:
@@ -645,20 +1016,76 @@ def _encode_species_type_categories(row: list[int], dex: "ShowdownDex | None", s
         _set_category(row, CATEGORY_TYPE_2, f"type:{info.types[1]}")
 
 
-def _encode_move_mechanics(
-    cat_row: list[int], num_row: list[float], dex: "ShowdownDex | None", move_name: str
+def _level_from_details(details: str | None) -> int | None:
+    """Extract the level from a details string like 'Charizard, L83, M' (None if absent)."""
+    if not details:
+        return None
+    for part in details.split(","):
+        token = part.strip()
+        if token.startswith("L") and token[1:].isdigit():
+            return int(token[1:])
+    return None
+
+
+_BASE_STAT_SLOTS = (
+    ("hp", NUMERIC_BASE_HP),
+    ("atk", NUMERIC_BASE_ATK),
+    ("def", NUMERIC_BASE_DEF),
+    ("spa", NUMERIC_BASE_SPA),
+    ("spd", NUMERIC_BASE_SPD),
+    ("spe", NUMERIC_BASE_SPE),
+)
+
+
+def _encode_pokemon_stats(
+    num_row: list[float], dex: "ShowdownDex | None", species: str | None, details: str | None
 ) -> None:
-    """Set move type / damage class (categorical) + base power / priority / accuracy (numeric)."""
+    """Set level + species base stats (dex-derived, public) for a pokemon/switch token."""
+    level = _level_from_details(details)
+    if level is not None:
+        _set_numeric(num_row, NUMERIC_LEVEL, min(1.0, level / 100.0))
+    if dex is None or not species:
+        return
+    info = dex.species_info(species)
+    if info is None:
+        return
+    for stat_key, slot in _BASE_STAT_SLOTS:
+        value = info.base_stats.get(stat_key)
+        if value:
+            _set_numeric(num_row, slot, min(1.0, float(value) / 200.0))
+
+
+def _encode_move_mechanics(
+    cat_row: list[int],
+    num_row: list[float],
+    dex: "ShowdownDex | None",
+    move_name: str,
+    user_types: Sequence[str] = (),
+    user_hp_fraction: float | None = None,
+) -> None:
+    """Set move type / damage class (categorical) + base power / priority / accuracy + effect.
+
+    ``user_types`` and ``user_hp_fraction`` are the acting (self active) mon's types and current HP
+    fraction, used to resolve type-dependent effects (Curse) and HP-variable base power
+    (Reversal / Flail / Eruption / Water Spout) at encode time.
+    """
     if dex is None:
         return
     move = dex.move_info(move_name)
     if move is None:
         return
+    base_power = resolve_move_base_power(move, user_hp_fraction)
     _set_category(cat_row, CATEGORY_TYPE_1, f"type:{move.type}")
     _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"move_category:{move.gen3_category}")
-    _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(move.base_power) / 200.0))
+    _set_category(cat_row, CATEGORY_MOVE_PRIORITY, f"move_priority:{move.priority}")
+    _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(base_power) / 200.0))
     _set_numeric(num_row, NUMERIC_PRIORITY, max(-1.0, min(1.0, float(move.priority) / 5.0)))
     _set_numeric(num_row, NUMERIC_ACCURACY, (float(move.accuracy) / 100.0) if move.accuracy else 1.0)
+    effect_label, effect_chance, self_hp_cost = resolve_move_effect(move, user_types)
+    if effect_label:
+        _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"move_effect:{effect_label}")
+    _set_numeric(num_row, NUMERIC_EFFECT_CHANCE, min(1.0, float(effect_chance) / 100.0))
+    _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(self_hp_cost))))
 
 
 def _encode_pokemon_tokens(
@@ -670,6 +1097,9 @@ def _encode_pokemon_tokens(
     role: str,
     limit: int,
     beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
+    active_boosts: Mapping[str, int] | None = None,
+    active_volatiles: Sequence[str] = (),
+    active_toxic_stage: int = 0,
     dex: "ShowdownDex | None" = None,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
@@ -688,10 +1118,19 @@ def _encode_pokemon_tokens(
         uncertainty = belief.uncertainty if belief is not None else 1.0
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
         _encode_species_type_categories(categorical_ids[token_index], dex, candidate.species)
+        _encode_pokemon_stats(numeric_features[token_index], dex, candidate.species, candidate.details)
+        if candidate.active:
+            _encode_active_boosts(numeric_features[token_index], active_boosts)
+            _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
+            if active_toxic_stage:
+                _set_numeric(numeric_features[token_index], NUMERIC_TOXIC_STAGE, min(1.0, active_toxic_stage / 15.0))
         status = belief.status if belief is not None and belief.status is not None else condition.status
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, f"status:{status}")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"pokemon:{role}")
-        _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"{role}_slot:{slot_index}")
+        # The party-slot index (self_slot/opponent_slot) is intentionally NOT encoded: team order
+        # is arbitrary in random battles, so the index carries no actionable signal, and the
+        # token's position in the sequence + token_type already identify which team slot it is.
+        # (The SLOT column stays in use on action tokens for move_slot/switch_slot.)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_ability", ability_feature_values)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_item", item_feature_values)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_move", possible_moves)
@@ -709,6 +1148,21 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
 
 
+def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
+    """Types of the acting (self active) mon, for resolving type-dependent move effects."""
+    if dex is None or state.self_active is None:
+        return ()
+    info = dex.species_info(state.self_active.species)
+    return tuple(info.types) if info is not None else ()
+
+
+def _self_active_hp_fraction(state: PlayerRelativeBattleState) -> float | None:
+    """Current HP fraction of the acting mon, for resolving HP-variable base power."""
+    if state.self_active is None:
+        return None
+    return _condition_features(state.self_active.condition).hp_fraction
+
+
 def _encode_action_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -718,6 +1172,10 @@ def _encode_action_tokens(
 ) -> None:
     active_request = _active_request(state.request)
     moves = active_request.get("moves") if isinstance(active_request, Mapping) else None
+    # The acting mon's types + HP fraction, to resolve type-dependent effects (Curse) and
+    # HP-variable base power (Reversal / Flail / Eruption / Water Spout) on its moves.
+    user_types = _self_active_types(state, dex)
+    user_hp_fraction = _self_active_hp_fraction(state)
     for move_index in range(MOVE_ACTION_COUNT):
         token_index = ACTION_CANDIDATE_TOKEN_OFFSET + move_index
         move = moves[move_index] if isinstance(moves, list) and move_index < len(moves) else None
@@ -728,7 +1186,11 @@ def _encode_action_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"move_slot:{move_index + 1}")
         if isinstance(move, Mapping):
-            _encode_move_mechanics(categorical_ids[token_index], numeric_features[token_index], dex, move_name)
+            _encode_move_mechanics(
+                categorical_ids[token_index], numeric_features[token_index], dex, move_name,
+                user_types, user_hp_fraction,
+            )
+            _set_numeric(numeric_features[token_index], NUMERIC_MOVE_PP_FRACTION, _move_pp_fraction(move))
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 1.0 if state.legal_action_mask[move_index] else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if isinstance(move, Mapping) else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 0.0 if disabled else 1.0)
@@ -749,6 +1211,7 @@ def _encode_action_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{species}")
         if pokemon is not None:
             _encode_species_type_categories(categorical_ids[token_index], dex, pokemon.species)
+            _encode_pokemon_stats(numeric_features[token_index], dex, pokemon.species, pokemon.details)
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:switch")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"switch_slot:{switch_slot + 1}")
@@ -786,6 +1249,16 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_side_conditions": list(state.opponent_side_conditions),
         "self_side_condition_counts": dict(state.self_side_condition_counts),
         "opponent_side_condition_counts": dict(state.opponent_side_condition_counts),
+        "weather": state.weather,
+        "turn_number": state.turn_number,
+        "self_active_boosts": dict(state.self_active_boosts),
+        "opponent_active_boosts": dict(state.opponent_active_boosts),
+        "self_active_volatiles": list(state.self_active_volatiles),
+        "opponent_active_volatiles": list(state.opponent_active_volatiles),
+        "self_future_sight_turns": state.self_future_sight_turns,
+        "opponent_future_sight_turns": state.opponent_future_sight_turns,
+        "self_toxic_stage": state.self_toxic_stage,
+        "opponent_toxic_stage": state.opponent_toxic_stage,
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],
@@ -894,24 +1367,17 @@ def _known_or_possible_values(known: str | None, possible: Sequence[str]) -> tup
     return _compact_belief_values(possible)
 
 
-def _belief_bucket_position(fact_kind: str, normalized: str, bucket_count: int) -> int:
-    """Deterministic position in [0, bucket_count) for a belief fact within its token block."""
-    digest = hashlib.blake2b(f"belief_bucket:{fact_kind}:{normalized}".encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(digest, "big") % bucket_count
-
-
 def _encode_belief_fact_categories(row: list[str], fact_kind: str, values: Sequence[str]) -> None:
     offset, bucket_count = _belief_bucket_range(fact_kind)
-    for value in _compact_belief_values(values):
-        normalized = _normalize_identifier(value)
-        # The bucket *position* (which of the N belief columns) is a small positional hash; the
-        # stored value is the category string, converted to a vocab row later. (This is not a
-        # row id, so it does not use the retired 1M-bucket id space.)
-        bucket = _belief_bucket_position(fact_kind, normalized, bucket_count)
-        column = offset + bucket
-        if column >= len(row) or row[column]:
-            continue
-        row[column] = f"belief:{fact_kind}:{normalized}"
+    # Place the (sorted, deduped) belief values positionally into this fact's columns. The bucket
+    # counts are sized to the Gen 3 closed universe's per-species maxima (2 abilities / 5 items /
+    # 14 moves), so positional placement is exact and collision-free — no hashing needed. The
+    # stored value is the category string, converted to a vocab row later.
+    for index, value in enumerate(_compact_belief_values(values, limit=bucket_count)):
+        column = offset + index
+        if column >= len(row):
+            break
+        row[column] = f"belief:{fact_kind}:{_normalize_identifier(value)}"
 
 
 def _belief_bucket_range(fact_kind: str) -> tuple[int, int]:
@@ -1013,6 +1479,15 @@ def _active_request(request: Mapping[str, Any] | None) -> Mapping[str, Any] | No
     if isinstance(active_rows, list) and active_rows and isinstance(active_rows[0], Mapping):
         return active_rows[0]
     return None
+
+
+def _move_pp_fraction(move: Mapping[str, Any]) -> float:
+    """Remaining PP as a fraction of max PP from a request move (1.0 if PP data is absent)."""
+    pp = move.get("pp")
+    maxpp = move.get("maxpp")
+    if isinstance(pp, (int, float)) and isinstance(maxpp, (int, float)) and maxpp:
+        return max(0.0, min(1.0, float(pp) / float(maxpp)))
+    return 1.0
 
 
 def _request_move_name(move: Mapping[str, Any]) -> str:

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
@@ -32,6 +32,15 @@ class MoveInfo:
     boosts: Mapping[str, int]
     target: str
     selfdestruct: bool
+    # Unified move-effect label (primary OR secondary): a status (par/brn/...), a volatile
+    # (substitute/leechseed/flinch/...), or a target-explicit, magnitude-enumerated stat change
+    # (raise_self_atk / raise_self_atk_sharply / raise_self_atk_max / lower_foe_def_sharply /
+    # raise_self_all / lower_self_atkdef / ...). effect_chance is its probability (100 = guaranteed).
+    effect_chance: int = 0
+    effect_label: str = ""
+    # Fraction of the user's max HP the move spends upfront as a deterrent (Belly Drum 0.5,
+    # Substitute 0.25, Explosion/Self-Destruct 1.0). Recoil (damage-proportional) is separate.
+    self_hp_cost: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,19 @@ const {TypeChart} = require(root + '/dist/data/typechart.js');
 const out = {moves: {}, species: {}, typeChart: {}};
 for (const [id, move] of Object.entries(Moves)) {
   const boosts = move.boosts || (move.secondary && move.secondary.boosts) || {};
+  // Emit the raw effect components; the single move-effect label (type/target/magnitude) and the
+  // effect chance are derived in Python (testable, with per-move overrides for custom-onHit moves).
+  const secondaries = [];
+  for (const s of [move.secondary, ...(Array.isArray(move.secondaries) ? move.secondaries : [])]) {
+    if (!s) continue;
+    secondaries.push({
+      chance: (typeof s.chance === 'number') ? s.chance : 100,
+      status: s.status || null,
+      volatileStatus: s.volatileStatus || null,
+      boosts: s.boosts || {},
+      selfBoosts: (s.self && s.self.boosts) || {},
+    });
+  }
   out.moves[id] = {
     id,
     name: move.name,
@@ -121,6 +143,11 @@ for (const [id, move] of Object.entries(Moves)) {
     heal: Boolean(move.heal),
     status: move.status || (move.secondary && move.secondary.status) || null,
     boosts,
+    topStatus: move.status || null,
+    topVolatile: move.volatileStatus || null,
+    topBoosts: move.boosts || {},
+    selfBoosts: (move.self && move.self.boosts) || {},
+    secondaries,
     target: move.target || '',
     selfdestruct: Boolean(move.selfdestruct)
   };
@@ -188,9 +215,97 @@ def normalize_id(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
+_STAT_BOOST_KEYS = ("atk", "def", "spa", "spd", "spe")
+
+# Custom-onHit moves whose effect / HP cost is not in declarative move data, so we name them
+# explicitly. Belly Drum maximizes Attack for 50% HP; Substitute's volatile is declarative but its
+# 25% HP cost is in onHit.
+_MOVE_EFFECT_OVERRIDES: dict[str, dict[str, Any]] = {
+    "bellydrum": {"effect_label": "raise_self_atk_max", "effect_chance": 100, "self_hp_cost": 0.5},
+    "substitute": {"self_hp_cost": 0.25},
+    # Curse is type-dependent and exposes only volatileStatus:"curse" in move data, so its static
+    # label is empty; the real label is resolved from the user's type at encode time (see
+    # resolve_move_effect / DYNAMIC_MOVE_EFFECT_LABELS).
+    "curse": {"effect_label": "", "effect_chance": 0},
+}
+
+# Effect labels that resolve_move_effect can produce for type-dependent moves (not present on any
+# MoveInfo.effect_label statically), so the vocabulary still enumerates them.
+DYNAMIC_MOVE_EFFECT_LABELS: tuple[str, ...] = ("curse", "curse_setup")
+
+
+def _stat_effect_label(boosts: Mapping[str, Any] | None, who: str) -> str:
+    """A target-explicit, magnitude-enumerated stat-change label, or '' if no stat change.
+
+    Direction (raise/lower) is uniform within a Gen 3 boost set; magnitude maps |1|->'' (rose),
+    |2|->'_sharply' (rose sharply), >=|3|->'_max' (maximized). Stats are sorted and concatenated,
+    collapsing the five-stat omniboost to 'all'.
+    """
+    entries = [(str(k), int(v)) for k, v in (boosts or {}).items() if isinstance(v, (int, float)) and v]
+    if not entries:
+        return ""
+    magnitude = max(abs(v) for _, v in entries)
+    suffix = "" if magnitude <= 1 else ("_sharply" if magnitude == 2 else "_max")
+    stats = sorted(k for k, _ in entries)
+    stat_str = "all" if set(stats) >= set(_STAT_BOOST_KEYS) else "".join(stats)
+    direction = "raise" if entries[0][1] > 0 else "lower"
+    return f"{direction}_{who}_{stat_str}{suffix}"
+
+
+def _secondary_effect_label(secondary: Mapping[str, Any]) -> str:
+    if secondary.get("volatileStatus"):
+        return str(secondary["volatileStatus"])
+    if secondary.get("status"):
+        return str(secondary["status"])
+    return _stat_effect_label(secondary.get("boosts"), "foe") or _stat_effect_label(
+        secondary.get("selfBoosts"), "self"
+    )
+
+
+def _compute_move_effect(payload: Mapping[str, Any]) -> tuple[str, int]:
+    """Derive the unified (label, chance) for a move from its raw effect components.
+
+    The strongest secondary effect (highest chance) is used if present, carrying its own chance —
+    a damaging move's rider is its notable effect even when guaranteed (chance 100). Only if there
+    is no labeled secondary does the move's guaranteed primary effect (status / volatile / stat
+    change, target from `target`; or a guaranteed self-boost like Overheat) apply, at chance 100.
+    """
+    best: tuple[int, str] | None = None
+    for secondary in payload.get("secondaries", []) or []:
+        if not isinstance(secondary, Mapping):
+            continue
+        label = _secondary_effect_label(secondary)
+        if not label:
+            continue
+        chance = int(secondary.get("chance") or 100)
+        if best is None or chance >= best[0]:
+            best = (chance, label)
+    if best is not None:
+        return best[1], best[0]
+    if payload.get("topStatus"):
+        return str(payload["topStatus"]), 100
+    if payload.get("topVolatile"):
+        return str(payload["topVolatile"]), 100
+    who = "self" if str(payload.get("target") or "") == "self" else "foe"
+    label = _stat_effect_label(payload.get("topBoosts"), who)
+    if label:
+        return label, 100
+    label = _stat_effect_label(payload.get("selfBoosts"), "self")
+    if label:
+        return label, 100
+    return "", 0
+
+
 def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInfo:
     move_type = str(payload.get("type") or "")
     category = str(payload.get("category") or "Status")
+    effect_label, effect_chance = _compute_move_effect(payload)
+    self_hp_cost = 1.0 if payload.get("selfdestruct") else 0.0
+    override = _MOVE_EFFECT_OVERRIDES.get(normalize_id(payload.get("id") if payload.get("id") is not None else move_id))
+    if override:
+        effect_label = override.get("effect_label", effect_label)
+        effect_chance = override.get("effect_chance", effect_chance)
+        self_hp_cost = override.get("self_hp_cost", self_hp_cost)
     return MoveInfo(
         id=normalize_id(payload.get("id") if payload.get("id") is not None else move_id),
         name=str(payload.get("name") or move_id),
@@ -211,7 +326,57 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
         },
         target=str(payload.get("target") or ""),
         selfdestruct=bool(payload.get("selfdestruct")),
+        effect_chance=int(effect_chance),
+        effect_label=str(effect_label),
+        self_hp_cost=float(self_hp_cost),
     )
+
+
+_HP_BASE_POWER_LOW = frozenset({"reversal", "flail"})  # low user HP -> high base power
+_HP_BASE_POWER_HIGH = frozenset({"eruption", "waterspout"})  # high user HP -> high base power
+
+
+def resolve_move_base_power(move: "MoveInfo", user_hp_fraction: float | None = None) -> int:
+    """Base power, resolving HP-variable moves from the user's current HP fraction at encode time.
+
+    Reversal/Flail scale inversely with the user's remaining HP (Gen 3 breakpoints on 48*HP/maxHP);
+    Eruption/Water Spout scale directly (150*HP/maxHP). Their static dex base power is 0, so without
+    this they would mislead the model. All other moves return their fixed base power.
+    """
+    if user_hp_fraction is None:
+        return move.base_power
+    fraction = max(0.0, min(1.0, user_hp_fraction))
+    if move.id in _HP_BASE_POWER_LOW:
+        # Gen 3 buckets the floored value p = floor(48 * curHP / maxHP), not the raw ratio.
+        scaled = int(48 * fraction)
+        if scaled <= 1:
+            return 200
+        if scaled <= 4:
+            return 150
+        if scaled <= 9:
+            return 100
+        if scaled <= 16:
+            return 80
+        if scaled <= 32:
+            return 40
+        return 20
+    if move.id in _HP_BASE_POWER_HIGH:
+        return max(1, int(150 * fraction))
+    return move.base_power
+
+
+def resolve_move_effect(move: "MoveInfo", user_types: Sequence[str] = ()) -> tuple[str, int, float]:
+    """(effect_label, effect_chance, self_hp_cost), resolving type-dependent moves by the user's type.
+
+    Curse is the one Gen 3 case: a Ghost user lays a foe curse for 50% of its own HP, while a
+    non-Ghost user gets the +Atk/+Def/-Spe self setup. A mon's typing is stable within a battle, so
+    resolving from the user's types at encode time is well-defined; all other moves pass through.
+    """
+    if move.id == "curse":
+        if any(str(type_name).lower() == "ghost" for type_name in user_types):
+            return "curse", 100, 0.5
+        return "curse_setup", 100, 0.0
+    return move.effect_label, move.effect_chance, move.self_hp_cost
 
 
 def _species_info_from_payload(species_id: str, payload: Mapping[str, Any]) -> SpeciesInfo:

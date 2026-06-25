@@ -38,15 +38,15 @@
 </head>
 <body>
   <h1>PokeZero — Current Model Input Shape</h1>
-  <p class="sub">What the neural policy actually <em>sees</em> per decision, after the lean-encoding cleanup (PR&nbsp;#215). Generated for visual review of the matchup-feature enrichment (task&nbsp;#10).</p>
+  <p class="sub">What the neural policy actually <em>sees</em> per decision, after the lean-encoding cleanup (PR&nbsp;#215), the raw type/move-mechanic enrichment (Phase&nbsp;1, PR&nbsp;#216), and the dynamic-state overhaul (Phase&nbsp;2: level, base stats, boosts, weather, hazards/screens, PP, secondary-effect type+chance, turn count, volatile statuses; plus the party-slot token drop and right-sized belief buckets).</p>
 
   <div class="shape">
     <div class="stat"><div class="v">46</div><div class="l">tokens (sequence)</div></div>
-    <div class="stat"><div class="v">87</div><div class="l">categorical ids / token</div></div>
-    <div class="stat"><div class="v">15</div><div class="l">numeric features / token</div></div>
-    <div class="stat"><div class="v">832</div><div class="l">embedding rows</div></div>
+    <div class="stat"><div class="v">39</div><div class="l">categorical ids / token</div></div>
+    <div class="stat"><div class="v">38</div><div class="l">numeric features / token</div></div>
+    <div class="stat"><div class="v">903</div><div class="l">embedding rows</div></div>
   </div>
-  <p class="sub">Input tensor per turn: <code>46 &times; (87 categorical ids + 15 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (815 closed-vocab tokens + 16 OOV + padding = 832 rows).</p>
+  <p class="sub">Input tensor per turn: <code>46 &times; (39 categorical ids + 38 numeric)</code> + a token-type id and attention mask per token. Categorical ids are compact embedding-row indices (886 closed-vocab tokens + 16 OOV + padding = 903 rows). The 39 categorical columns: 9 fixed (primary / secondary / role / slot / type×2 / move-category / move-effect / move-priority) + 24 belief buckets (2 ability, 6 item, 16 move) + 6 active-mon volatile columns.</p>
 
   <div class="note">
     <b>How a categorical id works (string → row, no hash).</b> The strings below (<code>species:Charizard</code>, <code>move:Flamethrower</code>) are human-readable <em>keys</em>; each maps by <b>direct lookup</b> in the enumerated closed-universe vocabulary to a small embedding-row index. The model embeds the <b>row</b> directly — the legacy 1,000,000-bucket blake2b hash + in-model remap are retired:
@@ -54,7 +54,7 @@
   </div>
 
   <div class="note">
-    <b>What is the "field" token?</b> Token 0 is a single <b>global / context token</b> (like a <code>[CLS]</code>) for battle-wide info not attached to a specific mon or move. Today it carries only <code>request_kind</code> (move / force-switch / team-preview / wait), so it is nearly empty — and it is the natural home for the Phase&nbsp;2 globals: <b>weather, turn count, hazards/screens</b>.
+    <b>What is the "field" token?</b> Token 0 is a single <b>global / context token</b> (like a <code>[CLS]</code>) for battle-wide info not attached to a specific mon or move. It carries <code>request_kind</code> (move / force-switch / team-preview / wait) plus the global dynamic state — <b>weather</b> (categorical <code>SECONDARY</code> slot), player-relative <b>hazard layers + screens</b> for both sides, and the <b>turn count</b> (all numeric).
   </div>
 
   <h2>Token sequence (the 46 tokens, in order)</h2>
@@ -159,7 +159,7 @@
     So the window reads, in order: <em>"I clicked Flamethrower at their Skarmory → they switched to Blissey → Skarmory took damage → my Charizard got burned."</em> This is the temporal signal that lets the model notice patterns like "the opponent keeps pivoting out of my Charizard" — the basis for anticipatory switching (hypothesis H2). Note the numeric magnitude of damage and exact HP live in the <em>numeric</em> features of the Pokémon tokens, not here.
   </div>
 
-  <h2>The 12 numeric features</h2>
+  <h2>The 38 numeric features</h2>
   <table>
     <tr><th>#</th><th>Feature</th><th>Meaning</th></tr>
     <tr><td>0</td><td><code>HP_FRACTION</code></td><td>current HP as fraction [0,1]</td></tr>
@@ -171,8 +171,21 @@
     <tr><td>6</td><td><code>UNCERTAINTY</code></td><td>belief uncertainty scalar</td></tr>
     <tr><td>7–9</td><td><code>POSSIBLE_ABILITY/ITEM/MOVE_COUNT</code></td><td>belief set sizes</td></tr>
     <tr><td>10–11</td><td><code>REVEALED_ABILITY/ITEM</code></td><td>has ability/item been revealed (0/1)</td></tr>
+    <tr><td>12–14</td><td><code>BASE_POWER / PRIORITY / ACCURACY</code></td><td><b>Phase 1</b> — move mechanics (move tokens)</td></tr>
+    <tr><td>15</td><td><code>LEVEL</code></td><td>level/100 (every Pokémon + switch token)</td></tr>
+    <tr><td>16–21</td><td><code>BASE_HP/ATK/DEF/SPA/SPD/SPE</code></td><td>species base stats (stat/200) — <b>SPE drives turn order</b></td></tr>
+    <tr><td>22–23</td><td><code>SELF_HAZARDS / OPP_HAZARDS</code></td><td>Spikes layers /3 (field token, player-relative)</td></tr>
+    <tr><td>24–25</td><td><code>SELF_SCREENS / OPP_SCREENS</code></td><td>Reflect+Light Screen active /2 (field token)</td></tr>
+    <tr><td>26–30</td><td><code>BOOST_ATK/DEF/SPA/SPD/SPE</code></td><td>current stat-boost stage/6 in [-1,1], <b>active mon only</b> (setup-sweep signal)</td></tr>
+    <tr><td>31</td><td><code>MOVE_PP_FRACTION</code></td><td>remaining PP / max PP (move tokens) — 1.0 full, low = scarce (last-PP risk)</td></tr>
+    <tr><td>32</td><td><code>EFFECT_CHANCE</code></td><td>move-effect probability [0,1] — pairs with the <code>move_effect</code> type (1.0 = guaranteed)</td></tr>
+    <tr><td>33</td><td><code>TURN_COUNT</code></td><td>battle turn / 1000 (field token) — tempo / stall signal</td></tr>
+    <tr><td>34</td><td><code>SELF_HP_COST</code></td><td>fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25, Explosion 1.0) — a deterrent</td></tr>
+    <tr><td>35–36</td><td><code>SELF/OPP_FUTURE_SIGHT</code></td><td>turns until a pending delayed attack (Future Sight / Doom Desire) lands on each side / 2 (field token)</td></tr>
+    <tr><td>37</td><td><code>TOXIC_STAGE</code></td><td>badly-poisoned ramp stage / 15 on the active mon (escalating 1/16, 2/16, …; resets on switch) — both sides</td></tr>
   </table>
-  <div class="note">Notice the theme: the model knows <b>who</b> (species/move ids), <b>how hurt</b> (HP/status), and <b>what's still uncertain</b> (belief) — but nothing about <b>game mechanics</b>.</div>
+  <div class="note"><b>Encode-time resolution.</b> A few moves are context-dependent and resolved from the acting mon's state when the observation is built (a mon's type/HP are stable enough within a turn): <b>base power</b> for HP-variable moves (Reversal / Flail scale inversely with the user's HP; Eruption / Water Spout directly), and <b>Curse</b>'s effect by the user's type (Ghost → <code>move_effect:curse</code> + 0.5 HP cost; non-Ghost → <code>move_effect:curse_setup</code>).</div>
+  <div class="note">The model now sees <b>who</b> (species/move ids + types), <b>how hurt</b> (HP/status), <b>what's still uncertain</b> (belief), <b>how hard / how fast</b> (base power, base stats, level), <b>the dynamic board</b> (boosts, weather, hazards/screens, turn count, volatiles), and <b>per-move tactics</b> (PP scarcity, secondary-effect type + chance).</div>
 
   <h2>✅ Now included (Phase 1): raw type &amp; move mechanics</h2>
   <p class="sub">Three new categorical slots and three new numeric features, populated from the dex, let the type chart + effectiveness emerge in the embedding space (no hand-computed multipliers):</p>
@@ -190,31 +203,60 @@
   <p class="sub">Two tokens from a live observation. Categorical slots show <code>string → row</code>; numeric slots show their value. Empty slots are padding (row 0).</p>
   <table>
     <tr><th>Slot</th><th>Self-Pokémon token — <b>Charizard</b> (active, full HP)</th><th>Move token — <b>Flamethrower</b> (slot 1)</th></tr>
-    <tr><td>PRIMARY [0]</td><td><code>species:Charizard → 586</code></td><td><code>move:flamethrower → 364</code></td></tr>
-    <tr><td>SECONDARY [1]</td><td><code>status:none → 788</code></td><td><code>action:move → 2</code></td></tr>
-    <tr><td>ROLE [2]</td><td><code>pokemon:self → 547</code></td><td><code>action → …</code></td></tr>
-    <tr><td>SLOT [3]</td><td><code>self_slot:0 → 554</code></td><td><code>move_slot:1 → 536</code></td></tr>
-    <tr><td><b>TYPE_1 [4]</b></td><td><code>type:fire → 803</code></td><td><code>type:fire → 803</code></td></tr>
-    <tr><td><b>TYPE_2 [5]</b></td><td><code>type:flying → 804</code></td><td class="pad">— (padding)</td></tr>
-    <tr><td><b>MOVE_CATEGORY [6]</b></td><td class="pad">— (padding)</td><td><code>move_category:special → 534</code></td></tr>
-    <tr><td>belief [7–86]</td><td class="pad">— (self: known)</td><td class="pad">—</td></tr>
+    <tr><td>PRIMARY [0]</td><td><code>species:Charizard</code></td><td><code>move:flamethrower</code></td></tr>
+    <tr><td>SECONDARY [1]</td><td><code>status:none</code></td><td><code>action:move</code></td></tr>
+    <tr><td>ROLE [2]</td><td><code>pokemon:self</code></td><td><code>action</code></td></tr>
+    <tr><td>SLOT [3]</td><td class="pad">— (party-slot token dropped)</td><td><code>move_slot:1</code></td></tr>
+    <tr><td><b>TYPE_1 [4]</b></td><td><code>type:fire</code></td><td><code>type:fire</code></td></tr>
+    <tr><td><b>TYPE_2 [5]</b></td><td><code>type:flying</code></td><td class="pad">— (padding)</td></tr>
+    <tr><td><b>MOVE_CATEGORY [6]</b></td><td class="pad">— (padding)</td><td><code>move_category:special</code></td></tr>
+    <tr><td><b>MOVE_EFFECT [7]</b></td><td class="pad">—</td><td><code>move_effect:brn</code> (10% burn)</td></tr>
+    <tr><td><b>MOVE_PRIORITY [8]</b></td><td class="pad">—</td><td><code>move_priority:0</code></td></tr>
+    <tr><td>belief [9–32]</td><td class="pad">— (self: known)</td><td class="pad">—</td></tr>
+    <tr><td>volatile [33–38]</td><td class="pad">— (none active)</td><td class="pad">—</td></tr>
     <tr><td>numeric: HP / ACTIVE</td><td>1.0 / 1.0</td><td>— / 1.0 (legal)</td></tr>
-    <tr><td><b>numeric: BASE_POWER/PRIORITY/ACCURACY</b></td><td class="pad">—</td><td>0.475 / 0.0 / 1.0</td></tr>
+    <tr><td><b>numeric: BASE_POWER/PRIORITY/ACCURACY</b> [12–14]</td><td class="pad">—</td><td>0.475 / 0.0 / 1.0</td></tr>
+    <tr><td><b>numeric: LEVEL</b> [15]</td><td>0.78 (L78)</td><td class="pad">—</td></tr>
+    <tr><td><b>numeric: BASE_HP…SPE</b> [16–21]</td><td>0.39 / 0.42 / 0.39 / 0.545 / 0.425 / 0.50</td><td class="pad">—</td></tr>
+    <tr><td><b>numeric: BOOST_ATK…SPE</b> [26–30]</td><td>0 (no boosts yet; e.g. 0.5 after a Dragon Dance +Atk)</td><td class="pad">—</td></tr>
+    <tr><td><b>numeric: MOVE_PP / EFFECT_CHANCE / SELF_HP_COST</b> [31,32,34]</td><td class="pad">—</td><td>1.0 / 0.10 / 0.0</td></tr>
   </table>
-  <div class="note">Note the shared <code>type:fire</code> row (803) on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model can use to learn STAB and effectiveness across every Fire mon/move at once.</div>
+  <div class="note">Note the shared <code>type:fire</code> row on both Charizard <em>and</em> Flamethrower — a single Fire embedding the model uses to learn STAB and effectiveness across every Fire mon/move at once. Base stats + level give the magnitudes for damage and <b>turn order</b>; boosts show its own setup landing; <code>move_effect</code> + <code>EFFECT_CHANCE</code> tell apart e.g. a 10% freeze from a guaranteed Calm Mind, and a foe-debuff from a self-drawback.</div>
 
-  <h2>⚠️ Still missing — Phase 2 (dynamic state, from the protocol/bridge)</h2>
+  <h2>✅ Now included (Phase 2): dynamic decision-critical state</h2>
+  <p class="sub">All raw observable facts (no computed judgments). Level / base stats / move mechanics are dex-derived; boosts, weather, hazards/screens, turn count, volatiles, and PP are tracked from the live protocol stream / request.</p>
+  <table>
+    <tr><th>Primitive</th><th>Where</th><th>Encoding</th><th>Why it matters</th></tr>
+    <tr><td><b>level</b></td><td>every Pokémon + switch token</td><td>num [15]: level/100</td><td>stat / damage scaling</td></tr>
+    <tr><td><b>base stats — esp. SPEED</b></td><td>every Pokémon + switch token</td><td>num [16–21]: stat/200</td><td><b>turn order</b> + damage magnitude</td></tr>
+    <tr><td><b>stat boosts (stages)</b></td><td>active mon token</td><td>num [26–30]: stage/6 in [-1,1]</td><td><b>setup-sweep</b> — sees its own +Atk/+Spe land (reset on switch; Baton Pass carries)</td></tr>
+    <tr><td><b>weather</b></td><td>field token <code>SECONDARY</code></td><td>cat: <code>weather:&lt;id&gt;</code></td><td>damage / ability modifiers (rain/sun/sand/hail)</td></tr>
+    <tr><td><b>hazards / screens</b></td><td>field token (player-relative)</td><td>num [22–25]: Spikes /3, screens /2</td><td>switch cost, damage reduction</td></tr>
+    <tr><td><b>turn count</b></td><td>field token</td><td>num [33]: turn/1000</td><td>tempo / stall</td></tr>
+    <tr><td><b>move priority</b></td><td>move tokens</td><td>cat [8]: <code>move_priority:&lt;n&gt;</code> + num [13]</td><td><b>discrete turn-order bracket</b> — a higher bracket moves first regardless of speed (Quick Attack +1, Focus Punch -3)</td></tr>
+    <tr><td><b>future sight</b></td><td>field token (player-relative)</td><td>num [35–36]: turns/2</td><td>a delayed attack incoming to / outgoing from the player's side (brace, switch, or set up around it)</td></tr>
+    <tr><td><b>toxic ramp stage</b></td><td>active mon token (both sides)</td><td>num [37]: stage/15</td><td>badly-poisoned escalating damage — distinct from the <code>status:tox</code> type; drives stall / switch timing</td></tr>
+    <tr><td><b>PP</b></td><td>move tokens</td><td>num [31]: pp/maxpp</td><td>scarcity — avoid relying on a near-empty move (last-PP Hydro Pump)</td></tr>
+    <tr><td><b>move effect (type + chance)</b></td><td>move tokens</td><td>cat [7]: <code>move_effect:&lt;id&gt;</code> + num [32]: chance</td><td><b>primary OR secondary</b>, one unified label: status (<code>par</code>), volatile (<code>substitute</code>, <code>leechseed</code>), or a target-explicit, magnitude-enumerated stat change (<code>raise_self_atk_sharply</code> Swords Dance, <code>raise_self_all</code> Ancient Power, <code>lower_foe_def_sharply</code> Screech = halve, <code>lower_self_atkdef</code> Superpower). Setup/status moves (Calm Mind, Thunder Wave) are now captured, at chance 1.0.</td></tr>
+    <tr><td><b>self-HP cost</b></td><td>move tokens</td><td>num [34]: fraction of max HP</td><td>deterrent the model weighs against the effect — Belly Drum 0.5, Substitute 0.25, Explosion 1.0</td></tr>
+    <tr><td><b>volatile statuses</b></td><td>active mon token</td><td>cat [33–38]: <code>volatile:&lt;id&gt;</code> (positional)</td><td>confusion / leech seed / substitute / taunt / … — residual damage, locked options (reset on switch)</td></tr>
+  </table>
+
+  <h2>Other representation cleanups in this overhaul</h2>
+  <table>
+    <tr><th>Change</th><th>Rationale</th></tr>
+    <tr><td><b>Dropped the party-slot token</b> (<code>self_slot</code>/<code>opponent_slot</code> on team tokens)</td><td>team order is arbitrary in randbats → the index is unactionable, and the sequence position + token-type already identify the slot. (Action <code>switch_slot</code>/<code>move_slot</code> stay — they map to the emitted action.)</td></tr>
+    <tr><td><b>Right-sized belief buckets</b> (ability 8→2, item 8→6, move 64→16) + <b>positional, not hashed</b></td><td>measured Gen 3 per-species maxima are 2 abilities / 5 items / 14 moves, so positional placement is exact and collision-free; the old hash collided badly and the old sizes were padding.</td></tr>
+  </table>
+
+  <h2>⚠️ Still missing — Phase 3 (lower priority)</h2>
   <table>
     <tr><th>Tier</th><th>Missing primitive</th><th>Why it matters</th><th>Source</th><th>Plan</th></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>stats — esp. SPEED</b></td><td><b>turn order</b> — can't tell who moves first</td><td>protocol / dex</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">1</span></td><td><b>stat boosts (stages)</b></td><td><b>setup-sweep</b> — can't see its own +Atk worked</td><td>protocol</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">2</span></td><td>weather</td><td>damage / ability modifiers</td><td>protocol</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">2</span></td><td>side conditions / hazards / screens</td><td>switch cost, damage reduction</td><td>protocol</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">2</span></td><td>level</td><td>stat / damage scaling</td><td>protocol</td><td>Phase 2</td></tr>
-    <tr><td><span class="tag m">3</span></td><td>PP, secondary-effect chances</td><td>stall, risk</td><td>dex</td><td>later</td></tr>
+    <tr><td><span class="tag m">3</span></td><td>move-effect <b>magnitude beyond ±2</b> is bucketed to <code>_max</code>; non-uniform multi-stat changes assume a shared magnitude</td><td>no Gen 3 cases today; safe for the closed set</td><td>dex</td><td>later</td></tr>
+    <tr><td><span class="tag m">3</span></td><td>trapping / future sight timers, exact perish countdown semantics</td><td>tempo edge cases</td><td>protocol</td><td>later</td></tr>
   </table>
   <div class="note">
-    <b>Principle (per review):</b> surface <b>raw observable facts</b> (move type, stats, boosts) — not <b>computed judgments</b> (e.g. an effectiveness multiplier, which would be brittle for ability immunities like Levitate / Wonder Guard). The model learns the type chart and effectiveness <em>emergently</em> from the raw primitives + the existing ability/item belief, so it can't inherit a hand-coded error.
+    <b>Principle (per review):</b> surface <b>raw observable facts</b> (move type, stats, boosts, secondary-effect type + chance) — not <b>computed judgments</b> (e.g. an effectiveness multiplier, which would be brittle for ability immunities like Levitate / Wonder Guard). The model learns the type chart, effectiveness, and effect semantics <em>emergently</em> from the raw primitives + the existing ability/item belief, so it can't inherit a hand-coded error.
   </div>
 </body>
 </html>
