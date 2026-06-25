@@ -783,42 +783,42 @@ class Phase2DynamicStateTest(unittest.TestCase):
 class SpeedBeliefTest(unittest.TestCase):
     """Observed speed-order belief inferred from equal-priority move order in recent events."""
 
-    def _advantage(self, events) -> float:
+    def _order(self, events) -> float:
         return _observed_speed_order(SimpleNamespace(recent_events=events), _speed_fake_dex())
 
     def test_self_first_equal_priority_is_faster(self) -> None:
-        adv = self._advantage(_events(("move", "self", "tackle"), ("move", "opponent", "psychic")))
-        self.assertEqual(adv, 1.0)
+        order = self._order(_events(("move", "self", "tackle"), ("move", "opponent", "psychic")))
+        self.assertEqual(order, 1.0)
 
     def test_opponent_first_equal_priority_is_slower(self) -> None:
-        adv = self._advantage(_events(("move", "opponent", "psychic"), ("move", "self", "tackle")))
-        self.assertEqual(adv, -1.0)
+        order = self._order(_events(("move", "opponent", "psychic"), ("move", "self", "tackle")))
+        self.assertEqual(order, -1.0)
 
     def test_unequal_priority_carries_no_speed_signal(self) -> None:
         # Opponent's Quick Attack (+1) moving first says nothing about base speed.
-        adv = self._advantage(_events(("move", "opponent", "quickattack"), ("move", "self", "tackle")))
-        self.assertEqual(adv, 0.0)
+        order = self._order(_events(("move", "opponent", "quickattack"), ("move", "self", "tackle")))
+        self.assertEqual(order, 0.0)
 
     def test_one_sided_turn_is_unknown(self) -> None:
-        adv = self._advantage(_events(("move", "self", "tackle")))
-        self.assertEqual(adv, 0.0)
+        order = self._order(_events(("move", "self", "tackle")))
+        self.assertEqual(order, 0.0)
 
     def test_switch_in_resets_the_matchup(self) -> None:
         # An observation before the opponent's switch-in belongs to a different matchup.
-        adv = self._advantage(
+        order = self._order(
             _events(("move", "self", "tackle"), ("move", "opponent", "psychic"), ("switch", "opponent", "Blissey"))
         )
-        self.assertEqual(adv, 0.0)
+        self.assertEqual(order, 0.0)
 
     def test_most_recent_turn_wins(self) -> None:
-        adv = self._advantage(
+        order = self._order(
             _events(
                 ("move", "self", "tackle"), ("move", "opponent", "psychic"),  # turn A: self first (+1)
                 ("turn", "none", None),
                 ("move", "opponent", "psychic"), ("move", "self", "tackle"),  # turn B: opp first (-1)
             )
         )
-        self.assertEqual(adv, -1.0)
+        self.assertEqual(order, -1.0)
 
     def test_no_dex_is_unknown(self) -> None:
         events = _events(("move", "self", "tackle"), ("move", "opponent", "psychic"))
@@ -826,46 +826,57 @@ class SpeedBeliefTest(unittest.TestCase):
 
     def test_speed_boost_after_observation_invalidates_it(self) -> None:
         # Self was observed slower, then used Agility (+Spe): the old order no longer holds.
-        adv = self._advantage(
+        order = self._order(
             _events(
                 ("move", "opponent", "psychic"), ("move", "self", "tackle"),  # opp first (-1)
                 ("-boost", "self", "spe"),  # Agility — speed regime changed
             )
         )
-        self.assertEqual(adv, 0.0)
+        self.assertEqual(order, 0.0)
 
     def test_paralysis_after_observation_invalidates_it(self) -> None:
         # Opponent moved first, then self paralyzes it (¼ Speed): the observed order is now stale.
-        adv = self._advantage(
+        order = self._order(
             _events(
                 ("move", "opponent", "psychic"), ("move", "self", "tackle"),
                 ("-status", "opponent", "par"),
             )
         )
-        self.assertEqual(adv, 0.0)
+        self.assertEqual(order, 0.0)
 
     def test_paralysis_cure_invalidates_observation(self) -> None:
-        adv = self._advantage(
+        order = self._order(
             _events(
                 ("move", "self", "tackle"), ("move", "opponent", "psychic"),
                 ("-curestatus", "opponent", "par"),
             )
         )
-        self.assertEqual(adv, 0.0)
+        self.assertEqual(order, 0.0)
+
+    def test_boost_clear_invalidates_observation(self) -> None:
+        # Haze (-clearallboost) can remove an Agility / Speed drop, changing who is faster — it must
+        # reset the observation even though it names no stat.
+        order = self._order(
+            _events(
+                ("move", "self", "tackle"), ("move", "opponent", "psychic"),
+                ("-clearallboost", "none", None),
+            )
+        )
+        self.assertEqual(order, 0.0)
 
     def test_quick_claw_turn_is_ignored(self) -> None:
         # Quick Claw can send an equal-priority move first regardless of speed — no signal.
-        adv = self._advantage(
+        order = self._order(
             _events(
                 ("-activate", "self", "item: Quick Claw"),
                 ("move", "self", "tackle"), ("move", "opponent", "psychic"),
             )
         )
-        self.assertEqual(adv, 0.0)
+        self.assertEqual(order, 0.0)
 
     def test_encoded_on_field_token(self) -> None:
         # End-to-end: bot is p2; a turn where Charizard (self) out-speeds Xatu (opp) at equal
-        # priority sets +1 on the field token's speed-advantage slot.
+        # priority sets +1 on the field token's observed-speed-order slot.
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],
             "|turn|1",
