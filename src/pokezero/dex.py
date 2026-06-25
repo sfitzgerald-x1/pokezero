@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
@@ -223,11 +223,15 @@ _STAT_BOOST_KEYS = ("atk", "def", "spa", "spd", "spe")
 _MOVE_EFFECT_OVERRIDES: dict[str, dict[str, Any]] = {
     "bellydrum": {"effect_label": "raise_self_atk_max", "effect_chance": 100, "self_hp_cost": 0.5},
     "substitute": {"self_hp_cost": 0.25},
-    # Curse is type-dependent (non-Ghost: self +Atk/+Def/-Spe setup; Ghost: 50% HP to curse the
-    # foe) and exposes only volatileStatus:"curse" in move data, so a static label would mislabel
-    # the common self-setup use. Suppress the move_effect label and let move identity carry it.
+    # Curse is type-dependent and exposes only volatileStatus:"curse" in move data, so its static
+    # label is empty; the real label is resolved from the user's type at encode time (see
+    # resolve_move_effect / DYNAMIC_MOVE_EFFECT_LABELS).
     "curse": {"effect_label": "", "effect_chance": 0},
 }
+
+# Effect labels that resolve_move_effect can produce for type-dependent moves (not present on any
+# MoveInfo.effect_label statically), so the vocabulary still enumerates them.
+DYNAMIC_MOVE_EFFECT_LABELS: tuple[str, ...] = ("curse", "curse_setup")
 
 
 def _stat_effect_label(boosts: Mapping[str, Any] | None, who: str) -> str:
@@ -326,6 +330,52 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
         effect_label=str(effect_label),
         self_hp_cost=float(self_hp_cost),
     )
+
+
+_HP_BASE_POWER_LOW = frozenset({"reversal", "flail"})  # low user HP -> high base power
+_HP_BASE_POWER_HIGH = frozenset({"eruption", "waterspout"})  # high user HP -> high base power
+
+
+def resolve_move_base_power(move: "MoveInfo", user_hp_fraction: float | None = None) -> int:
+    """Base power, resolving HP-variable moves from the user's current HP fraction at encode time.
+
+    Reversal/Flail scale inversely with the user's remaining HP (Gen 3 breakpoints on 48*HP/maxHP);
+    Eruption/Water Spout scale directly (150*HP/maxHP). Their static dex base power is 0, so without
+    this they would mislead the model. All other moves return their fixed base power.
+    """
+    if user_hp_fraction is None:
+        return move.base_power
+    fraction = max(0.0, min(1.0, user_hp_fraction))
+    if move.id in _HP_BASE_POWER_LOW:
+        scaled = 48 * fraction
+        if scaled <= 1:
+            return 200
+        if scaled <= 4:
+            return 150
+        if scaled <= 9:
+            return 100
+        if scaled <= 16:
+            return 80
+        if scaled <= 32:
+            return 40
+        return 20
+    if move.id in _HP_BASE_POWER_HIGH:
+        return max(1, int(150 * fraction))
+    return move.base_power
+
+
+def resolve_move_effect(move: "MoveInfo", user_types: Sequence[str] = ()) -> tuple[str, int, float]:
+    """(effect_label, effect_chance, self_hp_cost), resolving type-dependent moves by the user's type.
+
+    Curse is the one Gen 3 case: a Ghost user lays a foe curse for 50% of its own HP, while a
+    non-Ghost user gets the +Atk/+Def/-Spe self setup. A mon's typing is stable within a battle, so
+    resolving from the user's types at encode time is well-defined; all other moves pass through.
+    """
+    if move.id == "curse":
+        if any(str(type_name).lower() == "ghost" for type_name in user_types):
+            return "curse", 100, 0.5
+        return "curse_setup", 100, 0.0
+    return move.effect_label, move.effect_chance, move.self_hp_cost
 
 
 def _species_info_from_payload(species_id: str, payload: Mapping[str, Any]) -> SpeciesInfo:

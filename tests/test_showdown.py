@@ -18,8 +18,11 @@ from pokezero.showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     NUMERIC_EFFECT_CHANCE,
     NUMERIC_MOVE_PP_FRACTION,
+    NUMERIC_OPP_FUTURE_SIGHT,
+    NUMERIC_SELF_FUTURE_SIGHT,
     NUMERIC_SELF_HP_COST,
     NUMERIC_TURN_COUNT,
+    _encode_move_mechanics,
     _move_pp_fraction,
     NUMERIC_BASE_ATK,
     NUMERIC_BASE_DEF,
@@ -589,6 +592,26 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertAlmostEqual(observation.numeric_features[move_token][NUMERIC_EFFECT_CHANCE], 0.10)
         self.assertAlmostEqual(observation.numeric_features[move_token][NUMERIC_SELF_HP_COST], 0.0)
 
+    def test_curse_move_effect_resolves_by_user_type(self) -> None:
+        # The acting mon's type decides Curse's encoded effect/cost (stable within a battle).
+        curse = MoveInfo(
+            id="curse", name="Curse", type="Ghost", category="Status", gen3_category="Status",
+            base_power=0, accuracy=100.0, priority=0, recoil=False, drain=False, heal=False,
+            status=None, boosts={}, target="normal", selfdestruct=False,
+            effect_chance=0, effect_label="", self_hp_cost=0.0,  # static label suppressed
+        )
+        dex = ShowdownDex(moves={"curse": curse}, species={}, type_chart={})
+        spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+
+        def _encode(user_types):
+            cat = [""] * spec.categorical_feature_count
+            num = [0.0] * spec.numeric_feature_count
+            _encode_move_mechanics(cat, num, dex, "curse", user_types)
+            return cat[CATEGORY_MOVE_EFFECT], num[NUMERIC_SELF_HP_COST]
+
+        self.assertEqual(_encode(("Ghost",)), ("move_effect:curse", 0.5))
+        self.assertEqual(_encode(("Normal",)), ("move_effect:curse_setup", 0.0))
+
     def test_move_pp_fraction_helper(self) -> None:
         self.assertAlmostEqual(_move_pp_fraction({"pp": 8, "maxpp": 8}), 1.0)
         self.assertAlmostEqual(_move_pp_fraction({"pp": 1, "maxpp": 8}), 0.125)
@@ -603,6 +626,34 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertAlmostEqual(
             observation.numeric_features[self.ACTION_OFFSET][NUMERIC_MOVE_PP_FRACTION], 1.0
         )
+
+    def test_future_sight_tracked_as_incoming_and_outgoing(self) -> None:
+        # Bot is p2; p2's Future Sight lands on p1 (opponent) — the player's OUTGOING delayed hit.
+        state = self._replay_with(
+            [
+                "|turn|5",
+                "|move|p2a: Charizard|Future Sight|p1a: Xatu",
+                "|-start|p2a: Charizard|move: Future Sight",
+            ]
+        )
+        self.assertEqual(state.opponent_future_sight_turns, 2)
+        self.assertEqual(state.self_future_sight_turns, 0)
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        numeric = observation.numeric_features[FIELD_TOKEN_OFFSET]
+        self.assertAlmostEqual(numeric[NUMERIC_OPP_FUTURE_SIGHT], 1.0)  # 2 turns / 2
+        self.assertAlmostEqual(numeric[NUMERIC_SELF_FUTURE_SIGHT], 0.0)
+
+    def test_future_sight_cleared_when_it_lands(self) -> None:
+        landed = self._replay_with(
+            [
+                "|turn|5",
+                "|move|p2a: Charizard|Future Sight|p1a: Xatu",
+                "|-start|p2a: Charizard|move: Future Sight",
+                "|turn|7",
+                "|-end|p1a: Xatu|move: Future Sight",
+            ]
+        )
+        self.assertEqual(landed.opponent_future_sight_turns, 0)
 
     def test_turn_count_on_field_token(self) -> None:
         state = self._replay_with(["|turn|7"])

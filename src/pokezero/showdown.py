@@ -24,6 +24,7 @@ from .actions import (
     is_switch_action,
 )
 from .belief import PlayerBeliefView, PokemonSetSource, PublicBattleBeliefEngine, RevealedPokemonBelief
+from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
@@ -42,14 +43,14 @@ BELIEF_ABILITY_BUCKET_COUNT = 2
 BELIEF_ITEM_BUCKET_COUNT = 6
 BELIEF_MOVE_BUCKET_COUNT = 16
 BELIEF_FACT_BUCKET_COUNT = BELIEF_ABILITY_BUCKET_COUNT + BELIEF_ITEM_BUCKET_COUNT + BELIEF_MOVE_BUCKET_COUNT
-# Fixed categorical columns (0-7), then belief-fact buckets, then active-mon volatile-status
+# Fixed categorical columns (0-8), then belief-fact buckets, then active-mon volatile-status
 # columns. Volatiles (confusion / leech seed / substitute / taunt / ...) are placed positionally
 # like belief facts; 6 columns cover any realistic simultaneous set on one mon.
-CATEGORY_FIXED_COUNT = 8
+CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=35,
+    numeric_feature_count=37,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -70,6 +71,11 @@ CATEGORY_MOVE_CATEGORY = 6
 # (1.0 = guaranteed), so the model can tell e.g. a 10% freeze from a guaranteed setup, and a
 # foe-debuff from a self-drawback. NUMERIC_SELF_HP_COST carries the move's upfront HP price.
 CATEGORY_MOVE_EFFECT = 7
+# Move priority bracket (move tokens): move_priority:<n> for the integer priority (e.g. +1 Quick
+# Attack, -3 Focus Punch). Priority is a discrete turn-order bracket — a higher bracket always
+# moves first regardless of speed — so a per-bracket embedding captures it better than the scalar
+# NUMERIC_PRIORITY (kept for ordinal grounding).
+CATEGORY_MOVE_PRIORITY = 8
 CATEGORY_BELIEF_ABILITY_OFFSET = CATEGORY_FIXED_COUNT
 CATEGORY_BELIEF_ITEM_OFFSET = CATEGORY_BELIEF_ABILITY_OFFSET + BELIEF_ABILITY_BUCKET_COUNT
 CATEGORY_BELIEF_MOVE_OFFSET = CATEGORY_BELIEF_ITEM_OFFSET + BELIEF_ITEM_BUCKET_COUNT
@@ -121,6 +127,11 @@ NUMERIC_TURN_COUNT = 33  # field token: battle turn number / 1000 (clamped) — 
 # Move tokens: fraction of user max HP the move spends upfront (Belly Drum 0.5, Substitute 0.25,
 # Explosion 1.0) — a deterrent the model weighs against the effect.
 NUMERIC_SELF_HP_COST = 34
+# Field token: a pending delayed attack (Future Sight / Doom Desire) landing on each side, as
+# turns-remaining / 2. SELF = incoming to the player (a hit to brace/switch around); OPP = the
+# player's own outgoing attack landing on the foe.
+NUMERIC_SELF_FUTURE_SIGHT = 35
+NUMERIC_OPP_FUTURE_SIGHT = 36
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -150,6 +161,7 @@ class ShowdownReplayState:
     side_condition_counts: Mapping[str, Mapping[str, int]]
     boosts: Mapping[str, Mapping[str, int]]
     volatiles: Mapping[str, tuple[str, ...]]
+    future_sight: Mapping[str, int]
     public_events: tuple["ShowdownPublicEvent", ...]
     public_lines: tuple[str, ...]
     weather: Optional[str] = None
@@ -209,6 +221,8 @@ class PlayerRelativeBattleState:
     recent_public_events: tuple[str, ...]
     weather: Optional[str] = None
     turn_number: int = 0
+    self_future_sight_turns: int = 0  # turns until a delayed attack lands on the player's side
+    opponent_future_sight_turns: int = 0  # turns until the player's own delayed attack lands
     winner: Optional[str] = None
 
     @property
@@ -229,6 +243,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
     side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
     boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
     volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
+    future_sight: dict[str, int] = {}
     pending_baton_pass: set[str] = set()
     public_events: list[ShowdownPublicEvent] = []
     public_lines: list[str] = []
@@ -295,6 +310,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         weather = _update_weather(parts, weather)
         _update_boosts(parts, boosts)
         _update_volatiles(parts, volatiles)
+        _update_future_sight(parts, future_sight, turn_number)
         _flag_baton_pass(parts, pending_baton_pass)
         public_events.append(_public_event_from_line(line))
         public_lines.append(line)
@@ -312,6 +328,7 @@ def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") ->
         },
         boosts={slot: dict(sorted(stages.items())) for slot, stages in boosts.items()},
         volatiles={slot: tuple(sorted(names)) for slot, names in volatiles.items()},
+        future_sight=dict(future_sight),
         public_events=tuple(public_events),
         public_lines=tuple(public_lines),
         weather=weather,
@@ -403,6 +420,8 @@ def normalize_for_player(
         recent_public_events=tuple(event.relative_line or event.raw_line for event in recent_events),
         weather=replay.weather,
         turn_number=replay.turn_number,
+        self_future_sight_turns=_future_sight_turns_remaining(replay, showdown_slot),
+        opponent_future_sight_turns=_future_sight_turns_remaining(replay, opponent_slot),
         winner=replay.winner,
     )
 
@@ -568,7 +587,7 @@ TRACKED_VOLATILES = frozenset({
     "nightmare", "curse", "ingrain", "foresight", "lockon", "mindreader", "destinybond", "grudge",
     "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
     "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
-    "perishsong", "perish0", "perish1", "perish2", "perish3", "futuresight", "flashfire",
+    "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire",
 })
 
 
@@ -591,6 +610,41 @@ def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> N
         volatiles[slot].add(name)
     else:
         volatiles[slot].discard(name)
+
+
+# Delayed-damage moves (Future Sight / Doom Desire): used on one turn, they land on the target's
+# side ~2 turns later. Tracked as a per-side landing turn so the model sees an incoming/outgoing hit.
+_FUTURE_MOVES = frozenset({"futuresight", "doomdesire"})
+_FUTURE_SIGHT_DELAY = 2
+
+
+def _update_future_sight(parts: Sequence[str], future_sight: dict[str, int], turn_number: int) -> None:
+    """Track pending delayed attacks per side from |-start| (use) / |-end| (land) lines.
+
+    Showdown puts the |-start| on the USER and the |-end| on the side that takes the hit, so a use
+    schedules a landing on the user's OPPONENT side; the landing |-end| clears it.
+    """
+    event_type = parts[1] if len(parts) > 1 else ""
+    if event_type not in {"-start", "-end"} or len(parts) < 4:
+        return
+    if _side_condition_identifier(parts[3]) not in _FUTURE_MOVES:
+        return
+    slot = _slot_from_ident(parts[2])
+    if slot not in {"p1", "p2"}:
+        return
+    if event_type == "-start":
+        target_side = "p2" if slot == "p1" else "p1"
+        future_sight[target_side] = turn_number + _FUTURE_SIGHT_DELAY
+    else:
+        future_sight.pop(slot, None)
+
+
+def _future_sight_turns_remaining(replay: "ShowdownReplayState", slot: str) -> int:
+    """Turns until a pending delayed attack lands on ``slot``'s side (0 if none/overdue)."""
+    landing = replay.future_sight.get(slot)
+    if landing is None:
+        return 0
+    return max(0, landing - replay.turn_number)
 
 
 def _update_weather(parts: Sequence[str], weather: Optional[str]) -> Optional[str]:
@@ -866,6 +920,10 @@ def _encode_field_token(
     _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_SCREENS, opp_scr)
     if state.turn_number:
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_TURN_COUNT, min(1.0, state.turn_number / 1000.0))
+    if state.self_future_sight_turns:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_FUTURE_SIGHT, min(1.0, state.self_future_sight_turns / 2.0))
+    if state.opponent_future_sight_turns:
+        _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
 
 
 # Gen 3 has a single entry hazard (Spikes, max 3 layers); Toxic Spikes / Stealth Rock are
@@ -961,23 +1019,36 @@ def _encode_pokemon_stats(
 
 
 def _encode_move_mechanics(
-    cat_row: list[int], num_row: list[float], dex: "ShowdownDex | None", move_name: str
+    cat_row: list[int],
+    num_row: list[float],
+    dex: "ShowdownDex | None",
+    move_name: str,
+    user_types: Sequence[str] = (),
+    user_hp_fraction: float | None = None,
 ) -> None:
-    """Set move type / damage class (categorical) + base power / priority / accuracy (numeric)."""
+    """Set move type / damage class (categorical) + base power / priority / accuracy + effect.
+
+    ``user_types`` and ``user_hp_fraction`` are the acting (self active) mon's types and current HP
+    fraction, used to resolve type-dependent effects (Curse) and HP-variable base power
+    (Reversal / Flail / Eruption / Water Spout) at encode time.
+    """
     if dex is None:
         return
     move = dex.move_info(move_name)
     if move is None:
         return
+    base_power = resolve_move_base_power(move, user_hp_fraction)
     _set_category(cat_row, CATEGORY_TYPE_1, f"type:{move.type}")
     _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"move_category:{move.gen3_category}")
-    _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(move.base_power) / 200.0))
+    _set_category(cat_row, CATEGORY_MOVE_PRIORITY, f"move_priority:{move.priority}")
+    _set_numeric(num_row, NUMERIC_BASE_POWER, min(1.0, float(base_power) / 200.0))
     _set_numeric(num_row, NUMERIC_PRIORITY, max(-1.0, min(1.0, float(move.priority) / 5.0)))
     _set_numeric(num_row, NUMERIC_ACCURACY, (float(move.accuracy) / 100.0) if move.accuracy else 1.0)
-    if move.effect_label:
-        _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"move_effect:{move.effect_label}")
-    _set_numeric(num_row, NUMERIC_EFFECT_CHANCE, min(1.0, float(move.effect_chance) / 100.0))
-    _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(move.self_hp_cost))))
+    effect_label, effect_chance, self_hp_cost = resolve_move_effect(move, user_types)
+    if effect_label:
+        _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"move_effect:{effect_label}")
+    _set_numeric(num_row, NUMERIC_EFFECT_CHANCE, min(1.0, float(effect_chance) / 100.0))
+    _set_numeric(num_row, NUMERIC_SELF_HP_COST, max(0.0, min(1.0, float(self_hp_cost))))
 
 
 def _encode_pokemon_tokens(
@@ -1037,6 +1108,21 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
 
 
+def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
+    """Types of the acting (self active) mon, for resolving type-dependent move effects."""
+    if dex is None or state.self_active is None:
+        return ()
+    info = dex.species_info(state.self_active.species)
+    return tuple(info.types) if info is not None else ()
+
+
+def _self_active_hp_fraction(state: PlayerRelativeBattleState) -> float | None:
+    """Current HP fraction of the acting mon, for resolving HP-variable base power."""
+    if state.self_active is None:
+        return None
+    return _condition_features(state.self_active.condition).hp_fraction
+
+
 def _encode_action_tokens(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
@@ -1046,6 +1132,10 @@ def _encode_action_tokens(
 ) -> None:
     active_request = _active_request(state.request)
     moves = active_request.get("moves") if isinstance(active_request, Mapping) else None
+    # The acting mon's types + HP fraction, to resolve type-dependent effects (Curse) and
+    # HP-variable base power (Reversal / Flail / Eruption / Water Spout) on its moves.
+    user_types = _self_active_types(state, dex)
+    user_hp_fraction = _self_active_hp_fraction(state)
     for move_index in range(MOVE_ACTION_COUNT):
         token_index = ACTION_CANDIDATE_TOKEN_OFFSET + move_index
         move = moves[move_index] if isinstance(moves, list) and move_index < len(moves) else None
@@ -1056,7 +1146,10 @@ def _encode_action_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"move_slot:{move_index + 1}")
         if isinstance(move, Mapping):
-            _encode_move_mechanics(categorical_ids[token_index], numeric_features[token_index], dex, move_name)
+            _encode_move_mechanics(
+                categorical_ids[token_index], numeric_features[token_index], dex, move_name,
+                user_types, user_hp_fraction,
+            )
             _set_numeric(numeric_features[token_index], NUMERIC_MOVE_PP_FRACTION, _move_pp_fraction(move))
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 1.0 if state.legal_action_mask[move_index] else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if isinstance(move, Mapping) else 0.0)
@@ -1122,6 +1215,8 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_active_boosts": dict(state.opponent_active_boosts),
         "self_active_volatiles": list(state.self_active_volatiles),
         "opponent_active_volatiles": list(state.opponent_active_volatiles),
+        "self_future_sight_turns": state.self_future_sight_turns,
+        "opponent_future_sight_turns": state.opponent_future_sight_turns,
         "self_active": _pokemon_metadata(state.self_active),
         "opponent_active": _pokemon_metadata(state.opponent_active),
         "self_team": [_pokemon_metadata(pokemon) for pokemon in state.self_team],

@@ -51,12 +51,43 @@ class MoveEffectLabelTest(unittest.TestCase):
         icebeam = _move_effect("icebeam", category="Special", secondaries=[{"chance": 10, "status": "frz"}])
         self.assertEqual((icebeam.effect_label, icebeam.effect_chance), ("frz", 10))
 
-    def test_curse_is_suppressed_as_type_dependent(self) -> None:
-        # Curse is self-setup for non-Ghost and a foe HP-cost curse for Ghost; move data only
-        # exposes volatileStatus:"curse", so we suppress the label rather than mislabel the
-        # common self-setup use. The model falls back to move identity.
+    def test_curse_static_label_suppressed_resolved_by_user_type(self) -> None:
+        # Curse is type-dependent, so its static label is empty; resolve_move_effect picks the
+        # real label from the user's types at encode time (stable within a battle).
+        from pokezero.dex import resolve_move_effect
+
         curse = _move_effect("curse", topVolatile="curse", target="normal")
-        self.assertEqual((curse.effect_label, curse.effect_chance), ("", 0))
+        self.assertEqual((curse.effect_label, curse.effect_chance, curse.self_hp_cost), ("", 0, 0.0))
+        # Ghost user: lays a foe curse for 50% of its own HP.
+        self.assertEqual(resolve_move_effect(curse, ("Ghost",)), ("curse", 100, 0.5))
+        self.assertEqual(resolve_move_effect(curse, ("Ghost", "Poison")), ("curse", 100, 0.5))
+        # Non-Ghost user: +Atk/+Def/-Spe self setup, no HP cost.
+        self.assertEqual(resolve_move_effect(curse, ("Normal",)), ("curse_setup", 100, 0.0))
+        self.assertEqual(resolve_move_effect(curse, ()), ("curse_setup", 100, 0.0))
+
+    def test_hp_variable_base_power(self) -> None:
+        from pokezero.dex import resolve_move_base_power
+
+        reversal = _move_effect("reversal", category="Physical")  # static base power 0
+        self.assertEqual(resolve_move_base_power(reversal, 0.01), 200)  # ~1/48 HP
+        self.assertEqual(resolve_move_base_power(reversal, 0.05), 150)
+        self.assertEqual(resolve_move_base_power(reversal, 0.5), 40)
+        self.assertEqual(resolve_move_base_power(reversal, 1.0), 20)
+        self.assertEqual(resolve_move_base_power(reversal, None), 0)  # unknown HP -> static
+        eruption = _move_effect("eruption", category="Special", basePower=150)
+        self.assertEqual(resolve_move_base_power(eruption, 1.0), 150)  # direct scaling
+        self.assertEqual(resolve_move_base_power(eruption, 0.5), 75)
+        flamethrower = _move_effect("flamethrower", category="Special", basePower=95)
+        self.assertEqual(resolve_move_base_power(flamethrower, 0.2), 95)  # normal move unaffected
+
+    def test_resolve_move_effect_passes_through_non_dynamic_moves(self) -> None:
+        from pokezero.dex import resolve_move_effect
+
+        screech = _move_effect("screech", topBoosts={"def": -2}, target="normal")
+        self.assertEqual(
+            resolve_move_effect(screech, ("Ghost",)),
+            ("lower_foe_def_sharply", 100, 0.0),  # user type is irrelevant for non-dynamic moves
+        )
 
     def test_strongest_secondary_wins_over_primary(self) -> None:
         # A labeled secondary (even at 100%) is the move's notable effect and takes the slot over a

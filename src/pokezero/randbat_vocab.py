@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from .category_vocab import CategoryVocabulary, build_category_vocabulary, normalize_category_value
-from .dex import PHYSICAL_TYPES, SPECIAL_TYPES, load_showdown_dex_cached
+from .dex import DYNAMIC_MOVE_EFFECT_LABELS, PHYSICAL_TYPES, SPECIAL_TYPES, load_showdown_dex_cached
 from .showdown import TRACKED_VOLATILES, _normalize_identifier, stable_category_id
 
 # The 17 Gen 3 types (no Fairy) and the three damage classes the encoder emits as raw type
@@ -207,12 +207,19 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     # Move-effect labels the encoder emits on move tokens (move_effect:<id>), derived from the dex
     # over the closed randbat move universe. The encoder calls the identical dex.move_info(...)
     # .effect_label at play time, so this is exact coverage with no OOV path.
-    move_effects: set[str] = set()
+    move_effects: set[str] = set(DYNAMIC_MOVE_EFFECT_LABELS)  # type-dependent labels (Curse)
+    priorities: set[int] = set()
     for move in (*entities["moves"], *UNIVERSAL_MOVES):
         info = dex.move_info(move)
-        if info is not None and info.effect_label:
+        if info is None:
+            continue
+        if info.effect_label:
             move_effects.add(info.effect_label)
+        priorities.add(info.priority)
     groups["move_effects"] = [f"move_effect:{effect}" for effect in sorted(move_effects)]
+
+    # Move priority brackets (move_priority:<n>) the encoder emits, derived over the move universe.
+    groups["move_priorities"] = [f"move_priority:{priority}" for priority in sorted(priorities)]
 
     # Active-mon volatile statuses the encoder surfaces (volatile:<id>).
     groups["volatiles"] = [f"volatile:{name}" for name in GEN3_VOLATILES]

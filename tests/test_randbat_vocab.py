@@ -140,7 +140,7 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
     _REQUIRED_PREFIXES = (
         "species:", "move:", "belief:", "status:", "request_kind:", "pokemon:",
         "event:", "event_actor:", "event_target:",
-        "move_slot:", "switch_slot:", "move_effect:", "volatile:",
+        "move_slot:", "switch_slot:", "move_effect:", "move_priority:", "volatile:",
     )
 
     def test_live_games_have_no_required_oov(self) -> None:
