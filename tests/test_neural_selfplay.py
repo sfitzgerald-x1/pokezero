@@ -302,6 +302,103 @@ class NeuralSelfPlayTest(unittest.TestCase):
         )
         self.assertEqual(result.iterations[0].benchmark.games_per_matchup, 2)
 
+    def test_with_collection_temperature_injects_only_for_checkpoint_specs(self) -> None:
+        from urllib.parse import parse_qsl
+
+        from pokezero.collection import policy_factory_from_spec
+        from pokezero.neural_selfplay import _with_collection_temperature
+
+        # No-op at temperature 1.0.
+        self.assertEqual(_with_collection_temperature("neural:/m.pt", 1.0), "neural:/m.pt")
+        # Non-checkpoint specs are unchanged (temperature is meaningless there).
+        self.assertEqual(_with_collection_temperature("simple-legal", 1.5), "simple-legal")
+        # Neural spec gets a sampling temperature and is set to sample.
+        spec = _with_collection_temperature("neural:/m.pt", 1.5)
+        body, _, query = spec.partition("?")
+        params = dict(parse_qsl(query))
+        self.assertEqual(body, "neural:/m.pt")
+        self.assertEqual(float(params["temperature"]), 1.5)
+        self.assertEqual(params["sample"], "true")
+        self.assertNotIn("deterministic", params)
+
+    def test_with_collection_temperature_normalizes_and_round_trips(self) -> None:
+        from pokezero.collection import _split_policy_spec_options, policy_factory_from_spec
+        from pokezero.neural_selfplay import _with_collection_temperature
+
+        # A pre-existing deterministic option (any case) must be removed, not left to collide with
+        # the injected sample=true; other options (epsilon) are preserved.
+        spec = _with_collection_temperature("neural:/tmp/m.pt?Deterministic=true&epsilon=0.1", 1.25)
+        from pokezero.collection import _split_policy_spec_options as _canonical_split
+        _, options = _canonical_split(spec)
+        self.assertNotIn("deterministic", options)
+        self.assertEqual(options["sample"], "true")
+        self.assertEqual(float(options["temperature"]), 1.25)
+        self.assertEqual(options["epsilon"], "0.1")
+        # Must round-trip through the real resolver without a sample/deterministic conflict
+        # (the prior implementation raised here). neural specs build the factory lazily, so no
+        # checkpoint file is needed to validate option parsing.
+        self.assertTrue(callable(policy_factory_from_spec(spec)))
+        # Duplicate normalized option keys are rejected (same as the canonical resolver), rather
+        # than silently collapsed.
+        with self.assertRaises(ValueError):
+            _with_collection_temperature("neural:/m.pt?Sample=true&sample=false", 1.5)
+
+    def test_collection_temperature_keeps_canonical_spec_clean_in_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies():
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                    collection_temperature=2.0,
+                )
+        # The temperature is collection-only: the canonical recorded specs stay clean.
+        manifest = result.iterations[0].to_manifest_dict()
+        self.assertNotIn("temperature", manifest["current_policy_spec"])
+        self.assertNotIn("temperature", manifest["next_current_policy_spec"])
+
+    def test_collection_temperature_applies_to_collector_spec(self) -> None:
+        collected: list = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies(collected=collected):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                    collection_temperature=1.5,
+                )
+        # The collector spec passed to collection carries the exploration temperature.
+        self.assertIn("temperature=1.5", collected[0]["current_policy_spec"])
+
+    def test_collection_temperature_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaises(ValueError):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=1,
+                        games_per_iteration=2,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        collection_temperature=0.0,
+                    )
+
     def test_mirror_match_adds_current_policy_to_collection_opponents(self) -> None:
         collected: list = []
         with tempfile.TemporaryDirectory() as temp_dir:

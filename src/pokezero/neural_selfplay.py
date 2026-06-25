@@ -19,6 +19,7 @@ from .collection import (
     CollectionMetrics,
     benchmark_rollouts,
     policy_factory_from_spec,
+    _split_policy_spec_options,
 )
 from .env import PokeZeroEnv
 from .neural_policy import (
@@ -234,6 +235,7 @@ def run_neural_selfplay_iterations(
     fixed_opponent_policy_specs: Iterable[str] = ("random-legal", "simple-legal"),
     benchmark_reference_policy_specs: Iterable[str] = (),
     mirror_match: bool = False,
+    collection_temperature: float = 1.0,
     max_historical_opponents: int = 3,
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
@@ -261,6 +263,8 @@ def run_neural_selfplay_iterations(
         raise ValueError("evaluation_games must be positive for multi-iteration neural self-play advancement.")
     if worker_count <= 0:
         raise ValueError("worker_count must be positive.")
+    if collection_temperature <= 0.0:
+        raise ValueError("collection_temperature must be positive.")
     if post_iteration_audit_failure_mode not in POST_ITERATION_AUDIT_FAILURE_MODES:
         choices = ", ".join(POST_ITERATION_AUDIT_FAILURE_MODES)
         raise ValueError(f"post_iteration_audit_failure_mode must be one of: {choices}.")
@@ -338,6 +342,7 @@ def run_neural_selfplay_iterations(
         "post_iteration_audit_failure_mode": post_iteration_audit_failure_mode,
         "benchmark_reference_policy_specs": list(benchmark_references),
         "mirror_match": mirror_match,
+        "collection_temperature": collection_temperature,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -363,10 +368,16 @@ def run_neural_selfplay_iterations(
             checkpoint_path = iteration_dir / "transformer-policy.pt"
             iteration_manifest_path = iteration_dir / "manifest.json"
             iteration_seed_start = next_seed_start + (offset * games_per_iteration)
+            # Higher-temperature spec used only for collection so the collector explores; the
+            # canonical current_policy_spec stays clean for benchmark/advancement/manifest. The
+            # mirror opponent (built from this spec) inherits the same exploration temperature.
+            collection_current_policy_spec = _with_collection_temperature(
+                current_policy_spec, collection_temperature
+            )
             opponent_policy_specs = _opponent_pool(
                 fixed_policy_specs=fixed_opponents,
                 checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
-                current_policy_spec=current_policy_spec,
+                current_policy_spec=collection_current_policy_spec,
                 max_historical_opponents=max_historical_opponents,
                 include_current_policy=mirror_match,
             )
@@ -378,7 +389,7 @@ def run_neural_selfplay_iterations(
                 env_factory=env_factory,
                 rollout_config=rollout_config,
                 seed_start=iteration_seed_start,
-                current_policy_spec=current_policy_spec,
+                current_policy_spec=collection_current_policy_spec,
                 opponent_policy_specs=opponent_policy_specs,
                 worker_count=worker_count,
             )
@@ -893,13 +904,29 @@ def _deterministic_policy_spec(policy_spec: str) -> str:
     return f"{body}?{urlencode(options)}"
 
 
-def _split_policy_spec_options(policy_spec: str) -> tuple[str, dict[str, str]]:
-    body, separator, query = policy_spec.strip().partition("?")
-    if not separator:
-        return body, {}
-    from urllib.parse import parse_qsl
+def _with_collection_temperature(policy_spec: str, temperature: float) -> str:
+    """Return the spec with a sampling temperature for self-play *collection* only.
 
-    return body, {key: value for key, value in parse_qsl(query, keep_blank_values=True)}
+    Temperature only applies to learnable checkpoint policies (neural/linear); for any other
+    spec it is meaningless and the spec is returned unchanged. The canonical
+    ``current_policy_spec`` is left alone (benchmark/advancement/manifest use the clean spec);
+    this derived spec is used only for rollout collection so the collector explores.
+    """
+    if temperature == 1.0:
+        return policy_spec
+    from urllib.parse import urlencode
+
+    # Parse with the same semantics the resolver uses (lowercased keys, duplicate rejection) so
+    # the injected spec always round-trips through policy_factory_from_spec.
+    body, options = _split_policy_spec_options(policy_spec)
+    lowered = body.strip().lower()
+    if not (lowered.startswith("neural:") or lowered.startswith("linear:")):
+        return policy_spec
+    options = dict(options)
+    options.pop("deterministic", None)  # sampling is required for temperature to have any effect
+    options["sample"] = "true"
+    options["temperature"] = repr(float(temperature))
+    return f"{body}?{urlencode(options)}"
 
 
 def _opponent_pool(
