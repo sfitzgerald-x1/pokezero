@@ -420,8 +420,11 @@ def _iterate(args: argparse.Namespace) -> int:
         evaluation_games=args.evaluation_games,
         minimum_benchmark_matchups=MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS,
     )
-    # Build the category vocabulary ONCE and share it between the env (encode-time rows) and the
-    # model config (embedding) so rows can never drift.
+    # Self-play always uses the compact full Gen 3 randbat dex universe embedding. Build the
+    # vocabulary ONCE and share it between the env (encode-time rows) and the model config
+    # (embedding) so rows can never drift.
+    if args.showdown_root is None:
+        raise ValueError("neural self-play requires --showdown-root (used for the category vocabulary and the env).")
     from .randbat_vocab import gen3_category_vocabulary
 
     category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
@@ -460,14 +463,8 @@ def _iterate(args: argparse.Namespace) -> int:
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
     )
-    # Self-play always uses the compact full Gen 3 randbat dex universe embedding.
-    if args.showdown_root is None:
-        raise ValueError("neural self-play requires --showdown-root (used for the category vocabulary and the env).")
-    from .randbat_vocab import gen3_category_vocabulary
-
-    # The env builds the SAME vocabulary from this showdown_root, so encode-time rows align
-    # deterministically with the model's embedding.
-    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
+    # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
+    # model learns are exactly the rows the env encodes.
     model_config = TransformerPolicyConfig.compact_category(
         category_vocab=category_vocab.tokens,
         category_oov_buckets=category_vocab.oov_buckets,
