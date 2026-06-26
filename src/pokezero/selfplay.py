@@ -23,6 +23,8 @@ from .collection import (
     policy_factory_from_spec,
     policy_from_spec,
     run_rollout_record,
+    run_rollout_record_on_env,
+    ReusableEnvPool,
     summarize_records,
     write_rollout_record,
 )
@@ -608,49 +610,58 @@ def _collect_selfplay_records(
     worker_count: int,
     rss_recorder: Callable[[str], None] | None = None,
 ) -> None:
+    # Each worker thread reuses one warm env across the games it runs (bridge process not respawned
+    # per game). close_all() tears the per-thread processes down when collection finishes.
+    env_pool = ReusableEnvPool(env_factory)
     if worker_count == 1:
-        results = (
-            _run_selfplay_game_record(
-                game_index=game_index,
-                seed_start=seed_start,
-                env_factory=env_factory,
-                rollout_config=rollout_config,
-                current_policy_spec=current_policy_spec,
-                opponent_specs=opponent_specs,
-                policy_factories=policy_factories,
+        try:
+            results = (
+                _run_selfplay_game_record(
+                    game_index=game_index,
+                    seed_start=seed_start,
+                    env_provider=env_pool.get,
+                    rollout_config=rollout_config,
+                    current_policy_spec=current_policy_spec,
+                    opponent_specs=opponent_specs,
+                    policy_factories=policy_factories,
+                )
+                for game_index in range(games)
             )
-            for game_index in range(games)
-        )
-        _write_selfplay_game_results(
-            handle=handle,
-            training_handle=training_handle,
-            results=results,
-            total_results=games,
-            rss_recorder=rss_recorder,
-        )
+            _write_selfplay_game_results(
+                handle=handle,
+                training_handle=training_handle,
+                results=results,
+                total_results=games,
+                rss_recorder=rss_recorder,
+            )
+        finally:
+            env_pool.close_all()
         return
 
     max_workers = min(worker_count, games)
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
-        results = executor.map(
-            lambda game_index: _run_selfplay_game_record(
-                game_index=game_index,
-                seed_start=seed_start,
-                env_factory=env_factory,
-                rollout_config=rollout_config,
-                current_policy_spec=current_policy_spec,
-                opponent_specs=opponent_specs,
-                policy_factories=policy_factories,
-            ),
-            range(games),
-        )
-        _write_selfplay_game_results(
-            handle=handle,
-            training_handle=training_handle,
-            results=results,
-            total_results=games,
-            rss_recorder=rss_recorder,
-        )
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
+            results = executor.map(
+                lambda game_index: _run_selfplay_game_record(
+                    game_index=game_index,
+                    seed_start=seed_start,
+                    env_provider=env_pool.get,
+                    rollout_config=rollout_config,
+                    current_policy_spec=current_policy_spec,
+                    opponent_specs=opponent_specs,
+                    policy_factories=policy_factories,
+                ),
+                range(games),
+            )
+            _write_selfplay_game_results(
+                handle=handle,
+                training_handle=training_handle,
+                results=results,
+                total_results=games,
+                rss_recorder=rss_recorder,
+            )
+    finally:
+        env_pool.close_all()
 
 
 def _write_selfplay_game_results(
@@ -679,7 +690,7 @@ def _run_selfplay_game_record(
     *,
     game_index: int,
     seed_start: int,
-    env_factory: Callable[[], PokeZeroEnv],
+    env_provider: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
@@ -693,8 +704,10 @@ def _run_selfplay_game_record(
         game_index=game_index,
     )
     current_player = "p1" if game_index % 2 == 0 else "p2"
-    record = run_rollout_record(
-        env_factory=env_factory,
+    # env_provider returns this worker thread's reused (warm) env; the bridge process stays alive
+    # across games instead of being respawned per game.
+    record = run_rollout_record_on_env(
+        env=env_provider(),
         policies={
             "p1": policy_factories[p1_spec](),
             "p2": policy_factories[p2_spec](),

@@ -39,34 +39,45 @@ try {
   process.exit(2);
 }
 
-let streams = null;
-let boundaryRequests = {};
-let readyScheduled = false;
-let terminalScheduled = false;
+// One bridge process can host many battles concurrently, keyed by battleId. A single live process
+// serves both a warm pool (reused across battles, never exiting between games) and batched
+// collection (many battles stepped per round-trip). Every command and emitted event carries its
+// battleId, so the driver routes events and ignores stale events from a finished battle on a
+// reused process. battleId is optional; it defaults to "default" for single-battle callers.
+const DEFAULT_BATTLE_ID = "default";
+const battles = new Map();
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-function emitStreamChunk(stream, chunk) {
+function battleIdOf(command) {
+  return command.battleId == null ? DEFAULT_BATTLE_ID : String(command.battleId);
+}
+
+function newBattleState(battleId) {
+  return { battleId, streams: null, boundaryRequests: {}, readyScheduled: false, terminalScheduled: false };
+}
+
+function emitStreamChunk(battle, stream, chunk) {
   const lines = String(chunk)
     .split("\n")
     .filter(line => line.length > 0);
   if (lines.length > 0) {
-    emit({ type: "stream", stream, lines });
-    recordBoundaryLines(stream, lines);
+    emit({ type: "stream", battleId: battle.battleId, stream, lines });
+    recordBoundaryLines(battle, stream, lines);
   }
 }
 
-function listenToStream(name, stream) {
+function listenToStream(battle, name, stream) {
   void (async () => {
     try {
       for await (const chunk of stream) {
-        emitStreamChunk(name, chunk);
+        emitStreamChunk(battle, name, chunk);
       }
-      emit({ type: "stream_end", stream: name });
+      emit({ type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
-      emit({ type: "error", stream: name, message: error.message });
+      emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message });
     }
   })();
 }
@@ -80,15 +91,9 @@ function deriveSeed(seed, label) {
   return parts.join(",");
 }
 
-function resetBoundaryTracking() {
-  boundaryRequests = {};
-  readyScheduled = false;
-  terminalScheduled = false;
-}
-
-function recordBoundaryLines(stream, lines) {
+function recordBoundaryLines(battle, stream, lines) {
   if (stream === "omniscient" && lines.some(isTerminalLine)) {
-    scheduleTerminal();
+    scheduleTerminal(battle);
     return;
   }
   if (!["p1", "p2"].includes(stream)) return;
@@ -97,30 +102,41 @@ function recordBoundaryLines(stream, lines) {
     const request = JSON.parse(line.slice("|request|".length));
     const sideId = request?.side?.id;
     if (sideId === stream) {
-      boundaryRequests[stream] = request;
+      battle.boundaryRequests[stream] = request;
     }
   }
-  if (boundaryRequests.p1 && boundaryRequests.p2) {
-    scheduleReady();
+  if (battle.boundaryRequests.p1 && battle.boundaryRequests.p2) {
+    scheduleReady(battle);
   }
 }
 
-function scheduleReady() {
-  if (readyScheduled || terminalScheduled) return;
-  readyScheduled = true;
+function nodeProcMs(battle) {
+  // Milliseconds of node-side processing for this step (compute + node-side serialization +
+  // async event emission): from receiving the choices command to detecting the boundary.
+  if (battle.tRecv == null) return null;
+  return Number(process.hrtime.bigint() - battle.tRecv) / 1e6;
+}
+
+function scheduleReady(battle) {
+  if (battle.readyScheduled || battle.terminalScheduled) return;
+  battle.readyScheduled = true;
+  const procMs = nodeProcMs(battle);
   setImmediate(() => {
     emit({
       type: "ready",
-      requested: ["p1", "p2"].filter(player => isActionableRequest(boundaryRequests[player])),
+      battleId: battle.battleId,
+      requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+      nodeProcMs: procMs,
     });
   });
 }
 
-function scheduleTerminal() {
-  if (terminalScheduled) return;
-  terminalScheduled = true;
+function scheduleTerminal(battle) {
+  if (battle.terminalScheduled) return;
+  battle.terminalScheduled = true;
+  const procMs = nodeProcMs(battle);
   setImmediate(() => {
-    emit({ type: "terminal" });
+    emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
   });
 }
 
@@ -134,15 +150,30 @@ function isActionableRequest(request) {
   return Array.isArray(request.active) && request.active.length > 0;
 }
 
-async function startBattle(command) {
-  if (streams) {
-    throw new Error("A battle is already running in this bridge process.");
+async function teardownBattle(battle) {
+  if (battle && battle.streams) {
+    try {
+      await battle.streams.omniscient.writeEnd();
+    } catch (error) {
+      // best-effort teardown; the stream may already be ending
+    }
+    battle.streams = null;
   }
-  resetBoundaryTracking();
+}
+
+async function startBattle(command) {
+  const battleId = battleIdOf(command);
+  // Reusing a live process: tear down any prior battle under this id so a fresh battle can begin
+  // without exiting the process.
+  if (battles.has(battleId)) {
+    await teardownBattle(battles.get(battleId));
+  }
+  const battle = newBattleState(battleId);
+  battles.set(battleId, battle);
   const battleStream = new BattleStream();
-  streams = getPlayerStreams(battleStream);
+  battle.streams = getPlayerStreams(battleStream);
   for (const name of ["omniscient", "p1", "p2"]) {
-    listenToStream(name, streams[name]);
+    listenToStream(battle, name, battle.streams[name]);
   }
 
   const formatid = command.formatid || "gen3randombattle";
@@ -156,18 +187,25 @@ async function startBattle(command) {
     p1.seed = deriveSeed(seed, "p1");
     p2.seed = deriveSeed(seed, "p2");
   }
-  await streams.omniscient.write(
+  await battle.streams.omniscient.write(
     `>start ${JSON.stringify(startOptions)}\n` +
       `>player p1 ${JSON.stringify(p1)}\n` +
       `>player p2 ${JSON.stringify(p2)}`
   );
-  emit({ type: "started", formatid, seed: seed || null });
+  emit({ type: "started", battleId, formatid, seed: seed || null });
+}
+
+function requireBattle(command) {
+  const battleId = battleIdOf(command);
+  const battle = battles.get(battleId);
+  if (!battle || !battle.streams) {
+    throw new Error(`No running battle for battleId ${battleId}.`);
+  }
+  return battle;
 }
 
 async function sendChoice(command) {
-  if (!streams) {
-    throw new Error("Cannot submit a choice before starting a battle.");
-  }
+  const battle = requireBattle(command);
   const player = command.player;
   if (!["p1", "p2"].includes(player)) {
     throw new Error(`Unsupported player: ${player}`);
@@ -176,35 +214,46 @@ async function sendChoice(command) {
   if (typeof choice !== "string" || !choice.trim()) {
     throw new Error("Choice must be a non-empty string.");
   }
-  await streams[player].write(choice);
-  emit({ type: "choice_ack", player, choice });
+  await battle.streams[player].write(choice);
+  emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
 }
 
 async function sendChoices(command) {
-  if (!streams) {
-    throw new Error("Cannot submit choices before starting a battle.");
-  }
+  const battle = requireBattle(command);
   const choices = command.choices;
   if (!choices || typeof choices !== "object") {
     throw new Error("Choices must be an object keyed by player.");
   }
-  resetBoundaryTracking();
+  battle.boundaryRequests = {};
+  battle.readyScheduled = false;
+  battle.terminalScheduled = false;
+  battle.tRecv = process.hrtime.bigint();
   for (const player of ["p1", "p2"]) {
     if (!Object.prototype.hasOwnProperty.call(choices, player)) continue;
     const choice = choices[player];
     if (typeof choice !== "string" || !choice.trim()) {
       throw new Error(`Choice for ${player} must be a non-empty string.`);
     }
-    await streams[player].write(choice);
-    emit({ type: "choice_ack", player, choice });
+    await battle.streams[player].write(choice);
+    emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
   }
 }
 
-async function closeBattle() {
-  if (streams) {
-    await streams.omniscient.writeEnd();
-    streams = null;
+async function endBattle(command) {
+  const battleId = battleIdOf(command);
+  const battle = battles.get(battleId);
+  if (battle) {
+    await teardownBattle(battle);
+    battles.delete(battleId);
   }
+  emit({ type: "ended", battleId });
+}
+
+async function closeAll() {
+  for (const battle of battles.values()) {
+    await teardownBattle(battle);
+  }
+  battles.clear();
   emit({ type: "closed" });
 }
 
@@ -219,8 +268,11 @@ async function handleCommand(command) {
     case "choices":
       await sendChoices(command);
       break;
+    case "end":
+      await endBattle(command);
+      break;
     case "close":
-      await closeBattle();
+      await closeAll();
       process.exit(0);
       break;
     default:
@@ -245,5 +297,5 @@ rl.on("line", line => {
 });
 
 rl.on("close", () => {
-  void closeBattle().finally(() => process.exit(0));
+  void closeAll().finally(() => process.exit(0));
 });

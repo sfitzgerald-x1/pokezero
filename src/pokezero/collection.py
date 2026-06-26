@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
+import threading
 from time import perf_counter
 from typing import TYPE_CHECKING, Callable, Iterable, Iterator, Mapping, TextIO
 from urllib.parse import parse_qsl, urlencode
@@ -226,12 +227,14 @@ def collect_rollouts(
     accumulator = _MetricsAccumulator()
     collection_start = perf_counter()
     write_path = output_path if append else _temporary_output_path(output_path)
+    # One env reused across all games (warm bridge process), instead of spawning a node per game.
+    env = env_factory()
     try:
         with write_path.open("a" if append else "w", encoding="utf-8") as handle:
             for game_index in range(games):
                 seed = seed_start + game_index
-                record = run_rollout_record(
-                    env_factory=env_factory,
+                record = run_rollout_record_on_env(
+                    env=env,
                     policies=policies,
                     rollout_config=rollout_config,
                     seed=seed,
@@ -245,6 +248,10 @@ def collect_rollouts(
         if not append:
             write_path.unlink(missing_ok=True)
         raise
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
     elapsed = perf_counter() - collection_start
     return accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb())
 
@@ -264,33 +271,40 @@ def benchmark_rollouts(
         raise ValueError("at least one benchmark matchup is required.")
 
     results: list[BenchmarkMatchupResult] = []
-    for matchup in selected_matchups:
-        policies = {
-            "p1": matchup.p1_policy,
-            "p2": matchup.p2_policy,
-        }
-        accumulator = _MetricsAccumulator()
-        matchup_start = perf_counter()
-        for game_index in range(games):
-            seed = seed_start + game_index
-            record = run_rollout_record(
-                env_factory=env_factory,
-                policies=policies,
-                rollout_config=rollout_config,
-                seed=seed,
-                battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
+    # One env reused across every matchup and game (warm bridge process).
+    env = env_factory()
+    try:
+        for matchup in selected_matchups:
+            policies = {
+                "p1": matchup.p1_policy,
+                "p2": matchup.p2_policy,
+            }
+            accumulator = _MetricsAccumulator()
+            matchup_start = perf_counter()
+            for game_index in range(games):
+                seed = seed_start + game_index
+                record = run_rollout_record_on_env(
+                    env=env,
+                    policies=policies,
+                    rollout_config=rollout_config,
+                    seed=seed,
+                    battle_id=f"benchmark-{_slugify_label(matchup.label)}-{seed}",
+                )
+                accumulator.add(record)
+            elapsed = perf_counter() - matchup_start
+            results.append(
+                BenchmarkMatchupResult(
+                    label=matchup.label,
+                    p1_policy_id=matchup.p1_policy.policy_id,
+                    p2_policy_id=matchup.p2_policy.policy_id,
+                    seed_start=seed_start,
+                    metrics=accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()),
+                )
             )
-            accumulator.add(record)
-        elapsed = perf_counter() - matchup_start
-        results.append(
-            BenchmarkMatchupResult(
-                label=matchup.label,
-                p1_policy_id=matchup.p1_policy.policy_id,
-                p2_policy_id=matchup.p2_policy.policy_id,
-                seed_start=seed_start,
-                metrics=accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()),
-            )
-        )
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
 
     return BenchmarkReport(
         format_id=rollout_config.format_id,
@@ -396,6 +410,25 @@ def aggregate_benchmark_head_to_heads(
     return tuple(accumulators[key].to_result() for key in ordered_keys)
 
 
+def run_rollout_record_on_env(
+    *,
+    env: PokeZeroEnv,
+    policies: Mapping[str, Policy],
+    rollout_config: RolloutConfig,
+    seed: int,
+    battle_id: str,
+) -> RolloutRecord:
+    """Play one game on an already-created env (RolloutDriver.run resets it per game).
+
+    Reusing one env across games keeps the bridge process warm — a fresh battle on a live process
+    costs ~3 ms vs ~240 ms to spawn+load a new one. Callers own the env's lifetime (close it).
+    """
+    start = perf_counter()
+    result = RolloutDriver(env=env, policies=policies, config=rollout_config).run(seed=seed, battle_id=battle_id)
+    elapsed = perf_counter() - start
+    return record_from_result(result, policies=policies, elapsed_seconds=elapsed)
+
+
 def run_rollout_record(
     *,
     env_factory: Callable[[], PokeZeroEnv],
@@ -404,16 +437,52 @@ def run_rollout_record(
     seed: int,
     battle_id: str,
 ) -> RolloutRecord:
+    """One-shot: create an env, play a single game, close it. Prefer reusing an env across games
+    (run_rollout_record_on_env / ReusableEnvPool) so the bridge process stays warm."""
     env = env_factory()
-    start = perf_counter()
     try:
-        result = RolloutDriver(env=env, policies=policies, config=rollout_config).run(seed=seed, battle_id=battle_id)
+        return run_rollout_record_on_env(
+            env=env, policies=policies, rollout_config=rollout_config, seed=seed, battle_id=battle_id
+        )
     finally:
         close = getattr(env, "close", None)
         if callable(close):
             close()
-    elapsed = perf_counter() - start
-    return record_from_result(result, policies=policies, elapsed_seconds=elapsed)
+
+
+class ReusableEnvPool:
+    """Hands each worker thread its own env, reused across that thread's games (warm bridge process).
+
+    LocalShowdownEnv reuses its live node process across reset(), so one env per thread amortizes the
+    ~240 ms spawn+data-load over all of that thread's games. Call close_all() when collection ends.
+    """
+
+    def __init__(self, env_factory: Callable[[], PokeZeroEnv]) -> None:
+        self._env_factory = env_factory
+        self._local = threading.local()
+        self._envs: list[PokeZeroEnv] = []
+        self._lock = threading.Lock()
+
+    def get(self) -> PokeZeroEnv:
+        env = getattr(self._local, "env", None)
+        if env is None:
+            env = self._env_factory()
+            self._local.env = env
+            with self._lock:
+                self._envs.append(env)
+        return env
+
+    def close_all(self) -> None:
+        with self._lock:
+            envs = list(self._envs)
+            self._envs.clear()
+        for env in envs:
+            close = getattr(env, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
 
 def current_peak_rss_mb() -> float | None:

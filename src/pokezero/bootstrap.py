@@ -18,6 +18,7 @@ from .collection import (
     iter_rollout_records,
     policy_from_spec,
     run_rollout_record,
+    run_rollout_record_on_env,
     RolloutRecord,
 )
 from .env import PokeZeroEnv
@@ -326,29 +327,35 @@ def benchmark_teacher_policy(
         raise ValueError("teacher benchmark requires at least one baseline distinct from the teacher.")
     matchup_results: list[BenchmarkMatchupResult] = []
     records: list[RolloutRecord] = []
-    for matchup in matchups:
-        accumulator = _BenchmarkMetricsAccumulator()
-        matchup_start = perf_counter()
-        for game_index in range(games):
-            seed = seed_start + game_index
-            record = run_rollout_record(
-                env_factory=env_factory,
-                policies={"p1": matchup.p1_policy, "p2": matchup.p2_policy},
-                rollout_config=rollout_config,
-                seed=seed,
-                battle_id=f"teacher-benchmark-{_slugify_label(matchup.label)}-{seed}",
+    env = env_factory()  # reused across matchups and games (warm bridge process)
+    try:
+        for matchup in matchups:
+            accumulator = _BenchmarkMetricsAccumulator()
+            matchup_start = perf_counter()
+            for game_index in range(games):
+                seed = seed_start + game_index
+                record = run_rollout_record_on_env(
+                    env=env,
+                    policies={"p1": matchup.p1_policy, "p2": matchup.p2_policy},
+                    rollout_config=rollout_config,
+                    seed=seed,
+                    battle_id=f"teacher-benchmark-{_slugify_label(matchup.label)}-{seed}",
+                )
+                accumulator.add(record)
+                records.append(record)
+            matchup_results.append(
+                BenchmarkMatchupResult(
+                    label=matchup.label,
+                    p1_policy_id=matchup.p1_policy.policy_id,
+                    p2_policy_id=matchup.p2_policy.policy_id,
+                    seed_start=seed_start,
+                    metrics=accumulator.to_metrics(elapsed_seconds=perf_counter() - matchup_start),
+                )
             )
-            accumulator.add(record)
-            records.append(record)
-        matchup_results.append(
-            BenchmarkMatchupResult(
-                label=matchup.label,
-                p1_policy_id=matchup.p1_policy.policy_id,
-                p2_policy_id=matchup.p2_policy.policy_id,
-                seed_start=seed_start,
-                metrics=accumulator.to_metrics(elapsed_seconds=perf_counter() - matchup_start),
-            )
-        )
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
     benchmark = BenchmarkReport(
         format_id=rollout_config.format_id,
         max_decision_rounds=rollout_config.max_decision_rounds,
@@ -382,17 +389,23 @@ def benchmark_teacher_selfplay(
     accumulator = _BenchmarkMetricsAccumulator()
     records: list[RolloutRecord] = []
     matchup_start = perf_counter()
-    for game_index in range(games):
-        seed = seed_start + game_index
-        record = run_rollout_record(
-            env_factory=env_factory,
-            policies={"p1": matchup.p1_policy, "p2": matchup.p2_policy},
-            rollout_config=rollout_config,
-            seed=seed,
-            battle_id=f"teacher-selfplay-{_slugify_label(matchup.label)}-{seed}",
-        )
-        accumulator.add(record)
-        records.append(record)
+    env = env_factory()  # reused across games (warm bridge process)
+    try:
+        for game_index in range(games):
+            seed = seed_start + game_index
+            record = run_rollout_record_on_env(
+                env=env,
+                policies={"p1": matchup.p1_policy, "p2": matchup.p2_policy},
+                rollout_config=rollout_config,
+                seed=seed,
+                battle_id=f"teacher-selfplay-{_slugify_label(matchup.label)}-{seed}",
+            )
+            accumulator.add(record)
+            records.append(record)
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
     benchmark = BenchmarkReport(
         format_id=rollout_config.format_id,
         max_decision_rounds=rollout_config.max_decision_rounds,
