@@ -164,9 +164,11 @@ from .replay_import import (
 )
 from .replay_branching import (
     ReplayActionRound,
+    ReplayBranchResult,
     ReplayPrefixResult,
     action_rounds_from_trajectory,
     replay_action_rounds,
+    replay_trajectory_branch,
     replay_trajectory_prefix,
 )
 from .replay_benchmark import (
@@ -307,6 +309,7 @@ __all__ = [
     "RevealedPokemonBelief",
     "REPLAY_IMPORT_SCHEMA_VERSION",
     "ReplayActionRound",
+    "ReplayBranchResult",
     "ReplayPrefixBenchmarkReport",
     "ReplayPrefixResult",
     "ReplayPrefixTiming",
@@ -399,6 +402,7 @@ __all__ = [
     "benchmark_replay_prefixes",
     "require_torch",
     "replay_action_rounds",
+    "replay_trajectory_branch",
     "replay_prefix_counts",
     "replay_trajectory_prefix",
     "rollout_record_from_dict",
