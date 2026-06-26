@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, TextIO
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
+from .belief import PublicBattleBeliefEngine
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, PlayerId, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
@@ -24,9 +25,9 @@ from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
+    _ReplayParser,
     normalize_for_player,
     observation_from_player_state,
-    parse_showdown_replay,
     showdown_choice_for_action,
 )
 
@@ -76,6 +77,13 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal: TerminalState | None = None
         self._last_step_had_error = False
+        # Persistent incremental state: the parser + belief engine are fed each new protocol line
+        # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
+        # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
+        self._parser = _ReplayParser(self._battle_id)
+        self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
+        self._parsed_line_count = 0
+        self._belief_fed_count = 0
 
     @property
     def protocol_lines(self) -> tuple[str, ...]:
@@ -91,6 +99,10 @@ class LocalShowdownEnv:
         self._latest_turn = 0
         self._terminal = None
         self._last_step_had_error = False
+        self._parser = _ReplayParser(self._battle_id)
+        self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
+        self._parsed_line_count = 0
+        self._belief_fed_count = 0
         self._start_bridge()
         try:
             self._send_command(
@@ -339,20 +351,32 @@ class LocalShowdownEnv:
         if line == "|tie" or line.startswith("|tie|"):
             self._terminal = TerminalState(winner=None, turn_count=self._latest_turn)
 
+    def _sync_incremental_state(self) -> None:
+        """Feed newly-appended protocol lines to the persistent parser and belief engine once."""
+        if len(self._lines) > self._parsed_line_count:
+            self._parser.feed(self._lines[self._parsed_line_count :])
+            self._parsed_line_count = len(self._lines)
+        events = self._parser.public_events
+        if len(events) > self._belief_fed_count:
+            for event in events[self._belief_fed_count :]:
+                self._belief_engine.ingest_event(event)
+            self._belief_fed_count = len(events)
+
     def _state_for_player(self, player: PlayerId) -> PlayerRelativeBattleState:
         if player not in PLAYER_IDS:
             raise ValueError(f"player must be one of {', '.join(PLAYER_IDS)}; got {player!r}.")
-        replay = parse_showdown_replay(self._lines, battle_id=self._battle_id)
+        self._sync_incremental_state()
         return normalize_for_player(
-            replay,
+            self._parser.snapshot(),
             player_id=player,
             configured_showdown_slot=player,
             format_id=self._format_id,
+            belief_engine=self._belief_engine,
         )
 
     def _winner_slot(self, winner_name: str) -> PlayerId | None:
-        replay = parse_showdown_replay(self._lines, battle_id=self._battle_id)
-        for slot, name in replay.players.items():
+        self._sync_incremental_state()
+        for slot, name in self._parser.players.items():
             if name == winner_name:
                 return slot
         return None

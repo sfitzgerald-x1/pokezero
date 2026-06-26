@@ -253,116 +253,138 @@ class PlayerRelativeBattleState:
         return next((pokemon for pokemon in self.opponent_team if pokemon.active), None)
 
 
-def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") -> ShowdownReplayState:
-    """Parse compact Showdown protocol lines into transport-level state."""
-    players: dict[str, str] = {}
-    requests: dict[str, Mapping[str, Any]] = {}
-    public_active: dict[str, ShowdownPokemon] = {}
-    public_revealed: dict[str, list[ShowdownPokemon]] = {}
-    side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
-    boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
-    volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
-    future_sight: dict[str, int] = {}
-    toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
-    pending_baton_pass: set[str] = set()
-    public_events: list[ShowdownPublicEvent] = []
-    public_lines: list[str] = []
-    weather: Optional[str] = None
-    turn_number = 0
-    winner: Optional[str] = None
+class _ReplayParser:
+    """Incremental fold of Showdown protocol lines into transport-level replay state.
 
-    for raw_line in lines:
+    ``parse_showdown_replay`` is a thin batch wrapper around this. The local sim env keeps a
+    persistent instance and ``feed()``s only newly-arrived lines, so each line is parsed once
+    (O(n) per game) instead of the whole accumulated log being re-parsed on every observation
+    (O(n^2)). ``snapshot()`` returns an immutable :class:`ShowdownReplayState` and copies the
+    mutable accumulators, so a snapshot is unaffected by later ``feed()`` calls.
+    """
+
+    def __init__(self, battle_id: str = "replay") -> None:
+        self.battle_id = battle_id
+        self.players: dict[str, str] = {}
+        self.requests: dict[str, Mapping[str, Any]] = {}
+        self.public_active: dict[str, ShowdownPokemon] = {}
+        self.public_revealed: dict[str, list[ShowdownPokemon]] = {}
+        self.side_condition_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+        self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+        self.volatiles: dict[str, set[str]] = {"p1": set(), "p2": set()}
+        self.future_sight: dict[str, int] = {}
+        self.toxic_stage: dict[str, int] = {"p1": 0, "p2": 0}
+        self.pending_baton_pass: set[str] = set()
+        self.public_events: list[ShowdownPublicEvent] = []
+        self.public_lines: list[str] = []
+        self.weather: Optional[str] = None
+        self.turn_number: int = 0
+        self.winner: Optional[str] = None
+
+    def feed(self, lines: Sequence[str]) -> None:
+        for raw_line in lines:
+            self._feed_line(raw_line)
+
+    def _feed_line(self, raw_line: str) -> None:
         line = raw_line.strip()
         if not line:
-            continue
+            return
         if line.startswith(">"):
-            continue
+            return
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
         if event_type == "player" and len(parts) >= 4:
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:
-                players[showdown_slot] = parts[3]
-            public_events.append(_public_event_from_line(line))
-            public_lines.append(line)
-            continue
+                self.players[showdown_slot] = parts[3]
+            self.public_events.append(_public_event_from_line(line))
+            self.public_lines.append(line)
+            return
         if event_type == "request" and len(parts) >= 3:
             payload = _decode_request_payload(line)
             side = payload.get("side") if isinstance(payload.get("side"), Mapping) else {}
             showdown_slot = side.get("id") if isinstance(side, Mapping) else None
             if showdown_slot in {"p1", "p2"}:
-                requests[showdown_slot] = payload
-            continue
+                self.requests[showdown_slot] = payload
+            return
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
             pokemon = _pokemon_from_public_line(parts)
             if pokemon is not None:
-                public_active[pokemon.showdown_slot] = pokemon
-                _record_public_reveal(public_revealed, pokemon)
+                self.public_active[pokemon.showdown_slot] = pokemon
+                _record_public_reveal(self.public_revealed, pokemon)
                 # A new mon takes the slot with fresh (zero) stat-boost stages — UNLESS it came
                 # in via Baton Pass, which carries the passer's boosts to the incoming mon. Only
                 # a true |switch| can be a Baton Pass; a |drag| (Roar/Whirlwind) never is. We
                 # detect it from the preceding |move|...|Baton Pass (the flag) or a "[from] Baton
                 # Pass" tag on the switch line itself.
                 is_baton_pass = event_type == "switch" and (
-                    pokemon.showdown_slot in pending_baton_pass or _line_mentions_baton_pass(parts)
+                    pokemon.showdown_slot in self.pending_baton_pass or _line_mentions_baton_pass(parts)
                 )
-                pending_baton_pass.discard(pokemon.showdown_slot)
+                self.pending_baton_pass.discard(pokemon.showdown_slot)
                 if not is_baton_pass:
-                    boosts[pokemon.showdown_slot] = {}
+                    self.boosts[pokemon.showdown_slot] = {}
                 # Volatile statuses are tied to the mon on the field, so a new mon clears them
                 # (Baton Pass passes some volatiles, but conservatively resetting is the simple,
                 # rarely-wrong choice and keeps the volatile set honest about the current mon).
-                volatiles[pokemon.showdown_slot] = set()
+                self.volatiles[pokemon.showdown_slot] = set()
                 # Gen 3 resets the toxic counter when a mon leaves the field.
-                toxic_stage[pokemon.showdown_slot] = 0
-            public_events.append(_public_event_from_line(line))
-            public_lines.append(line)
-            continue
+                self.toxic_stage[pokemon.showdown_slot] = 0
+            self.public_events.append(_public_event_from_line(line))
+            self.public_lines.append(line)
+            return
         if event_type == "win" and len(parts) >= 3:
-            winner = parts[2]
-            public_events.append(_public_event_from_line(line))
-            public_lines.append(line)
-            continue
+            self.winner = parts[2]
+            self.public_events.append(_public_event_from_line(line))
+            self.public_lines.append(line)
+            return
         if event_type == "turn" and len(parts) >= 3:
             try:
-                turn_number = int(parts[2])
+                self.turn_number = int(parts[2])
             except (TypeError, ValueError):
                 pass
             # Each turn a badly-poisoned mon stays in, its toxic damage escalates (1/16, 2/16, ...).
-            for slot, stage in toxic_stage.items():
+            for slot, stage in self.toxic_stage.items():
                 if stage:
-                    toxic_stage[slot] = min(15, stage + 1)
-        _update_side_conditions(parts, side_condition_counts)
-        weather = _update_weather(parts, weather)
-        _update_boosts(parts, boosts)
-        _update_volatiles(parts, volatiles)
-        _update_future_sight(parts, future_sight, turn_number)
-        _update_toxic_stage(parts, toxic_stage)
-        _flag_baton_pass(parts, pending_baton_pass)
-        public_events.append(_public_event_from_line(line))
-        public_lines.append(line)
+                    self.toxic_stage[slot] = min(15, stage + 1)
+        _update_side_conditions(parts, self.side_condition_counts)
+        self.weather = _update_weather(parts, self.weather)
+        _update_boosts(parts, self.boosts)
+        _update_volatiles(parts, self.volatiles)
+        _update_future_sight(parts, self.future_sight, self.turn_number)
+        _update_toxic_stage(parts, self.toxic_stage)
+        _flag_baton_pass(parts, self.pending_baton_pass)
+        self.public_events.append(_public_event_from_line(line))
+        self.public_lines.append(line)
 
-    return ShowdownReplayState(
-        battle_id=battle_id,
-        players=players,
-        requests=requests,
-        public_active=public_active,
-        public_revealed={slot: tuple(pokemon) for slot, pokemon in public_revealed.items()},
-        side_conditions={slot: tuple(sorted(conditions)) for slot, conditions in _side_conditions_from_counts(side_condition_counts).items()},
-        side_condition_counts={
-            slot: dict(sorted(conditions.items()))
-            for slot, conditions in side_condition_counts.items()
-        },
-        boosts={slot: dict(sorted(stages.items())) for slot, stages in boosts.items()},
-        volatiles={slot: tuple(sorted(names)) for slot, names in volatiles.items()},
-        future_sight=dict(future_sight),
-        toxic_stage=dict(toxic_stage),
-        public_events=tuple(public_events),
-        public_lines=tuple(public_lines),
-        weather=weather,
-        turn_number=turn_number,
-        winner=winner,
-    )
+    def snapshot(self) -> ShowdownReplayState:
+        return ShowdownReplayState(
+            battle_id=self.battle_id,
+            players=dict(self.players),
+            requests=dict(self.requests),
+            public_active=dict(self.public_active),
+            public_revealed={slot: tuple(pokemon) for slot, pokemon in self.public_revealed.items()},
+            side_conditions={slot: tuple(sorted(conditions)) for slot, conditions in _side_conditions_from_counts(self.side_condition_counts).items()},
+            side_condition_counts={
+                slot: dict(sorted(conditions.items()))
+                for slot, conditions in self.side_condition_counts.items()
+            },
+            boosts={slot: dict(sorted(stages.items())) for slot, stages in self.boosts.items()},
+            volatiles={slot: tuple(sorted(names)) for slot, names in self.volatiles.items()},
+            future_sight=dict(self.future_sight),
+            toxic_stage=dict(self.toxic_stage),
+            public_events=tuple(self.public_events),
+            public_lines=tuple(self.public_lines),
+            weather=self.weather,
+            turn_number=self.turn_number,
+            winner=self.winner,
+        )
+
+
+def parse_showdown_replay(lines: Sequence[str], *, battle_id: str = "replay") -> ShowdownReplayState:
+    """Parse compact Showdown protocol lines into transport-level state."""
+    parser = _ReplayParser(battle_id=battle_id)
+    parser.feed(lines)
+    return parser.snapshot()
 
 
 def detect_showdown_slot(
@@ -399,8 +421,14 @@ def normalize_for_player(
     format_id: str | None = None,
     set_source: PokemonSetSource | None = None,
     recent_event_limit: int = 24,
+    belief_engine: "PublicBattleBeliefEngine | None" = None,
 ) -> PlayerRelativeBattleState:
-    """Build a player-relative state view from raw Showdown transport state."""
+    """Build a player-relative state view from raw Showdown transport state.
+
+    ``belief_engine`` lets a caller pass a persistent engine fed incrementally (the local sim
+    env), avoiding a from-scratch rebuild from ``replay.public_events`` on every call. When
+    omitted, the engine is built batch-style from the replay (unchanged behavior).
+    """
     showdown_slot = detect_showdown_slot(
         replay,
         player_name=player_name,
@@ -415,13 +443,18 @@ def normalize_for_player(
     request = replay.requests.get(showdown_slot)
     self_team = _self_team_from_request(request, showdown_slot)
     opponent_team = _opponent_team_from_public_state(replay, opponent_slot)
-    belief_engine = PublicBattleBeliefEngine.from_events(
-        replay.public_events,
-        format_id=format_id,
-        set_source=set_source,
-    )
-    belief_engine.resolve_pending_switches_at_boundary()
-    belief_view = belief_engine.snapshot().for_player(showdown_slot)
+    if belief_engine is None:
+        belief_engine = PublicBattleBeliefEngine.from_events(
+            replay.public_events,
+            format_id=format_id,
+            set_source=set_source,
+        )
+        belief_engine.resolve_pending_switches_at_boundary()
+        belief_view = belief_engine.snapshot().for_player(showdown_slot)
+    else:
+        # Persistent engine fed incrementally: resolve+snapshot on a copy so its pending-switch
+        # state survives for the next ingested event.
+        belief_view = belief_engine.resolved_player_view(showdown_slot)
     recent_events = tuple(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
