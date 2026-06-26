@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from .actions import ACTION_COUNT
-from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
+from .env import BattleFormat, PlayerId, PokeZeroEnv, StepResult, TerminalState
 from .trajectory import BattleTrajectory
 
 
@@ -43,6 +43,15 @@ class ReplayPrefixResult:
     replayed_round_count: int
     requested_players: tuple[PlayerId, ...]
     terminal: TerminalState | None
+
+
+@dataclass(frozen=True)
+class ReplayBranchResult:
+    """State summary after replaying a prefix and submitting one branch action round."""
+
+    prefix: ReplayPrefixResult
+    branch_round: ReplayActionRound
+    step_result: StepResult
 
 
 def action_rounds_from_trajectory(
@@ -112,21 +121,10 @@ def replay_action_rounds(
                 f"cannot replay decision round {action_round.turn_index}; "
                 "environment reached terminal early."
             )
-        requested_players = env.requested_players()
-        requested_set = set(requested_players)
-        action_players = set(action_round.actions)
-        if action_players != requested_set:
-            missing = sorted(requested_set - action_players)
-            extra = sorted(action_players - requested_set)
-            details: list[str] = []
-            if missing:
-                details.append(f"missing requested players: {', '.join(missing)}")
-            if extra:
-                details.append(f"unexpected players: {', '.join(extra)}")
-            raise ValueError(
-                f"replay actions for decision round {action_round.turn_index} "
-                f"do not match environment request ({'; '.join(details)})."
-            )
+        _require_requested_players(
+            action_round,
+            requested_players=env.requested_players(),
+        )
         env.step(action_round.actions)
 
     return ReplayPrefixResult(
@@ -152,4 +150,58 @@ def replay_trajectory_prefix(
             trajectory,
             decision_round_count=decision_round_count,
         ),
+    )
+
+
+def replay_trajectory_branch(
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    *,
+    prefix_decision_round_count: int,
+    branch_actions: Mapping[PlayerId, int],
+) -> ReplayBranchResult:
+    """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
+
+    prefix = replay_trajectory_prefix(
+        env,
+        trajectory,
+        decision_round_count=prefix_decision_round_count,
+    )
+    if prefix.terminal is not None:
+        raise ValueError("cannot branch from a terminal replay prefix.")
+    branch_round = ReplayActionRound(
+        turn_index=prefix_decision_round_count,
+        actions=branch_actions,
+    )
+    _require_requested_players(
+        branch_round,
+        requested_players=prefix.requested_players,
+    )
+    step_result = env.step(branch_round.actions)
+    return ReplayBranchResult(
+        prefix=prefix,
+        branch_round=branch_round,
+        step_result=step_result,
+    )
+
+
+def _require_requested_players(
+    action_round: ReplayActionRound,
+    *,
+    requested_players: tuple[PlayerId, ...],
+) -> None:
+    requested_set = set(requested_players)
+    action_players = set(action_round.actions)
+    if action_players == requested_set:
+        return
+    missing = sorted(requested_set - action_players)
+    extra = sorted(action_players - requested_set)
+    details: list[str] = []
+    if missing:
+        details.append(f"missing requested players: {', '.join(missing)}")
+    if extra:
+        details.append(f"unexpected players: {', '.join(extra)}")
+    raise ValueError(
+        f"replay actions for decision round {action_round.turn_index} "
+        f"do not match environment request ({'; '.join(details)})."
     )

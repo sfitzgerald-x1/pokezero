@@ -12,6 +12,7 @@ from pokezero.replay_branching import (
     ReplayActionRound,
     action_rounds_from_trajectory,
     replay_action_rounds,
+    replay_trajectory_branch,
     replay_trajectory_prefix,
 )
 from pokezero.rollout import RolloutConfig, RolloutDriver
@@ -166,6 +167,36 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                 action_rounds=(ReplayActionRound(turn_index=0, actions={"p1": 2, "p2": 3}),),
             )
 
+    def test_replay_trajectory_branch_submits_action_after_prefix(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        trajectory.append(_step("p1", 0, 2))
+        trajectory.append(_step("p2", 0, 3))
+        env = ScriptedReplayEnv((("p1", "p2"), ("p1",)))
+
+        result = replay_trajectory_branch(
+            env,
+            trajectory,
+            prefix_decision_round_count=1,
+            branch_actions={"p1": 4},
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 2, "p2": 3}, {"p1": 4}])
+        self.assertEqual(result.prefix.replayed_round_count, 1)
+        self.assertEqual(result.branch_round, ReplayActionRound(turn_index=1, actions={"p1": 4}))
+        self.assertEqual(result.step_result.requested_players, ())
+
+    def test_replay_trajectory_branch_rejects_request_mismatch(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        env = ScriptedReplayEnv((("p1",),))
+
+        with self.assertRaisesRegex(ValueError, "unexpected players"):
+            replay_trajectory_branch(
+                env,
+                trajectory,
+                prefix_decision_round_count=0,
+                branch_actions={"p1": 4, "p2": 3},
+            )
+
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
 class ReplayBranchingIntegrationTest(unittest.TestCase):
@@ -212,17 +243,64 @@ class ReplayBranchingIntegrationTest(unittest.TestCase):
             full_replay_lines = full_replay.protocol_lines
 
         with LocalShowdownEnv(config) as branch_replay:
-            replay_trajectory_prefix(
+            replay_trajectory_branch(
                 branch_replay,
                 trajectory,
-                decision_round_count=prefix_round_count,
+                prefix_decision_round_count=prefix_round_count,
+                branch_actions=branch_action.actions,
             )
-            branch_replay.step(branch_action.actions)
             branch_replay_lines = branch_replay.protocol_lines
 
         self.assertEqual(
             _without_timestamp_lines(branch_replay_lines),
             _without_timestamp_lines(full_replay_lines),
+        )
+
+    def test_replaying_prefix_with_divergent_action_explores_different_line(self) -> None:
+        trajectory = self._random_rollout_trajectory(seed=37, max_decision_rounds=40)
+        original_round = action_rounds_from_trajectory(
+            trajectory,
+            decision_round_count=1,
+        )[0]
+        p1_step = next(step for step in trajectory.steps_for_turn(0) if step.player_id == "p1")
+        alternate = next(
+            (
+                action_index
+                for action_index, legal in enumerate(p1_step.legal_action_mask)
+                if legal and action_index != p1_step.action_index
+            ),
+            None,
+        )
+        if alternate is None:
+            self.skipTest("source battle did not expose an alternate legal p1 action at turn 0")
+        divergent_actions = dict(original_round.actions)
+        divergent_actions["p1"] = alternate
+        config = integration_config()
+        assert config is not None
+
+        with LocalShowdownEnv(config) as original_replay:
+            replay_trajectory_branch(
+                original_replay,
+                trajectory,
+                prefix_decision_round_count=0,
+                branch_actions=original_round.actions,
+            )
+            original_lines = original_replay.protocol_lines
+
+        with LocalShowdownEnv(config) as divergent_replay:
+            result = replay_trajectory_branch(
+                divergent_replay,
+                trajectory,
+                prefix_decision_round_count=0,
+                branch_actions=divergent_actions,
+            )
+            divergent_lines = divergent_replay.protocol_lines
+
+        self.assertEqual(result.prefix.replayed_round_count, 0)
+        self.assertEqual(result.branch_round.actions["p1"], alternate)
+        self.assertNotEqual(
+            _without_timestamp_lines(divergent_lines),
+            _without_timestamp_lines(original_lines),
         )
 
     def _random_rollout_trajectory(self, *, seed: int, max_decision_rounds: int) -> BattleTrajectory:
