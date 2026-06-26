@@ -198,6 +198,9 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     # Raw mechanical type facts the encoder emits for pokemon/move tokens (closed + tiny).
     groups["types"] = (
         [f"type:{type_name}" for type_name in GEN3_TYPES]
+        # The typeless "???" type: in Gen 3 Curse is typeless (it only became Ghost in Gen 6).
+        # Enumerated so it gets a dedicated embedding row instead of hashing into the OOV band.
+        + ["type:???"]
         + [f"move_category:{category}" for category in GEN3_MOVE_CATEGORIES]
     )
 
