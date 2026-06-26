@@ -19,6 +19,7 @@ from pokezero.neural_policy import (
     TransformerSoftmaxPolicy,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
+    evaluate_transformer_observation_value,
     load_transformer_checkpoint,
     require_torch,
     save_transformer_checkpoint,
@@ -122,6 +123,52 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, embedding_dim=65, attention_heads=4)
         with self.assertRaisesRegex(ValueError, "token_count"):
             TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
+
+    def test_evaluate_transformer_observation_value_uses_configured_history_window(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=2,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class FakeValueModel:
+            def __init__(self) -> None:
+                self.eval_called = False
+                self.shapes: dict[str, tuple[int, ...]] = {}
+
+            def eval(self) -> None:
+                self.eval_called = True
+
+            def __call__(self, **kwargs):
+                self.shapes = {name: tuple(value.shape) for name, value in kwargs.items()}
+                return SimpleNamespace(value=torch.tensor([0.42]))
+
+        model = FakeValueModel()
+
+        value = evaluate_transformer_observation_value(
+            model=model,
+            result=SimpleNamespace(model_config=config),
+            observations=(observation(1), observation(2), observation(3)),
+            device="cpu",
+        )
+
+        self.assertAlmostEqual(value, 0.42, places=5)
+        self.assertTrue(model.eval_called)
+        self.assertEqual(model.shapes["categorical_ids"], (1, 2, spec.token_count, 1))
+        self.assertEqual(model.shapes["numeric_features"], (1, 2, spec.token_count, 1))
+        self.assertEqual(model.shapes["history_mask"], (1, 2))
 
     def test_transformer_training_config_validates_training_knobs(self) -> None:
         self.assertEqual(TransformerTrainingConfig().window_size, 4)

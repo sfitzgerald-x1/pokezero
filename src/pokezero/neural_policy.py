@@ -440,6 +440,38 @@ def observation_window_to_torch(
     }
 
 
+def evaluate_transformer_observation_value(
+    *,
+    model: Any,
+    result: TransformerTrainingResult,
+    observations: Sequence[PokeZeroObservationV0],
+    device: str | Any | None = None,
+) -> float:
+    """Evaluate the transformer's value head for a player-relative observation history."""
+
+    if not observations:
+        raise ValueError("observations must contain at least one item.")
+    torch_module = require_torch()
+    if hasattr(model, "eval"):
+        model.eval()
+    if device is not None and hasattr(model, "to"):
+        model.to(device)
+    tensors = observation_window_to_torch(
+        observations[-result.model_config.window_size :],
+        window_size=result.model_config.window_size,
+        device=device,
+    )
+    with torch_module.no_grad():
+        output = model(
+            categorical_ids=tensors["categorical_ids"],
+            numeric_features=tensors["numeric_features"],
+            token_type_ids=tensors["token_type_ids"],
+            attention_mask=tensors["attention_mask"],
+            history_mask=tensors["history_mask"],
+        )
+    return float(output.value[0].detach().cpu().item())
+
+
 @dataclass
 class TransformerSoftmaxPolicy:
     """Policy adapter that makes a transformer checkpoint playable in rollouts."""
