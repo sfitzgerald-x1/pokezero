@@ -16,6 +16,7 @@ from .collection import (
     policy_spec_with_showdown_root,
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
 
 
@@ -77,6 +78,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.set_defaults(func=_benchmark)
+
+    replay_benchmark = subparsers.add_parser(
+        "replay-benchmark",
+        help="Measure replay-from-root prefix latency for future search/MCTS planning.",
+    )
+    replay_benchmark.add_argument("--games", type=int, default=3, help="Number of source games to generate.")
+    replay_benchmark.add_argument(
+        "--prefixes-per-game",
+        type=int,
+        default=5,
+        help="Evenly sampled branch-prefix lengths to replay per source game.",
+    )
+    replay_benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    replay_benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    replay_benchmark.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
+    replay_benchmark.add_argument("--max-decision-rounds", type=int, default=250, help="Source rollout decision-round cap.")
+    replay_benchmark.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    replay_benchmark.add_argument("--p1-policy", default="random-legal", help=f"Source policy for p1. {policy_help}")
+    replay_benchmark.add_argument("--p2-policy", default="random-legal", help=f"Source policy for p2. {policy_help}")
+    replay_benchmark.add_argument("--json", action="store_true", help="Print replay benchmark results as JSON.")
+    replay_benchmark.set_defaults(func=_replay_benchmark)
     return parser
 
 
@@ -154,6 +176,35 @@ def _benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _replay_benchmark(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    policies = {
+        "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
+        "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
+    }
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    report = benchmark_replay_prefixes(
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        policies=policies,
+        rollout_config=rollout_config,
+        games=args.games,
+        prefixes_per_game=args.prefixes_per_game,
+        seed_start=args.seed_start,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print_replay_benchmark_report(report)
+    return 0
+
+
 def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"games: {metrics['games']}")
     print(f"elapsed_seconds: {float(metrics['elapsed_seconds']):.3f}")
@@ -221,6 +272,24 @@ def print_benchmark_report(report: BenchmarkReport) -> None:
             f"{result.first_policy_win_rate:8.3f} "
             f"{result.second_policy_win_rate:9.3f}"
         )
+
+
+def print_replay_benchmark_report(report: ReplayPrefixBenchmarkReport) -> None:
+    print(f"format: {report.format_id}")
+    print(f"games: {report.games}")
+    print(f"prefixes_per_game: {report.prefixes_per_game}")
+    print(f"max_decision_rounds: {report.max_decision_rounds}")
+    print(f"source_policy_ids: {dict(report.source_policy_ids)}")
+    print(f"source_average_decision_rounds: {report.average_source_decision_rounds:.2f}")
+    print(f"total_prefixes: {report.total_prefixes}")
+    print(f"replay_elapsed_seconds: {report.total_replay_elapsed_seconds:.3f}")
+    print(f"avg_replayed_decision_rounds: {report.average_replayed_decision_rounds:.2f}")
+    print(f"replayed_decision_rounds_per_second: {report.replayed_decision_rounds_per_second:.1f}")
+    print(f"avg_replay_ms: {report.average_replay_seconds * 1000.0:.2f}")
+    print(f"median_replay_ms: {report.median_replay_seconds * 1000.0:.2f}")
+    print(f"p95_replay_ms: {report.p95_replay_seconds * 1000.0:.2f}")
+    print(f"max_replay_ms: {report.max_replay_seconds * 1000.0:.2f}")
+    print("note: replay timing excludes source-game generation and includes env.reset plus prefix replay.")
 
 
 if __name__ == "__main__":
