@@ -50,7 +50,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=38,
+    numeric_feature_count=44,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -135,6 +135,16 @@ NUMERIC_OPP_FUTURE_SIGHT = 36
 # Active mon token: badly-poisoned (tox) ramp stage / 15 — the escalating 1/16, 2/16, ... damage
 # (0 if not badly poisoned). Distinct from the status:tox categorical, which only marks the type.
 NUMERIC_TOXIC_STAGE = 37
+# Actual computed stats (stat / 714, the Gen 3 max, so nothing saturates) on every self mon +
+# switch token — free, exact knowledge from the request (EVs/nature/IVs baked in), unlike the
+# species BASE stats which are all the model gets for the opponent. Left padding (0) for opponent
+# mons, whose actual stats are hidden. HP is the actual max HP (from the request condition).
+NUMERIC_ACTUAL_HP = 38
+NUMERIC_ACTUAL_ATK = 39
+NUMERIC_ACTUAL_DEF = 40
+NUMERIC_ACTUAL_SPA = 41
+NUMERIC_ACTUAL_SPD = 42
+NUMERIC_ACTUAL_SPE = 43
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -151,6 +161,9 @@ class ShowdownPokemon:
     condition: Optional[str] = None
     active: bool = False
     details: Optional[str] = None
+    # Actual computed stats {hp, atk, def, spa, spd, spe} — known only for the player's own team
+    # (from the request); None for opponent mons, whose actual stats are hidden.
+    stats: Optional[Mapping[str, int]] = None
 
 
 @dataclass(frozen=True)
@@ -906,17 +919,49 @@ def _self_team_from_request(request: Mapping[str, Any] | None, showdown_slot: st
         if not isinstance(row, Mapping):
             continue
         ident = str(row.get("ident") or "")
+        condition = str(row.get("condition")) if row.get("condition") is not None else None
         team.append(
             ShowdownPokemon(
                 ident=ident,
                 showdown_slot=_slot_from_ident(ident) or showdown_slot,
                 species=_species_from_request_pokemon(row),
-                condition=str(row.get("condition")) if row.get("condition") is not None else None,
+                condition=condition,
                 active=bool(row.get("active")),
                 details=str(row.get("details")) if row.get("details") is not None else None,
+                stats=_actual_stats_from_request_row(row, condition),
             )
         )
     return tuple(team)
+
+
+def _actual_stats_from_request_row(row: Mapping[str, Any], condition: str | None) -> dict[str, int] | None:
+    """The player mon's actual computed stats from a request row: the 5 battle stats plus max HP.
+
+    The request's ``stats`` object holds atk/def/spa/spd/spe; max HP is the denominator of the
+    condition (e.g. "250/250"). Returns None when no stats are present (e.g. simplified payloads).
+    """
+    raw = row.get("stats")
+    stats: dict[str, int] = {}
+    if isinstance(raw, Mapping):
+        for key in ("atk", "def", "spa", "spd", "spe"):
+            value = raw.get(key)
+            if isinstance(value, int):
+                stats[key] = value
+    max_hp = _max_hp_from_condition(condition)
+    if max_hp is not None:
+        stats["hp"] = max_hp
+    return stats or None
+
+
+def _max_hp_from_condition(condition: str | None) -> int | None:
+    """Max HP (the denominator) from a request condition like '180/250'; None for '0 fnt'/absent."""
+    if not condition:
+        return None
+    head = condition.split()[0]
+    if "/" not in head:
+        return None
+    _, _, denominator = head.partition("/")
+    return int(denominator) if denominator.isdigit() and int(denominator) > 0 else None
 
 
 def _opponent_team_from_public_state(
@@ -1037,6 +1082,19 @@ _BASE_STAT_SLOTS = (
 )
 
 
+_ACTUAL_STAT_SLOTS = (
+    ("hp", NUMERIC_ACTUAL_HP),
+    ("atk", NUMERIC_ACTUAL_ATK),
+    ("def", NUMERIC_ACTUAL_DEF),
+    ("spa", NUMERIC_ACTUAL_SPA),
+    ("spd", NUMERIC_ACTUAL_SPD),
+    ("spe", NUMERIC_ACTUAL_SPE),
+)
+# Gen 3 maximum possible stat (Blissey HP at level 100); normalizing by it keeps every actual
+# stat in [0, 1] with no saturation.
+_ACTUAL_STAT_DIVISOR = 714.0
+
+
 def _encode_pokemon_stats(
     num_row: list[float], dex: "ShowdownDex | None", species: str | None, details: str | None
 ) -> None:
@@ -1053,6 +1111,16 @@ def _encode_pokemon_stats(
         value = info.base_stats.get(stat_key)
         if value:
             _set_numeric(num_row, slot, min(1.0, float(value) / 200.0))
+
+
+def _encode_actual_stats(num_row: list[float], stats: Mapping[str, int] | None) -> None:
+    """Set the player mon's actual computed stats (known only for the self team; no-op otherwise)."""
+    if not stats:
+        return
+    for stat_key, slot in _ACTUAL_STAT_SLOTS:
+        value = stats.get(stat_key)
+        if value:
+            _set_numeric(num_row, slot, min(1.0, float(value) / _ACTUAL_STAT_DIVISOR))
 
 
 def _encode_move_mechanics(
@@ -1119,6 +1187,7 @@ def _encode_pokemon_tokens(
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
         _encode_species_type_categories(categorical_ids[token_index], dex, candidate.species)
         _encode_pokemon_stats(numeric_features[token_index], dex, candidate.species, candidate.details)
+        _encode_actual_stats(numeric_features[token_index], candidate.stats)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
             _encode_active_volatiles(categorical_ids[token_index], active_volatiles)
@@ -1212,6 +1281,7 @@ def _encode_action_tokens(
         if pokemon is not None:
             _encode_species_type_categories(categorical_ids[token_index], dex, pokemon.species)
             _encode_pokemon_stats(numeric_features[token_index], dex, pokemon.species, pokemon.details)
+            _encode_actual_stats(numeric_features[token_index], pokemon.stats)
         _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, "action:switch")
         _set_category(categorical_ids[token_index], CATEGORY_ROLE, "action")
         _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"switch_slot:{switch_slot + 1}")
