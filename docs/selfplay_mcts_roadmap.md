@@ -46,12 +46,33 @@ Pure searchless self-play risks settling into a mediocre local equilibrium. The 
 pool, exploration pressure, and (above all) a search improvement operator — are exactly the recipe
 above, and are all knowledge-free / on-mission.
 
+## Strategy hypothesis & go/no-go gates
+
+**Core hypothesis (unverified):** prior self-play stalled at ~0.52 because we never combined (a)
+enough scale, (b) a real opponent *league*, (c) exploration pressure, and — decisively — (d) a
+**search improvement operator**. The recipe above asserts all four break the plateau; gen4→gen3
+transfer is also assumed. Treat this as a hypothesis to test, not a given.
+
+**Search is the load-bearing bet, so prove it first and cheaply** (see M0): the thesis's strength
+came from *net + MCTS*, and net-alone may well re-plateau at ~0.52. Do **not** over-invest in
+scaling PPO before demonstrating that search lifts a modest net past the plateau. WS-D does **not**
+require a strong net — search improves any decent one — so it should not be gated on a great M1.
+
+**Go/no-go gates:**
+- **M0 gate:** on a cheap/early net, net+MCTS must clear ~0.60 vs max-damage (well past the 0.52
+  plateau). If search does *not* move the needle here, scaling PPO will not save us — stop and
+  rethink the operator (deeper search, better value head, DUCT) before spending fleet compute.
+- **M1 gate:** the per-iteration strength curve must *rise* over ≥10 league iterations; a multi-
+  iteration flatline = stuck → lean on search and revisit league diversity + exploration.
+
 ---
 
 ## Workstreams (parallelizable)
 
 Each workstream lists scope, concrete steps, deliverables, acceptance criteria, and dependencies.
-WS-A, WS-B, WS-C can start in parallel today. WS-D depends on WS-C + a net from WS-A.
+WS-A, WS-C, WS-E, WS-F can start in parallel today; the first milestone (M0) proves search on a
+*modest* net before WS-B commits fleet compute to scaling. WS-D depends on WS-C + WS-E + a decent
+(not great) net from WS-A.
 
 ### WS-A — Self-play PPO training loop (the RL engine)
 **Owner goal:** a robust PPO self-play loop that reliably *climbs* on a fixed strength yardstick,
@@ -60,9 +81,12 @@ with anti-stagnation machinery.
 Steps:
 1. Audit/solidify the PPO path in `neural_cli iterate` / `neural_selfplay.py`: advantage estimation,
    value-head loss weighting, entropy bonus, capped-game return, gradient/clip settings.
-2. **History/league opponent pool:** sample opponents from a bounded set of *past* checkpoints
-   (not just the latest), to kill non-transitive cycling and catastrophic forgetting. Wire through
-   the existing promotion registry / historical-opponent plumbing.
+2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
+   set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
+   Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
+   mode we already hit) induces no learning pressure. Add a behavioral-diversity check and/or a
+   dedicated exploiter agent folded back into the pool. Wire through the existing promotion registry
+   / historical-opponent plumbing.
 3. **Exploration pressure:** expose and tune entropy coefficient + collection temperature; ensure
    collection samples (not greedy) so the policy keeps exploring.
 4. **Fixed-yardstick eval every iteration** (see WS-F) and persist the strength curve.
@@ -86,10 +110,21 @@ Steps:
    collect→train loop; the *code* for sharded collection + aggregation lives in the tracked repo.)
 2. **Iteration controller:** a loop that, per iteration, launches N collector shards against the
    current checkpoint, waits, runs the central train, and advances.
-3. **Fleet deployment** (a CPU pod fleet): container image, parallel-collection manifests, shared
+3. **On-policy consistency (critical — PPO is on-policy):** use **synchronous iterations with a
+   barrier** — every collector shard uses checkpoint N; train N→N+1 only after all shards finish.
+   Do **not** mix rollouts collected under different checkpoints into one PPO update; stale rollouts
+   degrade PPO. (If we later want asynchronous collection, switch to a staleness-tolerant objective
+   — out of scope for v1.)
+4. **Data pipeline at scale:** rollout JSONL is ~TB-scale at 3M battles (≈215 MB / 200 games).
+   Design shard layout, cross-shard shuffle for training, and a retention policy (keep recent
+   iterations, prune old) so storage and train-time I/O stay bounded.
+5. **Hardware split:** collection is CPU (the fleet); the **central train step benefits from a GPU**
+   (the thesis trained the net on one GPU). Provision the train step accordingly — collection stays
+   CPU-only, training is not.
+6. **Fleet deployment** (a CPU pod fleet): container image, parallel-collection manifests, shared
    storage, and the iteration controller. All environment/location specifics are deliberately kept
    **out of this (public) repo**.
-4. Throughput target: enough parallel CPU to reach ~3M battles in single-digit days.
+7. Throughput target: enough parallel CPU to reach ~3M battles in single-digit days.
 
 Deliverable: sharded-collection + central-train code (tracked); the fleet deployment itself is kept
 out of this repo.
@@ -99,30 +134,36 @@ Touches: `collection.py`, `neural_selfplay.py`, `rollout_cli.py` (tracked). Depl
 kept out of this repo.
 
 ### WS-C — Battle forking / snapshot-restore (the MCTS enabler)
-**Owner goal:** the ability to clone a live battle and explore alternative actions without
-replaying from the start. This is the hard prerequisite for MCTS.
+**Owner goal:** explore alternative lines from a battle position — the prerequisite for MCTS. Pick
+the *simplest* mechanism that meets the per-move search budget; do not assume snapshot/restore.
 
 Steps:
-1. Investigate Showdown `BattleStream` state serialization (`Battle.toJSON()` / restart-from-state)
-   at our pinned commit; confirm a battle can be snapshotted mid-game and restored to fork branches.
-2. Extend `battle_bridge.mjs` (already battle-id-keyed) with `snapshot {battleId}` →
-   serialized state, and `fork {fromBattleId, newBattleId, state}` → a new battle resumed from that
-   state. Tag events by id (mechanism already exists).
-3. Expose `LocalShowdownEnv.snapshot()` / `fork()` (or a dedicated search env) returning a cheap
-   handle the searcher can step independently.
-4. Validate: fork at turn N, play divergent lines, and confirm each line is byte-identical to a
+0. **Verify how the thesis did rollouts first.** It ran MCTS over the Showdown sim, so branch
+   exploration is solved prior art — match its approach (snapshot/restore vs replay-from-root)
+   before inventing. This is the single highest-leverage de-risking step in the whole plan.
+1. **Prefer replay-from-root if the warm sim makes it cheap enough.** With determinization, each
+   rollout re-simulates from the battle's recorded line + a sampled opponent set; warm sim
+   (~0.4 ms/turn) may make this fast enough for shallow search and avoids state serialization
+   entirely. Validate the per-move cost against a realistic search budget.
+2. **Only if replay-from-root is too slow:** build snapshot/restore — investigate `BattleStream`
+   serialization (`Battle.toJSON()` / restart-from-state) at our pinned commit, then extend
+   `battle_bridge.mjs` (already battle-id-keyed) with `snapshot {battleId}` and
+   `fork {fromBattleId,newBattleId,state}`; expose `LocalShowdownEnv.snapshot()/fork()`.
+3. Validate either path: explore divergent lines from turn N and confirm each is byte-identical to a
    from-scratch battle that took the same actions (modulo timestamps).
 
-Deliverable: snapshot/fork in the bridge + env, with equivalence tests.
-Acceptance: forked lines are deterministic and identical to ground-truth replays; fork cost is
-small relative to a turn.
-Touches: `scripts/battle_bridge.mjs`, `local_showdown.py`.
-Risk: if BattleStream can't be cheaply serialized/forked, fall back to replay-from-root forking
-(slower) or a learned/in-process model (larger effort) — flag early.
+Deliverable: a forking/rollout mechanism (replay-from-root preferred) + equivalence tests.
+Acceptance: divergent lines are deterministic and identical to ground-truth replays; per-move rollout
+cost fits the search budget.
+Touches: `local_showdown.py`, and `scripts/battle_bridge.mjs` only if snapshot/restore is needed.
+Risk: this gates all of WS-D — validate the mechanism in days, not weeks. Last-resort fallback is a
+learned/in-process model (much larger effort).
 
 ### WS-D — Test-time MCTS (the policy-improvement operator)
 **Owner goal:** a search-augmented policy that measurably beats the raw net, mirroring the thesis.
-Depends on WS-C (forking) + a trained net from WS-A.
+Depends on WS-C (forking) + a *decent* net from WS-A (not a great one) + a **well-calibrated value
+head** (WS-E). MCTS leaf evaluation is bounded by value quality: a noisy value head makes search
+*worse* than the raw policy, so value calibration is a hard prerequisite, not a nicety.
 
 Steps:
 1. MCTS skeleton over the forkable sim, guided by the net (PUCT-style: prior from policy head, value
@@ -141,13 +182,16 @@ Acceptance: net+MCTS **beats net-alone** by a clear margin on the fixed yardstic
 Touches: new search module (e.g. `search/mcts.py`), `belief.py`, `local_showdown.py` (fork API),
 `neural_policy.py` (priors/value), `policy.py` (a search-policy adapter).
 
-### WS-E — Observation / value-signal support (enabling, lighter)
-**Owner goal:** keep the observation Markov-complete and the value head well-trained; expose the
-belief snapshot the searcher needs.
-Steps: audit value-target construction (terminal return, discount, capped-game value); confirm
-multi-turn-effect duration encodings are complete; expose a clean belief-determinization API for WS-D.
-Deliverable: validated value targets + a belief-sampling API.
-Acceptance: value-head calibration improves training stability; WS-D can request sampled opponent sets.
+### WS-E — Value-head calibration + observation/belief support (on the MCTS critical path)
+**Owner goal:** a value head good enough to guide MCTS, a Markov-complete observation, and a clean
+belief-sampling API for the searcher. Not "lighter" — WS-D's search quality is bounded by the value
+head, so this gates M0/M3.
+Steps: audit and improve value-target construction (terminal return, discount, capped-game value)
+and measure value-head **calibration** (predicted vs realized outcome); confirm multi-turn-effect
+duration encodings are complete; expose a clean belief-determinization (opponent-set sampling) API.
+Deliverable: a calibration metric + improved value targets + a belief-sampling API.
+Acceptance: value-head calibration is good enough that net+MCTS > net-alone (verified jointly in M0);
+WS-D can request sampled opponent sets.
 Touches: `showdown.py`, `belief.py`, `dataset.py`, `randbat_vocab.py`.
 
 ### WS-F — Evaluation, strength tracking, and ladder
@@ -166,12 +210,21 @@ Touches: `collection.py`, `evaluation.py`, `neural_cli.py`, `online_client.py`.
 
 ## Sequencing & milestones
 
-- **Now (parallel):** WS-A (league self-play + exploration), WS-B (scaling), WS-C (forking), WS-F
-  (yardstick). These are independent.
-- **M1 — Scaled self-play net:** WS-A + WS-B + WS-F → a net trained on the internal CPU fleet at ~thesis scale,
-  with a strength curve. Decision point: is the curve rising? If flat → search is needed (expected).
-- **M2 — Forking + MCTS skeleton:** WS-C done; WS-D builds the searcher against it using the M1 net.
-- **M3 — Search beats net:** WS-D acceptance — net+MCTS clearly beats net-alone and the baselines.
+**Ordering principle: prove the load-bearing bet (search) cheaply *before* spending fleet compute on
+scale.** Search improves any decent net, so it must not wait for a fully-scaled M1.
+
+- **Now (parallel):** WS-C (verify forking/rollout — the riskiest unknown), WS-E (value-head
+  calibration + belief-sampling API), WS-A (league self-play to produce a *modest* net), WS-F (fixed
+  yardstick). WS-B (full fleet scaling) can be scaffolded but is **not** on the critical path to M0.
+- **M0 — Prove search lifts a modest net (the de-risking gate):** WS-C + minimal WS-D + WS-E on a
+  cheap/early WS-A net → **net+MCTS clears ~0.60 vs max-damage** (past the 0.52 plateau). Pass →
+  scale. Fail → fix the operator (search depth / value head / DUCT) before any fleet compute.
+- **M1 — Scaled self-play net:** WS-A + WS-B + WS-F → a league-trained net on the fleet at ~thesis
+  scale, with a *rising* strength curve (M1 gate).
+- **M2 — Full MCTS:** harden WS-D (determinization over multiple sampled sets, roll-grouping, search
+  budget; DUCT if opponent-as-policy limits strength) on the scaled net.
+- **M3 — Search beats net at scale:** net+MCTS clearly beats net-alone and baselines at the larger
+  eval (≥300–400 games).
 - **M4 — Ladder:** WS-F ladder path — measure human-relative Elo; iterate.
 
 ## Anti-stagnation guardrails (apply throughout)
@@ -182,12 +235,24 @@ Touches: `collection.py`, `evaluation.py`, `neural_cli.py`, `online_client.py`.
   searchless local optimum.
 
 ## Open questions / risks
-- **Forking feasibility (WS-C)** is the biggest unknown; validate early. If BattleStream can't be
-  cheaply serialized, MCTS depth/cost suffers (mitigations: replay-from-root, or a learned model).
-- **Sim speed for search:** warm sim is ~0.4 ms/turn, but MCTS multiplies sim calls; budget per move
+- **Forking/rollout mechanism (WS-C)** is the biggest unknown; validate in days. Prefer
+  replay-from-root over snapshot/restore; last-resort fallback is a learned/in-process model.
+- **Value-head quality (WS-E)** is a hard MCTS dependency — a noisy value makes search worse than the
+  raw policy. Measure calibration, don't assume it.
+- **On-policy staleness (WS-B):** distributed PPO must use synchronous, single-checkpoint iterations
+  or it degrades — do not mix checkpoints in one update.
+- **Sim speed for search:** warm sim is ~0.4 ms/turn, but MCTS multiplies sim calls; per-move budget
   matters (the thesis worked within a 10 s/move ladder timer).
 - **Simultaneous moves:** start with opponent-plays-policy (simple); upgrade to DUCT if it limits
   strength vs stronger opponents.
+- **In-loop MCTS (true AlphaZero) is a research *stretch*, not near-term.** The thesis avoided it for
+  sim-speed reasons, and in-loop MCTS for *simultaneous-move* games is genuinely hard. The validated
+  path is PPO-self-play-then-test-time-MCTS; treat in-loop as a later experiment, not a milestone.
+- **Plateau-break + transfer are hypotheses:** prior self-play stalled at 0.52, and the thesis was
+  gen4, not gen3 (different mechanics: type-based phys/spec split, gen3 sleep/ability set). Hold the
+  go/no-go gates.
+- **Ladder eval is noisy/slow and the online client (`online_client.py`) is young** — it needs
+  reconnect/timeout hardening before ladder Elo is a trustworthy signal.
 - **Compute:** thesis hit rank 8 on ~3M battles / one GPU / ~80 CPU / 4 days — our budget target.
 
 ## References
