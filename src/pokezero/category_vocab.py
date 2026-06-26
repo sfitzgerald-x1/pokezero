@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import logging
 from typing import Iterable, Mapping
+
+logger = logging.getLogger("pokezero.category_vocab")
 
 
 def normalize_category_value(value: str | None) -> str:
@@ -47,11 +50,20 @@ class CategoryVocabulary:
                 index[normalize_category_value(alias)] = base_row
         object.__setattr__(self, "_index", index)
         object.__setattr__(self, "_oov_offset", 1 + len(self.tokens))
+        # Drift signal: distinct strings that fell through to the OOV band. In the closed
+        # randbat universe this stays empty; anything here means a token the encoder emits is
+        # missing from the vocabulary (dex update, un-aliased forme, new token kind, or a bug).
+        object.__setattr__(self, "_observed_oov", set())
 
     @property
     def size(self) -> int:
         """Total embedding rows: padding + vocabulary + OOV buckets."""
         return 1 + len(self.tokens) + self.oov_buckets
+
+    @property
+    def observed_oov_tokens(self) -> frozenset[str]:
+        """Distinct out-of-vocabulary strings seen by :meth:`encode` (drift signal; empty is healthy)."""
+        return frozenset(self._observed_oov)  # type: ignore[attr-defined]
 
     def encode(self, value: str | None) -> int:
         """Return the embedding row for a category string (0 = padding for empty)."""
@@ -63,7 +75,18 @@ class CategoryVocabulary:
             return row
         # Out-of-vocabulary: deterministic bucket in the reserved safety-net block.
         digest = hashlib.blake2b(normalized.encode("utf-8"), digest_size=8).digest()
-        return self._oov_offset + (int.from_bytes(digest, "big") % self.oov_buckets)  # type: ignore[attr-defined]
+        oov_row = self._oov_offset + (int.from_bytes(digest, "big") % self.oov_buckets)  # type: ignore[attr-defined]
+        observed = self._observed_oov  # type: ignore[attr-defined]
+        if normalized not in observed:
+            # Warn once per distinct token so genuine drift is visible without flooding hot paths.
+            observed.add(normalized)
+            logger.warning(
+                "category-vocab drift: %r is outside the closed Gen 3 randbat universe; "
+                "hashed to safety-net row %d. This token should be enumerated, not hashed.",
+                normalized,
+                oov_row,
+            )
+        return oov_row
 
 
 def build_category_vocabulary(
