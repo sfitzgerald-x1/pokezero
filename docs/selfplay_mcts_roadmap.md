@@ -39,6 +39,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   actions through the replay branch harness and scores non-terminal post-branch states with a value
   function over the player's observation history. This is the bridge from flat terminal rollout
   search toward PUCT/MCTS leaf evaluation.
+- **Root PUCT branch scorer** (`search.py` + transformer prior helper): combines policy-head priors
+  with value-branch scores at the search root, establishing the first PUCT-style selection layer
+  before deeper tree expansion.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

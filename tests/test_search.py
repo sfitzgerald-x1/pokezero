@@ -5,7 +5,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig
-from pokezero.search import flat_branch_search, terminal_value_for_player, value_branch_search
+from pokezero.search import flat_branch_search, puct_branch_search, terminal_value_for_player, value_branch_search
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -188,6 +188,66 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(result.action_index, 1)
         self.assertEqual(result.best_candidate.value, 1.0)
         self.assertEqual(result.best_candidate.evaluated_history_length, 0)
+
+    def test_puct_branch_search_combines_value_and_policy_prior(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
+            return {0: 0.1, 1: 0.2}[_only_legal_action(history[-1])]
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=value_fn,
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+        )
+
+        self.assertEqual(result.action_index, 0)
+        self.assertEqual([candidate.action_index for candidate in result.candidates], [0, 1])
+        self.assertAlmostEqual(result.candidates[0].prior, 0.9)
+        self.assertGreater(result.candidates[0].score, result.candidates[1].score)
+        self.assertEqual(result.to_dict()["selected_action_index"], 0)
+
+    def test_puct_branch_search_falls_back_to_uniform_when_legal_prior_mass_is_zero(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
+            return {0: 0.1, 1: 0.4}[_only_legal_action(history[-1])]
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=value_fn,
+            action_priors=(0.0,) * ACTION_COUNT,
+            cpuct=0.5,
+        )
+
+        self.assertEqual(result.action_index, 1)
+        self.assertEqual([candidate.prior for candidate in result.candidates], [0.5, 0.5])
+
+    def test_puct_branch_search_rejects_invalid_priors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "action_priors"):
+            puct_branch_search(
+                env=ValueBranchEnv(),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(1.0,),
+            )
 
     def test_flat_branch_search_selects_best_legal_action_from_rollout_outcomes(self) -> None:
         env = BranchOutcomeEnv({0: "p2", 1: "p1", 4: None})
