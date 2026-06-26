@@ -207,6 +207,12 @@ from .run_audit import (
     run_audit_config_payload,
     run_audit_config_to_dict,
 )
+from .search import (
+    BranchSearchCandidate,
+    FlatBranchSearchResult,
+    flat_branch_search,
+    terminal_value_for_player,
+)
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
@@ -238,6 +244,7 @@ __all__ = [
     "ActionCandidate",
     "AsyncPokeZeroEnv",
     "BattleBeliefSnapshot",
+    "BranchSearchCandidate",
     "CandidateSetSummary",
     "CollectionMetrics",
     "DEFAULT_AUDIT_CALIBRATION_MARGIN",
@@ -263,6 +270,7 @@ __all__ = [
     "EntityTokenTransformerPolicy",
     "EVALUATION_PROFILES",
     "EvaluationProfile",
+    "FlatBranchSearchResult",
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
     "MoveInfo",
@@ -372,6 +380,7 @@ __all__ = [
     "evaluation_profile",
     "evaluate_promotion_gate",
     "features_from_example",
+    "flat_branch_search",
     "historical_opponent_policy_specs",
     "is_move_action",
     "is_switch_action",
@@ -431,6 +440,7 @@ __all__ = [
     "stable_category_id",
     "summarize_records",
     "TeacherBenchmarkResult",
+    "terminal_value_for_player",
     "switch_action_index_for_team_index",
     "switch_action_candidates",
     "torch_available",

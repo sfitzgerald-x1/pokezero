@@ -32,6 +32,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   timestamp lines, submits explicit divergent branch actions, then rolls out from the resulting
   state with normal policy semantics.
   `rollout_cli replay-benchmark` measures prefix-replay latency before considering snapshot/restore.
+- **Flat branch-search harness** (`search.py`): enumerates legal root actions, evaluates each via
+  replayed branch rollout, and selects by terminal outcome. This is a deliberately small search
+  stepping stone before value-guided MCTS.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;
