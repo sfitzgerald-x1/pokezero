@@ -69,6 +69,17 @@ class Gen3RandbatVocabTests(unittest.TestCase):
             self.assertIn(stable_category_id(f"species:{forme}"), vocab)
             self.assertNotIn(stable_category_id(f"species:{forme}"), aliases)
 
+    def test_typeless_type_is_enumerated(self) -> None:
+        # Gen 3 Curse is typeless ("???"); the encoder emits type:??? for it, so it must resolve
+        # to a real vocab row instead of hashing into the OOV safety net.
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        vocab = gen3_category_vocabulary(SHOWDOWN_ROOT)
+        oov_offset = 1 + len(vocab.tokens)
+        row = vocab.encode("type:???")
+        self.assertGreaterEqual(row, 1)
+        self.assertLess(row, oov_offset, "type:??? fell into the OOV band; it must be enumerated")
+
     def test_known_entities_map_into_vocab(self) -> None:
         vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
         # Display-name forms the encoder emits at play time.
@@ -139,7 +150,7 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
     # Bounded structural/entity prefixes that MUST be covered by the full-universe vocab.
     _REQUIRED_PREFIXES = (
         "species:", "move:", "belief:", "status:", "request_kind:", "pokemon:",
-        "event:", "event_actor:", "event_target:",
+        "type:", "event:", "event_actor:", "event_target:",
         "move_slot:", "switch_slot:", "move_effect:", "move_priority:", "volatile:",
     )
 
