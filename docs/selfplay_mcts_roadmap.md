@@ -41,7 +41,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   search toward PUCT/MCTS leaf evaluation.
 - **Root PUCT branch scorer** (`search.py` + transformer prior helper): combines policy-head priors
   with value-branch scores at the search root, establishing the first PUCT-style selection layer
-  before deeper tree expansion.
+  before deeper tree expansion. `neural_cli root-puct-benchmark` evaluates that scorer on sampled
+  rollout prefixes to measure action deltas and search latency before changing live rollout control.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

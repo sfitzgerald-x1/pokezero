@@ -222,9 +222,16 @@ from .search import (
     ValueBranchSearchCandidate,
     ValueBranchSearchResult,
     flat_branch_search,
+    player_observation_history,
     puct_branch_search,
     terminal_value_for_player,
     value_branch_search,
+)
+from .search_benchmark import (
+    ActionPriorFunction,
+    RootPUCTSearchBenchmarkReport,
+    RootPUCTSearchDecision,
+    benchmark_root_puct_search,
 )
 from .value_calibration import (
     ValueCalibrationBin,
@@ -259,6 +266,7 @@ from .showdown import (
 __all__ = [
     "ACTION_COUNT",
     "ACTION_SCHEMA_VERSION",
+    "ActionPriorFunction",
     "ActionPriorVector",
     "ActionCandidate",
     "AsyncPokeZeroEnv",
@@ -351,6 +359,8 @@ __all__ = [
     "ReplayPrefixTiming",
     "ReplayImportResult",
     "RolloutRecord",
+    "RootPUCTSearchBenchmarkReport",
+    "RootPUCTSearchDecision",
     "RunAuditCheck",
     "RunAuditConfig",
     "RunAuditFailure",
@@ -437,6 +447,7 @@ __all__ = [
     "policy_from_name",
     "policy_from_spec",
     "policy_spec_with_showdown_root",
+    "player_observation_history",
     "puct_branch_search",
     "iter_training_batches",
     "iter_training_examples",
@@ -446,6 +457,7 @@ __all__ = [
     "record_promotion",
     "action_rounds_from_trajectory",
     "benchmark_replay_prefixes",
+    "benchmark_root_puct_search",
     "require_torch",
     "replay_action_rounds",
     "replay_trajectory_branch",

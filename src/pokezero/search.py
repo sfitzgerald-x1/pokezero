@@ -209,7 +209,7 @@ def value_branch_search(
     if player_id in opponent_actions:
         raise ValueError("opponent_actions must not include the searched player.")
 
-    prefix_history = _player_observation_history(
+    prefix_history = player_observation_history(
         trajectory,
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
@@ -369,7 +369,7 @@ def terminal_value_for_player(terminal: TerminalState, *, player_id: PlayerId) -
     return -1.0
 
 
-def _player_observation_history(
+def player_observation_history(
     trajectory: BattleTrajectory,
     *,
     player_id: PlayerId,
