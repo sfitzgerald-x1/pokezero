@@ -1,27 +1,13 @@
 # PokeZero
 
-PokeZero is a **work-in-progress** experiment in training an agent to play Pokémon Showdown
-**Gen 3 random battles** through self-play, on CPU-first hardware. The aim is AlphaZero-style —
-learn from self-play with a policy/value network — applied to an imperfect-information,
-simultaneous-move game.
-
-**How we measure progress:** win rate against fixed baselines. Beating `random-legal` and
-`simple-legal` is table stakes (~0.9–1.0); the real benchmark is the **`max-damage`** baseline,
-which is the current open problem (see Status).
+PokeZero is a **work-in-progress** effort to train an agent that plays Pokémon Showdown **Gen 3
+random battles** well enough to be **competitive on the live ladder** — learned entirely from
+self-play, on CPU-first hardware. The approach is AlphaZero-style: improve a policy/value network
+by having it play itself, here applied to an imperfect-information, simultaneous-move game.
 
 > ⚠️ Active research. Encodings, APIs, and checkpoints change frequently. The neural policy below
 > is the current frontier; the linear baseline and parts of the harness are earlier scaffolding
 > kept for reference.
-
-## Status
-
-- **Beats random/simple decisively; plateaus against max-damage.** Across ~20 training-method
-  variants, win rate vs max-damage sits in a tight **~0.46–0.52 band** — a ceiling, not active
-  climbing. (vs random/simple is table stakes, not a progress signal.)
-- **Why:** the imitation ceiling. The scripted teacher itself only beats max-damage ~0.57, and you
-  cannot out-clone your teacher — behavior cloning / DAgger caps the policy near (slightly below)
-  the teacher. Exceeding max-damage requires RL that *discovers exploitation*, or search.
-- Full analysis: [`docs/max_damage_exploration_learnings.md`](docs/max_damage_exploration_learnings.md).
 
 ## How it works
 
