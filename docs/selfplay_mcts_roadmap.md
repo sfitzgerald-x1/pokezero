@@ -35,6 +35,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 - **Flat branch-search harness** (`search.py`): enumerates legal root actions, evaluates each via
   replayed branch rollout, and selects by terminal outcome. This is a deliberately small search
   stepping stone before value-guided MCTS.
+- **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
+  measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
+  targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;

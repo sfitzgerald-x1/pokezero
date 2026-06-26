@@ -522,6 +522,19 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_value_calibration_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                ["value-calibration", "--checkpoint", "checkpoint.pt", "--data", "rollouts.jsonl"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
     def test_neural_cli_iterate_reports_missing_torch_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -596,6 +609,51 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[2].p1_policy, fake_policy)
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
+
+    def test_neural_cli_value_calibration_wires_checkpoint_and_data(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"examples": 3, "mse": 0.25}
+
+        fake_model = object()
+        fake_training_result = object()
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()) as evaluate,
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts-a.jsonl",
+                    "rollouts-b.jsonl",
+                    "--batch-size",
+                    "7",
+                    "--bins",
+                    "5",
+                    "--device",
+                    "cpu",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
+        self.assertEqual(evaluate.call_args.kwargs["model"], fake_model)
+        self.assertEqual(evaluate.call_args.kwargs["training_result"], fake_training_result)
+        self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("rollouts-a.jsonl"), Path("rollouts-b.jsonl")])
+        self.assertEqual(evaluate.call_args.kwargs["batch_size"], 7)
+        self.assertEqual(evaluate.call_args.kwargs["bins"], 5)
+        self.assertEqual(evaluate.call_args.kwargs["device"], "cpu")
+        self.assertEqual(json.loads(stdout.getvalue()), {"examples": 3, "mse": 0.25})
 
     def test_neural_cli_iterate_wires_arguments(self) -> None:
         fake_epoch = type(

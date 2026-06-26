@@ -213,6 +213,11 @@ from .search import (
     flat_branch_search,
     terminal_value_for_player,
 )
+from .value_calibration import (
+    ValueCalibrationBin,
+    ValueCalibrationReport,
+    evaluate_value_calibration,
+)
 from .selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayIterationResult,
@@ -365,6 +370,8 @@ __all__ = [
     "TransformerTrainingConfig",
     "TransformerTrainingResult",
     "TrainingBatch",
+    "ValueCalibrationBin",
+    "ValueCalibrationReport",
     "batch_training_examples",
     "calibrate_run_audit",
     "calibrate_run_audits",
@@ -379,6 +386,7 @@ __all__ = [
     "evaluate_linear_policy",
     "evaluation_profile",
     "evaluate_promotion_gate",
+    "evaluate_value_calibration",
     "features_from_example",
     "flat_branch_search",
     "historical_opponent_policy_specs",
