@@ -22,16 +22,6 @@ by having it play itself, here applied to an imperfect-information, simultaneous
   a value estimate — AlphaZero-style policy+value, *not* autoregressive next-token prediction. Gen 3
   dex data is loaded generation-correctly via `Dex.forGen(3)`.
 
-## Direction (what we're working toward)
-
-1. **Make the RL line measurable** — more PPO-from-DAgger iterations with a larger vs-max-damage
-   eval (≥300–400 games) to tell a real climb from eval noise.
-2. **If the single-pass policy stays capped, add search** — AlphaZero-style MCTS over the real
-   Showdown simulator, using the belief engine to determinize hidden information. Higher ceiling
-   than a feed-forward policy, and it reuses assets we already have (a fast sim + the belief engine).
-3. **Broaden the opponent set** beyond a single baseline so training rewards general skill rather
-   than exploiting one fixed opponent.
-
 ## Quickstart
 
 Prerequisites: a **built** Pokémon Showdown checkout (so `dist/sim/index.js` exists), passed as
