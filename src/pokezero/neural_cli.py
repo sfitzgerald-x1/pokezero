@@ -20,12 +20,14 @@ from .neural_policy import (
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     collect_categorical_ids,
+    load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
 )
+from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
     _mapping,
@@ -129,6 +131,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.set_defaults(func=_benchmark)
+
+    value_calibration = subparsers.add_parser(
+        "value-calibration",
+        help="Evaluate a neural checkpoint value head against rollout return targets.",
+    )
+    value_calibration.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
+    value_calibration.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
+    value_calibration.add_argument("--batch-size", type=int, default=128, help="Evaluation batch size.")
+    value_calibration.add_argument("--bins", type=int, default=10, help="Number of prediction bins across [-1, 1].")
+    value_calibration.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    value_calibration.add_argument("--json", action="store_true", help="Print calibration results as JSON.")
+    value_calibration.set_defaults(func=_value_calibration)
 
     iterate = subparsers.add_parser("iterate", help="Run neural-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
@@ -456,6 +470,24 @@ def _benchmark(args: argparse.Namespace) -> int:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
         print_benchmark_report(report)
+    return 0
+
+
+def _value_calibration(args: argparse.Namespace) -> int:
+    require_torch()
+    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    report = evaluate_value_calibration(
+        model=model,
+        training_result=training_result,
+        paths=args.data,
+        batch_size=args.batch_size,
+        bins=args.bins,
+        device=args.device,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print_value_calibration_report(report)
     return 0
 
 
@@ -790,6 +822,27 @@ def _format_optional_float(value: object, *, digits: int = 3) -> str:
     if value is None:
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def print_value_calibration_report(report: ValueCalibrationReport) -> None:
+    print(f"examples: {report.examples}")
+    print(f"mse: {report.mse:.6f}")
+    print(f"mae: {report.mae:.6f}")
+    print(f"bias: {report.bias:.6f}")
+    print(f"sign_accuracy: {report.sign_accuracy:.4f}")
+    print(f"expected_calibration_error: {report.expected_calibration_error:.6f}")
+    print("")
+    header = f"{'bin':>13} {'count':>6} {'pred':>9} {'return':>9} {'cal_err':>9}"
+    print(header)
+    print("-" * len(header))
+    for bin_result in report.bins:
+        print(
+            f"[{bin_result.lower:5.2f},{bin_result.upper:5.2f}) "
+            f"{bin_result.count:6d} "
+            f"{bin_result.mean_prediction:9.4f} "
+            f"{bin_result.mean_return:9.4f} "
+            f"{bin_result.calibration_error:9.4f}"
+        )
 
 
 def _policy_from_checkpoint(
