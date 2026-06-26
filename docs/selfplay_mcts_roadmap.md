@@ -35,6 +35,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 - **Flat branch-search harness** (`search.py`): enumerates legal root actions, evaluates each via
   replayed branch rollout, and selects by terminal outcome. This is a deliberately small search
   stepping stone before value-guided MCTS.
+- **Value-guided branch scoring** (`search.py` + transformer value helper): enumerates legal root
+  actions through the replay branch harness and scores non-terminal post-branch states with a value
+  function over the player's observation history. This is the bridge from flat terminal rollout
+  search toward PUCT/MCTS leaf evaluation.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

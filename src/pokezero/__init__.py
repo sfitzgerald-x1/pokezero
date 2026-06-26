@@ -121,6 +121,7 @@ from .neural_policy import (
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
     TransformerTrainingResult,
+    evaluate_transformer_observation_value,
     load_transformer_checkpoint,
     load_transformer_policy,
     observation_window_to_torch,
@@ -213,8 +214,12 @@ from .run_audit import (
 from .search import (
     BranchSearchCandidate,
     FlatBranchSearchResult,
+    ObservationValueFunction,
+    ValueBranchSearchCandidate,
+    ValueBranchSearchResult,
     flat_branch_search,
     terminal_value_for_player,
+    value_branch_search,
 )
 from .value_calibration import (
     ValueCalibrationBin,
@@ -293,6 +298,7 @@ __all__ = [
     "NeuralSelfPlayPromotionConfig",
     "NeuralSelfPlayRunResult",
     "ObservationSpec",
+    "ObservationValueFunction",
     "OpponentBeliefDeterminization",
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
@@ -377,6 +383,8 @@ __all__ = [
     "TrainingBatch",
     "ValueCalibrationBin",
     "ValueCalibrationReport",
+    "ValueBranchSearchCandidate",
+    "ValueBranchSearchResult",
     "batch_training_examples",
     "calibrate_run_audit",
     "calibrate_run_audits",
@@ -389,6 +397,7 @@ __all__ = [
     "detect_showdown_slot",
     "examples_from_record",
     "evaluate_linear_policy",
+    "evaluate_transformer_observation_value",
     "evaluation_profile",
     "evaluate_promotion_gate",
     "evaluate_value_calibration",
@@ -462,5 +471,6 @@ __all__ = [
     "train_transformer_policy",
     "training_batch_to_torch",
     "training_batch_from_examples",
+    "value_branch_search",
     "verify_promotion_registry",
 ]
