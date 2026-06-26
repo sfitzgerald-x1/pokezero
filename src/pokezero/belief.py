@@ -7,6 +7,7 @@ changing the public-state tracking API.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, replace
 import re
 from typing import Any, Mapping, Optional, Protocol, Sequence
@@ -289,6 +290,22 @@ class PublicBattleBeliefEngine:
 
     def resolve_pending_switches_at_boundary(self) -> None:
         self._resolve_pending_switches_as_no_trigger(None)
+
+    def resolved_player_view(self, showdown_slot: str) -> "PlayerBeliefView":
+        """Boundary-resolved belief view for a slot WITHOUT mutating this engine.
+
+        Resolving pending switches at a boundary is destructive, so a persistent engine
+        (fed incrementally across observations) cannot resolve in place. We deepcopy only the
+        small per-battle state (``_sides``/``_pending_switches``) — sharing the immutable, heavy
+        ``set_source`` — and resolve the twin. Equivalent to a throwaway
+        ``from_events`` engine's resolve+snapshot, but O(belief-state) instead of O(events).
+        """
+        twin = PublicBattleBeliefEngine(format_id=self.format_id, set_source=self.set_source)
+        twin._event_count = self._event_count
+        twin._sides = copy.deepcopy(self._sides)
+        twin._pending_switches = copy.deepcopy(self._pending_switches)
+        twin.resolve_pending_switches_at_boundary()
+        return twin.snapshot().for_player(showdown_slot)
 
     def snapshot(self) -> BattleBeliefSnapshot:
         return BattleBeliefSnapshot(
