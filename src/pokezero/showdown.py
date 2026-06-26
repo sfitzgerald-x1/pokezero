@@ -293,6 +293,11 @@ class _ReplayParser:
             return
         parts = line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
+        # BattleStream emits wall-clock timestamp lines (``|t:|...``). They are useful for raw
+        # protocol debugging but are not battle state and would make replay-from-root observations
+        # differ across otherwise identical deterministic simulations.
+        if event_type == "t:":
+            return
         if event_type == "player" and len(parts) >= 4:
             showdown_slot = parts[2]
             if showdown_slot in {"p1", "p2"}:

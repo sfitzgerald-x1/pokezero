@@ -27,6 +27,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 
 - **Warm-pooled sim** (`local_showdown.py`, `scripts/battle_bridge.mjs`): battle-id-keyed bridge,
   ~0.4 ms/turn warm, byte-identical battles, ~2× collection throughput. Collectors reuse one env.
+- **Replay-from-root prefix harness** (`replay_branching.py`): rebuilds a battle branch point from
+  the original seed + recorded action prefix, with real-sim equivalence tests modulo Showdown
+  timestamp lines. This is the first WS-C path before considering snapshot/restore.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;
