@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, replace
+import math
+import random
 import re
 from typing import Any, Mapping, Optional, Protocol, Sequence
 
@@ -117,6 +119,128 @@ class PlayerBeliefView:
             "self_pokemon": [pokemon.to_overlay_payload() for pokemon in self.self_pokemon],
             "opponent_pokemon": [pokemon.to_overlay_payload() for pokemon in self.opponent_pokemon],
         }
+
+
+@dataclass(frozen=True)
+class DeterminizedOpponentPokemon:
+    showdown_slot: str
+    species: str
+    active: bool
+    condition: Optional[str] = None
+    status: Optional[str] = None
+    revealed_moves: tuple[str, ...] = ()
+    variant_id: Optional[str] = None
+    source_set_id: Optional[str] = None
+    role: Optional[str] = None
+    level: Optional[int] = None
+    moves: tuple[str, ...] = ()
+    ability: Optional[str] = None
+    item: Optional[str] = None
+    candidate_count: Optional[int] = None
+    uncertainty: float = 1.0
+    possible_abilities: tuple[str, ...] = ()
+    possible_items: tuple[str, ...] = ()
+    possible_moves: tuple[str, ...] = ()
+    source_metadata: Mapping[str, Any] | None = None
+
+    @property
+    def resolved(self) -> bool:
+        return bool(self.variant_id or self.source_set_id or self.moves or self.ability or self.item)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "showdown_slot": self.showdown_slot,
+            "species": self.species,
+            "active": self.active,
+            "condition": self.condition,
+            "status": self.status,
+            "revealed_moves": list(self.revealed_moves),
+            "resolved": self.resolved,
+            "variant_id": self.variant_id,
+            "source_set_id": self.source_set_id,
+            "role": self.role,
+            "level": self.level,
+            "moves": list(self.moves),
+            "ability": self.ability,
+            "item": self.item,
+            "candidate_count": self.candidate_count,
+            "uncertainty": self.uncertainty,
+            "possible_abilities": list(self.possible_abilities),
+            "possible_items": list(self.possible_items),
+            "possible_moves": list(self.possible_moves),
+            "source_metadata": dict(self.source_metadata) if self.source_metadata else None,
+        }
+
+
+@dataclass(frozen=True)
+class OpponentBeliefDeterminization:
+    """One sampled opponent hidden-set realization from player-knowable belief state."""
+
+    self_slot: str
+    opponent_slot: str
+    sample_index: int
+    combination_count: int
+    opponent_pokemon: tuple[DeterminizedOpponentPokemon, ...]
+
+    @property
+    def unresolved_count(self) -> int:
+        return sum(1 for pokemon in self.opponent_pokemon if not pokemon.resolved)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "self_slot": self.self_slot,
+            "opponent_slot": self.opponent_slot,
+            "sample_index": self.sample_index,
+            "combination_count": self.combination_count,
+            "unresolved_count": self.unresolved_count,
+            "opponent_pokemon": [pokemon.to_payload() for pokemon in self.opponent_pokemon],
+        }
+
+
+def sample_opponent_determinizations(
+    view: PlayerBeliefView,
+    *,
+    sample_count: int = 1,
+    rng: random.Random | None = None,
+) -> tuple[OpponentBeliefDeterminization, ...]:
+    """Sample bounded opponent hidden-set realizations for search.
+
+    The sampler only uses public, player-relative belief. Candidate variants remain in source order
+    for deterministic enumeration; passing ``rng`` switches to unweighted random sampling. No
+    probabilities are invented, and unsourced/unknown Pokemon stay unresolved.
+    """
+
+    if sample_count <= 0:
+        raise ValueError("sample_count must be positive.")
+    choices_by_pokemon = tuple(tuple(pokemon.candidate_variants) for pokemon in view.opponent_pokemon)
+    choice_counts = tuple(max(1, len(choices)) for choices in choices_by_pokemon)
+    combination_count = math.prod(choice_counts) if choice_counts else 1
+    result_count = sample_count if rng is not None else min(sample_count, combination_count)
+    if not choices_by_pokemon:
+        result_count = 1
+
+    results: list[OpponentBeliefDeterminization] = []
+    for sample_index in range(result_count):
+        if rng is None:
+            selected_variants = _deterministic_variant_selection(choices_by_pokemon, sample_index)
+        else:
+            selected_variants = tuple(
+                choices[rng.randrange(len(choices))] if choices else None
+                for choices in choices_by_pokemon
+            )
+        results.append(
+            OpponentBeliefDeterminization(
+                self_slot=view.self_slot,
+                opponent_slot=view.opponent_slot,
+                sample_index=sample_index,
+                combination_count=combination_count,
+                opponent_pokemon=tuple(
+                    _determinized_pokemon(pokemon, variant)
+                    for pokemon, variant in zip(view.opponent_pokemon, selected_variants, strict=True)
+                ),
+            )
+        )
+    return tuple(results)
 
 
 @dataclass(frozen=True)
@@ -527,6 +651,84 @@ class _PendingSwitch:
 
 def belief_key(showdown_slot: str, species: str) -> str:
     return f"{showdown_slot}:{_normalize_species(species)}"
+
+
+def _deterministic_variant_selection(
+    choices_by_pokemon: tuple[tuple[Mapping[str, Any], ...], ...],
+    sample_index: int,
+) -> tuple[Mapping[str, Any] | None, ...]:
+    selected: list[Mapping[str, Any] | None] = []
+    radix = 1
+    for choices in choices_by_pokemon:
+        if not choices:
+            selected.append(None)
+            continue
+        selected.append(choices[(sample_index // radix) % len(choices)])
+        radix *= len(choices)
+    return tuple(selected)
+
+
+def _determinized_pokemon(
+    pokemon: RevealedPokemonBelief,
+    variant: Mapping[str, Any] | None,
+) -> DeterminizedOpponentPokemon:
+    if variant is None:
+        return DeterminizedOpponentPokemon(
+            showdown_slot=pokemon.showdown_slot,
+            species=pokemon.species,
+            active=pokemon.active,
+            condition=pokemon.condition,
+            status=pokemon.status,
+            revealed_moves=pokemon.revealed_moves,
+            candidate_count=pokemon.candidate_set_count,
+            uncertainty=pokemon.uncertainty,
+            possible_abilities=pokemon.possible_abilities,
+            possible_items=pokemon.possible_items,
+            possible_moves=pokemon.possible_moves,
+            source_metadata=pokemon.source_metadata,
+        )
+    return DeterminizedOpponentPokemon(
+        showdown_slot=pokemon.showdown_slot,
+        species=pokemon.species,
+        active=pokemon.active,
+        condition=pokemon.condition,
+        status=pokemon.status,
+        revealed_moves=pokemon.revealed_moves,
+        variant_id=_optional_variant_string(variant.get("variant_id")),
+        source_set_id=_optional_variant_string(variant.get("source_set_id")),
+        role=_optional_variant_string(variant.get("role")),
+        level=_optional_variant_int(variant.get("level")),
+        moves=_variant_string_tuple(variant.get("moves")),
+        ability=_optional_variant_string(variant.get("ability")),
+        item=_optional_variant_string(variant.get("item")),
+        candidate_count=pokemon.candidate_set_count,
+        uncertainty=pokemon.uncertainty,
+        possible_abilities=pokemon.possible_abilities,
+        possible_items=pokemon.possible_items,
+        possible_moves=pokemon.possible_moves,
+        source_metadata=pokemon.source_metadata,
+    )
+
+
+def _variant_string_tuple(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if str(item))
+
+
+def _optional_variant_string(value: Any) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _optional_variant_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _event_value(event: Any, name: str) -> Optional[str]:

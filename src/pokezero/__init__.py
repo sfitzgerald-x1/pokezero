@@ -16,10 +16,13 @@ from .actions import (
 from .belief import (
     BattleBeliefSnapshot,
     CandidateSetSummary,
+    DeterminizedOpponentPokemon,
+    OpponentBeliefDeterminization,
     PlayerBeliefView,
     PokemonSetSource,
     PublicBattleBeliefEngine,
     RevealedPokemonBelief,
+    sample_opponent_determinizations,
 )
 from .bootstrap import (
     DEFAULT_BASELINE_OPPONENT_POLICY_SPECS,
@@ -272,6 +275,7 @@ __all__ = [
     "DEFAULT_PREFLIGHT_GAMES",
     "DEFAULT_PREFLIGHT_SEED_START",
     "DEFAULT_REPLAY_POLICY_ID",
+    "DeterminizedOpponentPokemon",
     "EntityTokenTransformerPolicy",
     "EVALUATION_PROFILES",
     "EvaluationProfile",
@@ -289,6 +293,7 @@ __all__ = [
     "NeuralSelfPlayPromotionConfig",
     "NeuralSelfPlayRunResult",
     "ObservationSpec",
+    "OpponentBeliefDeterminization",
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
@@ -443,6 +448,7 @@ __all__ = [
     "run_teacher_bootstrap",
     "save_linear_model",
     "save_transformer_checkpoint",
+    "sample_opponent_determinizations",
     "showdown_choice_for_action",
     "showdown_submission_for_action",
     "stable_category_id",

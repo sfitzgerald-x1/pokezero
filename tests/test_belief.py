@@ -1,7 +1,13 @@
 from pathlib import Path
 import unittest
 
-from pokezero.belief import CandidateSetSummary, PublicBattleBeliefEngine
+from pokezero.belief import (
+    CandidateSetSummary,
+    PlayerBeliefView,
+    PublicBattleBeliefEngine,
+    RevealedPokemonBelief,
+    sample_opponent_determinizations,
+)
 from pokezero.showdown import parse_showdown_replay
 
 
@@ -64,6 +70,121 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
 
         self.assertEqual(xatu.candidate_set_count, 3)
         self.assertEqual(xatu.uncertainty, 0.75)
+
+
+class OpponentBeliefDeterminizationTest(unittest.TestCase):
+    def test_samples_player_relative_opponent_variants_in_source_order(self) -> None:
+        view = PlayerBeliefView(
+            self_slot="p2",
+            opponent_slot="p1",
+            self_pokemon=(_belief("p2", "Charizard", variants=("self-charizard",)),),
+            opponent_pokemon=(
+                _belief("p1", "Arcanine", variants=("arcanine-a", "arcanine-b"), active=True),
+                _belief("p1", "Xatu", variants=("xatu-a", "xatu-b")),
+            ),
+        )
+
+        samples = sample_opponent_determinizations(view, sample_count=4)
+
+        self.assertEqual(len(samples), 4)
+        self.assertEqual(samples[0].combination_count, 4)
+        self.assertEqual(
+            [
+                tuple(pokemon.variant_id for pokemon in sample.opponent_pokemon)
+                for sample in samples
+            ],
+            [
+                ("arcanine-a", "xatu-a"),
+                ("arcanine-b", "xatu-a"),
+                ("arcanine-a", "xatu-b"),
+                ("arcanine-b", "xatu-b"),
+            ],
+        )
+        self.assertEqual(samples[0].self_slot, "p2")
+        self.assertEqual(samples[0].opponent_slot, "p1")
+        self.assertTrue(samples[0].opponent_pokemon[0].resolved)
+        self.assertEqual(samples[0].to_payload()["unresolved_count"], 0)
+        self.assertEqual([pokemon.species for pokemon in samples[0].opponent_pokemon], ["Arcanine", "Xatu"])
+        self.assertNotIn("Charizard", [pokemon.species for pokemon in samples[0].opponent_pokemon])
+
+    def test_determinization_cap_does_not_repeat_source_order_combinations(self) -> None:
+        view = PlayerBeliefView(
+            self_slot="p1",
+            opponent_slot="p2",
+            self_pokemon=(),
+            opponent_pokemon=(_belief("p2", "Xatu", variants=("xatu-a", "xatu-b")),),
+        )
+
+        samples = sample_opponent_determinizations(view, sample_count=5)
+
+        self.assertEqual(len(samples), 2)
+        self.assertEqual([sample.opponent_pokemon[0].variant_id for sample in samples], ["xatu-a", "xatu-b"])
+
+    def test_unsourced_opponent_stays_unresolved_instead_of_inventing_hidden_facts(self) -> None:
+        view = PlayerBeliefView(
+            self_slot="p1",
+            opponent_slot="p2",
+            self_pokemon=(),
+            opponent_pokemon=(
+                RevealedPokemonBelief(
+                    showdown_slot="p2",
+                    species="Tauros",
+                    active=True,
+                    revealed_moves=("Hidden Power",),
+                    candidate_set_count=0,
+                    possible_moves=("hiddenpowerghost",),
+                ),
+            ),
+        )
+
+        samples = sample_opponent_determinizations(view, sample_count=3)
+
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].combination_count, 1)
+        self.assertEqual(samples[0].unresolved_count, 1)
+        tauros = samples[0].opponent_pokemon[0]
+        self.assertFalse(tauros.resolved)
+        self.assertIsNone(tauros.variant_id)
+        self.assertEqual(tauros.revealed_moves, ("Hidden Power",))
+        self.assertEqual(tauros.possible_moves, ("hiddenpowerghost",))
+        self.assertEqual(tauros.moves, ())
+
+    def test_rejects_non_positive_sample_count(self) -> None:
+        view = PlayerBeliefView(self_slot="p1", opponent_slot="p2", self_pokemon=(), opponent_pokemon=())
+
+        with self.assertRaisesRegex(ValueError, "sample_count"):
+            sample_opponent_determinizations(view, sample_count=0)
+
+
+def _belief(
+    slot: str,
+    species: str,
+    *,
+    variants: tuple[str, ...],
+    active: bool = False,
+) -> RevealedPokemonBelief:
+    return RevealedPokemonBelief(
+        showdown_slot=slot,
+        species=species,
+        active=active,
+        candidate_set_count=len(variants),
+        uncertainty=1.0,
+        possible_abilities=tuple(f"ability-{variant}" for variant in variants),
+        possible_items=tuple(f"item-{variant}" for variant in variants),
+        possible_moves=tuple(f"move-{variant}" for variant in variants),
+        candidate_variants=tuple(
+            {
+                "variant_id": variant,
+                "source_set_id": f"{variant}-source",
+                "role": "fixture",
+                "level": 80,
+                "moves": [f"move-{variant}"],
+                "ability": f"ability-{variant}",
+                "item": f"item-{variant}",
+            }
+            for variant in variants
+        ),
+    )
 
 
 if __name__ == "__main__":

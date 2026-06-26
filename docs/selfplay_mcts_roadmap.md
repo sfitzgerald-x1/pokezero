@@ -41,7 +41,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;
-  a better basis for determinization than ad-hoc set sampling.
+  a better basis for determinization than ad-hoc set sampling. It now exposes bounded
+  player-relative opponent determinizations for search, preserving unknowns instead of inventing
+  hidden facts.
 - **Self-play iterate loop** (`neural_cli iterate` → `neural_selfplay.py`, `selfplay.py`,
   `collection.py`) — collect → train → benchmark, with promotion gates (`evaluation.py`).
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
