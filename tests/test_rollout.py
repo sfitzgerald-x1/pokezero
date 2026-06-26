@@ -3,7 +3,7 @@ import unittest
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import PolicyDecision, RandomLegalPolicy, SimpleLegalPolicy
-from pokezero.rollout import RolloutConfig, RolloutDriver
+from pokezero.rollout import RolloutConfig, RolloutDriver, continue_rollout_from_current_state
 
 
 def observation(mask: tuple[bool, ...]) -> PokeZeroObservationV0:
@@ -183,6 +183,53 @@ class RolloutDriverTest(unittest.TestCase):
         driver.run(seed=2)
 
         self.assertEqual(policy.reset_calls, 2)
+
+    def test_continue_rollout_from_current_state_does_not_reset_env(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",), ("p1",)], terminal_after_steps=2)
+
+        result = continue_rollout_from_current_state(
+            env=env,
+            policies={"p1": SimpleLegalPolicy(switch_probability=0.0)},
+            config=RolloutConfig(max_decision_rounds=5),
+            seed=44,
+            battle_id="continued",
+            starting_decision_round_index=2,
+        )
+
+        self.assertEqual(env.reset_calls, [])
+        self.assertEqual(result.decision_round_count, 2)
+        self.assertEqual(result.terminal, TerminalState(winner="p1", turn_count=2))
+        self.assertEqual([step.turn_index for step in result.trajectory.steps], [2, 3])
+        self.assertEqual(result.trajectory.metadata["starting_decision_round_index"], 2)
+
+    def test_continue_rollout_from_current_state_can_use_cached_first_observation(self) -> None:
+        first_observation = observation((False, False, False, False, True, False, False, False, False))
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+
+        result = continue_rollout_from_current_state(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(max_decision_rounds=3),
+            seed=12,
+            available_observations={"p1": first_observation},
+        )
+
+        self.assertEqual(env.observe_calls, [])
+        self.assertEqual(result.trajectory.steps[0].action_index, 4)
+
+    def test_continue_rollout_from_current_state_can_reset_policies(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+        policy = ResetCountingPolicy()
+
+        continue_rollout_from_current_state(
+            env=env,
+            policies={"p1": policy},
+            config=RolloutConfig(max_decision_rounds=3),
+            seed=12,
+            reset_policies=True,
+        )
+
+        self.assertEqual(policy.reset_calls, 1)
 
 
 class DrawBurningPolicy:

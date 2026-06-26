@@ -8,6 +8,7 @@ import random
 from typing import Mapping
 
 from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
+from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyDecision
 from .trajectory import BattleTrajectory, TrajectoryStep
 
@@ -38,89 +39,12 @@ class RolloutDriver:
     def run(self, *, seed: int, battle_id: str = "rollout") -> RolloutResult:
         self._reset_policies()
         self.env.reset(seed=seed, format_id=self.config.format_id)
-        player_rngs: dict[PlayerId, random.Random] = {}
-        trajectory = BattleTrajectory(
-            battle_id=battle_id,
-            format_id=self.config.format_id,
+        return continue_rollout_from_current_state(
+            env=self.env,
+            policies=self.policies,
+            config=self.config,
             seed=seed,
-            metadata={"max_decision_rounds": self.config.max_decision_rounds},
-        )
-        requested_players = self.env.requested_players()
-        available_observations = {}
-
-        for decision_round_index in range(self.config.max_decision_rounds):
-            terminal = self.env.terminal()
-            if terminal is not None:
-                trajectory.record_terminal(terminal)
-                return RolloutResult(
-                    trajectory=trajectory,
-                    terminal=terminal,
-                    decision_round_count=decision_round_index,
-                )
-
-            if not requested_players:
-                terminal = self.env.terminal()
-                if terminal is not None:
-                    trajectory.record_terminal(terminal)
-                    return RolloutResult(
-                        trajectory=trajectory,
-                        terminal=terminal,
-                        decision_round_count=decision_round_index,
-                    )
-                raise ValueError("environment requested no players before reaching terminal state.")
-
-            decisions: dict[PlayerId, PolicyDecision] = {}
-            observations = {}
-            for player_id in requested_players:
-                policy = self._policy_for_player(player_id)
-                observation = available_observations.get(player_id) or self.env.observe(player_id)
-                decision = policy.select_action(
-                    observation,
-                    rng=_rng_for_player(seed, player_id, player_rngs),
-                )
-                decisions[player_id] = decision
-                observations[player_id] = observation
-
-            step_result = self.env.step(
-                {player_id: decision.action_index for player_id, decision in decisions.items()}
-            )
-
-            for player_id in requested_players:
-                decision = decisions[player_id]
-                opponent_action_index = _opponent_action_index(player_id, decisions)
-                trajectory.append(
-                    TrajectoryStep(
-                        player_id=player_id,
-                        turn_index=decision_round_index,
-                        observation=observations[player_id],
-                        legal_action_mask=tuple(observations[player_id].legal_action_mask),
-                        action_index=decision.action_index,
-                        reward=float(step_result.rewards.get(player_id, 0.0)),
-                        opponent_action_index=opponent_action_index,
-                        action_probability=decision.action_probability,
-                        metadata={
-                            "policy_id": decision.policy_id,
-                            **dict(decision.metadata),
-                        },
-                    )
-                )
-
-            if step_result.terminal is not None:
-                trajectory.record_terminal(step_result.terminal)
-                return RolloutResult(
-                    trajectory=trajectory,
-                    terminal=step_result.terminal,
-                    decision_round_count=decision_round_index + 1,
-                )
-            requested_players = step_result.requested_players
-            available_observations = dict(step_result.observations)
-
-        terminal = TerminalState(winner=None, turn_count=self.config.max_decision_rounds, capped=True)
-        trajectory.record_terminal(terminal)
-        return RolloutResult(
-            trajectory=trajectory,
-            terminal=terminal,
-            decision_round_count=self.config.max_decision_rounds,
+            battle_id=battle_id,
         )
 
     def _policy_for_player(self, player_id: PlayerId) -> Policy:
@@ -130,15 +54,135 @@ class RolloutDriver:
             raise ValueError(f"no policy configured for requested player {player_id!r}.") from exc
 
     def _reset_policies(self) -> None:
-        seen: set[int] = set()
-        for policy in self.policies.values():
-            policy_id = id(policy)
-            if policy_id in seen:
-                continue
-            seen.add(policy_id)
-            reset = getattr(policy, "reset", None)
-            if callable(reset):
-                reset()
+        _reset_unique_policies(self.policies)
+
+
+def continue_rollout_from_current_state(
+    *,
+    env: PokeZeroEnv,
+    policies: Mapping[PlayerId, Policy],
+    config: RolloutConfig,
+    seed: int,
+    battle_id: str = "rollout-continuation",
+    starting_decision_round_index: int = 0,
+    available_observations: Mapping[PlayerId, PokeZeroObservationV0] | None = None,
+    reset_policies: bool = False,
+) -> RolloutResult:
+    """Continue a rollout from the env's current request boundary without resetting it."""
+
+    if starting_decision_round_index < 0:
+        raise ValueError("starting_decision_round_index must be non-negative.")
+    if starting_decision_round_index > config.max_decision_rounds:
+        raise ValueError("starting_decision_round_index cannot exceed max_decision_rounds.")
+    if reset_policies:
+        _reset_unique_policies(policies)
+
+    player_rngs: dict[PlayerId, random.Random] = {}
+    trajectory = BattleTrajectory(
+        battle_id=battle_id,
+        format_id=config.format_id,
+        seed=seed,
+        metadata={
+            "max_decision_rounds": config.max_decision_rounds,
+            "starting_decision_round_index": starting_decision_round_index,
+        },
+    )
+    requested_players = env.requested_players()
+    cached_observations = dict(available_observations or {})
+
+    for decision_round_index in range(starting_decision_round_index, config.max_decision_rounds):
+        terminal = env.terminal()
+        if terminal is not None:
+            trajectory.record_terminal(terminal)
+            return RolloutResult(
+                trajectory=trajectory,
+                terminal=terminal,
+                decision_round_count=decision_round_index - starting_decision_round_index,
+            )
+
+        if not requested_players:
+            terminal = env.terminal()
+            if terminal is not None:
+                trajectory.record_terminal(terminal)
+                return RolloutResult(
+                    trajectory=trajectory,
+                    terminal=terminal,
+                    decision_round_count=decision_round_index - starting_decision_round_index,
+                )
+            raise ValueError("environment requested no players before reaching terminal state.")
+
+        decisions: dict[PlayerId, PolicyDecision] = {}
+        observations = {}
+        for player_id in requested_players:
+            policy = _policy_for_player(policies, player_id)
+            observation = cached_observations.get(player_id) or env.observe(player_id)
+            decision = policy.select_action(
+                observation,
+                rng=_rng_for_player(seed, player_id, player_rngs),
+            )
+            decisions[player_id] = decision
+            observations[player_id] = observation
+
+        step_result = env.step(
+            {player_id: decision.action_index for player_id, decision in decisions.items()}
+        )
+
+        for player_id in requested_players:
+            decision = decisions[player_id]
+            opponent_action_index = _opponent_action_index(player_id, decisions)
+            trajectory.append(
+                TrajectoryStep(
+                    player_id=player_id,
+                    turn_index=decision_round_index,
+                    observation=observations[player_id],
+                    legal_action_mask=tuple(observations[player_id].legal_action_mask),
+                    action_index=decision.action_index,
+                    reward=float(step_result.rewards.get(player_id, 0.0)),
+                    opponent_action_index=opponent_action_index,
+                    action_probability=decision.action_probability,
+                    metadata={
+                        "policy_id": decision.policy_id,
+                        **dict(decision.metadata),
+                    },
+                )
+            )
+
+        if step_result.terminal is not None:
+            trajectory.record_terminal(step_result.terminal)
+            return RolloutResult(
+                trajectory=trajectory,
+                terminal=step_result.terminal,
+                decision_round_count=decision_round_index - starting_decision_round_index + 1,
+            )
+        requested_players = step_result.requested_players
+        cached_observations = dict(step_result.observations)
+
+    terminal = TerminalState(winner=None, turn_count=config.max_decision_rounds, capped=True)
+    trajectory.record_terminal(terminal)
+    return RolloutResult(
+        trajectory=trajectory,
+        terminal=terminal,
+        decision_round_count=config.max_decision_rounds - starting_decision_round_index,
+    )
+
+
+def _policy_for_player(policies: Mapping[PlayerId, Policy], player_id: PlayerId) -> Policy:
+    try:
+        return policies[player_id]
+    except KeyError as exc:
+        raise ValueError(f"no policy configured for requested player {player_id!r}.") from exc
+
+
+def _reset_unique_policies(policies: Mapping[PlayerId, Policy]) -> None:
+    seen: set[int] = set()
+    for policy in policies.values():
+        policy_id = id(policy)
+        if policy_id in seen:
+            continue
+        seen.add(policy_id)
+        reset = getattr(policy, "reset", None)
+        if callable(reset):
+            reset()
 
 
 def _opponent_action_index(

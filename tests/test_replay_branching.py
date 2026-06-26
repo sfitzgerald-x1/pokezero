@@ -13,6 +13,7 @@ from pokezero.replay_branching import (
     action_rounds_from_trajectory,
     replay_action_rounds,
     replay_trajectory_branch,
+    replay_trajectory_branch_rollout,
     replay_trajectory_prefix,
 )
 from pokezero.rollout import RolloutConfig, RolloutDriver
@@ -196,6 +197,27 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                 prefix_decision_round_count=0,
                 branch_actions={"p1": 4, "p2": 3},
             )
+
+    def test_replay_trajectory_branch_rollout_continues_after_branch_action(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        trajectory.append(_step("p1", 0, 2))
+        trajectory.append(_step("p2", 0, 3))
+        env = ScriptedReplayEnv((("p1", "p2"), ("p1",), ("p1",)))
+
+        result = replay_trajectory_branch_rollout(
+            env,
+            trajectory,
+            prefix_decision_round_count=1,
+            branch_actions={"p1": 4},
+            policies={"p1": RandomLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 2, "p2": 3}, {"p1": 4}, {"p1": 0}])
+        self.assertEqual(result.branch.branch_round, ReplayActionRound(turn_index=1, actions={"p1": 4}))
+        self.assertTrue(result.continuation.terminal.capped)
+        self.assertEqual(result.continuation.decision_round_count, 1)
+        self.assertEqual([step.turn_index for step in result.continuation.trajectory.steps], [2])
 
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
