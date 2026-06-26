@@ -101,21 +101,33 @@ def load_showdown_dex_cached(showdown_root: Path | str) -> ShowdownDex:
 
 def load_showdown_dex(showdown_root: Path | str) -> ShowdownDex:
     root = Path(showdown_root).expanduser().resolve()
+    sim_entry = root / "dist" / "sim" / "index.js"
     moves_path = root / "dist" / "data" / "moves.js"
     pokedex_path = root / "dist" / "data" / "pokedex.js"
-    typechart_path = root / "dist" / "data" / "typechart.js"
-    if not moves_path.exists() or not pokedex_path.exists() or not typechart_path.exists():
+    if not sim_entry.exists() or not moves_path.exists() or not pokedex_path.exists():
         raise FileNotFoundError(
-            "Built Pokemon Showdown dex data is missing. Expected dist/data/moves.js, "
-            "dist/data/pokedex.js, and dist/data/typechart.js under the Showdown root."
+            "Built Pokemon Showdown data is missing. Expected dist/sim/index.js, "
+            "dist/data/moves.js, and dist/data/pokedex.js under the Showdown root."
         )
+    # Source data from the gen3-modded Dex (Dex.forGen(3)) rather than the raw base data files:
+    # the base files carry current-generation attributes (e.g. Fairy typing, modern move stats,
+    # post-gen3 type-chart changes) that are wrong for a Gen 3 battle. forGen(3) resolves the
+    # gen3 typings, base stats, move data, and type chart with full inheritance applied.
+    #
+    # We iterate the base data KEYS (not gen3.moves.all()) and resolve each through gen3: the .all()
+    # iterator collapses Hidden Power's type variants onto a single id ("hiddenpower"), which would
+    # drop hiddenpower<type> entries. The base keys keep every variant; gen3.moves.get() returns the
+    # gen3-correct, per-variant data.
     script = """
 const root = process.argv[1];
 const {Moves} = require(root + '/dist/data/moves.js');
 const {Pokedex} = require(root + '/dist/data/pokedex.js');
-const {TypeChart} = require(root + '/dist/data/typechart.js');
+const {Dex} = require(root + '/dist/sim');
+const gen3 = Dex.forGen(3);
 const out = {moves: {}, species: {}, typeChart: {}};
-for (const [id, move] of Object.entries(Moves)) {
+for (const id of Object.keys(Moves)) {
+  const move = gen3.moves.get(id);
+  if (!move) continue;
   const boosts = move.boosts || (move.secondary && move.secondary.boosts) || {};
   // Emit the raw effect components; the single move-effect label (type/target/magnitude) and the
   // effect chance are derived in Python (testable, with per-move overrides for custom-onHit moves).
@@ -152,7 +164,9 @@ for (const [id, move] of Object.entries(Moves)) {
     selfdestruct: Boolean(move.selfdestruct)
   };
 }
-for (const [id, species] of Object.entries(Pokedex)) {
+for (const id of Object.keys(Pokedex)) {
+  const species = gen3.species.get(id);
+  if (!species) continue;
   out.species[id] = {
     id,
     name: species.name,
@@ -160,8 +174,8 @@ for (const [id, species] of Object.entries(Pokedex)) {
     baseStats: species.baseStats || {}
   };
 }
-for (const [id, typeInfo] of Object.entries(TypeChart)) {
-  out.typeChart[id] = typeInfo.damageTaken || {};
+for (const type of gen3.types.all()) {
+  out.typeChart[type.id] = type.damageTaken || {};
 }
 console.log(JSON.stringify(out));
 """

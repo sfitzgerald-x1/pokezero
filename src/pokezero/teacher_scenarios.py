@@ -193,8 +193,11 @@ def default_teacher_scenarios() -> tuple[TeacherScenario, ...]:
                     "self_active": {"species": "Starmie", "hp_fraction": 1.0, "status": "none"},
                     "self_side_conditions": [],
                     "opponent_active": {"species": "Xatu", "hp_fraction": 1.0, "status": "none"},
+                    # No hazards, so Rapid Spin (Gen 3: 20 BP) is scored as ordinary chip damage and
+                    # chosen over the weaker Constrict (10 BP). The alternative must stay below Gen 3
+                    # Rapid Spin's BP for the rapid_spin_no_hazards branch to be the chosen action.
                     "action_candidates": [
-                        _move(0, "tackle", "Tackle"),
+                        _move(0, "constrict", "Constrict"),
                         _move(1, "rapidspin", "Rapid Spin"),
                     ],
                 },

@@ -227,6 +227,16 @@ def teacher_scenario_dex():
                     "basePower": 35,
                     "accuracy": 95,
                 },
+                "constrict": {
+                    # Weaker than Rapid Spin in both this fixture (50 BP) and the real Gen 3 dex
+                    # (Rapid Spin 20 BP), so the no-hazards chip scenario picks Rapid Spin either way.
+                    "id": "constrict",
+                    "name": "Constrict",
+                    "type": "Normal",
+                    "category": "Physical",
+                    "basePower": 10,
+                    "accuracy": 100,
+                },
                 "rapidspin": {
                     "id": "rapidspin",
                     "name": "Rapid Spin",
