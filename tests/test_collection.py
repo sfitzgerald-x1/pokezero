@@ -35,6 +35,12 @@ from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, 
 from pokezero.neural_policy import TorchUnavailableError, torch_available
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy, ScriptedTeacherPolicy
+from pokezero.replay_benchmark import (
+    ReplayPrefixBenchmarkReport,
+    ReplayPrefixTiming,
+    benchmark_replay_prefixes,
+    replay_prefix_counts,
+)
 from pokezero.rollout import RolloutConfig
 from pokezero.rollout_cli import main as rollout_cli_main
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep, trajectory_from_dict, trajectory_to_dict
@@ -275,6 +281,32 @@ class CollectionTest(unittest.TestCase):
         )
 
         self.assertEqual(reset_seeds, [7, 8, 7, 8])
+
+    def test_replay_prefix_counts_evenly_samples_valid_branch_prefixes(self) -> None:
+        self.assertEqual(replay_prefix_counts(0, prefixes_per_game=5), ())
+        self.assertEqual(replay_prefix_counts(1, prefixes_per_game=5), (0,))
+        self.assertEqual(replay_prefix_counts(10, prefixes_per_game=5), (0, 2, 4, 7, 9))
+        self.assertEqual(replay_prefix_counts(4, prefixes_per_game=10), (0, 1, 2, 3))
+
+    def test_benchmark_replay_prefixes_replays_sampled_prefixes_on_warm_env(self) -> None:
+        env = OneTurnEnv()
+
+        report = benchmark_replay_prefixes(
+            env_factory=lambda: env,
+            policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            games=2,
+            prefixes_per_game=4,
+            seed_start=20,
+        )
+
+        self.assertTrue(env.closed)
+        self.assertEqual(report.games, 2)
+        self.assertEqual(report.source_decision_rounds, (1, 1))
+        self.assertEqual(report.total_prefixes, 2)
+        self.assertEqual([timing.seed for timing in report.timings], [20, 21])
+        self.assertEqual([timing.decision_round_count for timing in report.timings], [0, 0])
+        self.assertGreaterEqual(report.average_replay_seconds, 0.0)
 
     def test_policy_benchmark_matchups_builds_mirrored_shared_opponent_matchups(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -825,6 +857,58 @@ class CollectionTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--include-policy-head-to-head requires at least two --policy values", stderr.getvalue())
+
+    def test_rollout_cli_replay_benchmark_wires_arguments_and_prints_report(self) -> None:
+        fake_report = ReplayPrefixBenchmarkReport(
+            format_id="gen3randombattle",
+            max_decision_rounds=9,
+            games=2,
+            prefixes_per_game=3,
+            source_policy_ids={"p1": "random-legal", "p2": "random-legal"},
+            source_decision_rounds=(10, 12),
+            timings=(
+                ReplayPrefixTiming(
+                    seed=80,
+                    decision_round_count=0,
+                    elapsed_seconds=0.001,
+                    requested_players=("p1", "p2"),
+                    terminal=False,
+                ),
+                ReplayPrefixTiming(
+                    seed=80,
+                    decision_round_count=9,
+                    elapsed_seconds=0.003,
+                    requested_players=("p1", "p2"),
+                    terminal=False,
+                ),
+            ),
+        )
+        with patch("pokezero.rollout_cli.benchmark_replay_prefixes", return_value=fake_report) as benchmark:
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = rollout_cli_main(
+                    [
+                        "replay-benchmark",
+                        "--games",
+                        "2",
+                        "--prefixes-per-game",
+                        "3",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--seed-start",
+                        "80",
+                        "--max-decision-rounds",
+                        "9",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = benchmark.call_args.kwargs
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["prefixes_per_game"], 3)
+        self.assertEqual(kwargs["seed_start"], 80)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 9)
+        self.assertEqual(kwargs["policies"]["p1"].policy_id, "random-legal")
+        self.assertIn("p95_replay_ms: 3.00", stdout.getvalue())
 
     @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
     def test_collect_rollouts_smoke_with_local_showdown_env(self) -> None:
