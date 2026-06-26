@@ -12,6 +12,7 @@ from pokezero.collection import (
     BenchmarkReport,
     CollectionMetrics,
     aggregate_benchmark_head_to_heads,
+    ReusableEnvPool,
     benchmark_rollouts,
     collect_rollouts,
     current_peak_rss_mb,
@@ -193,6 +194,45 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual([record.seed for record in records], [10, 11])
         self.assertEqual([record.seed for record in streamed_records], [10, 11])
         self.assertEqual([record.battle_id for record in records], ["rollout-10", "rollout-11"])
+
+    def test_collect_rollouts_reuses_one_warm_env_across_games(self) -> None:
+        # Warm pool: the collector creates ONE env and resets it per game (reusing the bridge
+        # process), instead of spawning a fresh env (node process) per game.
+        instances: list[SeedRecordingEnv] = []
+
+        def factory() -> SeedRecordingEnv:
+            env = SeedRecordingEnv([])
+            instances.append(env)
+            return env
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collect_rollouts(
+                output_path=Path(temp_dir) / "rollouts.jsonl",
+                games=3,
+                env_factory=factory,
+                policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=10,
+            )
+
+        self.assertEqual(len(instances), 1)  # one env reused, not three fresh spawns
+        self.assertEqual(instances[0].reset_seeds, [10, 11, 12])  # reset once per game
+        self.assertTrue(instances[0].closed)  # closed when collection finishes
+
+    def test_reusable_env_pool_reuses_per_thread_and_closes(self) -> None:
+        instances: list[OneTurnEnv] = []
+
+        def factory() -> OneTurnEnv:
+            env = OneTurnEnv()
+            instances.append(env)
+            return env
+
+        pool = ReusableEnvPool(factory)
+        first, second = pool.get(), pool.get()
+        self.assertIs(first, second)  # same thread -> same env reused
+        self.assertEqual(len(instances), 1)
+        pool.close_all()
+        self.assertTrue(first.closed)
 
     def test_benchmark_rollouts_runs_default_matchups_without_writing_trajectories(self) -> None:
         with patch("pokezero.collection.current_peak_rss_mb", side_effect=(101.0, 102.0, 103.0, 104.0)):
