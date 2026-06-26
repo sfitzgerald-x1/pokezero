@@ -84,16 +84,21 @@ class LocalShowdownEnv:
         self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
         self._parsed_line_count = 0
         self._belief_fed_count = 0
+        # Warm pool: the bridge process is reused across battles. Each battle gets a unique routing
+        # token; events from a prior battle carry a stale token and are ignored (see _apply_event).
+        self._battle_counter = 0
+        self._battle_token: str | None = None
 
     @property
     def protocol_lines(self) -> tuple[str, ...]:
         return tuple(self._lines)
 
     def reset(self, *, seed: int, format_id: BattleFormat = "gen3randombattle") -> None:
-        self.close()
-        self._validate_runtime()
+        previous_token = self._battle_token
         self._battle_id = f"local-{format_id}-{seed}"
         self._format_id = format_id
+        self._battle_counter += 1
+        self._battle_token = f"b{self._battle_counter}"
         self._lines = []
         self._latest_requests = {}
         self._latest_turn = 0
@@ -103,11 +108,21 @@ class LocalShowdownEnv:
         self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
         self._parsed_line_count = 0
         self._belief_fed_count = 0
-        self._start_bridge()
+        # Reuse a live bridge process across battles (warm pool); only spawn when there is none or
+        # the previous one died. Stale events from the prior battle carry previous_token and are
+        # ignored by _apply_event, so a clean queue drain is not required.
+        reuse = self._process is not None and self._process.poll() is None
+        if not reuse:
+            self.close()  # clean up a dead process / drain threads, then spawn fresh
+            self._validate_runtime()
+            self._start_bridge()
+        elif previous_token is not None:
+            self._send_command({"type": "end", "battleId": previous_token})
         try:
             self._send_command(
                 {
                     "type": "start",
+                    "battleId": self._battle_token,
                     "formatid": format_id,
                     "seed": showdown_seed_from_int(seed),
                     "players": {"p1": "PokeZero p1", "p2": "PokeZero p2"},
@@ -153,7 +168,7 @@ class LocalShowdownEnv:
             player: showdown_choice_for_action(states[player], actions[player])
             for player in requested
         }
-        self._send_command({"type": "choices", "choices": choices})
+        self._send_command({"type": "choices", "battleId": self._battle_token, "choices": choices})
         self._read_until_boundary()
         if self._last_step_had_error:
             raise LocalShowdownError("Showdown rejected a submitted choice.")
@@ -162,8 +177,9 @@ class LocalShowdownEnv:
         observations = {player: self.observe(player) for player in next_requested}
         rewards = self._rewards()
         terminal = self.terminal()
-        if terminal is not None:
-            self.close()
+        # On terminal we leave the bridge process alive (warm pool): the finished battle is freed
+        # by the next reset()'s "end" command, or by close() on shutdown. This avoids a node
+        # respawn per game.
         return StepResult(
             observations=observations,
             rewards=rewards,
@@ -302,6 +318,12 @@ class LocalShowdownEnv:
 
     def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")
+        # On a reused (warm) process, events from a finished battle still drain through the queue;
+        # they carry that battle's routing token, so ignore anything not for the current battle.
+        # Global events (process-level errors, "closed") carry no battleId and are not filtered.
+        battle_id = event.get("battleId")
+        if battle_id is not None and self._battle_token is not None and battle_id != self._battle_token:
+            return False
         if event_type == "error":
             raise LocalShowdownError(str(event.get("message") or "Bridge error."))
         if event_type == "ready":
