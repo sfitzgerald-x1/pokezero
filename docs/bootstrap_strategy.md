@@ -2,6 +2,13 @@
 
 PokeZero now has enough harness infrastructure to run repeatable self-play experiments, but the next strategic question is data quality. The current linear reward-weighted loop is useful as a plumbing baseline; it should not be treated as proof that cold self-play from weak policies will produce a strong agent.
 
+> **Goal alignment.** PokeZero's objective is for the model to learn to play **from first principles
+> through self-play** (see [`goals.md`](goals.md)). The imitation machinery described here — the
+> scripted teacher, behavior cloning, DAgger — is **scaffolding for early signal and a control
+> condition, not the destination**. By construction, imitation can only approach its teacher's
+> strength; reaching the goal requires self-play to surpass it. Treat everything below as a way to get
+> the self-play loop off the ground, not as the strategy itself.
+
 ## Decision Fork
 
 There are two viable paths for the next phase.
@@ -54,7 +61,7 @@ Curated Gen 3 randbat replays may still be useful, but the corpus source is unre
 
 ## Current Recommendation
 
-Keep Path A running as a baseline, but build Path B around the scripted Gen 3 randbat teacher. The next learner will need stronger early signal than random/simple rollouts are likely to provide, and a teacher can generate format-matched trajectories immediately without waiting on replay corpus availability.
+Path A — strength emerging from self-play — is the goal. Path B (the scripted-teacher bootstrap) is a pragmatic way to give the early self-play loop stronger-than-random signal on a CPU budget, plus a control to measure against; it is scaffolding, not the target. Use it to get the loop off the ground, then rely on self-play to surpass it — imitation caps the policy at the teacher's own (modest) strength, so it cannot, on its own, reach the goal.
 
 Replay import remains valuable after a randbat replay source is identified. A normalized replay-to-rollout scaffold now exists and writes the same rollout JSONL schema used by self-play collection. This normalized shape deliberately sits below raw Showdown replay parsing: it expects player-relative observations and action indices that a future corpus-specific converter must reconstruct. Raw Showdown replay discovery, curation, and conversion are still unresolved, so replay import should not block the first bootstrap iteration.
 
