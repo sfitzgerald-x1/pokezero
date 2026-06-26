@@ -7,6 +7,8 @@ from typing import Mapping
 
 from .actions import ACTION_COUNT
 from .env import BattleFormat, PlayerId, PokeZeroEnv, StepResult, TerminalState
+from .policy import Policy
+from .rollout import RolloutConfig, RolloutResult, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
 
 
@@ -52,6 +54,14 @@ class ReplayBranchResult:
     prefix: ReplayPrefixResult
     branch_round: ReplayActionRound
     step_result: StepResult
+
+
+@dataclass(frozen=True)
+class ReplayBranchRolloutResult:
+    """A branch action plus policy rollout continuation from the resulting state."""
+
+    branch: ReplayBranchResult
+    continuation: RolloutResult
 
 
 def action_rounds_from_trajectory(
@@ -182,6 +192,41 @@ def replay_trajectory_branch(
         prefix=prefix,
         branch_round=branch_round,
         step_result=step_result,
+    )
+
+
+def replay_trajectory_branch_rollout(
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    *,
+    prefix_decision_round_count: int,
+    branch_actions: Mapping[PlayerId, int],
+    policies: Mapping[PlayerId, Policy],
+    rollout_config: RolloutConfig,
+    battle_id: str = "replay-branch-rollout",
+    reset_policies: bool = True,
+) -> ReplayBranchRolloutResult:
+    """Replay, branch once, then continue the rollout with policies until terminal or cap."""
+
+    branch = replay_trajectory_branch(
+        env,
+        trajectory,
+        prefix_decision_round_count=prefix_decision_round_count,
+        branch_actions=branch_actions,
+    )
+    continuation = continue_rollout_from_current_state(
+        env=env,
+        policies=policies,
+        config=rollout_config,
+        seed=trajectory.seed,
+        battle_id=battle_id,
+        starting_decision_round_index=prefix_decision_round_count + 1,
+        available_observations=branch.step_result.observations,
+        reset_policies=reset_policies,
+    )
+    return ReplayBranchRolloutResult(
+        branch=branch,
+        continuation=continuation,
     )
 
 

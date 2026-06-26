@@ -165,10 +165,12 @@ from .replay_import import (
 from .replay_branching import (
     ReplayActionRound,
     ReplayBranchResult,
+    ReplayBranchRolloutResult,
     ReplayPrefixResult,
     action_rounds_from_trajectory,
     replay_action_rounds,
     replay_trajectory_branch,
+    replay_trajectory_branch_rollout,
     replay_trajectory_prefix,
 )
 from .replay_benchmark import (
@@ -177,6 +179,7 @@ from .replay_benchmark import (
     benchmark_replay_prefixes,
     replay_prefix_counts,
 )
+from .rollout import continue_rollout_from_current_state
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
@@ -310,6 +313,7 @@ __all__ = [
     "REPLAY_IMPORT_SCHEMA_VERSION",
     "ReplayActionRound",
     "ReplayBranchResult",
+    "ReplayBranchRolloutResult",
     "ReplayPrefixBenchmarkReport",
     "ReplayPrefixResult",
     "ReplayPrefixTiming",
@@ -361,6 +365,7 @@ __all__ = [
     "canonical_switch_action_map",
     "collect_rollouts",
     "collect_selfplay_rollouts",
+    "continue_rollout_from_current_state",
     "detect_showdown_slot",
     "examples_from_record",
     "evaluate_linear_policy",
@@ -403,6 +408,7 @@ __all__ = [
     "require_torch",
     "replay_action_rounds",
     "replay_trajectory_branch",
+    "replay_trajectory_branch_rollout",
     "replay_prefix_counts",
     "replay_trajectory_prefix",
     "rollout_record_from_dict",
