@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import unittest
 
@@ -16,6 +17,8 @@ from pokezero.showdown import (
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    NUMERIC_ACTUAL_HP,
+    NUMERIC_ACTUAL_SPE,
     NUMERIC_EFFECT_CHANCE,
     NUMERIC_MOVE_PP_FRACTION,
     NUMERIC_OPP_FUTURE_SIGHT,
@@ -23,7 +26,9 @@ from pokezero.showdown import (
     NUMERIC_SELF_HP_COST,
     NUMERIC_TOXIC_STAGE,
     NUMERIC_TURN_COUNT,
+    _actual_stats_from_request_row,
     _encode_move_mechanics,
+    _max_hp_from_condition,
     _move_pp_fraction,
     NUMERIC_BASE_ATK,
     NUMERIC_BASE_DEF,
@@ -753,6 +758,61 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertAlmostEqual(numeric[NUMERIC_SELF_HAZARDS], 0.0)
         self.assertAlmostEqual(numeric[NUMERIC_SELF_SCREENS], 1.0)  # reflect + light screen / 2
         self.assertAlmostEqual(numeric[NUMERIC_OPP_SCREENS], 0.0)
+
+
+class PlayerActualStatsTest(unittest.TestCase):
+    """The player's own actual computed stats (from the request) are surfaced on self tokens."""
+
+    def test_max_hp_from_condition(self) -> None:
+        self.assertEqual(_max_hp_from_condition("180/250"), 250)
+        self.assertEqual(_max_hp_from_condition("250/250"), 250)
+        self.assertIsNone(_max_hp_from_condition("0 fnt"))
+        self.assertIsNone(_max_hp_from_condition(None))
+
+    def test_actual_stats_from_request_row(self) -> None:
+        row = {"condition": "250/250", "stats": {"atk": 200, "def": 180, "spa": 286, "spd": 206, "spe": 236}}
+        self.assertEqual(
+            _actual_stats_from_request_row(row, row["condition"]),
+            {"atk": 200, "def": 180, "spa": 286, "spd": 206, "spe": 236, "hp": 250},
+        )
+        # No stats object (e.g. simplified payload) -> None.
+        self.assertIsNone(_actual_stats_from_request_row({"condition": "0 fnt"}, "0 fnt"))
+
+    def test_actual_stats_encoded_on_self_tokens_only(self) -> None:
+        request = {
+            "active": [{"moves": [{"move": "Flamethrower", "id": "flamethrower", "pp": 8, "maxpp": 8}]}],
+            "side": {
+                "id": "p2",
+                "name": "PokeZeroBot",
+                "pokemon": [
+                    {"ident": "p2a: Charizard", "details": "Charizard, L78", "condition": "250/250",
+                     "active": True, "stats": {"atk": 200, "def": 180, "spa": 286, "spd": 206, "spe": 236}},
+                    {"ident": "p2b: Snorlax", "details": "Snorlax, L78", "condition": "520/520",
+                     "active": False, "stats": {"atk": 250, "def": 160, "spa": 160, "spd": 230, "spe": 90}},
+                ],
+            },
+        }
+        lines = [
+            "|player|p1|Foe|1|",
+            "|player|p2|PokeZeroBot|2|",
+            "|switch|p1a: Xatu|Xatu, L78|100/100",
+            "|switch|p2a: Charizard|Charizard, L78|250/250",
+            "|turn|1",
+            "|request|" + json.dumps(request),
+        ]
+        replay = parse_showdown_replay(lines, battle_id="b")
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+
+        self_active = FIELD_TOKEN_COUNT  # token 1: active Charizard
+        self_bench = FIELD_TOKEN_COUNT + 1  # token 2: Snorlax
+        opp_active = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT  # token 7: Xatu (no actual stats)
+        self.assertAlmostEqual(observation.numeric_features[self_active][NUMERIC_ACTUAL_SPE], 236 / 714)
+        self.assertAlmostEqual(observation.numeric_features[self_active][NUMERIC_ACTUAL_HP], 250 / 714)
+        self.assertAlmostEqual(observation.numeric_features[self_bench][NUMERIC_ACTUAL_SPE], 90 / 714)
+        # The opponent's actual stats are hidden -> the slots stay padding (0).
+        self.assertEqual(observation.numeric_features[opp_active][NUMERIC_ACTUAL_SPE], 0.0)
+        self.assertEqual(observation.numeric_features[opp_active][NUMERIC_ACTUAL_HP], 0.0)
 
 
 if __name__ == "__main__":
