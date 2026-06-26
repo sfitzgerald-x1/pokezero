@@ -13,13 +13,15 @@ from .cli_audit import (
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
 )
-from .collection import BenchmarkMatchup, benchmark_rollouts, policy_spec_with_showdown_root, reject_eval_only_specs
+from .collection import BenchmarkMatchup, benchmark_rollouts, policy_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
     DEFAULT_CATEGORY_OOV_BUCKETS,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     collect_categorical_ids,
+    evaluate_transformer_action_priors,
+    evaluate_transformer_observation_value,
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
@@ -27,6 +29,7 @@ from .neural_policy import (
     torch_available,
     train_transformer_policy,
 )
+from .search_benchmark import RootPUCTSearchBenchmarkReport, benchmark_root_puct_search
 from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
@@ -131,6 +134,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.set_defaults(func=_benchmark)
+
+    root_puct = subparsers.add_parser(
+        "root-puct-benchmark",
+        help="Evaluate root-PUCT checkpoint decisions on sampled rollout prefixes.",
+    )
+    root_puct.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path used for policy priors and value scores.")
+    root_puct.add_argument("--games", type=int, default=3, help="Number of source games to generate.")
+    root_puct.add_argument(
+        "--prefixes-per-game",
+        type=int,
+        default=5,
+        help="Evenly sampled source prefixes evaluated with root PUCT per game.",
+    )
+    root_puct.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    root_puct.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    root_puct.add_argument("--seed-start", type=int, default=1, help="First deterministic source-game seed.")
+    root_puct.add_argument("--max-decision-rounds", type=int, default=250, help="Source rollout decision-round cap.")
+    root_puct.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    root_puct.add_argument("--p1-policy", default="random-legal", help="Source rollout policy for p1.")
+    root_puct.add_argument("--p2-policy", default="random-legal", help="Source rollout policy for p2.")
+    root_puct.add_argument("--search-player", choices=("p1", "p2"), default="p1", help="Player side whose recorded decisions are re-scored.")
+    root_puct.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
+    root_puct.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    root_puct.add_argument("--temperature", type=float, default=1.0, help="Policy-prior softmax temperature.")
+    root_puct.add_argument("--json", action="store_true", help="Print search benchmark results as JSON.")
+    root_puct.set_defaults(func=_root_puct_benchmark)
 
     value_calibration = subparsers.add_parser(
         "value-calibration",
@@ -470,6 +499,59 @@ def _benchmark(args: argparse.Namespace) -> int:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
         print_benchmark_report(report)
+    return 0
+
+
+def _root_puct_benchmark(args: argparse.Namespace) -> int:
+    require_torch()
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    policies = {
+        "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
+        "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
+    }
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+
+    def value_fn(history):
+        return evaluate_transformer_observation_value(
+            model=model,
+            result=result,
+            observations=history,
+            device=args.device,
+        )
+
+    def prior_fn(history):
+        return evaluate_transformer_action_priors(
+            model=model,
+            result=result,
+            observations=history,
+            temperature=args.temperature,
+            device=args.device,
+        )
+
+    report = benchmark_root_puct_search(
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        policies=policies,
+        rollout_config=rollout_config,
+        games=args.games,
+        prefixes_per_game=args.prefixes_per_game,
+        seed_start=args.seed_start,
+        search_player=args.search_player,
+        cpuct=args.cpuct,
+        value_fn=value_fn,
+        prior_fn=prior_fn,
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print_root_puct_benchmark_report(report)
     return 0
 
 
@@ -843,6 +925,46 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
             f"{bin_result.mean_return:9.4f} "
             f"{bin_result.calibration_error:9.4f}"
         )
+
+
+def print_root_puct_benchmark_report(report: RootPUCTSearchBenchmarkReport) -> None:
+    print(f"format: {report.format_id}")
+    print(f"games: {report.games}")
+    print(f"prefixes_per_game: {report.prefixes_per_game}")
+    print(f"max_decision_rounds: {report.max_decision_rounds}")
+    print(f"search_player: {report.search_player}")
+    print(f"cpuct: {report.cpuct:.3f}")
+    print(f"source_policy_ids: {dict(report.source_policy_ids)}")
+    print(f"source_average_decision_rounds: {report.average_source_decision_rounds:.2f}")
+    print(f"evaluated_prefixes: {report.evaluated_prefixes}")
+    print(f"skipped_prefixes: {report.skipped_prefixes}")
+    print(f"changed_actions: {report.changed_actions}")
+    print(f"action_change_rate: {report.action_change_rate:.3f}")
+    print(f"average_candidate_count: {report.average_candidate_count:.2f}")
+    print(f"average_search_ms: {report.average_elapsed_seconds * 1000.0:.2f}")
+    if not report.decisions:
+        return
+    print("")
+    header = (
+        f"{'seed':>6} {'prefix':>6} {'recorded':>8} {'selected':>8} "
+        f"{'changed':>7} {'value':>8} {'score':>8} {'cand':>5} {'ms':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for decision in report.decisions[:20]:
+        print(
+            f"{decision.seed:6d} "
+            f"{decision.prefix_decision_round_count:6d} "
+            f"{decision.recorded_action_index:8d} "
+            f"{decision.selected_action_index:8d} "
+            f"{str(decision.changed_action):>7} "
+            f"{decision.selected_value:8.3f} "
+            f"{decision.selected_score:8.3f} "
+            f"{decision.candidate_count:5d} "
+            f"{decision.elapsed_seconds * 1000.0:8.2f}"
+        )
+    if len(report.decisions) > 20:
+        print(f"... {len(report.decisions) - 20} more decisions omitted; use --json for full details.")
 
 
 def _policy_from_checkpoint(
