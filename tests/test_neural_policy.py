@@ -19,6 +19,7 @@ from pokezero.neural_policy import (
     TransformerSoftmaxPolicy,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
+    evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
     load_transformer_checkpoint,
     require_torch,
@@ -169,6 +170,48 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(model.shapes["categorical_ids"], (1, 2, spec.token_count, 1))
         self.assertEqual(model.shapes["numeric_features"], (1, 2, spec.token_count, 1))
         self.assertEqual(model.shapes["history_mask"], (1, 2))
+
+    def test_evaluate_transformer_action_priors_masks_illegal_actions(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=2,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class FakePriorModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                logits = torch.zeros(1, 9)
+                logits[0, 0] = -2.0
+                logits[0, 1] = 2.0
+                logits[0, 2] = 20.0
+                return SimpleNamespace(policy_logits=logits, value=torch.tensor([0.0]))
+
+        priors = evaluate_transformer_action_priors(
+            model=FakePriorModel(),
+            result=SimpleNamespace(model_config=config),
+            observations=(observation(1), observation(2), observation(3)),
+            device="cpu",
+        )
+
+        self.assertEqual(len(priors), 9)
+        self.assertAlmostEqual(sum(priors), 1.0, places=5)
+        self.assertGreater(priors[1], priors[0])
+        self.assertEqual(priors[2], 0.0)
 
     def test_transformer_training_config_validates_training_knobs(self) -> None:
         self.assertEqual(TransformerTrainingConfig().window_size, 4)
