@@ -162,6 +162,13 @@ from .replay_import import (
     import_replay_files,
     rollout_record_from_normalized_replay,
 )
+from .replay_branching import (
+    ReplayActionRound,
+    ReplayPrefixResult,
+    action_rounds_from_trajectory,
+    replay_action_rounds,
+    replay_trajectory_prefix,
+)
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
     DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP,
@@ -293,6 +300,8 @@ __all__ = [
     "PublicBattleBeliefEngine",
     "RevealedPokemonBelief",
     "REPLAY_IMPORT_SCHEMA_VERSION",
+    "ReplayActionRound",
+    "ReplayPrefixResult",
     "ReplayImportResult",
     "RolloutRecord",
     "RunAuditCheck",
@@ -378,7 +387,10 @@ __all__ = [
     "import_replay_files",
     "read_rollout_records",
     "record_promotion",
+    "action_rounds_from_trajectory",
     "require_torch",
+    "replay_action_rounds",
+    "replay_trajectory_prefix",
     "rollout_record_from_dict",
     "rollout_record_from_normalized_replay",
     "rollout_record_to_dict",

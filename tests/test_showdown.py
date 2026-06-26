@@ -164,6 +164,25 @@ class ReorderedFakeSetSource(FakeSetSource):
 
 
 class ShowdownReplayNormalizationTest(unittest.TestCase):
+    def test_timestamp_lines_are_not_normalized_into_public_events(self) -> None:
+        replay = parse_showdown_replay(
+            [
+                "|player|p1|HumanFriend|",
+                "|player|p2|PokeZeroBot|",
+                "|t:|1782513831",
+                "|switch|p1a: Xatu|Xatu, L80|100/100",
+                "|t:|1782513832",
+                "|turn|1",
+            ],
+            battle_id="battle-gen3randombattle-1",
+        )
+
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+        self.assertNotIn("|t:|", "\n".join(state.recent_public_events))
+        self.assertFalse(any(event.event_type == "t:" for event in replay.public_events))
+        self.assertFalse(any(line.startswith("|t:|") for line in replay.public_lines))
+
     def test_detected_player_name_overrides_stale_configured_slot(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
 
