@@ -1343,6 +1343,22 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
             f"{bin_result.mean_return:9.4f} "
             f"{bin_result.calibration_error:9.4f}"
         )
+    if report.slices:
+        print("")
+        slice_header = f"{'slice':>20} {'count':>6} {'mse':>9} {'mae':>9} {'bias':>9} {'sign':>7} {'ece':>9}"
+        print(slice_header)
+        print("-" * len(slice_header))
+        for slice_result in report.slices:
+            sign_accuracy = f"{slice_result.sign_accuracy:7.4f}" if slice_result.sign_accuracy_applicable else "    n/a"
+            print(
+                f"{slice_result.name:>20} "
+                f"{slice_result.examples:6d} "
+                f"{slice_result.mse:9.4f} "
+                f"{slice_result.mae:9.4f} "
+                f"{slice_result.bias:9.4f} "
+                f"{sign_accuracy} "
+                f"{slice_result.expected_calibration_error:9.4f}"
+            )
 
 
 def print_root_puct_benchmark_report(report: RootPUCTSearchBenchmarkReport) -> None:
