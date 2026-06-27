@@ -230,6 +230,40 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertGreater(bounded_value, -1.0)
         self.assertLess(bounded_value, -0.99)
 
+    def test_transformer_linear_value_activation_preserves_unbounded_outputs(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = replace(
+            TransformerPolicyConfig.compact_category(
+                category_vocab=("species:a",),
+                category_oov_buckets=1,
+                embedding_dim=8,
+                transformer_layers=1,
+                attention_heads=2,
+                feedforward_dim=16,
+                dropout=0.0,
+            ),
+            value_activation="linear",
+        )
+        model = EntityTokenTransformerPolicy(config)
+        shape = (1, config.window_size, config.token_count)
+        inputs = {
+            "categorical_ids": torch.zeros((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.zeros((*shape, config.numeric_feature_count), dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.ones((1, config.window_size), dtype=torch.bool),
+        }
+
+        with torch.no_grad():
+            model.value_head.weight.zero_()
+            model.value_head.bias.fill_(5.0)
+
+        output = model(**inputs)
+
+        self.assertGreater(float(output.value[0].detach()), 4.99)
+
     def test_evaluate_transformer_action_priors_masks_illegal_actions(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")
