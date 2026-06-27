@@ -77,6 +77,7 @@ from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
+NEURAL_ITERATE_EXPERIMENT_PRESETS = ("none", "foundation-arms-race")
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
@@ -469,6 +470,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
     iterate.add_argument("--iterations", type=int, required=True, help="Number of collect/train/evaluate iterations.")
     iterate.add_argument("--resume", action="store_true", help="Continue an existing neural self-play run directory from its latest manifest.")
+    iterate.add_argument(
+        "--experiment-preset",
+        choices=NEURAL_ITERATE_EXPERIMENT_PRESETS,
+        default="none",
+        help=(
+            "Optional experiment preset. 'foundation-arms-race' fills the current WS-A CPU PPO "
+            "arms-race recipe unless a specific option is explicitly supplied."
+        ),
+    )
     iterate.add_argument("--games-per-iteration", type=int, required=True, help="Rollout games collected before each train step.")
     iterate.add_argument("--workers", type=int, default=16, help="Parallel rollout collection workers per iteration (capped at the game count).")
     iterate.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
@@ -739,7 +749,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_argv)
+    args._explicit_cli_options = _explicit_cli_options(raw_argv)
     try:
         return int(args.func(args))
     except RunAuditFailure as exc:
@@ -748,6 +760,19 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def _explicit_cli_options(argv: Iterable[str]) -> frozenset[str]:
+    options: set[str] = set()
+    for token in argv:
+        if token == "--":
+            break
+        if not token.startswith("--") or token == "--":
+            continue
+        option = token[2:].split("=", 1)[0]
+        if option:
+            options.add(option.replace("-", "_"))
+    return frozenset(options)
 
 
 def _describe(args: argparse.Namespace) -> int:
@@ -1583,6 +1608,7 @@ def _print_value_calibration_quality_gates(payload: Mapping[str, Any]) -> None:
 def _iterate(args: argparse.Namespace) -> int:
     # Surface the missing-neural-extra message before any Showdown file I/O (vocab build).
     require_torch()
+    _apply_iterate_experiment_preset(args)
     # Fail fast: eval-only baselines (max-damage) cannot seed self-play training.
     reject_eval_only_specs([args.initial_policy], role="self-play initial policy")
     reject_eval_only_specs(args.opponent_policy or (), role="self-play training opponent")
@@ -1728,6 +1754,7 @@ def _iterate(args: argparse.Namespace) -> int:
         value_calibration_config=_value_calibration_config_from_args(args),
         value_selection_config=_value_selection_config_from_args(args),
         collector_advancement_mode=args.collector_advancement_mode,
+        experiment_preset=args.experiment_preset,
         resume=args.resume,
     )
     if args.json:
@@ -1735,6 +1762,41 @@ def _iterate(args: argparse.Namespace) -> int:
     else:
         _print_iterate_summary(result)
     return 0
+
+
+def _apply_iterate_experiment_preset(args: argparse.Namespace) -> None:
+    if args.experiment_preset == "none":
+        return
+    if args.experiment_preset != "foundation-arms-race":
+        raise ValueError(f"unsupported neural iterate experiment preset: {args.experiment_preset!r}.")
+
+    _set_preset_default(args, "objective", "ppo")
+    _set_preset_default(args, "mirror_match", True)
+    _set_preset_default(args, "collector_advancement_mode", "always")
+    _set_preset_default(args, "collection_temperature", 1.4)
+    _set_preset_default(args, "historical_opponent_selection", "spread")
+    _set_preset_default(args, "evaluation_games", 200)
+    _set_preset_default(args, "value_calibration", True)
+    _set_preset_default(args, "value_selection", True)
+    _set_preset_default(args, "value_selection_metric", "pearson_correlation")
+    _set_preset_default(args, "value_selection_heldout_games", 32)
+
+    if args.objective == "ppo":
+        _set_preset_default(args, "entropy_coef", 0.01)
+        _set_preset_default(args, "ppo_target_mode", "gae")
+
+    explicit_options = getattr(args, "_explicit_cli_options", frozenset())
+    benchmark_references = list(args.benchmark_reference_policy or ())
+    if "benchmark_reference_policy" not in explicit_options and not benchmark_references:
+        benchmark_references = ["max-damage"]
+    elif "max-damage" not in {str(spec).partition("?")[0] for spec in benchmark_references}:
+        benchmark_references.append("max-damage")
+    args.benchmark_reference_policy = benchmark_references or None
+
+
+def _set_preset_default(args: argparse.Namespace, name: str, value: Any) -> None:
+    if name not in getattr(args, "_explicit_cli_options", frozenset()):
+        setattr(args, name, value)
 
 
 def _print_run_audit_failure(exc: RunAuditFailure) -> None:
