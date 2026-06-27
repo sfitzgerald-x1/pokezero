@@ -197,6 +197,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   run manifest. By default it selects on iteration/history training rollouts; for a
   cleaner value-calibration read, `--value-selection-heldout-games` collects separate current-policy
   self-play games that are used only for epoch selection and are not added to the training history.
+  `neural_cli foundation-value-tune-plan/run/report` now wraps the standalone value-only path for a
+  selected foundation candidate (`latest-accepted` by default, or `best-max-damage`) so WS-E
+  experiments can fine-tune the value head of the retained base-policy checkpoint without manually
+  reconstructing rollout/checkpoint paths.
   A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
   held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
   games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
