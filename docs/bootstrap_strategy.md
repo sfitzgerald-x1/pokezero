@@ -543,6 +543,12 @@ baseline variant leaves the underlying neural iterate default intact (currently 
 the opponent-signal variant explicitly passes a higher `--opponent-action-loss-weight`. Compare it
 against baseline on the same profile and seed bands before drawing any search conclusions.
 
+Use `--variant temporal-gru` to evaluate the GRU temporal aggregator as a WS-E/WS-A
+value/base-net ablation. Use `--variant opponent-signal-gru` when the question is whether the H3
+opponent-signal change and GRU temporal aggregation combine better than either lever alone. These
+variants pass `--temporal-aggregator gru` to `neural_cli iterate`; they are foundation arms to compare
+with `foundation-compare`, not MCTS verdicts.
+
 Audit a run for regression-health checks that are cheap to run on CPU:
 
 ```bash

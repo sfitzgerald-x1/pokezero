@@ -124,10 +124,22 @@ NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
     "baseline": {
         "description": "Use the foundation-arms-race preset without wrapper-level auxiliary-loss changes.",
         "opponent_action_loss_weight": None,
+        "temporal_aggregator": None,
     },
     "opponent-signal": {
         "description": "Increase opponent-action auxiliary supervision for an H3 foundation ablation.",
         "opponent_action_loss_weight": 1.0,
+        "temporal_aggregator": None,
+    },
+    "temporal-gru": {
+        "description": "Use the GRU temporal aggregator as a WS-E/WS-A value/base-net ablation.",
+        "opponent_action_loss_weight": None,
+        "temporal_aggregator": "gru",
+    },
+    "opponent-signal-gru": {
+        "description": "Combine opponent-action auxiliary supervision with the GRU temporal aggregator.",
+        "opponent_action_loss_weight": 1.0,
+        "temporal_aggregator": "gru",
     },
 }
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
@@ -954,6 +966,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         type=float,
         default=None,
         help="Override the variant's opponent-action auxiliary loss weight.",
+    )
+    parser.add_argument(
+        "--temporal-aggregator",
+        choices=("mean", "gru"),
+        default=None,
+        help="Override the variant's temporal aggregator for value/opponent heads.",
     )
     parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
     parser.add_argument("--resume", action="store_true", help="Resume an existing neural foundation run directory.")
@@ -2905,6 +2923,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
+    if resolved["temporal_aggregator"] is not None:
+        argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
     if args.device is not None:
         argv.extend(["--device", str(args.device)])
     if args.resume:
@@ -2929,13 +2949,18 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | float | None]:
+def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | float | str | None]:
     profile = NEURAL_FOUNDATION_PROFILES[args.profile]
     variant = NEURAL_FOUNDATION_VARIANTS[args.variant]
     opponent_action_loss_weight = (
         args.opponent_action_loss_weight
         if args.opponent_action_loss_weight is not None
         else variant["opponent_action_loss_weight"]
+    )
+    temporal_aggregator = (
+        args.temporal_aggregator
+        if args.temporal_aggregator is not None
+        else variant["temporal_aggregator"]
     )
     resolved = {
         "iterations": _foundation_option(args.iterations, profile["iterations"]),
@@ -2949,6 +2974,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
             profile["value_selection_heldout_games"],
         ),
         "opponent_action_loss_weight": opponent_action_loss_weight,
+        "temporal_aggregator": temporal_aggregator,
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
@@ -2957,6 +2983,8 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         raise ValueError("value-selection-heldout-games must be non-negative.")
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
+    if resolved["temporal_aggregator"] is not None and resolved["temporal_aggregator"] not in {"mean", "gru"}:
+        raise ValueError("temporal-aggregator must be 'mean' or 'gru'.")
     return resolved
 
 

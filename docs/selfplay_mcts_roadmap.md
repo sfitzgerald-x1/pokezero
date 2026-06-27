@@ -434,6 +434,9 @@ Steps:
    simply continuing the same H3 run; the next WS-A lever should change the training signal,
    initialization, or selection/retention policy rather than expecting more identical iterations to
    climb.
+   The foundation wrapper now exposes `temporal-gru` and `opponent-signal-gru` variants so the
+   optional GRU temporal aggregator can be evaluated as the next CPU WS-E/WS-A foundation lever
+   before returning to larger root-PUCT reads.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
