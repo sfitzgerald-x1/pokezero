@@ -313,10 +313,44 @@ class TransformerEpochMetrics:
 
 
 @dataclass(frozen=True)
+class ValueCalibrationTransform:
+    scale: float = 1.0
+    bias: float = 0.0
+    clip_min: float = -1.0
+    clip_max: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.clip_min >= self.clip_max:
+            raise ValueError("clip_min must be less than clip_max.")
+
+    def apply(self, value: float) -> float:
+        calibrated = (self.scale * float(value)) + self.bias
+        return min(self.clip_max, max(self.clip_min, calibrated))
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "scale": float(self.scale),
+            "bias": float(self.bias),
+            "clip_min": float(self.clip_min),
+            "clip_max": float(self.clip_max),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ValueCalibrationTransform":
+        return cls(
+            scale=float(payload.get("scale", 1.0)),
+            bias=float(payload.get("bias", 0.0)),
+            clip_min=float(payload.get("clip_min", -1.0)),
+            clip_max=float(payload.get("clip_max", 1.0)),
+        )
+
+
+@dataclass(frozen=True)
 class TransformerTrainingResult:
     model_config: TransformerPolicyConfig
     training_config: TransformerTrainingConfig
     epochs: tuple[TransformerEpochMetrics, ...]
+    value_calibration_transform: ValueCalibrationTransform | None = None
 
     @property
     def final_metrics(self) -> TransformerEpochMetrics:
@@ -491,7 +525,11 @@ def evaluate_transformer_observation_value(
             attention_mask=tensors["attention_mask"],
             history_mask=tensors["history_mask"],
         )
-    return float(output.value[0].detach().cpu().item())
+    value = float(output.value[0].detach().cpu().item())
+    transform = getattr(result, "value_calibration_transform", None)
+    if isinstance(transform, ValueCalibrationTransform):
+        return transform.apply(value)
+    return value
 
 
 def evaluate_transformer_action_priors(
@@ -811,6 +849,9 @@ def save_transformer_checkpoint(
             "model_config": result.model_config.to_dict(),
             "training_config": result.training_config.to_dict(),
             "epochs": [metrics.to_dict() for metrics in result.epochs],
+            "value_calibration_transform": (
+                result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
+            ),
             "state_dict": model.state_dict(),
         },
         checkpoint_path,
@@ -828,6 +869,7 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
     model.load_state_dict(payload["state_dict"])
     if map_location is not None:
         model.to(map_location)
+    value_calibration_payload = payload.get("value_calibration_transform")
     result = TransformerTrainingResult(
         model_config=model_config,
         training_config=training_config,
@@ -854,6 +896,11 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
             )
             for metrics in payload.get("epochs", ())
+        ),
+        value_calibration_transform=(
+            ValueCalibrationTransform.from_dict(value_calibration_payload)
+            if isinstance(value_calibration_payload, Mapping)
+            else None
         ),
     )
     return model, result

@@ -8,12 +8,13 @@ import unittest
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.neural_cli import print_value_calibration_report
-from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
+from pokezero.neural_policy import TransformerTrainingConfig, ValueCalibrationTransform, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import (
     ValueCalibrationReport,
     evaluate_value_calibration,
+    fit_affine_value_calibration_transform,
     value_selection_metric_direction,
     value_selection_metric_value,
     value_selection_score,
@@ -77,6 +78,26 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(value_selection_score(0.75, "sign_accuracy"), 0.75)
         with self.assertRaisesRegex(ValueError, "unsupported value selection metric"):
             value_selection_metric_direction("not-a-metric")
+
+    def test_fit_affine_value_calibration_transform_maps_predictions_to_returns(self) -> None:
+        transform = fit_affine_value_calibration_transform(
+            predictions=(-0.5, 0.0, 0.5),
+            returns=(-1.0, 0.0, 1.0),
+        )
+
+        self.assertAlmostEqual(transform.scale, 2.0)
+        self.assertAlmostEqual(transform.bias, 0.0)
+        self.assertAlmostEqual(transform.apply(0.25), 0.5)
+        self.assertEqual(transform.apply(2.0), 1.0)
+
+    def test_fit_affine_value_calibration_transform_handles_constant_predictions(self) -> None:
+        transform = fit_affine_value_calibration_transform(
+            predictions=(0.25, 0.25, 0.25),
+            returns=(-1.0, 0.0, 1.0),
+        )
+
+        self.assertEqual(transform.scale, 0.0)
+        self.assertAlmostEqual(transform.bias, 0.0)
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():
@@ -149,6 +170,61 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(report.sign_accuracy, 1.0)
         self.assertFalse(model.training_during_call)
         self.assertTrue(model.training)
+
+    def test_evaluate_value_calibration_applies_stored_transform(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class FakeValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                batch_size = int(kwargs["categorical_ids"].shape[0])
+                return SimpleNamespace(value=torch.tensor((0.4, -0.4)[:batch_size]))
+
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=9)
+        observation = _observation()
+        for player_id in ("p1", "p2"):
+            trajectory.append(
+                TrajectoryStep(
+                    player_id=player_id,
+                    turn_index=0,
+                    observation=observation,
+                    legal_action_mask=observation.legal_action_mask,
+                    action_index=0,
+                )
+            )
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=1))
+        record = RolloutRecord(
+            battle_id="battle",
+            seed=9,
+            format_id="gen3randombattle",
+            policy_ids={"p1": "fixture", "p2": "fixture"},
+            decision_round_count=1,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+
+            report = evaluate_value_calibration(
+                model=FakeValueModel(),
+                training_result=SimpleNamespace(
+                    training_config=TransformerTrainingConfig(window_size=1),
+                    value_calibration_transform=ValueCalibrationTransform(scale=2.0, bias=0.0),
+                ),
+                paths=path,
+                batch_size=2,
+                bins=4,
+            )
+
+        self.assertAlmostEqual(report.mae, (abs(0.8 - 1.0) + abs(-0.8 - -1.0)) / 2)
+        self.assertEqual(report.sign_accuracy, 1.0)
 
     def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
         if not torch_available():

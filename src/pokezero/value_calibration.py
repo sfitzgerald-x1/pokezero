@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Iterable
 
 from .dataset import TrajectoryDatasetConfig, iter_training_batches
-from .neural_policy import TransformerTrainingResult, require_torch, training_batch_to_torch
+from .neural_policy import (
+    TransformerTrainingResult,
+    ValueCalibrationTransform,
+    require_torch,
+    training_batch_to_torch,
+)
 
 PathInput = str | PathLike[str] | Path
 VALUE_SELECTION_METRICS = ("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias")
@@ -141,7 +146,11 @@ def evaluate_value_calibration(
                     attention_mask=tensors["attention_mask"],
                     history_mask=tensors["history_mask"],
                 )
-                predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
+                transform = getattr(training_result, "value_calibration_transform", None)
+                predictions = tuple(
+                    _apply_value_calibration_transform(float(value), transform)
+                    for value in output.value.detach().cpu().tolist()
+                )
                 returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
                 totals.add(predictions=predictions, returns=returns)
                 slice_totals.add(
@@ -154,6 +163,58 @@ def evaluate_value_calibration(
         if was_training is not None and hasattr(model, "train"):
             model.train(bool(was_training))
     return totals.to_report(slices=slice_totals.to_slices())
+
+
+def fit_value_calibration_transform(
+    *,
+    model: object,
+    training_result: TransformerTrainingResult,
+    paths: PathInput | Iterable[PathInput],
+    batch_size: int = 128,
+    device: str | object | None = None,
+) -> ValueCalibrationTransform:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    torch_module = require_torch()
+    was_training = getattr(model, "training", None)
+    if hasattr(model, "eval"):
+        model.eval()
+    if device is not None and hasattr(model, "to"):
+        model.to(device)
+    dataset_config = TrajectoryDatasetConfig(
+        window_size=training_result.training_config.window_size,
+        discount=training_result.training_config.discount,
+        capped_terminal_value=training_result.training_config.capped_terminal_value,
+    )
+    totals = _AffineFitTotals()
+    try:
+        with torch_module.no_grad():
+            for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
+                tensors = training_batch_to_torch(batch, device=device)
+                output = model(
+                    categorical_ids=tensors["categorical_ids"],
+                    numeric_features=tensors["numeric_features"],
+                    token_type_ids=tensors["token_type_ids"],
+                    attention_mask=tensors["attention_mask"],
+                    history_mask=tensors["history_mask"],
+                )
+                predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
+                returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
+                totals.add(predictions=predictions, returns=returns)
+    finally:
+        if was_training is not None and hasattr(model, "train"):
+            model.train(bool(was_training))
+    return totals.to_transform()
+
+
+def fit_affine_value_calibration_transform(
+    *,
+    predictions: tuple[float, ...],
+    returns: tuple[float, ...],
+) -> ValueCalibrationTransform:
+    totals = _AffineFitTotals()
+    totals.add(predictions=predictions, returns=returns)
+    return totals.to_transform()
 
 
 def value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
@@ -178,6 +239,41 @@ def value_selection_metric_direction(metric: str) -> str:
 
 def value_selection_score(metric_value: float, metric: str) -> float:
     return metric_value if value_selection_metric_direction(metric) == "max" else -metric_value
+
+
+def _apply_value_calibration_transform(value: float, transform: object) -> float:
+    if isinstance(transform, ValueCalibrationTransform):
+        return transform.apply(value)
+    return float(value)
+
+
+@dataclass
+class _AffineFitTotals:
+    examples: int = 0
+    prediction_sum: float = 0.0
+    return_sum: float = 0.0
+    prediction_square_sum: float = 0.0
+    prediction_return_sum: float = 0.0
+
+    def add(self, *, predictions: tuple[float, ...], returns: tuple[float, ...]) -> None:
+        if len(predictions) != len(returns):
+            raise ValueError("predictions and returns must have the same length.")
+        for prediction, target in zip(predictions, returns, strict=True):
+            self.examples += 1
+            self.prediction_sum += prediction
+            self.return_sum += target
+            self.prediction_square_sum += prediction * prediction
+            self.prediction_return_sum += prediction * target
+
+    def to_transform(self) -> ValueCalibrationTransform:
+        if self.examples == 0:
+            raise ValueError("calibration data produced no examples.")
+        denominator = (self.examples * self.prediction_square_sum) - (self.prediction_sum * self.prediction_sum)
+        if abs(denominator) <= 1e-12:
+            return ValueCalibrationTransform(scale=0.0, bias=self.return_sum / self.examples)
+        scale = ((self.examples * self.prediction_return_sum) - (self.prediction_sum * self.return_sum)) / denominator
+        bias = (self.return_sum - (scale * self.prediction_sum)) / self.examples
+        return ValueCalibrationTransform(scale=scale, bias=bias)
 
 
 @dataclass
