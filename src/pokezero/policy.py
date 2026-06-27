@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import ShowdownDex, load_showdown_dex_cached, normalize_id
 from .observation import PokeZeroObservationV0
+from .trajectory import BattleTrajectory
 
 
 _STATUS_CURE_WEIGHTS = {
@@ -63,6 +64,18 @@ class PolicyDecision:
             raise ValueError("action_probability must be between 0 and 1 when set.")
 
 
+@dataclass(frozen=True)
+class PolicyContext:
+    player_id: str
+    decision_round_index: int
+    battle_id: str
+    format_id: str
+    seed: int
+    observation: PokeZeroObservationV0
+    requested_players: tuple[str, ...]
+    trajectory: BattleTrajectory
+
+
 @runtime_checkable
 class Policy(Protocol):
     policy_id: str
@@ -70,6 +83,17 @@ class Policy(Protocol):
     def select_action(
         self,
         observation: PokeZeroObservationV0,
+        *,
+        rng: random.Random,
+    ) -> PolicyDecision:
+        ...
+
+
+@runtime_checkable
+class ContextAwarePolicy(Policy, Protocol):
+    def select_action_with_context(
+        self,
+        context: PolicyContext,
         *,
         rng: random.Random,
     ) -> PolicyDecision:

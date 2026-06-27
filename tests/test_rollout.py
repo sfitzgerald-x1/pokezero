@@ -160,6 +160,29 @@ class RolloutDriverTest(unittest.TestCase):
         else:
             self.assertEqual(step.action_probability, 0.25)
 
+    def test_rollout_dispatches_context_aware_policy_without_opponent_private_observations(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",), ("p1",)], terminal_after_steps=2)
+        policy = ContextRecordingPolicy(action_index=0)
+        driver = RolloutDriver(env=env, policies={"p1": policy}, config=RolloutConfig(max_decision_rounds=3))
+
+        result = driver.run(seed=22, battle_id="context-battle")
+
+        self.assertEqual(result.decision_round_count, 2)
+        self.assertEqual(len(policy.contexts), 2)
+        first, second = policy.contexts
+        self.assertEqual(first.player_id, "p1")
+        self.assertEqual(first.decision_round_index, 0)
+        self.assertEqual(first.battle_id, "context-battle")
+        self.assertEqual(first.format_id, "gen3randombattle")
+        self.assertEqual(first.seed, 22)
+        self.assertEqual(first.requested_players, ("p1",))
+        self.assertIs(first.observation, env.default_observation)
+        self.assertFalse(hasattr(first, "available_observations"))
+        self.assertEqual(first.trajectory.steps, [])
+        self.assertEqual(second.decision_round_index, 1)
+        self.assertEqual(len(second.trajectory.steps), 1)
+        self.assertEqual(result.trajectory.steps[0].metadata["policy_id"], "context-recorder")
+
     def test_rollout_rejects_missing_policy_for_requested_player(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
         driver = RolloutDriver(env=env, policies={"p1": RandomLegalPolicy()})
@@ -255,6 +278,21 @@ class ResetCountingPolicy:
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         return RandomLegalPolicy(policy_id=self.policy_id).select_action(observation, rng=rng)
+
+
+class ContextRecordingPolicy:
+    policy_id = "context-recorder"
+
+    def __init__(self, *, action_index: int) -> None:
+        self.action_index = action_index
+        self.contexts = []
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        raise AssertionError("context-aware policy should use select_action_with_context")
+
+    def select_action_with_context(self, context, *, rng) -> PolicyDecision:
+        self.contexts.append(context)
+        return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
 
 
 class StepResultDrivenEnv:

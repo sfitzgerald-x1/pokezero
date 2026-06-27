@@ -147,7 +147,7 @@ from .opponents import (
     historical_opponent_policy_specs,
     opponent_pool_policy_specs,
 )
-from .policy import ScriptedTeacherPolicy
+from .policy import ContextAwarePolicy, PolicyContext, ScriptedTeacherPolicy
 from .promotion import (
     PROMOTION_REGISTRY_SCHEMA_VERSION,
     PromotionRecordResult,
@@ -236,6 +236,11 @@ from .search_benchmark import (
     benchmark_root_puct_counterfactual_rollouts,
     benchmark_root_puct_search,
 )
+from .search_policy import (
+    OpponentActionPlanner,
+    RootPUCTSearchPolicy,
+    no_opponent_action_planner,
+)
 from .value_calibration import (
     ValueCalibrationBin,
     ValueCalibrationReport,
@@ -277,6 +282,7 @@ __all__ = [
     "BranchSearchCandidate",
     "CandidateSetSummary",
     "CollectionMetrics",
+    "ContextAwarePolicy",
     "DEFAULT_AUDIT_CALIBRATION_MARGIN",
     "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
     "DEFAULT_BENCHMARK_GAMES",
@@ -316,6 +322,7 @@ __all__ = [
     "NeuralSelfPlayRunResult",
     "ObservationSpec",
     "ObservationValueFunction",
+    "OpponentActionPlanner",
     "OpponentBeliefDeterminization",
     "OBSERVATION_SCHEMA_VERSION",
     "PokeZeroEnv",
@@ -340,6 +347,7 @@ __all__ = [
     "SWITCH_ACTION_COUNT",
     "PlayerRelativeBattleState",
     "PlayerRelativePublicEvent",
+    "PolicyContext",
     "PlayerBeliefView",
     "PokemonSetSource",
     "PromotionBenchmarkOpponentResult",
@@ -364,6 +372,7 @@ __all__ = [
     "RolloutRecord",
     "RootPUCTCounterfactualBenchmarkReport",
     "RootPUCTCounterfactualDecision",
+    "RootPUCTSearchPolicy",
     "RootPUCTSearchBenchmarkReport",
     "RootPUCTSearchDecision",
     "RunAuditCheck",
@@ -443,6 +452,7 @@ __all__ = [
     "linear_policy_factory_from_model_spec",
     "move_action_candidates",
     "normalize_for_player",
+    "no_opponent_action_planner",
     "observation_window_to_torch",
     "opponent_pool_policy_specs",
     "observation_from_player_state",
