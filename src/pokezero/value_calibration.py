@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from os import PathLike
 from pathlib import Path
 from typing import Iterable
@@ -51,6 +52,7 @@ class ValueCalibrationReport:
     sign_accuracy: float
     expected_calibration_error: float
     bins: tuple[ValueCalibrationBin, ...]
+    pearson_correlation: float | None = None
     slices: tuple["ValueCalibrationSlice", ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -61,6 +63,7 @@ class ValueCalibrationReport:
             "bias": self.bias,
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
+            "pearson_correlation": self.pearson_correlation,
             "bins": [bin_result.to_dict() for bin_result in self.bins],
             "slices": [slice_result.to_dict() for slice_result in self.slices],
         }
@@ -75,6 +78,7 @@ class ValueCalibrationSlice:
     bias: float
     sign_accuracy: float
     expected_calibration_error: float
+    pearson_correlation: float | None = None
     sign_accuracy_applicable: bool = True
 
     @classmethod
@@ -93,6 +97,7 @@ class ValueCalibrationSlice:
             bias=report.bias,
             sign_accuracy=report.sign_accuracy,
             expected_calibration_error=report.expected_calibration_error,
+            pearson_correlation=report.pearson_correlation,
             sign_accuracy_applicable=sign_accuracy_applicable,
         )
 
@@ -105,6 +110,7 @@ class ValueCalibrationSlice:
             "bias": self.bias,
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
+            "pearson_correlation": self.pearson_correlation,
             "sign_accuracy_applicable": self.sign_accuracy_applicable,
         }
 
@@ -293,6 +299,11 @@ class _ValueCalibrationTotals:
     absolute_error: float = 0.0
     signed_error: float = 0.0
     sign_correct: int = 0
+    prediction_sum: float = 0.0
+    return_sum: float = 0.0
+    prediction_square_sum: float = 0.0
+    return_square_sum: float = 0.0
+    prediction_return_sum: float = 0.0
 
     def __post_init__(self) -> None:
         self._bin_totals: list[_BinTotals] = [_BinTotals() for _ in range(self.bin_count)]
@@ -306,6 +317,11 @@ class _ValueCalibrationTotals:
             self.squared_error += error * error
             self.absolute_error += abs(error)
             self.signed_error += error
+            self.prediction_sum += prediction
+            self.return_sum += target
+            self.prediction_square_sum += prediction * prediction
+            self.return_square_sum += target * target
+            self.prediction_return_sum += prediction * target
             if _sign(prediction) == _sign(target):
                 self.sign_correct += 1
             self._bin_totals[self._bin_index(prediction)].add(prediction=prediction, target=target)
@@ -333,6 +349,14 @@ class _ValueCalibrationTotals:
             sign_accuracy=self.sign_correct / self.examples,
             expected_calibration_error=expected_calibration_error,
             bins=bins,
+            pearson_correlation=_pearson_correlation(
+                count=self.examples,
+                prediction_sum=self.prediction_sum,
+                return_sum=self.return_sum,
+                prediction_square_sum=self.prediction_square_sum,
+                return_square_sum=self.return_square_sum,
+                prediction_return_sum=self.prediction_return_sum,
+            ),
             slices=slices,
         )
 
@@ -459,3 +483,21 @@ def _sign(value: float) -> int:
     if value < 0.0:
         return -1
     return 0
+
+
+def _pearson_correlation(
+    *,
+    count: int,
+    prediction_sum: float,
+    return_sum: float,
+    prediction_square_sum: float,
+    return_square_sum: float,
+    prediction_return_sum: float,
+) -> float | None:
+    numerator = (count * prediction_return_sum) - (prediction_sum * return_sum)
+    prediction_denominator = (count * prediction_square_sum) - (prediction_sum * prediction_sum)
+    return_denominator = (count * return_square_sum) - (return_sum * return_sum)
+    denominator = prediction_denominator * return_denominator
+    if denominator <= 1e-12:
+        return None
+    return numerator / math.sqrt(denominator)

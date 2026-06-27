@@ -1759,7 +1759,8 @@ def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> No
             "- value_calibration: present "
             f"examples={_format_manifest_value(calibration.get('examples'))} "
             f"sign={_format_optional_float(calibration.get('sign_accuracy'), digits=4)} "
-            f"ece={_format_optional_float(calibration.get('expected_calibration_error'), digits=6)}"
+            f"ece={_format_optional_float(calibration.get('expected_calibration_error'), digits=6)} "
+            f"corr={_format_optional_float(calibration.get('pearson_correlation'), digits=4)}"
         )
     else:
         print("- value_calibration: missing")
@@ -1817,6 +1818,7 @@ def _foundation_value_calibration_payload(report: Mapping[str, Any] | None) -> d
         "examples": _int_or_none(report.get("examples")),
         "sign_accuracy": _float_or_none(report.get("sign_accuracy")),
         "expected_calibration_error": _float_or_none(report.get("expected_calibration_error")),
+        "pearson_correlation": _float_or_none(report.get("pearson_correlation")),
         "mse": _float_or_none(report.get("mse")),
         "mae": _float_or_none(report.get("mae")),
         "bias": _float_or_none(report.get("bias")),
@@ -2152,6 +2154,8 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
     print(f"bias: {report.bias:.6f}")
     print(f"sign_accuracy: {report.sign_accuracy:.4f}")
     print(f"expected_calibration_error: {report.expected_calibration_error:.6f}")
+    correlation = "n/a" if report.pearson_correlation is None else f"{report.pearson_correlation:.4f}"
+    print(f"pearson_correlation: {correlation}")
     print("")
     header = f"{'bin':>13} {'count':>6} {'pred':>9} {'return':>9} {'cal_err':>9}"
     print(header)
@@ -2166,11 +2170,12 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
         )
     if report.slices:
         print("")
-        slice_header = f"{'slice':>20} {'count':>6} {'mse':>9} {'mae':>9} {'bias':>9} {'sign':>7} {'ece':>9}"
+        slice_header = f"{'slice':>20} {'count':>6} {'mse':>9} {'mae':>9} {'bias':>9} {'sign':>7} {'ece':>9} {'corr':>7}"
         print(slice_header)
         print("-" * len(slice_header))
         for slice_result in report.slices:
             sign_accuracy = f"{slice_result.sign_accuracy:7.4f}" if slice_result.sign_accuracy_applicable else "    n/a"
+            correlation = "    n/a" if slice_result.pearson_correlation is None else f"{slice_result.pearson_correlation:7.4f}"
             print(
                 f"{slice_result.name:>20} "
                 f"{slice_result.examples:6d} "
@@ -2178,7 +2183,8 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
                 f"{slice_result.mae:9.4f} "
                 f"{slice_result.bias:9.4f} "
                 f"{sign_accuracy} "
-                f"{slice_result.expected_calibration_error:9.4f}"
+                f"{slice_result.expected_calibration_error:9.4f} "
+                f"{correlation}"
             )
 
 

@@ -56,7 +56,18 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(report.sign_accuracy, 0.75)
         self.assertEqual([bin_result.count for bin_result in report.bins], [1, 1, 1, 1])
         self.assertGreater(report.expected_calibration_error, 0.0)
+        self.assertAlmostEqual(report.pearson_correlation or 0.0, 7.0 / (55.0**0.5))
         self.assertEqual(report.to_dict()["examples"], 4)
+        self.assertAlmostEqual(report.to_dict()["pearson_correlation"], 7.0 / (55.0**0.5))
+
+    def test_value_calibration_correlation_is_absent_for_constant_targets(self) -> None:
+        totals = _ValueCalibrationTotals(bin_count=2)
+
+        totals.add(predictions=(-0.5, 0.0, 0.5), returns=(1.0, 1.0, 1.0))
+        report = totals.to_report()
+
+        self.assertIsNone(report.pearson_correlation)
+        self.assertIsNone(report.to_dict()["pearson_correlation"])
 
     def test_value_calibration_totals_rejects_empty_report(self) -> None:
         with self.assertRaisesRegex(ValueError, "no examples"):
@@ -539,8 +550,11 @@ class ValueCalibrationTest(unittest.TestCase):
         with contextlib.redirect_stdout(stdout):
             print_value_calibration_report(report)
 
-        self.assertIn("return:zero", stdout.getvalue())
-        self.assertIn("n/a", stdout.getvalue())
+        output = stdout.getvalue()
+        self.assertIn("pearson_correlation:", output)
+        self.assertIn("return:zero", output)
+        self.assertIn("corr", output)
+        self.assertIn("n/a", output)
 
 
 if __name__ == "__main__":
