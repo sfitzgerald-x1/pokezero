@@ -110,6 +110,98 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertAlmostEqual(report.mae, (abs(0.8 - 1.0) + abs(-0.6 - -1.0)) / 2)
         self.assertEqual(report.sign_accuracy, 1.0)
 
+    def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class FakeValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                batch_size = int(kwargs["categorical_ids"].shape[0])
+                return SimpleNamespace(value=torch.tensor((0.8, -0.6, 0.1, -0.2)[:batch_size]))
+
+        uncapped = BattleTrajectory(battle_id="uncapped", format_id="gen3randombattle", seed=9)
+        uncapped.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=_observation(),
+                legal_action_mask=_observation().legal_action_mask,
+                action_index=0,
+            )
+        )
+        uncapped.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=15,
+                observation=_observation(),
+                legal_action_mask=_observation().legal_action_mask,
+                action_index=0,
+            )
+        )
+        uncapped.record_terminal(TerminalState(winner="p1", turn_count=16))
+        capped = BattleTrajectory(battle_id="capped", format_id="gen3randombattle", seed=10)
+        capped.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=35,
+                observation=_observation(),
+                legal_action_mask=_observation().legal_action_mask,
+                action_index=0,
+            )
+        )
+        capped.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=5,
+                observation=_observation(),
+                legal_action_mask=_observation().legal_action_mask,
+                action_index=0,
+            )
+        )
+        capped.record_terminal(TerminalState(winner=None, turn_count=250, capped=True))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                for trajectory in (uncapped, capped):
+                    write_rollout_record(
+                        handle,
+                        RolloutRecord(
+                            battle_id=trajectory.battle_id,
+                            seed=trajectory.seed,
+                            format_id=trajectory.format_id,
+                            policy_ids={"p1": "fixture", "p2": "fixture"},
+                            decision_round_count=trajectory.terminal.turn_count if trajectory.terminal else 0,
+                            elapsed_seconds=0.1,
+                            terminal=trajectory.terminal,
+                            trajectory=trajectory,
+                        ),
+                    )
+
+            report = evaluate_value_calibration(
+                model=FakeValueModel(),
+                training_result=SimpleNamespace(training_config=TransformerTrainingConfig(window_size=1)),
+                paths=path,
+                batch_size=4,
+                bins=4,
+            )
+
+        slice_counts = {slice_result.name: slice_result.examples for slice_result in report.slices}
+
+        self.assertEqual(slice_counts["return:positive"], 1)
+        self.assertEqual(slice_counts["return:negative"], 1)
+        self.assertEqual(slice_counts["return:zero"], 2)
+        self.assertEqual(slice_counts["turn:early_0_9"], 2)
+        self.assertEqual(slice_counts["turn:mid_10_29"], 1)
+        self.assertEqual(slice_counts["turn:late_30_plus"], 1)
+        self.assertEqual(slice_counts["terminal:uncapped"], 2)
+        self.assertEqual(slice_counts["terminal:capped"], 2)
+        self.assertIn("slices", report.to_dict())
+
 
 if __name__ == "__main__":
     unittest.main()

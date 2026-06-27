@@ -45,6 +45,7 @@ class ValueCalibrationReport:
     sign_accuracy: float
     expected_calibration_error: float
     bins: tuple[ValueCalibrationBin, ...]
+    slices: tuple["ValueCalibrationSlice", ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -55,6 +56,41 @@ class ValueCalibrationReport:
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
             "bins": [bin_result.to_dict() for bin_result in self.bins],
+            "slices": [slice_result.to_dict() for slice_result in self.slices],
+        }
+
+
+@dataclass(frozen=True)
+class ValueCalibrationSlice:
+    name: str
+    examples: int
+    mse: float
+    mae: float
+    bias: float
+    sign_accuracy: float
+    expected_calibration_error: float
+
+    @classmethod
+    def from_report(cls, *, name: str, report: ValueCalibrationReport) -> "ValueCalibrationSlice":
+        return cls(
+            name=name,
+            examples=report.examples,
+            mse=report.mse,
+            mae=report.mae,
+            bias=report.bias,
+            sign_accuracy=report.sign_accuracy,
+            expected_calibration_error=report.expected_calibration_error,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "examples": self.examples,
+            "mse": self.mse,
+            "mae": self.mae,
+            "bias": self.bias,
+            "sign_accuracy": self.sign_accuracy,
+            "expected_calibration_error": self.expected_calibration_error,
         }
 
 
@@ -82,6 +118,7 @@ def evaluate_value_calibration(
         capped_terminal_value=training_result.training_config.capped_terminal_value,
     )
     totals = _ValueCalibrationTotals(bin_count=bins)
+    slice_totals = _ValueCalibrationSliceTotals(bin_count=bins)
     with torch_module.no_grad():
         for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
             tensors = training_batch_to_torch(batch, device=device)
@@ -95,7 +132,13 @@ def evaluate_value_calibration(
             predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
             returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
             totals.add(predictions=predictions, returns=returns)
-    return totals.to_report()
+            slice_totals.add(
+                predictions=predictions,
+                returns=returns,
+                turn_indices=tuple(int(value) for value in batch.turn_indices),
+                terminal_capped=tuple(bool(value) for value in batch.terminal_capped),
+            )
+    return totals.to_report(slices=slice_totals.to_slices())
 
 
 @dataclass
@@ -123,7 +166,7 @@ class _ValueCalibrationTotals:
                 self.sign_correct += 1
             self._bin_totals[self._bin_index(prediction)].add(prediction=prediction, target=target)
 
-    def to_report(self) -> ValueCalibrationReport:
+    def to_report(self, *, slices: tuple[ValueCalibrationSlice, ...] = ()) -> ValueCalibrationReport:
         if self.examples == 0:
             raise ValueError("calibration data produced no examples.")
         bins = tuple(
@@ -146,6 +189,7 @@ class _ValueCalibrationTotals:
             sign_accuracy=self.sign_correct / self.examples,
             expected_calibration_error=expected_calibration_error,
             bins=bins,
+            slices=slices,
         )
 
     def _bin_index(self, prediction: float) -> int:
@@ -182,6 +226,81 @@ class _BinTotals:
             mean_prediction=self.prediction_sum / self.count,
             mean_return=self.return_sum / self.count,
         )
+
+
+@dataclass
+class _ValueCalibrationSliceTotals:
+    bin_count: int
+
+    def __post_init__(self) -> None:
+        self._totals_by_name: dict[str, _ValueCalibrationTotals] = {}
+
+    def add(
+        self,
+        *,
+        predictions: tuple[float, ...],
+        returns: tuple[float, ...],
+        turn_indices: tuple[int, ...],
+        terminal_capped: tuple[bool, ...],
+    ) -> None:
+        lengths = {len(predictions), len(returns), len(turn_indices), len(terminal_capped)}
+        if len(lengths) != 1:
+            raise ValueError("slice inputs must have the same length.")
+        for prediction, target, turn_index, capped in zip(
+            predictions,
+            returns,
+            turn_indices,
+            terminal_capped,
+            strict=True,
+        ):
+            for name in _slice_names(return_value=target, turn_index=turn_index, terminal_capped=capped):
+                self._totals_for(name).add(predictions=(prediction,), returns=(target,))
+
+    def to_slices(self) -> tuple[ValueCalibrationSlice, ...]:
+        slices: list[ValueCalibrationSlice] = []
+        for name in _SLICE_ORDER:
+            totals = self._totals_by_name.get(name)
+            if totals is not None and totals.examples:
+                slices.append(ValueCalibrationSlice.from_report(name=name, report=totals.to_report()))
+        return tuple(slices)
+
+    def _totals_for(self, name: str) -> _ValueCalibrationTotals:
+        totals = self._totals_by_name.get(name)
+        if totals is None:
+            totals = _ValueCalibrationTotals(bin_count=self.bin_count)
+            self._totals_by_name[name] = totals
+        return totals
+
+
+_SLICE_ORDER = (
+    "return:positive",
+    "return:negative",
+    "return:zero",
+    "turn:early_0_9",
+    "turn:mid_10_29",
+    "turn:late_30_plus",
+    "terminal:uncapped",
+    "terminal:capped",
+)
+
+
+def _slice_names(*, return_value: float, turn_index: int, terminal_capped: bool) -> tuple[str, ...]:
+    if return_value > 0.0:
+        return_name = "return:positive"
+    elif return_value < 0.0:
+        return_name = "return:negative"
+    else:
+        return_name = "return:zero"
+
+    if turn_index < 10:
+        turn_name = "turn:early_0_9"
+    elif turn_index < 30:
+        turn_name = "turn:mid_10_29"
+    else:
+        turn_name = "turn:late_30_plus"
+
+    terminal_name = "terminal:capped" if terminal_capped else "terminal:uncapped"
+    return (return_name, turn_name, terminal_name)
 
 
 def _sign(value: float) -> int:

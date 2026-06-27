@@ -173,6 +173,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(batch.action_probabilities, (0.5, 0.0))
         self.assertEqual(batch.action_probability_mask, (True, False))
         self.assertEqual(batch.battle_ids, ("battle-1", "battle-1"))
+        self.assertEqual(batch.terminal_capped, (False, False))
         self.assertEqual(batch.step_metadata[0]["value"], 5)
 
     def test_batch_training_examples_chunks_stream_and_keeps_tail_batch(self) -> None:

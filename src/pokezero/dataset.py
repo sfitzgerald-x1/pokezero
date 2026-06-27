@@ -84,6 +84,7 @@ class TrainingBatch:
     format_ids: tuple[str, ...]
     player_ids: tuple[str, ...]
     turn_indices: tuple[int, ...]
+    terminal_capped: tuple[bool, ...]
     step_metadata: tuple[Mapping[str, Any], ...]
 
     def __post_init__(self) -> None:
@@ -108,6 +109,7 @@ class TrainingBatch:
             ("format_ids", self.format_ids),
             ("player_ids", self.player_ids),
             ("turn_indices", self.turn_indices),
+            ("terminal_capped", self.terminal_capped),
             ("step_metadata", self.step_metadata),
         ):
             if len(values) != batch_size:
@@ -215,6 +217,7 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         format_ids=tuple(example.format_id for example in examples),
         player_ids=tuple(example.player_id for example in examples),
         turn_indices=tuple(example.turn_index for example in examples),
+        terminal_capped=tuple(example.terminal_capped for example in examples),
         step_metadata=tuple(dict(example.step_metadata or {}) for example in examples),
     )
 
