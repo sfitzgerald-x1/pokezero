@@ -179,7 +179,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   evaluation and gates as required for any useful read. `value-calibration-compare` now fits affine
   and isotonic transforms on fit data, evaluates raw/affine/isotonic on held-out data, and records the
   selected method under an explicit metric so WS-E experiments do not rely on ad-hoc manual
-  comparisons. It also supports opt-in quality gates such as
+  comparisons. Its default selection metric is Pearson correlation because search needs value
+  ranking; calibration-error metrics remain available but are reported with warnings because they can
+  prefer collapsed transforms. It also supports opt-in quality gates such as
   `--min-sign-accuracy`, `--max-expected-calibration-error`, and `--min-pearson-correlation` so
   experiment scripts can fail a weak value-head read without hardcoding project-wide readiness
   thresholds. Value-head consumers such as search leaf scoring read the stored transform when

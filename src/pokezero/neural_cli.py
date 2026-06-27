@@ -13,7 +13,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .cli_audit import (
     add_post_iteration_audit_arguments,
@@ -548,8 +548,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     value_calibration_compare.add_argument(
         "--selection-metric",
         choices=VALUE_SELECTION_METRICS,
-        default="expected_calibration_error",
-        help="Metric used to select the best reported transform.",
+        default="pearson_correlation",
+        help="Metric used to select the best reported transform. Defaults to Pearson because search needs value ranking.",
     )
     value_calibration_compare.add_argument("--out", type=Path, default=None, help="Optional JSON output path.")
     value_calibration_compare.add_argument("--json", action="store_true", help="Print comparison results as JSON.")
@@ -1729,6 +1729,13 @@ def _value_calibration_compare(args: argparse.Namespace) -> int:
     best = max(entries, key=lambda entry: float(entry["selection_score"]))
     if not math.isfinite(float(best["selection_score"])):
         raise ValueError(f"{args.selection_metric} is unavailable for all calibration methods.")
+    warnings = _value_calibration_compare_warnings(
+        fit_paths=args.data,
+        eval_paths=args.eval_data,
+        entries=entries,
+        best=best,
+        selection_metric=args.selection_metric,
+    )
     payload = {
         "checkpoint": str(args.checkpoint),
         "fit_paths": [str(path) for path in args.data],
@@ -1739,6 +1746,7 @@ def _value_calibration_compare(args: argparse.Namespace) -> int:
         "selection_metric": args.selection_metric,
         "selection_direction": value_selection_metric_direction(args.selection_metric),
         "best_method": best["method"],
+        "warnings": warnings,
         "methods": entries,
     }
     if args.out is not None:
@@ -1779,6 +1787,85 @@ def _value_calibration_compare_entry(
     if transform is not None:
         entry["value_calibration_transform"] = transform.to_dict()
     return entry
+
+
+def _value_calibration_compare_warnings(
+    *,
+    fit_paths: Sequence[Path],
+    eval_paths: Sequence[Path],
+    entries: Sequence[Mapping[str, Any]],
+    best: Mapping[str, Any],
+    selection_metric: str,
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    fit_identities = {path.resolve() for path in fit_paths}
+    eval_identities = {path.resolve() for path in eval_paths}
+    overlap = sorted(str(path) for path in fit_identities & eval_identities)
+    if overlap:
+        warnings.append(
+            {
+                "code": "fit_eval_path_overlap",
+                "message": "Fit and eval data overlap; reported metrics are not fully held out.",
+                "paths": overlap,
+            }
+        )
+    if selection_metric in {"mae", "mse", "expected_calibration_error", "abs_bias"}:
+        warnings.append(
+            {
+                "code": "calibration_only_selection_metric",
+                "message": (
+                    "Calibration-error metrics can prefer collapsed transforms; inspect ranking metrics "
+                    "before using a transform for search."
+                ),
+            }
+        )
+
+    best_report = best["report"]
+    best_correlation = best_report.get("pearson_correlation")
+    if best_correlation is None or float(best_correlation) < 0.2:
+        warnings.append(
+            {
+                "code": "selected_low_pearson_correlation",
+                "message": "Selected method has weak value-return ranking signal.",
+                "method": best["method"],
+                "value": best_correlation,
+                "threshold": 0.2,
+            }
+        )
+    best_sign_accuracy = float(best_report["sign_accuracy"])
+    if best_sign_accuracy < 0.55:
+        warnings.append(
+            {
+                "code": "selected_low_sign_accuracy",
+                "message": "Selected method has weak outcome-sign accuracy.",
+                "method": best["method"],
+                "value": best_sign_accuracy,
+                "threshold": 0.55,
+            }
+        )
+    if best.get("value_blind"):
+        warnings.append(
+            {
+                "code": "selected_value_blind",
+                "message": "Selected method is near-constant and may make value-head search value-blind.",
+                "method": best["method"],
+            }
+        )
+
+    raw = next((entry for entry in entries if entry.get("method") == "raw"), None)
+    if raw is not None:
+        raw_correlation = raw["report"].get("pearson_correlation")
+        if best_correlation is not None and raw_correlation is not None and float(best_correlation) < float(raw_correlation) - 0.05:
+            warnings.append(
+                {
+                    "code": "selected_pearson_regressed_vs_raw",
+                    "message": "Selected transform reduced value-return ranking correlation versus raw values.",
+                    "method": best["method"],
+                    "raw_value": raw_correlation,
+                    "selected_value": best_correlation,
+                }
+            )
+    return warnings
 
 
 def _validate_value_calibration_gate_args(args: argparse.Namespace) -> None:
@@ -3013,6 +3100,12 @@ def print_value_calibration_compare(payload: Mapping[str, Any]) -> None:
             f"{metric_text} "
             f"{_format_bool(entry.get('value_blind')):>6}"
         )
+    warnings = payload.get("warnings")
+    if warnings:
+        print("")
+        print("warnings:")
+        for warning in warnings:
+            print(f"- {warning['code']}: {warning['message']}")
 
 
 def print_root_puct_benchmark_report(report: RootPUCTSearchBenchmarkReport) -> None:

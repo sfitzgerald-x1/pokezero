@@ -395,19 +395,21 @@ python -m pokezero.neural_cli value-calibration-compare \
   --checkpoint runs/neural-selfplay/iteration-0003/transformer-policy.pt \
   --data runs/neural-selfplay/iteration-0003/training-rollouts.jsonl \
   --eval-data runs/neural-selfplay/iteration-0003/value-selection-training-rollouts.jsonl \
-  --selection-metric expected_calibration_error \
   --out runs/neural-selfplay/iteration-0003/value-calibration-compare.json
 ```
 
 The compare command fits affine and isotonic transforms on `--data`, evaluates raw/affine/isotonic
-on held-out `--eval-data`, and records the best method under the selected metric. For saving a
-specific calibrated checkpoint copy, use `value-calibration --fit-out ... --fit-method affine` or
-`--fit-method isotonic` after the held-out comparison supports that choice. Isotonic has more degrees
-of freedom than affine and should use substantially more fit data plus held-out quality gates before
-being trusted. Any transform is WS-E calibration plumbing, not policy-strength evidence until
-benchmarked against fixed yardsticks.
+on held-out `--eval-data`, and records the best method under the selected metric. The default
+selection metric is `pearson_correlation` because search needs value ranking; use
+`--selection-metric expected_calibration_error` only when intentionally comparing calibration error
+and inspect the ranking warnings before saving a transform. For saving a specific calibrated
+checkpoint copy, use `value-calibration --fit-out ... --fit-method affine` or `--fit-method isotonic`
+after the held-out comparison supports that choice. Isotonic has more degrees of freedom than affine
+and should use substantially more fit data plus held-out quality gates before being trusted. Any
+transform is WS-E calibration plumbing, not policy-strength evidence until benchmarked against fixed
+yardsticks.
 
-Use the generated checkpoint as the first self-play policy:
+Use a trained checkpoint as the first self-play policy:
 
 ```bash
 python -m pokezero.selfplay_cli iterate \

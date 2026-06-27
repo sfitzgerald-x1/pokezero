@@ -2377,6 +2377,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "fit-rollouts.jsonl",
                     "--eval-data",
                     "heldout-rollouts.jsonl",
+                    "--selection-metric",
+                    "expected_calibration_error",
                     "--json",
                 ]
             )
@@ -2388,10 +2390,73 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["selection_metric"], "expected_calibration_error")
         self.assertEqual(payload["best_method"], "isotonic")
         self.assertEqual([entry["method"] for entry in payload["methods"]], ["raw", "affine", "isotonic"])
+        self.assertIn("calibration_only_selection_metric", {warning["code"] for warning in payload["warnings"]})
         self.assertIsNone(evaluate.call_args_list[0].kwargs["training_result"].value_calibration_transform)
         self.assertEqual(evaluate.call_args_list[1].kwargs["training_result"].value_calibration_transform, affine)
         self.assertEqual(evaluate.call_args_list[2].kwargs["training_result"].value_calibration_transform, isotonic)
         self.assertEqual([call.kwargs["method"] for call in fit.call_args_list], ["affine", "isotonic"])
+
+    def test_neural_cli_value_calibration_compare_defaults_to_pearson_selection(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        def report(*, pearson: float) -> ValueCalibrationReport:
+            return ValueCalibrationReport(
+                examples=20,
+                mse=0.25,
+                mae=0.5,
+                bias=0.0,
+                sign_accuracy=0.6,
+                expected_calibration_error=0.2,
+                pearson_correlation=pearson,
+                bins=(),
+                slices=(),
+            )
+
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                return_value=(
+                    object(),
+                    TransformerTrainingResult(
+                        model_config=TransformerPolicyConfig.compact_category(
+                            category_vocab=(1, 2, 3),
+                            category_oov_buckets=4,
+                            policy_id="fixture",
+                        ),
+                        training_config=TransformerTrainingConfig(),
+                        epochs=(),
+                    ),
+                ),
+            ),
+            patch(
+                "pokezero.neural_cli.fit_value_calibration_transform",
+                side_effect=(
+                    ValueCalibrationTransform(scale=1.0, bias=0.0),
+                    ValueCalibrationTransform(method="isotonic", points=((-1.0, 0.0), (1.0, 0.0))),
+                ),
+            ),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=(report(pearson=0.1), report(pearson=0.4), report(pearson=0.2))),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration-compare",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "fit-rollouts.jsonl",
+                    "--eval-data",
+                    "heldout-rollouts.jsonl",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["selection_metric"], "pearson_correlation")
+        self.assertEqual(payload["selection_direction"], "max")
+        self.assertEqual(payload["best_method"], "affine")
 
     def test_neural_cli_value_calibration_compare_text_can_write_json_report(self) -> None:
         if not torch_available():
@@ -2440,7 +2505,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "--data",
                         "fit-rollouts.jsonl",
                         "--eval-data",
-                        "heldout-rollouts.jsonl",
+                        "fit-rollouts.jsonl",
+                        "--selection-metric",
+                        "expected_calibration_error",
                         "--out",
                         str(out_path),
                     ]
@@ -2451,6 +2518,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["best_method"], "raw")
+        self.assertIn("fit_eval_path_overlap", {warning["code"] for warning in payload["warnings"]})
         self.assertIn("value_calibration_compare:", output)
         self.assertIn("comparison_json:", output)
 
