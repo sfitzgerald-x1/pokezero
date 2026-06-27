@@ -165,6 +165,7 @@ class NeuralSelfPlayIterationResult:
     current_policy_spec: str
     opponent_policy_specs: tuple[str, ...]
     training_rollout_paths: tuple[Path, ...]
+    training_input_paths: tuple[Path, ...]
     value_selection_training_rollout_paths: tuple[Path, ...]
     seed_start: int
     worker_count: int
@@ -211,6 +212,7 @@ class NeuralSelfPlayIterationResult:
             "invocation_config": dict(self.invocation_config),
             "benchmark_reference_policy_specs": list(self.benchmark_reference_policy_specs),
             "training_rollout_paths": [str(path) for path in self.training_rollout_paths],
+            "training_input_paths": [str(path) for path in self.training_input_paths],
             "value_selection_training_rollout_paths": [
                 str(path) for path in self.value_selection_training_rollout_paths
             ],
@@ -530,6 +532,11 @@ def run_neural_selfplay_iterations(
                 worker_count=worker_count,
             )
             training_rollout_history.append(training_rollout_path)
+            training_input_paths = _training_input_paths_for_objective(
+                objective=training_config.objective,
+                iteration_training_rollout_path=training_rollout_path,
+                training_rollout_history=tuple(training_rollout_history),
+            )
             value_selection_metrics = None
             if value_selection_config is not None and value_selection_config.heldout_games_per_iteration:
                 value_selection_rollout_path = iteration_dir / "value-selection-rollouts.jsonl"
@@ -575,14 +582,14 @@ def run_neural_selfplay_iterations(
                 )
             if value_selection_config is None:
                 model, training = train_transformer_policy(
-                    tuple(training_rollout_history),
+                    training_input_paths,
                     model_config=iteration_model_config,
                     training_config=training_config,
                     initial_model=current_model,
                 )
             else:
                 model, training, value_selection = _train_with_iteration_value_selection(
-                    paths=tuple(training_rollout_history),
+                    paths=training_input_paths,
                     model_config=iteration_model_config,
                     training_config=training_config,
                     initial_model=current_model,
@@ -648,6 +655,7 @@ def run_neural_selfplay_iterations(
                 current_policy_spec=current_policy_spec,
                 opponent_policy_specs=opponent_policy_specs,
                 training_rollout_paths=tuple(training_rollout_history),
+                training_input_paths=training_input_paths,
                 value_selection_training_rollout_paths=tuple(value_selection_rollout_history),
                 seed_start=iteration_seed_start,
                 worker_count=worker_count,
@@ -771,6 +779,19 @@ def run_neural_selfplay_iterations(
         prior_invocation_configs=prior_invocation_configs,
         source=source_metadata,
     )
+
+
+def _training_input_paths_for_objective(
+    *,
+    objective: str,
+    iteration_training_rollout_path: Path,
+    training_rollout_history: tuple[Path, ...],
+) -> tuple[Path, ...]:
+    # PPO is on-policy enough that replaying older iteration shards as policy-gradient data makes
+    # the behavior-policy ratio stale. If future on-policy objectives are added, route them here too.
+    if objective == "ppo":
+        return (iteration_training_rollout_path,)
+    return training_rollout_history
 
 
 def _train_with_iteration_value_selection(

@@ -339,6 +339,9 @@ with anti-stagnation machinery.
 Steps:
 1. Audit/solidify the PPO path in `neural_cli iterate` / `neural_selfplay.py`: advantage estimation,
    value-head loss weighting, entropy bonus, capped-game return, gradient/clip settings.
+   PPO updates now train on the current iteration's rollout shard only, while retaining cumulative
+   rollout paths in the manifest for provenance. This preserves the roadmap's on-policy consistency
+   requirement; supervised/RWR objectives may still use cumulative history.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
