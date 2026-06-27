@@ -227,20 +227,26 @@ def fit_affine_value_calibration_transform(
 
 def value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
     if metric == "mae":
-        return float(report.mae)
+        return _finite_value_selection_metric(float(report.mae), metric)
     if metric == "mse":
-        return float(report.mse)
+        return _finite_value_selection_metric(float(report.mse), metric)
     if metric == "expected_calibration_error":
-        return float(report.expected_calibration_error)
+        return _finite_value_selection_metric(float(report.expected_calibration_error), metric)
     if metric == "sign_accuracy":
-        return float(report.sign_accuracy)
+        return _finite_value_selection_metric(float(report.sign_accuracy), metric)
     if metric == "pearson_correlation":
         if report.pearson_correlation is None:
             raise ValueError("pearson_correlation value selection requires non-constant predictions and returns.")
-        return float(report.pearson_correlation)
+        return _finite_value_selection_metric(float(report.pearson_correlation), metric)
     if metric == "abs_bias":
-        return abs(float(report.bias))
+        return _finite_value_selection_metric(abs(float(report.bias)), metric)
     raise ValueError(f"unsupported value selection metric: {metric!r}.")
+
+
+def _finite_value_selection_metric(value: float, metric: str) -> float:
+    if not math.isfinite(value):
+        raise ValueError(f"{metric} value selection requires a finite metric value.")
+    return value
 
 
 def value_selection_metric_direction(metric: str) -> str:

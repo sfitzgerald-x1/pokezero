@@ -129,6 +129,22 @@ class ValueCalibrationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pearson_correlation"):
             value_selection_metric_value(report, "pearson_correlation")
 
+    def test_value_selection_metric_rejects_non_finite_correlation(self) -> None:
+        report = ValueCalibrationReport(
+            examples=4,
+            mse=0.36,
+            mae=0.4,
+            bias=-0.25,
+            sign_accuracy=0.75,
+            expected_calibration_error=0.12,
+            pearson_correlation=float("nan"),
+            bins=(),
+            slices=(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            value_selection_metric_value(report, "pearson_correlation")
+
     def test_fit_affine_value_calibration_transform_maps_predictions_to_returns(self) -> None:
         transform = fit_affine_value_calibration_transform(
             predictions=(-0.5, 0.0, 0.5),

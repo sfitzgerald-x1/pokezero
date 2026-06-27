@@ -837,16 +837,27 @@ def _train_with_iteration_value_selection(
             bins=config.bins,
             device=device,
         )
-        metric_value = value_selection_metric_value(report, config.metric)
-        score = value_selection_score(metric_value, config.metric)
-        selection_reports.append(
-            {
-                "epoch": epoch_metric.epoch,
-                "metric_value": metric_value,
-                "training_metrics": epoch_metric.to_dict(),
-                "report": report.to_dict(),
-            }
-        )
+        try:
+            metric_value = value_selection_metric_value(report, config.metric)
+            score = value_selection_score(metric_value, config.metric)
+            metric_unavailable_reason = None
+        except ValueError as exc:
+            if config.metric != "pearson_correlation":
+                raise
+            metric_value = None
+            score = None
+            metric_unavailable_reason = str(exc)
+        selection_entry: dict[str, object] = {
+            "epoch": epoch_metric.epoch,
+            "metric_value": metric_value,
+            "training_metrics": epoch_metric.to_dict(),
+            "report": report.to_dict(),
+        }
+        if metric_unavailable_reason is not None:
+            selection_entry["metric_unavailable_reason"] = metric_unavailable_reason
+        selection_reports.append(selection_entry)
+        if score is None:
+            return
         if best_score is None or score > best_score:
             best_score = score
             best_metric_value = metric_value
@@ -861,7 +872,7 @@ def _train_with_iteration_value_selection(
         epoch_callback=evaluate_epoch,
     )
     if best_state is None or best_epoch is None or best_metric_value is None:
-        raise ValueError("value selection produced no epoch reports.")
+        raise ValueError("value selection produced no selectable epoch reports.")
     model.load_state_dict(best_state)
     selected_result = TransformerTrainingResult(
         model_config=model_config,

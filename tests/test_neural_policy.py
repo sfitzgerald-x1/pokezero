@@ -2305,7 +2305,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 self.weight = int(state["weight"])
 
         class FakeReport:
-            def __init__(self, *, pearson_correlation: float) -> None:
+            def __init__(self, *, pearson_correlation: float | None) -> None:
                 self.examples = 2
                 self.mse = 0.25
                 self.mae = 0.4
@@ -2360,7 +2360,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             )
 
         reports = [
-            FakeReport(pearson_correlation=0.1),
+            FakeReport(pearson_correlation=None),
             FakeReport(pearson_correlation=0.65),
             FakeReport(pearson_correlation=0.4),
         ]
@@ -2388,6 +2388,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["metric_direction"], "max")
         self.assertEqual(payload["selected_epoch"], 2)
         self.assertEqual(payload["selected_metric_value"], 0.65)
+        self.assertIsNone(payload["epochs"][0]["metric_value"])
+        self.assertIn("metric_unavailable_reason", payload["epochs"][0])
 
     def test_neural_cli_train_can_write_value_selection_artifact(self) -> None:
         if not torch_available():
