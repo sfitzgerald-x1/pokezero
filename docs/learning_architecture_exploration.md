@@ -172,7 +172,11 @@ privileged supervision, etc.).
 - **H7 — Reward shaping + value head for long-horizon credit.** Faint/HP-fraction-differential
   shaping plus a trained value head should speed RL convergence to stall/setup lines (the win
   often comes many turns after the decisive switch). *Experiment:* ablate shaping/value weight.
-  *Signal:* faster, more stable climb vs `max-damage`.
+  *Signal:* faster, more stable climb vs `max-damage`. *Current update:* clipped shaped-return
+  targets are now implemented, but the first conservative same-seed ablation (`hp=0.5`,
+  `faint=0.5`, late-turn penalty after 180) did not improve the aggressive always-advance PPO
+  shape: 154/600 versus `max-damage`, behind the unshaped mean run's 159/600 and the GRU run's
+  166/600 on the same seed bands.
 - **H8 — Diverse opponent pool / light league for robustness.** Train against self + frozen
   checkpoints + random/simple/scripted-teacher (never `max-damage`). *Experiment:* pool-
   composition ablation. *Signal:* generalization — beating the *unseen* `max-damage` rather
