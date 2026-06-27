@@ -1804,10 +1804,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("ppo_cov", output)
         self.assertIn("ppo_clip", output)
         self.assertIn("ppo_ent", output)
-        self.assertIn("0.800", output)
+        self.assertIn("0.617", output)
         self.assertIn("0.600", output)
         self.assertIn("0.250000", output)
         self.assertIn("0.7500", output)
+        self.assertIn("benchmark_opponent_curves:", output)
+        self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
+        self.assertIn("- simple-legal: 1:1.000/20g", output)
+        self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
         self.assertIn("0.100000", output)
         self.assertIn("0.7200", output)
         self.assertIn("0.180000", output)
@@ -2058,7 +2062,7 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
             "format_id": "gen3randombattle",
             "max_decision_rounds": 250,
             "games_per_matchup": 10,
-            "total_games": 20,
+            "total_games": 60,
             "elapsed_seconds": 4.0,
             "matchups": [],
             "head_to_heads": [
@@ -2081,6 +2085,16 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
                     "second_policy_wins": 0,
                     "ties": 0,
                     "capped_games": 0,
+                },
+                {
+                    "label": "entity-test-iter-0001 vs max-damage",
+                    "first_policy_id": "entity-test-iter-0001",
+                    "second_policy_id": "max-damage",
+                    "games": 20,
+                    "first_policy_wins": 5,
+                    "second_policy_wins": 15,
+                    "ties": 0,
+                    "capped_games": 2,
                 }
             ],
         },

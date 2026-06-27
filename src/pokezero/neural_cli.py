@@ -1719,6 +1719,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(final_epoch.get('ppo_entropy') if final_epoch else None):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
+    _print_benchmark_opponent_curves(iterations)
 
 
 def _final_epoch_metrics(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1732,6 +1733,82 @@ def _iteration_value_calibration_report(iteration: Mapping[str, Any]) -> Mapping
     if not calibration:
         return None
     return _optional_mapping(calibration.get("report"))
+
+
+def _print_benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) -> None:
+    curves = _benchmark_opponent_curves(iterations)
+    if not curves:
+        return
+    print("")
+    print("benchmark_opponent_curves:")
+    for opponent, entries in curves.items():
+        cells = " ".join(
+            f"{entry['iteration']}:{entry['win_rate']:.3f}/{entry['games']}g"
+            f"{',cap=' + str(entry['capped_games']) if entry['capped_games'] else ''}"
+            for entry in entries
+        )
+        print(f"- {opponent}: {cells}")
+
+
+def _benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) -> dict[str, list[dict[str, Any]]]:
+    curves: dict[str, list[dict[str, Any]]] = {}
+    for iteration in iterations:
+        candidate_policy_id = _iteration_policy_id(iteration)
+        if not candidate_policy_id:
+            continue
+        benchmark = _optional_mapping(iteration.get("benchmark"))
+        head_to_heads = tuple(_mapping(item) for item in _sequence(benchmark.get("head_to_heads", ())))
+        for head_to_head in head_to_heads:
+            first_policy_id = _string_or_none(head_to_head.get("first_policy_id"))
+            second_policy_id = _string_or_none(head_to_head.get("second_policy_id"))
+            if first_policy_id == candidate_policy_id:
+                opponent_policy_id = second_policy_id
+                wins = _int_or_none(head_to_head.get("first_policy_wins"))
+                win_rate = _float_or_none(head_to_head.get("first_policy_win_rate"))
+            elif second_policy_id == candidate_policy_id:
+                opponent_policy_id = first_policy_id
+                wins = _int_or_none(head_to_head.get("second_policy_wins"))
+                win_rate = _float_or_none(head_to_head.get("second_policy_win_rate"))
+            else:
+                continue
+            games = _int_or_none(head_to_head.get("games")) or 0
+            if not opponent_policy_id or games <= 0:
+                continue
+            if win_rate is None:
+                win_rate = (wins or 0) / games
+            curves.setdefault(opponent_policy_id, []).append(
+                {
+                    "iteration": int(iteration.get("iteration", 0)),
+                    "win_rate": float(win_rate),
+                    "games": games,
+                    "capped_games": _int_or_none(head_to_head.get("capped_games")) or 0,
+                }
+            )
+    return curves
+
+
+def _string_or_none(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:
