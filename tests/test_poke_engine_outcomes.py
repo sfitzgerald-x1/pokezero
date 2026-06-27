@@ -10,17 +10,26 @@ import unittest
 from pokezero.dex import showdown_dex_from_payload
 from pokezero.poke_engine_adapter import PokemonSpec, SideSpec
 from pokezero.poke_engine_outcomes import (
+    ActiveStateComparison,
     ActiveStateSummary,
     DirectCalculateDamageDiagnostic,
+    EngineActiveStateSummary,
+    EngineBranchDamageSummary,
     EngineBranchOutcome,
+    ENGINE_FIELD_UNREAD,
+    ENGINE_STATE_COMPARED_FIELDS,
+    FieldMismatch,
     ObservedDamage,
     OneTurnDamageDiagnostic,
     OutcomeComparison,
+    _mismatch_surface_and_notes,
     active_state_summary_from_side,
     build_battle_spec_from_result,
     build_one_turn_damage_diagnostic,
+    compare_engine_active_state,
     compare_outcomes,
     direct_calculate_damage_diagnostic,
+    engine_active_state_summary,
     engine_move_for_choice,
     enumerate_engine_outcomes,
     observed_damage_from_result,
@@ -449,6 +458,264 @@ class ActiveStateSummaryTest(unittest.TestCase):
         self.assertEqual(payload["moves"][0], {"id": "watergun", "pp": 40})
 
 
+# ---- damage diagnostic: engine-state inspection ---------------------------
+
+
+def fake_engine_mon(**overrides):
+    """A fake built-engine Pokemon mirroring the real binding's readable surface.
+
+    Uses mixed-case ids and a Gen 3 ``typeless`` padding slot on purpose so the
+    extractor's normalization (lower-casing, dropping ``typeless``) is exercised.
+    """
+
+    base = dict(
+        id="Charmander",
+        level=100,
+        hp=219,
+        maxhp=219,
+        types=("Fire", "typeless"),
+        ability="Blaze",
+        item="none",
+        attack=140,
+        defense=122,
+        special_attack=156,
+        special_defense=136,
+        speed=166,
+        moves=[SimpleNamespace(id="Ember", pp=40), SimpleNamespace(id="Tackle", pp=56)],
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def fake_engine_state(side_one_mon, side_two_mon):
+    return SimpleNamespace(
+        # active_index as a string on one side, int on the other: both must coerce.
+        side_one=SimpleNamespace(active_index="0", pokemon=[side_one_mon]),
+        side_two=SimpleNamespace(active_index=0, pokemon=[side_two_mon]),
+    )
+
+
+def request_active_summary(seat: str = "side_one") -> ActiveStateSummary:
+    spec = build_battle_spec_from_result(charmander_squirtle_result(), minimal_dex())
+    side = spec.side_one if seat == "side_one" else spec.side_two
+    return active_state_summary_from_side(side)
+
+
+def matching_engine_summary(req: ActiveStateSummary) -> EngineActiveStateSummary:
+    return EngineActiveStateSummary(
+        species=req.species,
+        level=req.level,
+        hp=req.hp,
+        maxhp=req.maxhp,
+        types=tuple(req.types),
+        ability=req.ability,
+        item=req.item,
+        attack=req.attack,
+        defense=req.defense,
+        special_attack=req.special_attack,
+        special_defense=req.special_defense,
+        speed=req.speed,
+        moves=tuple(req.moves),
+    )
+
+
+class EngineActiveStateSummaryTest(unittest.TestCase):
+    def test_extracts_and_normalizes_fields(self) -> None:
+        state = fake_engine_state(fake_engine_mon(), fake_engine_mon(id="Squirtle"))
+        summary = engine_active_state_summary(state, "side_one")
+
+        self.assertIsInstance(summary, EngineActiveStateSummary)
+        self.assertEqual(summary.missing_fields, ())
+        # ids lower-cased, typeless dropped from types.
+        self.assertEqual(summary.species, "charmander")
+        self.assertEqual(summary.types, ("fire",))
+        self.assertEqual(summary.ability, "blaze")
+        # "none" item normalizes to None (no item), not the literal string.
+        self.assertIsNone(summary.item)
+        self.assertEqual((summary.hp, summary.maxhp), (219, 219))
+        self.assertEqual(summary.attack, 140)
+        self.assertEqual(summary.speed, 166)
+        self.assertEqual(summary.moves, (("ember", 40), ("tackle", 56)))
+
+    def test_other_side_uses_int_active_index(self) -> None:
+        state = fake_engine_state(fake_engine_mon(), fake_engine_mon(id="Squirtle"))
+        summary = engine_active_state_summary(state, "side_two")
+        self.assertEqual(summary.species, "squirtle")
+
+    def test_missing_attribute_is_recorded_not_raised(self) -> None:
+        # A Pokemon lacking 'speed' must not crash extraction; the field is recorded.
+        mon = fake_engine_mon()
+        del mon.speed
+        summary = engine_active_state_summary(fake_engine_state(mon, fake_engine_mon()), "side_one")
+        self.assertIn("speed", summary.missing_fields)
+        self.assertIsNone(summary.speed)
+        # Other fields still read fine.
+        self.assertEqual(summary.attack, 140)
+
+    def test_uncoercible_stat_is_recorded_missing(self) -> None:
+        mon = fake_engine_mon(attack="not-an-int")
+        summary = engine_active_state_summary(fake_engine_state(mon, fake_engine_mon()), "side_one")
+        self.assertIn("attack", summary.missing_fields)
+        self.assertIsNone(summary.attack)
+
+    def test_uninspectable_state_marks_every_field_missing(self) -> None:
+        # An opaque state object can't be navigated; every field is reported missing
+        # rather than raising.
+        summary = engine_active_state_summary(object(), "side_one")
+        self.assertEqual(set(summary.missing_fields), set(ENGINE_STATE_COMPARED_FIELDS))
+        self.assertIsNone(summary.species)
+        self.assertIsNone(summary.moves)
+
+    def test_to_dict_is_serializable(self) -> None:
+        import json
+
+        state = fake_engine_state(fake_engine_mon(), fake_engine_mon(id="Squirtle"))
+        payload = engine_active_state_summary(state, "side_one").to_dict()
+        json.dumps(payload)
+        self.assertEqual(payload["types"], ["fire"])
+        self.assertEqual(payload["moves"][0], {"id": "ember", "pp": 40})
+        self.assertEqual(payload["missing_fields"], [])
+
+
+class CompareEngineActiveStateTest(unittest.TestCase):
+    def test_identical_summaries_match(self) -> None:
+        req = request_active_summary("side_one")
+        comparison = compare_engine_active_state(req, matching_engine_summary(req), "side_one")
+        self.assertIsInstance(comparison, ActiveStateComparison)
+        self.assertTrue(comparison.matched)
+        self.assertEqual(comparison.mismatches, ())
+        self.assertIsNone(comparison.reason)
+        self.assertIn("MATCH", comparison.summary())
+
+    def test_request_values_are_normalized_before_comparison(self) -> None:
+        from dataclasses import replace
+
+        req = replace(
+            request_active_summary("side_one"),
+            species="Charmander",
+            types=("Fire", "typeless"),
+            ability="BLAZE",
+            item="None",
+            moves=(("Ember", "40"), ("TACKLE", 56)),
+        )
+        engine = replace(matching_engine_summary(request_active_summary("side_one")), item=None)
+        comparison = compare_engine_active_state(req, engine, "side_one")
+        self.assertTrue(comparison.matched)
+
+    def test_field_value_difference_is_reported(self) -> None:
+        req = request_active_summary("side_one")
+        from dataclasses import replace
+
+        engine = replace(matching_engine_summary(req), special_attack=999, speed=1)
+        comparison = compare_engine_active_state(req, engine, "side_one")
+        self.assertFalse(comparison.matched)
+        fields = {m.field: m for m in comparison.mismatches}
+        self.assertEqual(set(fields), {"special_attack", "speed"})
+        self.assertEqual((fields["special_attack"].request_value, fields["special_attack"].engine_value), (156, 999))
+        self.assertIn("special_attack", comparison.summary())
+
+    def test_types_difference_is_reported(self) -> None:
+        req = request_active_summary("side_one")
+        from dataclasses import replace
+
+        engine = replace(matching_engine_summary(req), types=("water",))
+        comparison = compare_engine_active_state(req, engine, "side_one")
+        self.assertFalse(comparison.matched)
+        self.assertEqual([m.field for m in comparison.mismatches], ["types"])
+
+    def test_unreadable_field_reported_with_marker_and_reason(self) -> None:
+        req = request_active_summary("side_one")
+        from dataclasses import replace
+
+        engine = replace(matching_engine_summary(req), speed=None, missing_fields=("speed",))
+        comparison = compare_engine_active_state(req, engine, "side_one")
+        self.assertFalse(comparison.matched)
+        self.assertEqual([m.field for m in comparison.mismatches], ["speed"])
+        self.assertEqual(comparison.mismatches[0].engine_value, ENGINE_FIELD_UNREAD)
+        self.assertIsNotNone(comparison.reason)
+        self.assertIn("speed", comparison.reason)
+
+    def test_to_dict_is_serializable(self) -> None:
+        import json
+
+        req = request_active_summary("side_one")
+        from dataclasses import replace
+
+        engine = replace(matching_engine_summary(req), attack=1)
+        payload = compare_engine_active_state(req, engine, "side_one").to_dict()
+        json.dumps(payload)
+        self.assertFalse(payload["matched"])
+        self.assertEqual(payload["mismatches"][0]["field"], "attack")
+        self.assertEqual(payload["side"], "side_one")
+
+
+class MismatchSurfaceSelectionTest(unittest.TestCase):
+    """Surface selection over the engine-state comparisons (no engine required)."""
+
+    def _observed(self) -> ObservedDamage:
+        return ObservedDamage(opening_hp=(219, 229), final_hp=(127, 209), deltas=(92, 20))
+
+    def _branches(self):
+        return (EngineBranchDamageSummary(100.0, (122, 207), (97, 22), "d"),)
+
+    def _matched_comparison(self, side: str) -> ActiveStateComparison:
+        req = request_active_summary(side)
+        return compare_engine_active_state(req, matching_engine_summary(req), side)
+
+    def _mismatched_comparison(self, side: str) -> ActiveStateComparison:
+        req = request_active_summary(side)
+        from dataclasses import replace
+
+        return compare_engine_active_state(req, replace(matching_engine_summary(req), attack=1), side)
+
+    def test_damage_match_reports_no_surface(self) -> None:
+        surface, notes = _mismatch_surface_and_notes(
+            matched=True,
+            observed=self._observed(),
+            engine_branches=self._branches(),
+            side_one_comparison=None,
+            side_two_comparison=None,
+        )
+        self.assertEqual(surface, "none")
+
+    def test_both_engine_states_match_narrows_surface(self) -> None:
+        surface, notes = _mismatch_surface_and_notes(
+            matched=False,
+            observed=self._observed(),
+            engine_branches=self._branches(),
+            side_one_comparison=self._matched_comparison("side_one"),
+            side_two_comparison=self._matched_comparison("side_two"),
+        )
+        self.assertEqual(surface, "engine damage/data path")
+        self.assertTrue(any("inspected exposed/stored field" in note for note in notes))
+        self.assertTrue(any("UNRESOLVED" in note for note in notes))
+
+    def test_one_engine_state_mismatch_keeps_broad_surface(self) -> None:
+        surface, notes = _mismatch_surface_and_notes(
+            matched=False,
+            observed=self._observed(),
+            engine_branches=self._branches(),
+            side_one_comparison=self._mismatched_comparison("side_one"),
+            side_two_comparison=self._matched_comparison("side_two"),
+        )
+        self.assertEqual(surface, "engine damage/data or state-translation path")
+        self.assertTrue(any("did not clear" in note for note in notes))
+        self.assertTrue(any("attack" in note for note in notes))
+        self.assertTrue(any("UNRESOLVED" in note for note in notes))
+
+    def test_uninspectable_comparison_keeps_broad_surface(self) -> None:
+        surface, notes = _mismatch_surface_and_notes(
+            matched=False,
+            observed=self._observed(),
+            engine_branches=self._branches(),
+            side_one_comparison=self._matched_comparison("side_one"),
+            side_two_comparison=None,
+        )
+        self.assertEqual(surface, "engine damage/data or state-translation path")
+        self.assertTrue(any("could not be inspected" in note for note in notes))
+        self.assertTrue(any("UNRESOLVED" in note for note in notes))
+
+
 # ---- damage diagnostic: direct calculate_damage ---------------------------
 
 
@@ -529,13 +796,17 @@ class DirectCalculateDamageDiagnosticTest(unittest.TestCase):
 # ---- damage diagnostic assembler (fake engine, no wheel/Showdown) ---------
 
 
-def fake_damage_engine_module(branches, *, calc=None):
+def fake_damage_engine_module(branches, *, calc=None, corrupt=None):
     """A fake engine module sufficient to run build_one_turn_damage_diagnostic.
 
     Provides the State/Side/Pokemon/Move construction API that
     build_poke_engine_state needs, plus generate_instructions/apply_instructions,
     so the assembler runs end-to-end without the native wheel or a built Showdown.
     Each branch carries the final active HP tuple its apply_instructions sets.
+
+    ``corrupt`` is an optional callable invoked with each built Pokemon's kwargs dict
+    so a test can mutate the *built engine state* away from the request-derived spec
+    (modelling an unfaithful spec->engine translation) before construction.
     """
 
     module = ModuleType("poke_engine_fake_damage")
@@ -552,9 +823,20 @@ def fake_damage_engine_module(branches, *, calc=None):
                 side_two=SimpleNamespace(active_index=0, pokemon=[SimpleNamespace(hp=p2_hp)]),
             )
 
+    def _pokemon(**kwargs):
+        # Mirror the real poke-engine Pokemon, which always exposes ability/item as a
+        # string ("none" when absent). The adapter only passes them when set, so default
+        # the rest here -- otherwise the built engine state would look unfaithful purely
+        # because a fake omitted an attribute the real binding always carries.
+        kwargs.setdefault("ability", "none")
+        kwargs.setdefault("item", "none")
+        if corrupt is not None:
+            corrupt(kwargs)
+        return SimpleNamespace(**kwargs)
+
     module.State = _State
     module.Side = lambda **kwargs: SimpleNamespace(**kwargs)
-    module.Pokemon = lambda **kwargs: SimpleNamespace(**kwargs)
+    module.Pokemon = _pokemon
     module.Move = lambda **kwargs: SimpleNamespace(**kwargs)
     module.generate_instructions = lambda state, m1, m2: list(branches)
     if calc is not None:
@@ -563,10 +845,11 @@ def fake_damage_engine_module(branches, *, calc=None):
 
 
 class BuildOneTurnDamageDiagnosticTest(unittest.TestCase):
-    def test_mismatch_branch_records_surface_notes_and_deltas(self) -> None:
+    def test_mismatch_with_matching_engine_state_narrows_surface(self) -> None:
         import json
 
-        # No engine branch reproduces Showdown's (127, 209) final HP.
+        # No engine branch reproduces Showdown's (127, 209) final HP, but the built
+        # engine state faithfully mirrors the request-derived spec on both sides.
         engine = fake_damage_engine_module(
             [
                 fake_branch(122, 207, 79.1, "Damage A"),
@@ -590,12 +873,24 @@ class BuildOneTurnDamageDiagnosticTest(unittest.TestCase):
         self.assertEqual(diag.engine_branches[1].deltas, (194, 22))
         self.assertEqual(diag.engine_delta_tuples(), ((97, 22), (194, 22)))
 
-        # Conservative surface (no engine-state inspection) and honest notes.
-        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data or state-translation path")
+        # The built engine state was read back and matches the request spec on both
+        # sides, so the surface narrows to the engine's damage/data path -- the mismatch
+        # is NOT made to look like a pass (matched stays False).
+        self.assertTrue(diag.side_one_comparison.matched)
+        self.assertEqual(diag.side_one_comparison.mismatches, ())
+        self.assertTrue(diag.side_two_comparison.matched)
+        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data path")
         self.assertTrue(any("dex-derived" in note for note in diag.notes))
         self.assertTrue(any("UNRESOLVED" in note for note in diag.notes))
 
-        # Request-derived active-state summaries are present for both seats.
+        # Engine-state summaries are read back off the built state for both seats.
+        self.assertEqual(diag.side_one_engine_state.species, "charmander")
+        self.assertEqual(diag.side_one_engine_state.types, ("fire",))
+        self.assertEqual(diag.side_one_engine_state.moves, (("ember", 40), ("tackle", 56)))
+        self.assertIsNone(diag.side_one_engine_state.item)
+        self.assertEqual(diag.side_two_engine_state.species, "squirtle")
+
+        # Request-derived active-state summaries are still present for both seats.
         self.assertEqual(diag.side_one_state.species, "charmander")
         self.assertEqual(diag.side_one_state.types, ("fire",))
         self.assertEqual(diag.side_two_state.species, "squirtle")
@@ -607,6 +902,42 @@ class BuildOneTurnDamageDiagnosticTest(unittest.TestCase):
         # Fully serializable (strict JSON, no NaN/inf).
         json.dumps(diag.to_dict(), allow_nan=False)
         self.assertIn("MISMATCH", diag.summary())
+        self.assertIn("engine-state matches request spec", diag.summary())
+
+    def test_mismatch_with_unfaithful_engine_state_keeps_broad_surface(self) -> None:
+        import json
+
+        # The built engine state mis-translates a stat (here Charmander's special_attack
+        # comes back wrong), so the spec->engine translation path cannot be cleared and
+        # the broad surface must stand with an explicit, named field mismatch.
+        engine = fake_damage_engine_module(
+            [fake_branch(122, 207, 100.0, "Damage A")],
+            corrupt=lambda kwargs: kwargs.update(special_attack=999)
+            if kwargs.get("id") == "charmander"
+            else None,
+        )
+        diag = build_one_turn_damage_diagnostic(charmander_squirtle_result(), minimal_dex(), module=engine)
+
+        self.assertFalse(diag.matched)
+        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data or state-translation path")
+
+        # The mismatch is explicit and field-level, not a vague note.
+        self.assertFalse(diag.side_one_comparison.matched)
+        fields = [m.field for m in diag.side_one_comparison.mismatches]
+        self.assertEqual(fields, ["special_attack"])
+        mismatch = diag.side_one_comparison.mismatches[0]
+        self.assertEqual(mismatch.request_value, 156)
+        self.assertEqual(mismatch.engine_value, 999)
+        # The other side translated faithfully.
+        self.assertTrue(diag.side_two_comparison.matched)
+
+        # Notes explain WHY the broad surface stands and name the offending field.
+        self.assertTrue(any("did not clear" in note for note in diag.notes))
+        self.assertTrue(any("special_attack" in note for note in diag.notes))
+        self.assertTrue(any("UNRESOLVED" in note for note in diag.notes))
+
+        json.dumps(diag.to_dict(), allow_nan=False)
+        self.assertIn("engine-state mismatch on side_one", diag.summary())
 
     def test_match_branch_reports_no_surface(self) -> None:
         # One engine branch reproduces Showdown's exact (127, 209) final HP.
@@ -737,11 +1068,37 @@ class RealOutcomeComparisonIntegrationTest(unittest.TestCase):
         self.assertEqual(diag.observed.final_hp, (127, 209))
         self.assertEqual(diag.observed.deltas, (92, 20))
         self.assertTrue(diag.engine_branches)
-        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data or state-translation path")
 
         # Request-derived active state is present for both seats.
         self.assertEqual(diag.side_one_state.species, "charmander")
         self.assertEqual(diag.side_two_state.species, "squirtle")
+
+        # The built engine state is inspected and compared field-by-field against the
+        # request-derived spec. The surface narrows to the engine's damage/data path
+        # ONLY if both sides' states match; otherwise the broad surface stands with
+        # explicit field-level mismatches. Either way the damage mismatch is real
+        # (matched stays False) -- this never fakes a pass.
+        self.assertIsNotNone(diag.side_one_comparison)
+        self.assertIsNotNone(diag.side_two_comparison)
+        self.assertEqual(diag.side_one_engine_state.species, "charmander")
+        self.assertEqual(diag.side_two_engine_state.species, "squirtle")
+        both_match = diag.side_one_comparison.matched and diag.side_two_comparison.matched
+        if both_match:
+            self.assertEqual(diag.likely_mismatch_surface, "engine damage/data path")
+            self.assertTrue(any("inspected exposed/stored field" in note for note in diag.notes))
+        else:
+            self.assertEqual(
+                diag.likely_mismatch_surface, "engine damage/data or state-translation path"
+            )
+            # A broad surface here must be backed by explicit, named field mismatches
+            # (or an inability to inspect), not left vague.
+            explicit = [
+                m.field
+                for comparison in (diag.side_one_comparison, diag.side_two_comparison)
+                for m in comparison.mismatches
+            ]
+            self.assertTrue(explicit, "broad surface must name the mismatching engine-state fields")
+        self.assertTrue(any("UNRESOLVED" in note for note in diag.notes))
 
         # The local poke-engine 0.0.47 binding exposes a usable, serializable
         # calculate_damage output in this environment, so demand it: an unsupported
@@ -759,6 +1116,8 @@ class RealOutcomeComparisonIntegrationTest(unittest.TestCase):
         json.dumps([direct.output_side_one_first, direct.output_side_two_first], allow_nan=False)
 
         print("\nREAL DAMAGE DIAGNOSTIC:", diag.summary())
+        print("side_one engine-state:", diag.side_one_comparison.summary())
+        print("side_two engine-state:", diag.side_two_comparison.summary())
         print("direct calculate_damage:", direct.to_dict())
 
 

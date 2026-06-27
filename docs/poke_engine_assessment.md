@@ -154,29 +154,52 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
    exposes it (reported as an explicit unsupported reason, not an exception, when the function is
    missing, raises, or returns an unrecognized/non-finite shape).
 
-   The diagnostic's `likely_mismatch_surface` is deliberately conservative. The active-state summaries
-   are the *Python* request-derived spec fed into `build_poke_engine_state` (stats/hp/moves from the
-   request, types from the dex); confirming they match the Showdown request shows the request-derived
-   spec is faithful, but it does **not** prove the engine's internal state matches — no engine-state
-   inspection is done. So the surviving mismatch is left on the broad surface of the engine's
-   damage/data or the spec→engine state-translation path
-   (`likely_mismatch_surface = "engine damage/data or state-translation path"`). The **exact** root
-   cause — move base power/category, type-effectiveness table, stat usage, rounding, or a translation
-   defect — remains **UNRESOLVED**; the diagnostic records the surface, not a proven cause, and still
-   reports `matched=False`. Unit tests cover the assembler end-to-end against a fake engine (both
-   matched and mismatched branches, engine-branch deltas, surface/notes, and direct-`calculate_damage`
-   payload propagation with no native wheel or built Showdown), observed-delta computation, the
+   **Engine-state inspection now narrows the surface.** The diagnostic additionally reads the active
+   Pokemon back off the *built* `poke_engine.State` (not just the Python spec) and compares it
+   field-by-field against the request-derived `ActiveStateSummary`. The engine-state summary
+   (`engine_active_state_summary`) normalizes ids to lower-case, drops the Gen 3 `typeless` padding
+   slot from `types`, and maps an `ability`/`item` of `"none"` to `None`; any field the binding cannot
+   expose is recorded in `missing_fields` and surfaces as an explicit mismatch rather than a crash. The
+   per-side `ActiveStateComparison` carries `matched`, the field-level `mismatches`, and a serializable
+   `to_dict()`. `likely_mismatch_surface` is then chosen conservatively from the comparisons: if **both
+   sides' built engine states match the request-derived spec** for every inspected exposed/stored field
+   (species/level/hp/maxhp/types/ability/item/atk/def/spa/spd/spe/moves), the surface narrows to
+   `"engine damage/data path"`; if **either side mismatches or cannot be inspected**, the broad
+   `"engine damage/data or state-translation path"` stands, with notes naming the offending fields (or
+   the inability to inspect). Either way the **exact** root cause — move base power/category,
+   type-effectiveness table, stat usage, or rounding — remains **UNRESOLVED**; a matching state
+   comparison narrows *where* the bug is, it does not name it, and `matched=False` is unchanged (the
+   mismatch is never made to look like a pass).
+
+   On the local **real** integration run (built Showdown + node + poke-engine 0.0.47), the built engine
+   state matched the request-derived spec on **both** sides for all 13 inspected exposed/stored fields, so the surface
+   narrows to `"engine damage/data path"`. That is, for the inspected fields the spec→engine
+   state readback is faithful, which points the surviving one-turn damage mismatch at the engine's
+   Gen 3 damage/data path rather than the adapter's state construction. This is scoped to the inspected
+   fields only (it does not cover the engine's full internal state or its damage math), and the exact
+   root cause stays unresolved.
+
+   Unit tests cover the assembler end-to-end against a fake engine (a damage mismatch with a faithful
+   engine state → narrowed surface; an unfaithful engine state → broad surface with an explicit named
+   field mismatch; a matched-branch path; engine-branch deltas; and direct-`calculate_damage` payload
+   propagation, all with no native wheel or built Showdown), engine-state extraction from fake states
+   (normalization, missing/uncoercible fields, and a fully uninspectable state), field-level comparison
+   match/mismatch (including the unreadable-field marker), surface selection across the
+   matched/both-match/one-mismatch/uninspectable branches, observed-delta computation, the
    request-derived active-state summary (no wheel), the strict-JSON `_coerce_jsonable` guard (non-finite
    floats rejected), and the direct-`calculate_damage` probe (simple shape plus graceful unsupported on
-   missing/raising/unknown shape); an optional real integration test (built Showdown + node +
-   poke-engine 0.0.47) asserts the diagnostic runs, records the known mismatch, and exposes a
+   missing/raising/unknown shape); the optional real integration test (built Showdown + node +
+   poke-engine 0.0.47) asserts the diagnostic runs, records the known mismatch, includes both
+   engine-state comparisons, and asserts that **if** the comparisons match the surface narrows to
+   `"engine damage/data path"` (else the broad surface stands with explicit field mismatches), plus a
    serializable, non-empty direct `calculate_damage` output (the local 0.0.47 binding supports it). It
    is fixture-only and is not wired into rollout/training/search/benchmarks/self-play.
 
    **Remaining:** extend the comparator across the full matrix above (status, switch, forced switch,
    faint, Spikes, Toxic, Substitute, Hidden Power, Intimidate, Flash Fire), and reconcile the Gen 3
-   damage/data/mechanics difference the diagnostic now surfaces (or pin an engine build/config that
-   matches) before engine outcome equivalence can be considered proven; today it is unproven.
+   engine damage/data difference the diagnostic now isolates (the inspected build state is faithful, so
+   the gap is on the engine's damage path) — fix or pin an engine build/config that matches — before
+   engine outcome equivalence can be considered proven; today it is unproven.
 5. Benchmark apply/reverse branch throughput against the current replay-from-root branch harness.
 6. If equivalence and speed are good, add an optional search backend that keeps Showdown as final
    benchmark/evaluation truth.
