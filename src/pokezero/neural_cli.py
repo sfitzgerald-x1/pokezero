@@ -763,16 +763,19 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _explicit_cli_options(argv: Iterable[str]) -> frozenset[str]:
-    options: set[str] = set()
-    for token in argv:
-        if token == "--":
-            break
-        if not token.startswith("--") or token == "--":
-            continue
-        option = token[2:].split("=", 1)[0]
-        if option:
-            options.add(option.replace("-", "_"))
-    return frozenset(options)
+    parser = build_arg_parser()
+    _suppress_parser_defaults(parser)
+    parsed = parser.parse_args(list(argv))
+    return frozenset(vars(parsed))
+
+
+def _suppress_parser_defaults(parser: argparse.ArgumentParser) -> None:
+    parser._defaults.clear()
+    for action in parser._actions:
+        action.default = argparse.SUPPRESS
+        if isinstance(action, argparse._SubParsersAction):
+            for subparser in action.choices.values():
+                _suppress_parser_defaults(subparser)
 
 
 def _describe(args: argparse.Namespace) -> int:
