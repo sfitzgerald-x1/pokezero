@@ -2967,8 +2967,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
             manifest_path = run_dir / "manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             accepted_checkpoint = manifest["iterations"][0]["checkpoint_path"]
-            manifest["latest_accepted_checkpoint_path"] = accepted_checkpoint
-            manifest["current_policy_spec"] = f"neural:{accepted_checkpoint}"
+            latest_checkpoint = manifest["latest_checkpoint_path"]
+            accepted_via_dotdot = str(Path(accepted_checkpoint).parent / ".." / Path(accepted_checkpoint).parent.name / Path(accepted_checkpoint).name)
+            manifest["latest_accepted_checkpoint_path"] = None
+            manifest["current_policy_spec"] = f"neural:{accepted_via_dotdot}"
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             summary_path = _write_foundation_summary(
                 run_dir,
@@ -2999,8 +3001,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["candidate_source"], "latest-accepted")
         self.assertEqual(entry["latest_iteration"], 2)
+        self.assertEqual(entry["latest_checkpoint_path"], latest_checkpoint)
         self.assertEqual(entry["candidate_iteration"], 1)
         self.assertEqual(entry["candidate_checkpoint_path"], accepted_checkpoint)
+        self.assertIsNone(entry["candidate_selection_error"])
         self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.25)
         self.assertEqual(entry["quality_gate"]["status"], "pass")
 
@@ -3102,18 +3106,40 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = neural_cli_main(["foundation-compare", str(run_dir), "--json"])
+            with patch("sys.stdout", new_callable=io.StringIO) as accepted_stdout:
+                accepted_exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(run_dir),
+                        "--candidate-source",
+                        "latest-accepted",
+                        "--json",
+                    ]
+                )
 
         payload = json.loads(stdout.getvalue())
         entry = payload["entries"][0]
+        accepted_payload = json.loads(accepted_stdout.getvalue())
+        accepted_entry = accepted_payload["entries"][0]
         self.assertEqual(exit_code, 0)
+        self.assertEqual(accepted_exit_code, 0)
         self.assertEqual(payload["schema_version"], "pokezero.neural_foundation_compare.v1")
+        self.assertEqual(payload["candidate_source"], "latest")
         self.assertFalse(entry["manifest_loaded"])
         self.assertEqual(entry["manifest_error"], "manifest not found")
         self.assertEqual(entry["variant"], "opponent-signal")
+        self.assertIsNone(entry["candidate_selection_error"])
+        self.assertEqual(entry["candidate_iteration"], 1)
         self.assertEqual(entry["yardsticks"]["max-damage"]["source"], "summary")
         self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.125)
         self.assertFalse(entry["yardsticks"]["simple-legal"]["available"])
         self.assertEqual(entry["value_calibration"]["pearson_correlation"], 0.22)
+        self.assertEqual(accepted_payload["candidate_source"], "latest-accepted")
+        self.assertEqual(accepted_entry["candidate_selection_error"], "candidate source requires a loaded manifest")
+        self.assertIsNone(accepted_entry["candidate_iteration"])
+        self.assertIsNone(accepted_entry["candidate_checkpoint_path"])
+        self.assertEqual(accepted_entry["foundation_evidence_status"], "incomplete")
+        self.assertFalse(accepted_entry["yardsticks"]["max-damage"]["available"])
 
     def test_neural_cli_foundation_compare_quality_gate_can_require_one_passing_row(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

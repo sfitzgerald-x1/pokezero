@@ -2691,10 +2691,13 @@ def _foundation_compare_entry(path: Path, *, candidate_source: str) -> dict[str,
     elif candidate_source != "latest":
         candidate_error = "candidate source requires a loaded manifest"
         readiness = _missing_foundation_candidate_readiness(candidate_error)
+    else:
+        candidate_error = None
     candidate_iteration = _int_or_none(selected_iteration.get("iteration")) if selected_iteration is not None else None
     candidate_checkpoint_path = (
         _string_or_none(selected_iteration.get("checkpoint_path")) if selected_iteration is not None else None
     )
+    fallback_to_summary_candidate = selected_iteration is None and candidate_error is None
     return {
         "label": _foundation_compare_label(summary_path, recipe),
         "summary_path": str(summary_path),
@@ -2712,8 +2715,13 @@ def _foundation_compare_entry(path: Path, *, candidate_source: str) -> dict[str,
         "candidate_source": candidate_source,
         "candidate_iteration": candidate_iteration
         if candidate_iteration is not None
-        else _coalesce_optional_int(readiness.get("latest_iteration"), foundation.get("latest_iteration")),
-        "candidate_checkpoint_path": candidate_checkpoint_path or _string_or_none(foundation.get("latest_checkpoint_path")),
+        else (
+            _coalesce_optional_int(readiness.get("latest_iteration"), foundation.get("latest_iteration"))
+            if fallback_to_summary_candidate
+            else None
+        ),
+        "candidate_checkpoint_path": candidate_checkpoint_path
+        or (_string_or_none(foundation.get("latest_checkpoint_path")) if fallback_to_summary_candidate else None),
         "candidate_selection_error": candidate_error,
         "foundation_evidence_status": _string_or_none(readiness.get("foundation_evidence_status")) or "unknown",
         "reasons": [str(reason) for reason in _sequence(readiness.get("reasons", ()))],
@@ -2782,9 +2790,17 @@ def _find_foundation_iteration_by_checkpoint(
     checkpoint_path: str,
 ) -> Mapping[str, Any] | None:
     for iteration in iterations:
-        if _string_or_none(iteration.get("checkpoint_path")) == checkpoint_path:
+        if _foundation_checkpoint_paths_match(_string_or_none(iteration.get("checkpoint_path")), checkpoint_path):
             return iteration
     return None
+
+
+def _foundation_checkpoint_paths_match(left: str | None, right: str | None) -> bool:
+    if left is None or right is None:
+        return False
+    if left == right:
+        return True
+    return Path(left).expanduser().resolve(strict=False) == Path(right).expanduser().resolve(strict=False)
 
 
 def _find_foundation_iteration_by_number(
@@ -2973,7 +2989,10 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     for entry in entries:
         manifest_state = "loaded" if entry.get("manifest_loaded") is True else f"missing({_format_manifest_value(entry.get('manifest_error'))})"
         load_error = entry.get("load_error")
+        candidate_error = entry.get("candidate_selection_error")
         error_suffix = f" load_error={_format_manifest_value(load_error)}" if load_error is not None else ""
+        if candidate_error is not None:
+            error_suffix += f" candidate_error={_format_manifest_value(candidate_error)}"
         print(
             f"- {_format_manifest_value(entry.get('label'))}: "
             f"candidate={_format_manifest_value(entry.get('candidate_checkpoint_path'))} "
