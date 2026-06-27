@@ -1813,6 +1813,18 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- simple-legal: 1:1.000/20g", output)
         self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
+        self.assertIn("foundation_readiness:", output)
+        self.assertIn(
+            "note: presence/sample-size only; inspect value quality and strength separately.",
+            output,
+        )
+        self.assertIn("- value_calibration: present examples=6 sign=0.7200 ece=0.180000", output)
+        self.assertIn(
+            "- max_damage_yardstick: iter=1 win_rate=0.250 games=20 cap=2 sample=below_milestone(20/300)",
+            output,
+        )
+        self.assertIn("- foundation_evidence_status: incomplete", output)
+        self.assertIn("reasons: max_damage_sample_below_milestone", output)
         self.assertIn("0.100000", output)
         self.assertIn("0.7200", output)
         self.assertIn("0.180000", output)
@@ -1919,6 +1931,66 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("benchmark_opponent_curves:", output)
         self.assertIn("- random-legal: 1:0.550/20g,cap=3", output)
         self.assertNotIn("entity-test-iter-0000", output)
+
+    def test_neural_cli_report_marks_foundation_readable_at_milestone_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            max_damage = next(
+                result
+                for result in manifest["iterations"][0]["benchmark"]["head_to_heads"]
+                if result["second_policy_id"] == "max-damage"
+            )
+            max_damage["games"] = 300
+            max_damage["first_policy_wins"] = 120
+            max_damage["second_policy_wins"] = 180
+            max_damage["capped_games"] = 0
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("- max_damage_yardstick: iter=1 win_rate=0.400 games=300 cap=0 sample=milestone", output)
+        self.assertIn("- foundation_evidence_status: present_and_sample_sized", output)
+        self.assertNotIn("reasons:", output)
+
+    def test_neural_cli_report_foundation_readiness_requires_latest_yardstick(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            first_iteration = manifest["iterations"][0]
+            max_damage = next(
+                result
+                for result in first_iteration["benchmark"]["head_to_heads"]
+                if result["second_policy_id"] == "max-damage"
+            )
+            max_damage["games"] = 300
+            max_damage["first_policy_wins"] = 120
+            max_damage["second_policy_wins"] = 180
+            second_iteration = json.loads(json.dumps(first_iteration))
+            second_iteration["iteration"] = 2
+            second_iteration["benchmark"]["head_to_heads"] = [
+                result
+                for result in second_iteration["benchmark"]["head_to_heads"]
+                if result["second_policy_id"] != "max-damage"
+            ]
+            manifest["iterations"].append(second_iteration)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("- max_damage_yardstick: missing", output)
+        self.assertIn("- foundation_evidence_status: incomplete", output)
+        self.assertIn("reasons: max_damage_yardstick_missing", output)
 
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(

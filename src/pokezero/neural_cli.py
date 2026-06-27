@@ -75,6 +75,7 @@ from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
+FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
@@ -1730,6 +1731,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{iteration.get('checkpoint_path')}"
         )
     _print_benchmark_opponent_curves(iterations)
+    _print_foundation_readiness(iterations)
 
 
 def _final_epoch_metrics(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1742,7 +1744,106 @@ def _iteration_value_calibration_report(iteration: Mapping[str, Any]) -> Mapping
     calibration = _optional_mapping(iteration.get("value_calibration"))
     if not calibration:
         return None
-    return _optional_mapping(calibration.get("report"))
+    report = _optional_mapping(calibration.get("report"))
+    return report if report else None
+
+
+def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> None:
+    report = _foundation_readiness_report(iterations)
+    print("")
+    print("foundation_readiness:")
+    print("note: presence/sample-size only; inspect value quality and strength separately.")
+    calibration = _optional_mapping(report.get("value_calibration"))
+    if calibration.get("available") is True:
+        print(
+            "- value_calibration: present "
+            f"examples={_format_manifest_value(calibration.get('examples'))} "
+            f"sign={_format_optional_float(calibration.get('sign_accuracy'), digits=4)} "
+            f"ece={_format_optional_float(calibration.get('expected_calibration_error'), digits=6)}"
+        )
+    else:
+        print("- value_calibration: missing")
+    max_damage = _optional_mapping(report.get("max_damage_yardstick"))
+    if max_damage.get("available") is True:
+        games = max_damage.get("games")
+        sample_state = (
+            "milestone"
+            if max_damage.get("sample_games_ready") is True
+            else f"below_milestone({games}/{FOUNDATION_MILESTONE_BENCHMARK_GAMES})"
+        )
+        print(
+            "- max_damage_yardstick: "
+            f"iter={_format_manifest_value(max_damage.get('iteration'))} "
+            f"win_rate={_format_optional_float(max_damage.get('win_rate'), digits=3)} "
+            f"games={_format_manifest_value(games)} "
+            f"cap={_format_manifest_value(max_damage.get('capped_games'))} "
+            f"sample={sample_state}"
+        )
+    else:
+        print("- max_damage_yardstick: missing")
+    print(f"- foundation_evidence_status: {_format_manifest_value(report.get('foundation_evidence_status'))}")
+    reasons = report.get("reasons")
+    if isinstance(reasons, list) and reasons:
+        print(f"  reasons: {', '.join(str(reason) for reason in reasons)}")
+
+
+def _foundation_readiness_report(iterations: tuple[Mapping[str, Any], ...]) -> dict[str, Any]:
+    latest = iterations[-1] if iterations else {}
+    calibration_report = _iteration_value_calibration_report(latest)
+    curves = _benchmark_opponent_curves((latest,)) if latest else {}
+    max_damage_entry = _latest_curve_entry(curves, "max-damage")
+    reasons: list[str] = []
+    if calibration_report is None:
+        reasons.append("value_calibration_missing")
+    if max_damage_entry is None:
+        reasons.append("max_damage_yardstick_missing")
+    elif int(max_damage_entry.get("games", 0)) < FOUNDATION_MILESTONE_BENCHMARK_GAMES:
+        reasons.append("max_damage_sample_below_milestone")
+    return {
+        "latest_iteration": int(latest.get("iteration", 0)) if latest else None,
+        "milestone_benchmark_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
+        "value_calibration": _foundation_value_calibration_payload(calibration_report),
+        "max_damage_yardstick": _foundation_yardstick_payload(max_damage_entry),
+        "foundation_evidence_status": "present_and_sample_sized" if not reasons else "incomplete",
+        "reasons": reasons,
+    }
+
+
+def _foundation_value_calibration_payload(report: Mapping[str, Any] | None) -> dict[str, Any]:
+    if report is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "examples": _int_or_none(report.get("examples")),
+        "sign_accuracy": _float_or_none(report.get("sign_accuracy")),
+        "expected_calibration_error": _float_or_none(report.get("expected_calibration_error")),
+        "mse": _float_or_none(report.get("mse")),
+        "mae": _float_or_none(report.get("mae")),
+        "bias": _float_or_none(report.get("bias")),
+    }
+
+
+def _foundation_yardstick_payload(entry: Mapping[str, Any] | None) -> dict[str, Any]:
+    if entry is None:
+        return {"available": False, "sample_games_ready": False}
+    games = _int_or_none(entry.get("games")) or 0
+    return {
+        "available": True,
+        "opponent_policy_id": "max-damage",
+        "iteration": _int_or_none(entry.get("iteration")),
+        "win_rate": _float_or_none(entry.get("win_rate")),
+        "games": games,
+        "capped_games": _int_or_none(entry.get("capped_games")) or 0,
+        "sample_games_ready": games >= FOUNDATION_MILESTONE_BENCHMARK_GAMES,
+    }
+
+
+def _latest_curve_entry(
+    curves: Mapping[str, list[dict[str, Any]]],
+    opponent_policy_id: str,
+) -> Mapping[str, Any] | None:
+    entries = curves.get(opponent_policy_id)
+    return entries[-1] if entries else None
 
 
 def _print_benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) -> None:
