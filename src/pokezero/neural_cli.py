@@ -199,7 +199,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Opponent action source used for the simultaneous root branch. 'checkpoint' uses "
             "the checkpoint opponent-action prior head; 'benchmark' asks a separate copy of "
-            "the fixed benchmark opponent policy to choose the non-search side's root action."
+            "the fixed benchmark opponent policy to choose the non-search side's root action "
+            "from its private observation. Benchmark mode is privileged evaluation plumbing; "
+            "stochastic opponents produce one sampled action, not a modal expectation."
         ),
     )
     root_puct_play.add_argument(

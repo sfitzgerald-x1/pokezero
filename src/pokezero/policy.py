@@ -75,6 +75,8 @@ class PolicyContext:
     requested_players: tuple[str, ...]
     trajectory: BattleTrajectory
     requested_legal_action_masks: Mapping[str, tuple[bool, ...]] = field(default_factory=dict)
+    # Privileged: contains every requested player's private observation. Context-aware policies
+    # should only read other players' observations when intentionally building search/eval tooling.
     requested_observations: Mapping[str, PokeZeroObservationV0] = field(default_factory=dict)
 
 

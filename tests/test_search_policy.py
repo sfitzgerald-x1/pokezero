@@ -47,6 +47,21 @@ class ResettableFixedPolicy(FixedPolicy):
         self.reset_calls += 1
 
 
+class ContextRecordingPolicy:
+    policy_id = "context-recorder"
+
+    def __init__(self, action_index: int) -> None:
+        self.action_index = action_index
+        self.contexts: list[PolicyContext] = []
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        raise AssertionError("context-aware planner should call select_action_with_context")
+
+    def select_action_with_context(self, context: PolicyContext, *, rng) -> PolicyDecision:
+        self.contexts.append(context)
+        return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
+
+
 class ImmediateOutcomeEnv:
     def __init__(self, *, label: str) -> None:
         self.label = label
@@ -218,6 +233,33 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(opponent_policy.observations, [opponent_observation])
         planner.reset()
         self.assertEqual(opponent_policy.reset_calls, 1)
+
+    def test_policy_opponent_action_planner_supports_context_aware_policy(self) -> None:
+        opponent_policy = ContextRecordingPolicy(1)
+        planner = policy_opponent_action_planner({"p2": opponent_policy}, planner_id="benchmark")
+        trajectory = BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7)
+        opponent_observation = _observation(1)
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=3,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0),
+            requested_players=("p1", "p2"),
+            trajectory=trajectory,
+            requested_legal_action_masks={"p1": _mask(0), "p2": _mask(1)},
+            requested_observations={"p1": _observation(0), "p2": opponent_observation},
+        )
+
+        self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+        self.assertEqual(len(opponent_policy.contexts), 1)
+        opponent_context = opponent_policy.contexts[0]
+        self.assertEqual(opponent_context.player_id, "p2")
+        self.assertEqual(opponent_context.decision_round_index, 3)
+        self.assertIs(opponent_context.observation, opponent_observation)
+        self.assertIs(opponent_context.trajectory, trajectory)
+        self.assertEqual(opponent_context.requested_players, ("p1", "p2"))
 
     def test_root_puct_policy_selects_search_action_using_separate_branch_env(self) -> None:
         branch_envs: list[ImmediateOutcomeEnv] = []

@@ -12,7 +12,7 @@ from .actions import ACTION_COUNT
 from .env import PlayerId, PokeZeroEnv
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
-from .rollout import RolloutConfig
+from .rollout import RolloutConfig, _reset_unique_policies
 from .search import (
     ActionPriorVector,
     ObservationValueFunction,
@@ -120,10 +120,12 @@ def policy_opponent_action_planner(
 class RootPUCTSearchPolicy:
     """Context-aware policy adapter that selects actions with root-level PUCT.
 
-    The policy intentionally receives only the acting player's observation through
+    The policy's own action search is rooted in the acting player's observation through
     ``PolicyContext``. Simultaneous-turn opponent actions must come from the explicit
-    ``opponent_action_planner`` hook, which keeps hidden-information assumptions auditable.
-    Branch search runs in a separate env from ``env_factory`` so it cannot mutate the live rollout.
+    ``opponent_action_planner`` hook. Some planners are hidden-info-safe predictors, while
+    benchmark/evaluation planners may intentionally consume the opponent's private observation;
+    keep that assumption visible in planner metadata. Branch search runs in a separate env from
+    ``env_factory`` so it cannot mutate the live rollout.
     """
 
     env_factory: Callable[[], PokeZeroEnv]
@@ -436,18 +438,6 @@ def _leaf_rollout_policies(
     for step in context.trajectory.steps:
         players.add(step.player_id)
     return {player: factory(player) for player in sorted(players)}
-
-
-def _reset_unique_policies(policies: Mapping[PlayerId, Policy]) -> None:
-    seen: set[int] = set()
-    for policy in policies.values():
-        policy_identity = id(policy)
-        if policy_identity in seen:
-            continue
-        seen.add(policy_identity)
-        reset = getattr(policy, "reset", None)
-        if callable(reset):
-            reset()
 
 
 def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> None:
