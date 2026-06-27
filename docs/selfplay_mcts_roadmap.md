@@ -79,6 +79,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   1/8 vs `max-damage`, with zero capped games and active-search throughput around 2.7-2.8
   decisions/s. This points back to operator/value quality rather than submit-validity as the next
   M0 bottleneck.
+  A follow-up probe with the conservative value gate on the same 64-game teacher-BC checkpoint and
+  a fresh fixed seed range also failed to show lift: at `--min-value-improvement 0.0`, the gate made
+  no changes (`0/244` uses/checks) and raw/root-PUCT both scored 3/8 vs `max-damage`; at
+  `--min-value-improvement 0.25`, the gate changed a few decisions (`8/245`) but raw/root-PUCT still
+  both scored 3/8. Both runs had zero fallbacks and zero capped games, so the next M0 work should
+  focus on improving the search/value signal itself rather than only adding conservative vetoes.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
