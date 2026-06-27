@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 import json
+import math
 from os import PathLike
 from pathlib import Path
 import random
@@ -299,6 +300,13 @@ class TransformerEpochMetrics:
     action_family_accuracy: float | None = None
     switch_target_loss: float | None = None
     switch_target_accuracy: float | None = None
+    ppo_valid_examples: int | None = None
+    ppo_valid_fraction: float | None = None
+    ppo_advantage_mean: float | None = None
+    ppo_advantage_std: float | None = None
+    ppo_ratio_mean: float | None = None
+    ppo_clip_fraction: float | None = None
+    ppo_entropy: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -837,6 +845,13 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 action_family_accuracy=_optional_float(metrics.get("action_family_accuracy")),
                 switch_target_loss=_optional_float(metrics.get("switch_target_loss")),
                 switch_target_accuracy=_optional_float(metrics.get("switch_target_accuracy")),
+                ppo_valid_examples=_optional_int(metrics.get("ppo_valid_examples")),
+                ppo_valid_fraction=_optional_float(metrics.get("ppo_valid_fraction")),
+                ppo_advantage_mean=_optional_float(metrics.get("ppo_advantage_mean")),
+                ppo_advantage_std=_optional_float(metrics.get("ppo_advantage_std")),
+                ppo_ratio_mean=_optional_float(metrics.get("ppo_ratio_mean")),
+                ppo_clip_fraction=_optional_float(metrics.get("ppo_clip_fraction")),
+                ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
             )
             for metrics in payload.get("epochs", ())
         ),
@@ -860,6 +875,12 @@ class _TorchMetricTotals:
     switch_target_loss: float = 0.0
     switch_target_correct: int = 0
     switch_target_examples: int = 0
+    ppo_valid_examples: int = 0
+    ppo_advantage_sum: float = 0.0
+    ppo_advantage_square_sum: float = 0.0
+    ppo_ratio_sum: float = 0.0
+    ppo_clip_count: int = 0
+    ppo_entropy_sum: float = 0.0
 
     def add(self, batch_size: int, pieces: Mapping[str, float | int]) -> None:
         self.examples += batch_size
@@ -882,8 +903,31 @@ class _TorchMetricTotals:
             self.switch_target_examples += switch_target_examples
             self.switch_target_loss += float(pieces["switch_target_loss"]) * switch_target_examples
             self.switch_target_correct += int(pieces["switch_target_correct"])
+        ppo_valid_examples = int(pieces["ppo_valid_examples"])
+        if ppo_valid_examples:
+            self.ppo_valid_examples += ppo_valid_examples
+            self.ppo_advantage_sum += float(pieces["ppo_advantage_sum"])
+            self.ppo_advantage_square_sum += float(pieces["ppo_advantage_square_sum"])
+            self.ppo_ratio_sum += float(pieces["ppo_ratio_sum"])
+            self.ppo_clip_count += int(pieces["ppo_clip_count"])
+            self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
 
     def to_epoch_metrics(self, epoch: int) -> TransformerEpochMetrics:
+        ppo_advantage_mean = None
+        ppo_advantage_std = None
+        ppo_ratio_mean = None
+        ppo_clip_fraction = None
+        ppo_entropy = None
+        if self.ppo_valid_examples:
+            ppo_advantage_mean = self.ppo_advantage_sum / self.ppo_valid_examples
+            ppo_advantage_variance = max(
+                0.0,
+                (self.ppo_advantage_square_sum / self.ppo_valid_examples) - (ppo_advantage_mean**2),
+            )
+            ppo_advantage_std = math.sqrt(ppo_advantage_variance)
+            ppo_ratio_mean = self.ppo_ratio_sum / self.ppo_valid_examples
+            ppo_clip_fraction = self.ppo_clip_count / self.ppo_valid_examples
+            ppo_entropy = self.ppo_entropy_sum / self.ppo_valid_examples
         return TransformerEpochMetrics(
             epoch=epoch,
             examples=self.examples,
@@ -897,6 +941,13 @@ class _TorchMetricTotals:
             action_family_accuracy=(self.action_family_correct / self.action_family_examples) if self.action_family_examples else None,
             switch_target_loss=(self.switch_target_loss / self.switch_target_examples) if self.switch_target_examples else None,
             switch_target_accuracy=(self.switch_target_correct / self.switch_target_examples) if self.switch_target_examples else None,
+            ppo_valid_examples=self.ppo_valid_examples if self.ppo_valid_examples else None,
+            ppo_valid_fraction=(self.ppo_valid_examples / self.examples) if self.ppo_valid_examples else None,
+            ppo_advantage_mean=ppo_advantage_mean,
+            ppo_advantage_std=ppo_advantage_std,
+            ppo_ratio_mean=ppo_ratio_mean,
+            ppo_clip_fraction=ppo_clip_fraction,
+            ppo_entropy=ppo_entropy,
         )
 
 
@@ -919,6 +970,12 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_loss = functional.mse_loss(output.value, tensors["returns"])
+    ppo_valid_examples = 0
+    ppo_advantage_sum = 0.0
+    ppo_advantage_square_sum = 0.0
+    ppo_ratio_sum = 0.0
+    ppo_clip_count = 0
+    ppo_entropy_sum = 0.0
 
     if config.objective == "value-only":
         policy_loss = value_loss * 0.0
@@ -937,7 +994,8 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         mask = (tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)).float()
         behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
         denom = mask.sum().clamp(min=1.0)
-        advantage = tensors["returns"] - output.value.detach()
+        raw_advantage = tensors["returns"] - output.value.detach()
+        advantage = raw_advantage
         if config.normalize_advantage and float(denom.item()) > 1.0:
             masked_mean = (advantage * mask).sum() / denom
             masked_var = (((advantage - masked_mean) ** 2) * mask).sum() / denom
@@ -948,7 +1006,23 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
             ratio.clamp(1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantage,
         )
         policy_loss = -(surrogate * mask).sum() / denom
-        entropy_mean = (-(log_probs.exp() * log_probs).sum(dim=1) * mask).sum() / denom
+        entropy = -(log_probs.exp() * log_probs).sum(dim=1)
+        entropy_mean = (entropy * mask).sum() / denom
+        valid_mask = mask.bool()
+        ppo_valid_examples = int(valid_mask.sum().item())
+        if ppo_valid_examples:
+            valid_advantage = raw_advantage[valid_mask]
+            valid_ratio = ratio[valid_mask]
+            ppo_advantage_sum = float(valid_advantage.sum().detach().item())
+            ppo_advantage_square_sum = float((valid_advantage * valid_advantage).sum().detach().item())
+            ppo_ratio_sum = float(valid_ratio.sum().detach().item())
+            ppo_clip_count = int(
+                (
+                    (valid_ratio < (1.0 - config.clip_epsilon))
+                    | (valid_ratio > (1.0 + config.clip_epsilon))
+                ).sum().detach().item()
+            )
+            ppo_entropy_sum = float(entropy[valid_mask].sum().detach().item())
         loss = policy_loss + (config.value_loss_weight * value_loss) - (config.entropy_coef * entropy_mean)
     elif config.objective == "reward-weighted":
         per_example_policy_loss = functional.cross_entropy(
@@ -994,6 +1068,12 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "switch_target_loss": switch_loss_value,
         "switch_target_correct": switch_correct,
         "switch_target_examples": switch_examples,
+        "ppo_valid_examples": ppo_valid_examples,
+        "ppo_advantage_sum": ppo_advantage_sum,
+        "ppo_advantage_square_sum": ppo_advantage_square_sum,
+        "ppo_ratio_sum": ppo_ratio_sum,
+        "ppo_clip_count": ppo_clip_count,
+        "ppo_entropy_sum": ppo_entropy_sum,
     }
 
 
@@ -1148,6 +1228,12 @@ def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _int_field(payload: Mapping[str, Any], key: str, default: int) -> int:
