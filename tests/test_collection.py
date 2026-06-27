@@ -143,11 +143,17 @@ class MetadataPolicy:
         fallback: bool = False,
         include_elapsed: bool = True,
         value_gate_used: bool | None = None,
+        leaf_rollout_rounds: int | None = None,
+        leaf_actual_rounds: dict[str, int] | None = None,
+        leaf_evaluations: dict[str, int] | None = None,
     ) -> None:
         self.policy_id = policy_id
         self.fallback = fallback
         self.include_elapsed = include_elapsed
         self.value_gate_used = value_gate_used
+        self.leaf_rollout_rounds = leaf_rollout_rounds
+        self.leaf_actual_rounds = leaf_actual_rounds
+        self.leaf_evaluations = leaf_evaluations
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         if self.fallback:
@@ -172,6 +178,12 @@ class MetadataPolicy:
             metadata["root_puct_elapsed_seconds"] = 0.25
         if self.value_gate_used is not None:
             metadata["root_puct_value_gate_used"] = self.value_gate_used
+        if self.leaf_rollout_rounds is not None:
+            metadata["root_puct_leaf_rollout_rounds"] = self.leaf_rollout_rounds
+        if self.leaf_actual_rounds is not None:
+            metadata["root_puct_leaf_actual_rollout_rounds"] = dict(self.leaf_actual_rounds)
+        if self.leaf_evaluations is not None:
+            metadata["root_puct_leaf_evaluations"] = dict(self.leaf_evaluations)
         return PolicyDecision(
             action_index=0,
             policy_id=self.policy_id,
@@ -318,7 +330,12 @@ class CollectionTest(unittest.TestCase):
             matchups=(
                 BenchmarkMatchup(
                     "root-puct vs random",
-                    MetadataPolicy(value_gate_used=True),
+                    MetadataPolicy(
+                        value_gate_used=True,
+                        leaf_rollout_rounds=2,
+                        leaf_actual_rounds={"0": 1, "2": 2},
+                        leaf_evaluations={"rollout_terminal": 2, "rollout_value_fn": 1},
+                    ),
                     RandomLegalPolicy(),
                 ),
             ),
@@ -335,6 +352,12 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_checks"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_uses"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_selection_modes"], {"puct": 2})
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_leaf_rollout_rounds"], {"2": 2})
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_leaf_actual_rollout_rounds"], {"0": 2, "2": 4})
+        self.assertEqual(
+            summary["root-puct-diagnostic"]["root_puct_leaf_evaluations"],
+            {"rollout_terminal": 4, "rollout_value_fn": 2},
+        )
         self.assertEqual(summary["random-legal"]["decisions"], 2)
         self.assertNotIn("root_puct_searches", summary["random-legal"])
 
@@ -407,7 +430,15 @@ class CollectionTest(unittest.TestCase):
             rollout_config=RolloutConfig(max_decision_rounds=5),
             seed_start=20,
             matchups=(
-                BenchmarkMatchup("root-puct vs random", MetadataPolicy(), RandomLegalPolicy()),
+                BenchmarkMatchup(
+                    "root-puct vs random",
+                    MetadataPolicy(
+                        leaf_rollout_rounds=2,
+                        leaf_actual_rounds={"1": 3},
+                        leaf_evaluations={"rollout_terminal": 2, "rollout_value_fn": 1},
+                    ),
+                    RandomLegalPolicy(),
+                ),
                 BenchmarkMatchup(
                     "fallback-root-puct vs random",
                     MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
@@ -425,6 +456,12 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("gate", output)
         self.assertIn("root-puct-fallback", output)
         self.assertIn("selection_modes:", output)
+        self.assertIn("leaf_rollouts_configured:", output)
+        self.assertIn("leaf_rollouts_actual:", output)
+        self.assertIn("leaf_evaluations:", output)
+        self.assertIn("2=1", output)
+        self.assertIn("1=3", output)
+        self.assertIn("rollout_terminal=2", output)
         self.assertIn("fallback_reasons:", output)
         self.assertIn("search failed: boom=1", output)
 

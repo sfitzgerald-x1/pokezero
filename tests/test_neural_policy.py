@@ -791,6 +791,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "random-legal",
                     "--cpuct",
                     "0.75",
+                    "--leaf-rollout-rounds",
+                    "2",
                     "--selection-mode",
                     "value",
                     "--min-value-improvement",
@@ -821,6 +823,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(matchups[2].p1_policy.cpuct, 0.75)
         self.assertEqual(matchups[2].p1_policy.selection_mode, "value")
         self.assertEqual(matchups[2].p1_policy.minimum_value_improvement, 0.2)
+        self.assertEqual(matchups[2].p1_policy.leaf_rollout_decision_rounds, 2)
+        self.assertIsNotNone(matchups[2].p1_policy.leaf_rollout_policy_factory)
+        self.assertEqual(matchups[2].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
         self.assertTrue(matchups[2].p1_policy.allow_fallback)
         self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")

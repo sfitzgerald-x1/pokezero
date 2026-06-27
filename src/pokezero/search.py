@@ -16,7 +16,7 @@ from .replay_branching import (
     replay_trajectory_branch,
     replay_trajectory_branch_rollout,
 )
-from .rollout import RolloutConfig
+from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
@@ -50,6 +50,8 @@ class ValueBranchSearchCandidate:
     terminal: TerminalState | None
     branch: ReplayBranchResult
     evaluated_history_length: int
+    leaf_evaluation: str = "value_fn"
+    leaf_rollout_decision_round_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -64,6 +66,8 @@ class ValueBranchSearchCandidate:
             },
             "post_branch_requested_players": list(self.branch.step_result.requested_players),
             "evaluated_history_length": self.evaluated_history_length,
+            "leaf_evaluation": self.leaf_evaluation,
+            "leaf_rollout_decision_round_count": self.leaf_rollout_decision_round_count,
         }
 
 
@@ -198,8 +202,17 @@ def value_branch_search(
     legal_action_mask: tuple[bool, ...],
     opponent_actions: Mapping[PlayerId, int],
     value_fn: ObservationValueFunction,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
+    leaf_rollout_config: RolloutConfig | None = None,
+    leaf_rollout_decision_rounds: int = 0,
 ) -> ValueBranchSearchResult:
-    """Enumerate legal root actions and score post-branch states with a value function."""
+    """Enumerate legal root actions and score branch leaves.
+
+    The default path is the original one-ply evaluator: branch once and score the
+    immediate post-branch observation with ``value_fn``. When leaf rollouts are
+    enabled, each non-terminal branch is continued through the simulator for a
+    bounded number of decision rounds before scoring the terminal or truncated leaf.
+    """
 
     if len(legal_action_mask) != ACTION_COUNT:
         raise ValueError(f"legal_action_mask must contain {ACTION_COUNT} values.")
@@ -208,6 +221,12 @@ def value_branch_search(
         raise ValueError("value branch search requires at least one legal action.")
     if player_id in opponent_actions:
         raise ValueError("opponent_actions must not include the searched player.")
+    if leaf_rollout_decision_rounds < 0:
+        raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
+    if leaf_rollout_decision_rounds and leaf_rollout_policies is None:
+        raise ValueError("leaf_rollout_policies are required when leaf rollouts are enabled.")
+    if leaf_rollout_decision_rounds and leaf_rollout_config is None:
+        raise ValueError("leaf_rollout_config is required when leaf rollouts are enabled.")
 
     prefix_history = player_observation_history(
         trajectory,
@@ -226,25 +245,19 @@ def value_branch_search(
             prefix_decision_round_count=prefix_decision_round_count,
             branch_actions=branch_actions,
         )
-        terminal = branch.step_result.terminal
-        if terminal is not None:
-            value = terminal_value_for_player(terminal, player_id=player_id)
-            evaluated_history = prefix_history
-        else:
-            post_branch_observation = branch.step_result.observations.get(player_id)
-            if post_branch_observation is None:
-                post_branch_observation = env.observe(player_id)
-            evaluated_history = (*prefix_history, post_branch_observation)
-            value = float(value_fn(evaluated_history))
-            if not math.isfinite(value):
-                raise ValueError("value_fn returned a non-finite branch value.")
         candidates.append(
-            ValueBranchSearchCandidate(
-                action_index=action_index,
-                value=value,
-                terminal=terminal,
+            _value_branch_candidate(
+                env=env,
+                trajectory=trajectory,
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                prefix_history=prefix_history,
                 branch=branch,
-                evaluated_history_length=len(evaluated_history),
+                action_index=action_index,
+                value_fn=value_fn,
+                leaf_rollout_policies=leaf_rollout_policies,
+                leaf_rollout_config=leaf_rollout_config,
+                leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
             )
         )
 
@@ -267,6 +280,9 @@ def puct_branch_search(
     value_fn: ObservationValueFunction,
     action_priors: ActionPriorVector,
     cpuct: float = 1.25,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
+    leaf_rollout_config: RolloutConfig | None = None,
+    leaf_rollout_decision_rounds: int = 0,
 ) -> PUCTBranchSearchResult:
     """Score one-ply replay branches with PUCT-style policy-prior exploration."""
 
@@ -280,6 +296,9 @@ def puct_branch_search(
         legal_action_mask=legal_action_mask,
         opponent_actions=opponent_actions,
         value_fn=value_fn,
+        leaf_rollout_policies=leaf_rollout_policies,
+        leaf_rollout_config=leaf_rollout_config,
+        leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
     )
     normalized_priors = _normalized_legal_priors(
         action_priors,
@@ -367,6 +386,138 @@ def terminal_value_for_player(terminal: TerminalState, *, player_id: PlayerId) -
     if terminal.winner is None:
         return 0.0
     return -1.0
+
+
+def _value_branch_candidate(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    prefix_history: tuple[PokeZeroObservationV0, ...],
+    branch: ReplayBranchResult,
+    action_index: int,
+    value_fn: ObservationValueFunction,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None,
+    leaf_rollout_config: RolloutConfig | None,
+    leaf_rollout_decision_rounds: int,
+) -> ValueBranchSearchCandidate:
+    terminal = branch.step_result.terminal
+    if terminal is not None:
+        return ValueBranchSearchCandidate(
+            action_index=action_index,
+            value=terminal_value_for_player(terminal, player_id=player_id),
+            terminal=terminal,
+            branch=branch,
+            evaluated_history_length=len(prefix_history),
+            leaf_evaluation="terminal",
+            leaf_rollout_decision_round_count=0,
+        )
+
+    post_branch_history = _post_branch_history(
+        env=env,
+        player_id=player_id,
+        prefix_history=prefix_history,
+        branch=branch,
+    )
+    if leaf_rollout_decision_rounds <= 0:
+        return ValueBranchSearchCandidate(
+            action_index=action_index,
+            value=_finite_value(value_fn(post_branch_history)),
+            terminal=None,
+            branch=branch,
+            evaluated_history_length=len(post_branch_history),
+            leaf_evaluation="value_fn",
+            leaf_rollout_decision_round_count=0,
+        )
+
+    if leaf_rollout_policies is None or leaf_rollout_config is None:
+        raise ValueError("leaf rollout policy/config missing.")
+    leaf_max_decision_rounds = min(
+        leaf_rollout_config.max_decision_rounds,
+        prefix_decision_round_count + 1 + leaf_rollout_decision_rounds,
+    )
+    if leaf_max_decision_rounds <= prefix_decision_round_count + 1:
+        return ValueBranchSearchCandidate(
+            action_index=action_index,
+            value=_finite_value(value_fn(post_branch_history)),
+            terminal=None,
+            branch=branch,
+            evaluated_history_length=len(post_branch_history),
+            leaf_evaluation="value_fn",
+            leaf_rollout_decision_round_count=0,
+        )
+
+    continuation = continue_rollout_from_current_state(
+        env=env,
+        policies=leaf_rollout_policies,
+        config=RolloutConfig(
+            max_decision_rounds=leaf_max_decision_rounds,
+            format_id=leaf_rollout_config.format_id,
+        ),
+        seed=trajectory.seed,
+        battle_id=f"value-branch-leaf-{player_id}-{prefix_decision_round_count}-{action_index}",
+        starting_decision_round_index=prefix_decision_round_count + 1,
+        available_observations=branch.step_result.observations,
+        reset_policies=True,
+    )
+    continuation_observations = tuple(
+        step.observation
+        for step in continuation.trajectory.steps
+        if step.player_id == player_id
+    )
+    evaluated_history = _rollout_leaf_history(
+        post_branch_history=post_branch_history,
+        continuation_observations=continuation_observations,
+    )
+    terminal = continuation.terminal
+    if terminal.winner is not None or not terminal.capped:
+        value = terminal_value_for_player(terminal, player_id=player_id)
+        leaf_evaluation = "rollout_terminal"
+    else:
+        value = _finite_value(value_fn(evaluated_history))
+        leaf_evaluation = "rollout_value_fn"
+    return ValueBranchSearchCandidate(
+        action_index=action_index,
+        value=value,
+        terminal=terminal,
+        branch=branch,
+        evaluated_history_length=len(evaluated_history),
+        leaf_evaluation=leaf_evaluation,
+        leaf_rollout_decision_round_count=continuation.decision_round_count,
+    )
+
+
+def _post_branch_history(
+    *,
+    env: PokeZeroEnv,
+    player_id: PlayerId,
+    prefix_history: tuple[PokeZeroObservationV0, ...],
+    branch: ReplayBranchResult,
+) -> tuple[PokeZeroObservationV0, ...]:
+    post_branch_observation = branch.step_result.observations.get(player_id)
+    if post_branch_observation is None:
+        post_branch_observation = env.observe(player_id)
+    return (*prefix_history, post_branch_observation)
+
+
+def _rollout_leaf_history(
+    *,
+    post_branch_history: tuple[PokeZeroObservationV0, ...],
+    continuation_observations: tuple[PokeZeroObservationV0, ...],
+) -> tuple[PokeZeroObservationV0, ...]:
+    if not continuation_observations:
+        return post_branch_history
+    if post_branch_history and continuation_observations[0] == post_branch_history[-1]:
+        return (*post_branch_history[:-1], *continuation_observations)
+    return (*post_branch_history, *continuation_observations)
+
+
+def _finite_value(value: float) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("value_fn returned a non-finite branch value.")
+    return result
 
 
 def player_observation_history(
