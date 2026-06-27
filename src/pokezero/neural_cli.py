@@ -75,7 +75,7 @@ from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
-MCTS_MILESTONE_BENCHMARK_GAMES = 300
+FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
@@ -1744,14 +1744,15 @@ def _iteration_value_calibration_report(iteration: Mapping[str, Any]) -> Mapping
     calibration = _optional_mapping(iteration.get("value_calibration"))
     if not calibration:
         return None
-    return _optional_mapping(calibration.get("report"))
+    report = _optional_mapping(calibration.get("report"))
+    return report if report else None
 
 
 def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> None:
     report = _foundation_readiness_report(iterations)
     print("")
     print("foundation_readiness:")
-    print("note: treat low-sample search deltas as plumbing checks until this is foundation_readable.")
+    print("note: presence/sample-size only; inspect value quality and strength separately.")
     calibration = _optional_mapping(report.get("value_calibration"))
     if calibration.get("available") is True:
         print(
@@ -1768,10 +1769,11 @@ def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> No
         sample_state = (
             "milestone"
             if max_damage.get("sample_games_ready") is True
-            else f"below_milestone({games}/{MCTS_MILESTONE_BENCHMARK_GAMES})"
+            else f"below_milestone({games}/{FOUNDATION_MILESTONE_BENCHMARK_GAMES})"
         )
         print(
             "- max_damage_yardstick: "
+            f"iter={_format_manifest_value(max_damage.get('iteration'))} "
             f"win_rate={_format_optional_float(max_damage.get('win_rate'), digits=3)} "
             f"games={_format_manifest_value(games)} "
             f"cap={_format_manifest_value(max_damage.get('capped_games'))} "
@@ -1779,7 +1781,7 @@ def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> No
         )
     else:
         print("- max_damage_yardstick: missing")
-    print(f"- mcts_evidence_status: {_format_manifest_value(report.get('mcts_evidence_status'))}")
+    print(f"- foundation_evidence_status: {_format_manifest_value(report.get('foundation_evidence_status'))}")
     reasons = report.get("reasons")
     if isinstance(reasons, list) and reasons:
         print(f"  reasons: {', '.join(str(reason) for reason in reasons)}")
@@ -1788,21 +1790,21 @@ def _print_foundation_readiness(iterations: tuple[Mapping[str, Any], ...]) -> No
 def _foundation_readiness_report(iterations: tuple[Mapping[str, Any], ...]) -> dict[str, Any]:
     latest = iterations[-1] if iterations else {}
     calibration_report = _iteration_value_calibration_report(latest)
-    curves = _benchmark_opponent_curves(iterations)
+    curves = _benchmark_opponent_curves((latest,)) if latest else {}
     max_damage_entry = _latest_curve_entry(curves, "max-damage")
     reasons: list[str] = []
     if calibration_report is None:
         reasons.append("value_calibration_missing")
     if max_damage_entry is None:
         reasons.append("max_damage_yardstick_missing")
-    elif int(max_damage_entry.get("games", 0)) < MCTS_MILESTONE_BENCHMARK_GAMES:
+    elif int(max_damage_entry.get("games", 0)) < FOUNDATION_MILESTONE_BENCHMARK_GAMES:
         reasons.append("max_damage_sample_below_milestone")
     return {
         "latest_iteration": int(latest.get("iteration", 0)) if latest else None,
-        "milestone_benchmark_games": MCTS_MILESTONE_BENCHMARK_GAMES,
+        "milestone_benchmark_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
         "value_calibration": _foundation_value_calibration_payload(calibration_report),
         "max_damage_yardstick": _foundation_yardstick_payload(max_damage_entry),
-        "mcts_evidence_status": "foundation_readable" if not reasons else "plumbing_only",
+        "foundation_evidence_status": "present_and_sample_sized" if not reasons else "incomplete",
         "reasons": reasons,
     }
 
@@ -1832,7 +1834,7 @@ def _foundation_yardstick_payload(entry: Mapping[str, Any] | None) -> dict[str, 
         "win_rate": _float_or_none(entry.get("win_rate")),
         "games": games,
         "capped_games": _int_or_none(entry.get("capped_games")) or 0,
-        "sample_games_ready": games >= MCTS_MILESTONE_BENCHMARK_GAMES,
+        "sample_games_ready": games >= FOUNDATION_MILESTONE_BENCHMARK_GAMES,
     }
 
 
