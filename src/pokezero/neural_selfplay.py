@@ -435,6 +435,10 @@ def run_neural_selfplay_iterations(
         )
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
+        next_evaluation_seed_start = _next_evaluation_seed_start(
+            last_iteration,
+            default_seed_start=evaluation_seed_start,
+        )
     else:
         current_policy_spec = initial_policy_spec
         current_model = _initial_neural_model_from_policy_spec(current_policy_spec, device=training_config.device)
@@ -448,6 +452,7 @@ def run_neural_selfplay_iterations(
         )
         first_iteration = 1
         next_seed_start = seed_start
+        next_evaluation_seed_start = evaluation_seed_start
     if current_model is not None:
         # Fail fast on a warm-start/resume embedding mismatch (e.g. resuming a compact
         # randbat-dex run without re-passing the flag) before collecting any rollouts.
@@ -479,6 +484,7 @@ def run_neural_selfplay_iterations(
         "initial_policy_spec": initial_policy_spec,
         "evaluation_games": evaluation_games,
         "evaluation_seed_start": evaluation_seed_start,
+        "first_iteration_evaluation_seed_start": next_evaluation_seed_start,
         "worker_count": worker_count,
         "source": source_metadata,
         "post_iteration_audit_failure_mode": post_iteration_audit_failure_mode,
@@ -632,7 +638,7 @@ def run_neural_selfplay_iterations(
                     env_factory=env_factory,
                     rollout_config=rollout_config,
                     games=evaluation_games,
-                    seed_start=evaluation_seed_start + (offset * evaluation_games),
+                    seed_start=next_evaluation_seed_start + (offset * evaluation_games),
                     device=training_config.device,
                     benchmark_reference_policy_specs=benchmark_references,
                 )
@@ -1422,6 +1428,22 @@ def _next_value_selection_seed_start(iteration: Mapping[str, Any], *, default_se
     if seed_start is not None and isinstance(metrics, Mapping):
         return int(seed_start) + int(metrics.get("games", 0))
     return int(default_seed_start)
+
+
+def _next_evaluation_seed_start(iteration: Mapping[str, Any], *, default_seed_start: int) -> int:
+    benchmark = iteration.get("benchmark")
+    if not isinstance(benchmark, Mapping):
+        return int(default_seed_start)
+    next_seed: int | None = None
+    for matchup in _sequence(benchmark.get("matchups", ())):
+        matchup_payload = _mapping(matchup)
+        seed_start = matchup_payload.get("seed_start")
+        metrics = matchup_payload.get("metrics")
+        if seed_start is None or not isinstance(metrics, Mapping):
+            continue
+        matchup_next_seed = int(seed_start) + int(metrics.get("games", 0))
+        next_seed = matchup_next_seed if next_seed is None else max(next_seed, matchup_next_seed)
+    return next_seed if next_seed is not None else int(default_seed_start)
 
 
 def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any]:
