@@ -92,6 +92,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   value/score profile. That makes "PUCT prior mixing alone" a weaker explanation for the current
   miss; the more likely M0 bottlenecks are value-head quality, one-ply depth, and opponent/chance
   modeling.
+  A value-calibration pass on the same checkpoint's own 64-game training rollouts reinforces the
+  value-quality concern even before testing generalization: over 3,809 in-sample examples, the value
+  head measured MSE 0.752, MAE 0.810, sign accuracy 0.722, and expected calibration error 0.187.
+  That is too noisy to trust as the only one-ply search leaf signal.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
