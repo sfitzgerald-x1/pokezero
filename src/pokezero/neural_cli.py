@@ -1349,13 +1349,14 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
         print(slice_header)
         print("-" * len(slice_header))
         for slice_result in report.slices:
+            sign_accuracy = f"{slice_result.sign_accuracy:7.4f}" if slice_result.sign_accuracy_applicable else "    n/a"
             print(
                 f"{slice_result.name:>20} "
                 f"{slice_result.examples:6d} "
                 f"{slice_result.mse:9.4f} "
                 f"{slice_result.mae:9.4f} "
                 f"{slice_result.bias:9.4f} "
-                f"{slice_result.sign_accuracy:7.4f} "
+                f"{sign_accuracy} "
                 f"{slice_result.expected_calibration_error:9.4f}"
             )
 

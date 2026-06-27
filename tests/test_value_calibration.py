@@ -1,10 +1,13 @@
+import contextlib
+import io
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
+from pokezero.neural_cli import print_value_calibration_report
 from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -191,6 +194,7 @@ class ValueCalibrationTest(unittest.TestCase):
             )
 
         slice_counts = {slice_result.name: slice_result.examples for slice_result in report.slices}
+        slices = {slice_result.name: slice_result for slice_result in report.slices}
 
         self.assertEqual(slice_counts["return:positive"], 1)
         self.assertEqual(slice_counts["return:negative"], 1)
@@ -200,7 +204,23 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(slice_counts["turn:late_30_plus"], 1)
         self.assertEqual(slice_counts["terminal:uncapped"], 2)
         self.assertEqual(slice_counts["terminal:capped"], 2)
-        self.assertIn("slices", report.to_dict())
+        self.assertAlmostEqual(slices["return:positive"].mae, 0.2)
+        self.assertAlmostEqual(slices["return:negative"].mae, 0.4)
+        self.assertAlmostEqual(slices["return:zero"].mae, 0.15)
+        self.assertAlmostEqual(slices["return:zero"].bias, -0.05)
+        self.assertFalse(slices["return:zero"].sign_accuracy_applicable)
+        self.assertTrue(slices["return:positive"].sign_accuracy_applicable)
+        payload = report.to_dict()
+        self.assertIn("slices", payload)
+        zero_payload = next(slice_payload for slice_payload in payload["slices"] if slice_payload["name"] == "return:zero")
+        self.assertFalse(zero_payload["sign_accuracy_applicable"])
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            print_value_calibration_report(report)
+
+        self.assertIn("return:zero", stdout.getvalue())
+        self.assertIn("n/a", stdout.getvalue())
 
 
 if __name__ == "__main__":

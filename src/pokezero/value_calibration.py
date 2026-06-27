@@ -69,9 +69,16 @@ class ValueCalibrationSlice:
     bias: float
     sign_accuracy: float
     expected_calibration_error: float
+    sign_accuracy_applicable: bool = True
 
     @classmethod
-    def from_report(cls, *, name: str, report: ValueCalibrationReport) -> "ValueCalibrationSlice":
+    def from_report(
+        cls,
+        *,
+        name: str,
+        report: ValueCalibrationReport,
+        sign_accuracy_applicable: bool = True,
+    ) -> "ValueCalibrationSlice":
         return cls(
             name=name,
             examples=report.examples,
@@ -80,6 +87,7 @@ class ValueCalibrationSlice:
             bias=report.bias,
             sign_accuracy=report.sign_accuracy,
             expected_calibration_error=report.expected_calibration_error,
+            sign_accuracy_applicable=sign_accuracy_applicable,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -91,6 +99,7 @@ class ValueCalibrationSlice:
             "bias": self.bias,
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
+            "sign_accuracy_applicable": self.sign_accuracy_applicable,
         }
 
 
@@ -261,7 +270,13 @@ class _ValueCalibrationSliceTotals:
         for name in _SLICE_ORDER:
             totals = self._totals_by_name.get(name)
             if totals is not None and totals.examples:
-                slices.append(ValueCalibrationSlice.from_report(name=name, report=totals.to_report()))
+                slices.append(
+                    ValueCalibrationSlice.from_report(
+                        name=name,
+                        report=totals.to_report(),
+                        sign_accuracy_applicable=(name != "return:zero"),
+                    )
+                )
         return tuple(slices)
 
     def _totals_for(self, name: str) -> _ValueCalibrationTotals:
