@@ -462,6 +462,11 @@ Steps:
    `0.113/400`, and the latest value read was weak (`sign=0.4249`, `ECE=0.2819`, `Pearson=0.2302`).
    The next WS-A/WS-E lever should improve value/base-net quality rather than returning to search
    micro-tuning.
+   The foundation wrapper now also exposes `anti-aggression` and `anti-aggression-gru` variants to
+   make the next targeted opponent-pool experiment reproducible: they add `aggressive-damage` to the
+   fixed self-play opponent pool while preserving `max-damage` as eval-only, with the `-gru` arm
+   combining that pressure with temporal aggregation. This is curriculum plumbing for the targeted
+   anti-aggression/counterplay thread below, not evidence until a same-profile run is recorded.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure

@@ -2468,6 +2468,70 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "1.0")
         self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "gru")
 
+    def test_neural_cli_foundation_anti_aggression_variant_sets_opponent_pool(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-anti-aggression",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "anti-aggression",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["variant"], "anti-aggression")
+        self.assertIn("aggressive-damage", recipe["variant_description"])
+        self.assertEqual(
+            recipe["resolved_options"]["opponent_policies"],
+            ["random-legal", "simple-legal", "aggressive-damage"],
+        )
+        opponent_flags = [
+            argv[index + 1]
+            for index, value in enumerate(argv)
+            if value == "--opponent-policy"
+        ]
+        self.assertEqual(opponent_flags, ["random-legal", "simple-legal", "aggressive-damage"])
+        self.assertNotIn("--temporal-aggregator", argv)
+
+    def test_neural_cli_foundation_anti_aggression_gru_variant_combines_levers(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-anti-aggression-gru",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "anti-aggression-gru",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "gru")
+        self.assertEqual(
+            recipe["resolved_options"]["opponent_policies"],
+            ["random-legal", "simple-legal", "aggressive-damage"],
+        )
+        self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "gru")
+        self.assertIn("aggressive-damage", argv)
+
     def test_neural_cli_foundation_plan_text_prints_variant(self) -> None:
         with (
             patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
@@ -2541,6 +2605,39 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(recipe["resolved_options"]["collector_advancement_mode"], "yardstick-gate")
         self.assertEqual(argv[argv.index("--collector-advancement-mode") + 1], "yardstick-gate")
+
+    def test_neural_cli_foundation_opponent_policy_override_respects_explicit_values(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-custom-pool",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "anti-aggression",
+                    "--opponent-policy",
+                    "simple-legal",
+                    "--opponent-policy",
+                    "aggressive-damage",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["opponent_policies"], ["simple-legal", "aggressive-damage"])
+        opponent_flags = [
+            argv[index + 1]
+            for index, value in enumerate(argv)
+            if value == "--opponent-policy"
+        ]
+        self.assertEqual(opponent_flags, ["simple-legal", "aggressive-damage"])
 
     def test_neural_cli_foundation_opponent_signal_variant_respects_explicit_loss_override(self) -> None:
         with (

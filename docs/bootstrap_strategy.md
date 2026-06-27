@@ -549,6 +549,14 @@ opponent-signal change and GRU temporal aggregation combine better than either l
 variants pass `--temporal-aggregator gru` to `neural_cli iterate`; they are foundation arms to compare
 with `foundation-compare`, not MCTS verdicts.
 
+Use `--variant anti-aggression` when testing targeted fixed-opponent pressure against predictable
+damage-first play. This variant keeps the normal foundation fixed opponents and adds
+`aggressive-damage` to the self-play opponent pool while keeping `max-damage` eval-only. Use
+`--variant anti-aggression-gru` when combining that opponent-pool pressure with the GRU temporal
+aggregator. Both variants are WS-A base-net ablations; they should be compared against same-profile
+baseline/GRU runs before drawing search conclusions. For one-off curriculum tests, repeat
+`--opponent-policy` to override the variant's fixed opponent pool explicitly.
+
 When an arm finds a stronger early checkpoint but regresses under the preset's always-advance
 collector policy, rerun the same recipe with yardstick-gated collector retention:
 

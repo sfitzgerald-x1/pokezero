@@ -125,21 +125,37 @@ NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
         "description": "Use the foundation-arms-race preset without wrapper-level auxiliary-loss changes.",
         "opponent_action_loss_weight": None,
         "temporal_aggregator": None,
+        "opponent_policies": None,
     },
     "opponent-signal": {
         "description": "Increase opponent-action auxiliary supervision for an H3 foundation ablation.",
         "opponent_action_loss_weight": 1.0,
         "temporal_aggregator": None,
+        "opponent_policies": None,
     },
     "temporal-gru": {
         "description": "Use the GRU temporal aggregator as a WS-E/WS-A value/base-net ablation.",
         "opponent_action_loss_weight": None,
         "temporal_aggregator": "gru",
+        "opponent_policies": None,
     },
     "opponent-signal-gru": {
         "description": "Combine opponent-action auxiliary supervision with the GRU temporal aggregator.",
         "opponent_action_loss_weight": 1.0,
         "temporal_aggregator": "gru",
+        "opponent_policies": None,
+    },
+    "anti-aggression": {
+        "description": "Add aggressive-damage to the fixed opponent pool for targeted counterplay pressure.",
+        "opponent_action_loss_weight": None,
+        "temporal_aggregator": None,
+        "opponent_policies": ("random-legal", "simple-legal", "aggressive-damage"),
+    },
+    "anti-aggression-gru": {
+        "description": "Combine aggressive-damage fixed-opponent pressure with the GRU temporal aggregator.",
+        "opponent_action_loss_weight": None,
+        "temporal_aggregator": "gru",
+        "opponent_policies": ("random-legal", "simple-legal", "aggressive-damage"),
     },
 }
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
@@ -946,7 +962,7 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         "--variant",
         choices=variant_choices,
         default="baseline",
-        help="Foundation experiment arm. opponent-signal increases opponent-action auxiliary supervision.",
+        help="Foundation experiment arm for auxiliary-loss, temporal, and opponent-pool ablations.",
     )
     parser.add_argument("--iterations", type=int, default=None, help="Override profile iterations.")
     parser.add_argument("--games-per-iteration", type=int, default=None, help="Override profile games per iteration.")
@@ -967,6 +983,15 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         type=float,
         default=None,
         help="Override the variant's opponent-action auxiliary loss weight.",
+    )
+    parser.add_argument(
+        "--opponent-policy",
+        action="append",
+        default=None,
+        help=(
+            "Override the variant's fixed self-play opponent policy specs. May be repeated. "
+            "When omitted, the variant decides whether to use iterate defaults or a custom pool."
+        ),
     )
     parser.add_argument(
         "--temporal-aggregator",
@@ -2932,6 +2957,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
+    for opponent_policy in _sequence_or_empty(resolved["opponent_policies"]):
+        argv.extend(["--opponent-policy", str(opponent_policy)])
     if resolved["temporal_aggregator"] is not None:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
     if resolved["collector_advancement_mode"] is not None:
@@ -2960,7 +2987,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | float | str | None]:
+def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     profile = NEURAL_FOUNDATION_PROFILES[args.profile]
     variant = NEURAL_FOUNDATION_VARIANTS[args.variant]
     opponent_action_loss_weight = (
@@ -2972,6 +2999,11 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         args.temporal_aggregator
         if args.temporal_aggregator is not None
         else variant["temporal_aggregator"]
+    )
+    opponent_policies = (
+        tuple(str(spec) for spec in args.opponent_policy)
+        if args.opponent_policy is not None
+        else variant["opponent_policies"]
     )
     resolved = {
         "iterations": _foundation_option(args.iterations, profile["iterations"]),
@@ -2986,6 +3018,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         ),
         "opponent_action_loss_weight": opponent_action_loss_weight,
         "temporal_aggregator": temporal_aggregator,
+        "opponent_policies": list(opponent_policies) if opponent_policies is not None else None,
         "collector_advancement_mode": args.collector_advancement_mode,
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
@@ -3002,7 +3035,16 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         and resolved["collector_advancement_mode"] not in COLLECTOR_ADVANCEMENT_MODES
     ):
         raise ValueError("collector-advancement-mode is invalid.")
+    opponent_policy_values = _sequence_or_empty(resolved["opponent_policies"])
+    if any(not str(policy).strip() for policy in opponent_policy_values):
+        raise ValueError("opponent-policy entries must be non-empty.")
     return resolved
+
+
+def _sequence_or_empty(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    return tuple(_sequence(value))
 
 
 def _foundation_option(value: int | None, default: int | None) -> int | None:
