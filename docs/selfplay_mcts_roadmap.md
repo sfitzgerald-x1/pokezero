@@ -221,9 +221,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   Pearson `0.1161`, sign `0.5060`, ECE `0.5491`, and MAE `0.9821`; the value-tuned checkpoint
   measured Pearson `0.1235`, sign `0.5329`, ECE `0.1715`, and MAE `0.9788`. This is positive
   out-of-sample evidence for calibration magnitude and a small sign/ranking improvement, but the
-  independent Pearson remains far too weak to treat the value head as search-ready. The next
-  value-only experiment should use an independent calibration split plus the opt-in value-ranking
-  loss before spending more cycles on root-PUCT micro-tuning.
+  independent Pearson remains far too weak to treat the value head as search-ready.
+  A follow-up value-only tune then enabled the new global pairwise ranking loss with
+  `--value-ranking-loss-weight 0.25` and used that same independent 32-game split as final
+  calibration data. It trained successfully in 237.8 seconds and slightly improved selection-set
+  Pearson (`0.3617` -> `0.3631`), but independent ranking was effectively unchanged: Pearson
+  `0.1238`, sign `0.5336`, ECE `0.1684`, and MAE `0.9786` over the same 4,470 examples. Treat this
+  as plumbing evidence and a tiny positive read for the ranking-loss lever, not a value-head
+  breakthrough; the value/base-net bottleneck remains before root-PUCT micro-tuning should resume.
   A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
   held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
   games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
