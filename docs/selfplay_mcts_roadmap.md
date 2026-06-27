@@ -49,7 +49,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   driver can now call policies with player-local decision context, and the root-PUCT adapter can
   select actions through a separate branch env without mutating the live rollout. Simultaneous-turn
   opponent actions are supplied by an explicit planner hook rather than by leaking opponent-private
-  observations.
+  observations; `greedy_opponent_action_planner` can drive that hook from player-local
+  opponent-action priors such as the transformer's auxiliary opponent-action head.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

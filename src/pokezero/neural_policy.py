@@ -512,6 +512,45 @@ def evaluate_transformer_action_priors(
     return tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
 
 
+def evaluate_transformer_opponent_action_priors(
+    *,
+    model: Any,
+    result: TransformerTrainingResult,
+    observations: Sequence[PokeZeroObservationV0],
+    temperature: float = 1.0,
+    device: str | Any | None = None,
+) -> tuple[float, ...]:
+    """Evaluate unmasked opponent-action priors from the auxiliary opponent head."""
+
+    if not observations:
+        raise ValueError("observations must contain at least one item.")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive.")
+    torch_module = require_torch()
+    if hasattr(model, "eval"):
+        model.eval()
+    if device is not None and hasattr(model, "to"):
+        model.to(device)
+    tensors = observation_window_to_torch(
+        observations[-result.model_config.window_size :],
+        window_size=result.model_config.window_size,
+        device=device,
+    )
+    with torch_module.no_grad():
+        output = model(
+            categorical_ids=tensors["categorical_ids"],
+            numeric_features=tensors["numeric_features"],
+            token_type_ids=tensors["token_type_ids"],
+            attention_mask=tensors["attention_mask"],
+            history_mask=tensors["history_mask"],
+        )
+        probabilities = _action_probabilities(
+            output.opponent_action_logits[0],
+            temperature=temperature,
+        )
+    return tuple(float(probabilities[index].detach().cpu().item()) for index in range(ACTION_COUNT))
+
+
 @dataclass
 class TransformerSoftmaxPolicy:
     """Policy adapter that makes a transformer checkpoint playable in rollouts."""
@@ -978,6 +1017,11 @@ def _masked_action_probabilities(logits: Any, legal_action_mask: Any, *, tempera
     torch_module = require_torch()
     masked_logits = logits.masked_fill(~legal_action_mask.bool(), -1e9)
     return torch_module.nn.functional.softmax(masked_logits / temperature, dim=0)
+
+
+def _action_probabilities(logits: Any, *, temperature: float) -> Any:
+    torch_module = require_torch()
+    return torch_module.nn.functional.softmax(logits / temperature, dim=0)
 
 
 def _sample_action(probabilities: Sequence[float], legal: Sequence[int], rng: random.Random) -> int:

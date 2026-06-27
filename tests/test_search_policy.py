@@ -4,9 +4,10 @@ import unittest
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
-from pokezero.policy import PolicyDecision, RandomLegalPolicy
+from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
-from pokezero.search_policy import RootPUCTSearchPolicy
+from pokezero.search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner
+from pokezero.trajectory import BattleTrajectory
 
 
 def _mask(*legal_indices: int) -> tuple[bool, ...]:
@@ -75,6 +76,44 @@ class ImmediateOutcomeEnv:
 
 
 class RootPUCTSearchPolicyTest(unittest.TestCase):
+    def test_greedy_opponent_action_planner_uses_player_local_history(self) -> None:
+        observed_history_lengths: list[int] = []
+
+        def prior_fn(history: tuple[PokeZeroObservationV0, ...]) -> tuple[float, ...]:
+            observed_history_lengths.append(len(history))
+            return (0.1, 0.7, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+        planner = greedy_opponent_action_planner(prior_fn)
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+        )
+
+        self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+        self.assertEqual(observed_history_lengths, [1])
+
+    def test_greedy_opponent_action_planner_rejects_bad_prior_width(self) -> None:
+        planner = greedy_opponent_action_planner(lambda history: (1.0,))
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+        )
+
+        with self.assertRaisesRegex(ValueError, "opponent action priors"):
+            planner(context, random.Random(1))
+
     def test_root_puct_policy_selects_search_action_using_separate_branch_env(self) -> None:
         branch_envs: list[ImmediateOutcomeEnv] = []
 
