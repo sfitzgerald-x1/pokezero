@@ -163,6 +163,7 @@ def continue_rollout_from_current_state(
                     reward=float(step_result.rewards.get(player_id, 0.0)),
                     opponent_action_index=opponent_action_index,
                     action_probability=decision.action_probability,
+                    value_estimate=decision.value_estimate,
                     metadata={
                         "policy_id": decision.policy_id,
                         **dict(decision.metadata),

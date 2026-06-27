@@ -758,6 +758,7 @@ class TransformerSoftmaxPolicy:
                 greedy_action=greedy_action,
                 exploration_epsilon=self.exploration_epsilon,
             ),
+            value_estimate=float(output.value[0].detach().cpu().item()),
             metadata={
                 "policy_family": "transformer-softmax",
                 "deterministic": self.deterministic,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import os
 from pathlib import Path
 import random
@@ -56,12 +57,15 @@ class PolicyDecision:
     policy_id: str
     action_probability: Optional[float] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    value_estimate: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.action_index < 0 or self.action_index >= ACTION_COUNT:
             raise ValueError(f"action_index must be between 0 and {ACTION_COUNT - 1}.")
         if self.action_probability is not None and not 0.0 <= self.action_probability <= 1.0:
             raise ValueError("action_probability must be between 0 and 1 when set.")
+        if self.value_estimate is not None and not math.isfinite(float(self.value_estimate)):
+            raise ValueError("value_estimate must be finite when set.")
 
 
 @dataclass(frozen=True)

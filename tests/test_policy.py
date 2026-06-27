@@ -102,6 +102,10 @@ class PolicyBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 0 and 1"):
             PolicyDecision(action_index=0, policy_id="bad", action_probability=1.5)
 
+    def test_policy_decision_validates_value_estimate(self) -> None:
+        with self.assertRaisesRegex(ValueError, "value_estimate"):
+            PolicyDecision(action_index=0, policy_id="bad", value_estimate=float("nan"))
+
     def test_scripted_teacher_prefers_highest_scoring_gen3_attack(self) -> None:
         policy = ScriptedTeacherPolicy(dex=teacher_dex())
         obs = observation(
