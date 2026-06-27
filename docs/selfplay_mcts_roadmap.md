@@ -373,6 +373,9 @@ Steps:
    convenience for WS-A/WS-E foundation runs, not promotion evidence.
    `neural foundation-plan/run/report` wraps this preset with smoke/pilot profile defaults and a
    compact summary artifact so CPU foundation attempts can be launched and audited consistently.
+   The wrapper also supports `--variant opponent-signal` for the H3 ablation path: it keeps the
+   same foundation recipe but raises opponent-action auxiliary supervision, so the result can be
+   compared against the baseline wrapper before spending more effort on search tuning.
    A real local `foundation-run --profile pilot` then validated the wrapper and cold-start recipe
    end-to-end at `runs/foundation-pilot-local-20260627/pilot-001`: 3 iterations, 256 games per
    iteration, mirror collection, always-advance PPO, held-out Pearson value selection, and 400-game
@@ -528,8 +531,9 @@ scale, but do not keep tuning search on an unreadable foundation.** Search impro
 does not rescue a value head that cannot rank leaves.
 
 - **Now (parallel, ordered by current bottleneck):** WS-E (improve value calibration beyond the new
-  report/artifact plumbing), WS-A (produce a stronger current-schema base net), WS-F (fixed yardstick
-  with milestone-scale samples), and WS-C/WS-D harness hardening only where it removes known blockers.
+  report/artifact plumbing), WS-A (produce a stronger current-schema base net, including H3
+  opponent-signal ablations), WS-F (fixed yardstick with milestone-scale samples), and WS-C/WS-D
+  harness hardening only where it removes known blockers.
   WS-B (full fleet scaling) can be scaffolded but is **not** on the critical path to M0.
 - **M0 — Prove search lifts a modest net (the de-risking gate):** WS-C + minimal WS-D + WS-E on a
   cheap/early WS-A net → **net+MCTS clears ~0.60 vs max-damage** (past the 0.52 plateau). Pass →
