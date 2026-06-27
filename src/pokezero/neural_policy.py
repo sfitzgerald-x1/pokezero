@@ -235,6 +235,8 @@ class TransformerTrainingConfig:
     turn_penalty_after: int | None = None
     turn_penalty: float = 0.0
     value_loss_weight: float = 0.25
+    value_ranking_loss_weight: float = 0.0
+    value_ranking_margin: float = 0.0
     opponent_action_loss_weight: float = 0.1
     switch_action_loss_weight: float = 1.0
     action_family_loss_weight: float = 0.0
@@ -297,6 +299,10 @@ class TransformerTrainingConfig:
             raise ValueError("turn_penalty_after must be set when turn_penalty is positive.")
         if self.value_loss_weight < 0.0:
             raise ValueError("value_loss_weight must be non-negative.")
+        if self.value_ranking_loss_weight < 0.0:
+            raise ValueError("value_ranking_loss_weight must be non-negative.")
+        if self.value_ranking_margin < 0.0:
+            raise ValueError("value_ranking_margin must be non-negative.")
         if self.opponent_action_loss_weight < 0.0:
             raise ValueError("opponent_action_loss_weight must be non-negative.")
         if self.switch_action_loss_weight <= 0.0:
@@ -320,6 +326,8 @@ class TransformerEpochMetrics:
     policy_loss: float
     policy_accuracy: float
     value_loss: float | None = None
+    value_ranking_loss: float | None = None
+    value_ranking_pairs: int | None = None
     opponent_loss: float | None = None
     opponent_accuracy: float | None = None
     action_family_loss: float | None = None
@@ -1005,6 +1013,8 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 policy_loss=float(metrics["policy_loss"]),
                 policy_accuracy=float(metrics["policy_accuracy"]),
                 value_loss=_optional_float(metrics.get("value_loss")),
+                value_ranking_loss=_optional_float(metrics.get("value_ranking_loss")),
+                value_ranking_pairs=_optional_int(metrics.get("value_ranking_pairs")),
                 opponent_loss=_optional_float(metrics.get("opponent_loss")),
                 opponent_accuracy=_optional_float(metrics.get("opponent_accuracy")),
                 action_family_loss=_optional_float(metrics.get("action_family_loss")),
@@ -1037,6 +1047,8 @@ class _TorchMetricTotals:
     policy_loss: float = 0.0
     policy_correct: int = 0
     value_loss: float = 0.0
+    value_ranking_loss: float = 0.0
+    value_ranking_pairs: int = 0
     opponent_loss: float = 0.0
     opponent_correct: int = 0
     opponent_examples: int = 0
@@ -1060,6 +1072,10 @@ class _TorchMetricTotals:
         self.policy_loss += float(pieces["policy_loss"]) * batch_size
         self.policy_correct += int(pieces["policy_correct"])
         self.value_loss += float(pieces["value_loss"]) * batch_size
+        value_ranking_pairs = int(pieces.get("value_ranking_pairs", 0))
+        if value_ranking_pairs:
+            self.value_ranking_pairs += value_ranking_pairs
+            self.value_ranking_loss += float(pieces.get("value_ranking_loss", 0.0)) * value_ranking_pairs
         opponent_examples = int(pieces["opponent_examples"])
         if opponent_examples:
             self.opponent_examples += opponent_examples
@@ -1108,6 +1124,10 @@ class _TorchMetricTotals:
             policy_loss=self.policy_loss / self.examples,
             policy_accuracy=self.policy_correct / self.examples,
             value_loss=self.value_loss / self.examples,
+            value_ranking_loss=(
+                self.value_ranking_loss / self.value_ranking_pairs if self.value_ranking_pairs else None
+            ),
+            value_ranking_pairs=self.value_ranking_pairs if self.value_ranking_pairs else None,
             opponent_loss=(self.opponent_loss / self.opponent_examples) if self.opponent_examples else None,
             opponent_accuracy=(self.opponent_correct / self.opponent_examples) if self.opponent_examples else None,
             action_family_loss=(self.action_family_loss / self.action_family_examples) if self.action_family_examples else None,
@@ -1144,6 +1164,11 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_targets = _value_targets(tensors)
     value_loss = functional.mse_loss(output.value, value_targets)
+    value_ranking_loss, value_ranking_loss_value, value_ranking_pairs = _value_ranking_loss_terms(
+        output.value,
+        value_targets,
+        config,
+    )
     ppo_objective_examples = 0
     ppo_valid_examples = 0
     ppo_advantage_sum = 0.0
@@ -1154,7 +1179,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
 
     if config.objective == "value-only":
         policy_loss = value_loss * 0.0
-        loss = value_loss
+        loss = value_loss + (config.value_ranking_loss_weight * value_ranking_loss)
         opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = None, 0.0, 0, 0
         family_loss, family_loss_value, family_correct, family_examples = None, 0.0, 0, 0
         switch_loss, switch_loss_value, switch_correct, switch_examples = None, 0.0, 0, 0
@@ -1199,7 +1224,12 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
                 ).sum().detach().item()
             )
             ppo_entropy_sum = float(entropy[valid_mask].sum().detach().item())
-        loss = policy_loss + (config.value_loss_weight * value_loss) - (config.entropy_coef * entropy_mean)
+        loss = (
+            policy_loss
+            + (config.value_loss_weight * value_loss)
+            + (config.value_ranking_loss_weight * value_ranking_loss)
+            - (config.entropy_coef * entropy_mean)
+        )
     elif config.objective == "reward-weighted":
         per_example_policy_loss = functional.cross_entropy(
             masked_policy_logits,
@@ -1209,7 +1239,11 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         weights = tensors["returns"].clamp(min=0.0) * _action_family_loss_weights(tensors, config)
         denom = weights.sum().clamp(min=1.0)
         policy_loss = (per_example_policy_loss * weights).sum() / denom
-        loss = policy_loss + (config.value_loss_weight * value_loss)
+        loss = (
+            policy_loss
+            + (config.value_loss_weight * value_loss)
+            + (config.value_ranking_loss_weight * value_ranking_loss)
+        )
     else:
         per_example_policy_loss = functional.cross_entropy(
             masked_policy_logits,
@@ -1218,7 +1252,11 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         )
         weights = _action_family_loss_weights(tensors, config)
         policy_loss = (per_example_policy_loss * weights).sum() / weights.sum().clamp(min=1.0)
-        loss = policy_loss + (config.value_loss_weight * value_loss)
+        loss = (
+            policy_loss
+            + (config.value_loss_weight * value_loss)
+            + (config.value_ranking_loss_weight * value_ranking_loss)
+        )
 
     if config.objective != "value-only":
         opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = _opponent_loss_terms(output, tensors, config)
@@ -1235,6 +1273,8 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "policy_loss": float(policy_loss.detach().item()),
         "policy_correct": policy_correct,
         "value_loss": float(value_loss.detach().item()),
+        "value_ranking_loss": value_ranking_loss_value,
+        "value_ranking_pairs": value_ranking_pairs,
         "opponent_loss": opponent_loss_value,
         "opponent_correct": opponent_correct,
         "opponent_examples": opponent_examples,
@@ -1263,6 +1303,25 @@ def _value_targets(tensors: Mapping[str, Any]):
         tensors["ppo_value_targets"],
         tensors["returns"],
     )
+
+
+def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, float, int]:
+    if config.value_ranking_loss_weight <= 0.0:
+        return values.sum() * 0.0, 0.0, 0
+    torch_module = require_torch()
+    functional = torch_module.nn.functional
+    target_delta = targets.unsqueeze(1) - targets.unsqueeze(0)
+    pair_mask = (target_delta.abs() > 1e-6) & torch_module.triu(
+        torch_module.ones_like(target_delta, dtype=torch_module.bool),
+        diagonal=1,
+    )
+    pair_count = int(pair_mask.sum().item())
+    if not pair_count:
+        return values.sum() * 0.0, 0.0, 0
+    direction = target_delta[pair_mask].sign()
+    prediction_delta = values.unsqueeze(1) - values.unsqueeze(0)
+    loss = functional.softplus(config.value_ranking_margin - (direction * prediction_delta[pair_mask])).mean()
+    return loss, float(loss.detach().item()), pair_count
 
 
 def _ppo_advantages(output: TransformerPolicyOutput, tensors: Mapping[str, Any]):

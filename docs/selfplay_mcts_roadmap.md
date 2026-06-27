@@ -192,7 +192,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   each standalone-train epoch on held-out calibration and restore the best epoch by
   MAE/MSE/ECE/sign/bias/correlation metric. The correlation option is affine-invariant linear
   association, not calibration by itself, and is intended for workflows that separately check or fit
-  calibration transforms. `neural_cli iterate --value-selection` applies value-based epoch selection
+  calibration transforms. The training path now also has an opt-in pairwise value-ranking loss
+  (`--value-ranking-loss-weight`, `--value-ranking-margin`) so WS-E experiments can optimize a global
+  return-ordering proxy, not only value magnitude/calibration.
+  `neural_cli iterate --value-selection` applies value-based epoch selection
   inside self-play iterations, writes a per-iteration sidecar, and stores the selected epoch in the
   run manifest. By default it selects on iteration/history training rollouts; for a
   cleaner value-calibration read, `--value-selection-heldout-games` collects separate current-policy
@@ -218,7 +221,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   Pearson `0.1161`, sign `0.5060`, ECE `0.5491`, and MAE `0.9821`; the value-tuned checkpoint
   measured Pearson `0.1235`, sign `0.5329`, ECE `0.1715`, and MAE `0.9788`. This is positive
   out-of-sample evidence for calibration magnitude and a small sign/ranking improvement, but the
-  independent Pearson remains far too weak to treat the value head as search-ready.
+  independent Pearson remains far too weak to treat the value head as search-ready. The next
+  value-only experiment should use an independent calibration split plus the opt-in value-ranking
+  loss before spending more cycles on root-PUCT micro-tuning.
   A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
   held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
   games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
@@ -621,6 +626,9 @@ The calibration metric/artifact path now exists; the open work is improving the 
 until held-out calibration is good enough to guide search. The standalone value-calibration commands
 can now compare raw/affine/isotonic on held-out data and fit affine or isotonic stored transforms;
 isotonic is a WS-E calibration lever, not a substitute for improving the underlying value ranking.
+The opt-in pairwise value-ranking loss is the next model-side lever to test because MCTS leaf
+selection depends on value ordering more than absolute calibration alone. It is a global
+batch-ranking proxy, not direct supervision on sibling leaves from a single search tree.
 One current model-side lever is the optional recurrent temporal aggregator, which should be evaluated
 as a base-net/value-head upgrade before resuming larger root-PUCT reads. The dataset path also
 exposes optional clipped shaped return targets for visible HP/faint deltas and late-turn pressure;
