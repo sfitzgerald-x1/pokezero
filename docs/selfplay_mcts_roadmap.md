@@ -217,6 +217,16 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   (`runs/max-damage-goal-local-20260627/current-schema-value-selected-vs-max-damage-300.json`).
   This is a valid current-observation-schema checkpoint but not a useful M0 search substrate; the
   next WS-A task is to produce a stronger current-schema PPO/base-net checkpoint.
+  A medium current-schema PPO run then tested that directly:
+  `runs/current-schema-ppo-local-20260627/aggressive-always-advance-256x3` ran 3 iterations from the
+  value-selected checkpoint with 256 games/iteration, mirror self-play, `aggressive-damage` in the
+  training pool, `max-damage` eval-only, collection temperature 1.4, entropy 0.01, and always-advance
+  collector progression. Each candidate beat its incumbent head-to-head (0.535, 0.530, 0.530), and
+  PPO diagnostics were mechanically healthy (`ppo_valid_fraction=1.0`, clip fraction
+  0.145-0.187, entropy rising 1.01 -> 1.27), but the external yardstick stayed flat:
+  54/200, 55/200, then 50/200 versus `max-damage`, with zero capped games. This is useful negative
+  evidence: current-schema PPO is able to move internally, but this short aggressive-curriculum run
+  still did not produce a stronger base net for M0.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
