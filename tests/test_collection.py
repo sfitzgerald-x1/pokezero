@@ -34,7 +34,7 @@ from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.neural_policy import TorchUnavailableError, torch_available
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
-from pokezero.policy import RandomLegalPolicy, ScriptedTeacherPolicy
+from pokezero.policy import PolicyDecision, RandomLegalPolicy, ScriptedTeacherPolicy
 from pokezero.replay_benchmark import (
     ReplayPrefixBenchmarkReport,
     ReplayPrefixTiming,
@@ -42,7 +42,7 @@ from pokezero.replay_benchmark import (
     replay_prefix_counts,
 )
 from pokezero.rollout import RolloutConfig
-from pokezero.rollout_cli import main as rollout_cli_main
+from pokezero.rollout_cli import main as rollout_cli_main, print_benchmark_report
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep, trajectory_from_dict, trajectory_to_dict
 
 
@@ -133,6 +133,45 @@ class SeedRecordingEnv(OneTurnEnv):
     def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
         self.reset_seeds.append(seed)
         super().reset(seed=seed, format_id=format_id)
+
+
+class MetadataPolicy:
+    def __init__(
+        self,
+        *,
+        policy_id: str = "root-puct-diagnostic",
+        fallback: bool = False,
+        include_elapsed: bool = True,
+    ) -> None:
+        self.policy_id = policy_id
+        self.fallback = fallback
+        self.include_elapsed = include_elapsed
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        if self.fallback:
+            return PolicyDecision(
+                action_index=0,
+                policy_id=self.policy_id,
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": True,
+                    "root_puct_fallback_reason": "search failed: boom",
+                },
+            )
+        metadata = {
+            "policy_family": "root-puct-search",
+            "root_puct_fallback": False,
+            "root_puct_candidate_count": 3,
+            "root_puct_selected_value": 0.5,
+            "root_puct_selected_score": 0.75,
+        }
+        if self.include_elapsed:
+            metadata["root_puct_elapsed_seconds"] = 0.25
+        return PolicyDecision(
+            action_index=0,
+            policy_id=self.policy_id,
+            metadata=metadata,
+        )
 
 
 def integration_config() -> LocalShowdownConfig | None:
@@ -264,6 +303,96 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(result.metrics.games, 2)
             self.assertEqual(result.metrics.p1_wins, 2)
             self.assertEqual(result.metrics.total_decision_rounds, 2)
+
+    def test_benchmark_rollouts_summarizes_policy_decision_metadata(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup("root-puct vs random", MetadataPolicy(), RandomLegalPolicy()),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-diagnostic"]["decisions"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_searches"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_fallbacks"], 0)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_candidate_count"], 3.0)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_elapsed_seconds"], 0.25)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_value"], 0.5)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_score"], 0.75)
+        self.assertEqual(summary["random-legal"]["decisions"], 2)
+        self.assertNotIn("root_puct_searches", summary["random-legal"])
+
+    def test_benchmark_rollouts_summarizes_root_puct_fallback_metadata(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "fallback-root-puct vs random",
+                    MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-fallback"]["decisions"], 2)
+        self.assertEqual(summary["root-puct-fallback"]["root_puct_searches"], 0)
+        self.assertEqual(summary["root-puct-fallback"]["root_puct_fallbacks"], 2)
+        self.assertEqual(
+            summary["root-puct-fallback"]["root_puct_fallback_reasons"],
+            {"search failed: boom": 2},
+        )
+
+    def test_benchmark_rollouts_omits_missing_root_puct_elapsed_average(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct-no-elapsed vs random",
+                    MetadataPolicy(policy_id="root-puct-no-elapsed", include_elapsed=False),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-no-elapsed"]["root_puct_searches"], 2)
+        self.assertNotIn("root_puct_average_elapsed_seconds", summary["root-puct-no-elapsed"])
+
+    def test_print_benchmark_report_includes_root_puct_diagnostics(self) -> None:
+        report = benchmark_rollouts(
+            games=1,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "fallback-root-puct vs random",
+                    MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            print_benchmark_report(report)
+
+        output = stdout.getvalue()
+        self.assertIn("root-puct diagnostics:", output)
+        self.assertIn("root-puct-fallback", output)
+        self.assertIn("fallback_reasons:", output)
+        self.assertIn("search failed: boom=1", output)
 
     def test_benchmark_rollouts_reuses_seed_range_for_each_matchup(self) -> None:
         reset_seeds = []
