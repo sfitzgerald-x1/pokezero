@@ -99,6 +99,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   value-quality concern even before testing generalization: over 3,809 in-sample examples, the value
   head measured MSE 0.752, MAE 0.810, sign accuracy 0.722, and expected calibration error 0.187.
   That is too noisy to trust as the only one-ply search leaf signal.
+  A first bounded-rollout-leaf probe (`--leaf-rollout-rounds 1`) on the same checkpoint and
+  max-damage seed range gave a small positive but still far-from-gate result: raw scored 3/8 and
+  root-PUCT with one rollout leaf round scored 4/8, with zero capped games and zero search
+  fallbacks. The run recorded 252 root-PUCT searches, actual candidate leaf rounds split across
+  0-round immediate terminals and 1-round continuations, and active-search throughput around
+  2.2-2.4 decisions/s. This is exploratory evidence that replacing immediate one-ply leaves may
+  matter, but it is not enough to clear M0 or justify scale; the next read should either enlarge
+  this leaf-depth probe or improve value/opponent modeling further.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
