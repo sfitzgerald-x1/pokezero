@@ -6,6 +6,7 @@ import argparse
 import copy
 from dataclasses import replace
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Any, Iterable, Mapping
@@ -438,6 +439,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     value_calibration.add_argument("--batch-size", type=int, default=128, help="Evaluation batch size.")
     value_calibration.add_argument("--bins", type=int, default=10, help="Number of prediction bins across [-1, 1].")
     value_calibration.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    value_calibration.add_argument("--min-examples", type=int, default=None, help="Fail if fewer calibration examples are evaluated.")
+    value_calibration.add_argument("--max-mse", type=float, default=None, help="Fail if calibration MSE exceeds this threshold.")
+    value_calibration.add_argument("--max-mae", type=float, default=None, help="Fail if calibration MAE exceeds this threshold.")
+    value_calibration.add_argument("--max-abs-bias", type=float, default=None, help="Fail if absolute calibration bias exceeds this threshold.")
+    value_calibration.add_argument(
+        "--max-expected-calibration-error",
+        type=float,
+        default=None,
+        help="Fail if expected calibration error exceeds this threshold.",
+    )
+    value_calibration.add_argument("--min-sign-accuracy", type=float, default=None, help="Fail if sign accuracy is below this threshold.")
+    value_calibration.add_argument(
+        "--min-pearson-correlation",
+        type=float,
+        default=None,
+        help="Fail if linear value-return Pearson correlation is below this threshold or unavailable.",
+    )
     value_calibration.add_argument(
         "--fit-out",
         type=Path,
@@ -1390,6 +1408,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
     require_torch()
     if args.eval_data is not None and args.fit_out is None:
         raise ValueError("--eval-data requires --fit-out.")
+    _validate_value_calibration_gate_args(args)
     device = resolve_torch_device(args.device)
     model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
     transform = None
@@ -1425,6 +1444,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
         bins=args.bins,
         device=device,
     )
+    quality_gates = _value_calibration_quality_gates(args, report)
     if args.json:
         payload = report.to_dict()
         if args.fit_out is not None:
@@ -1436,6 +1456,8 @@ def _value_calibration(args: argparse.Namespace) -> int:
                 "value_calibration_transform": transform.to_dict() if transform is not None else None,
                 "report": payload,
             }
+        if quality_gates["configured"]:
+            payload["quality_gates"] = quality_gates
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         if args.fit_out is not None and transform is not None:
@@ -1448,7 +1470,114 @@ def _value_calibration(args: argparse.Namespace) -> int:
             print(f"evaluation_held_out: {_format_bool(evaluation_held_out)}")
             print("")
         print_value_calibration_report(report)
+        if quality_gates["configured"]:
+            print("")
+            _print_value_calibration_quality_gates(quality_gates)
+    if quality_gates["configured"] and not quality_gates["passed"]:
+        failed = ", ".join(str(check["metric"]) for check in quality_gates["checks"] if not check["passed"])
+        print(f"value_calibration_quality_gates_failed: {failed}", file=sys.stderr)
+        return 4
     return 0
+
+
+def _validate_value_calibration_gate_args(args: argparse.Namespace) -> None:
+    if args.min_examples is not None and args.min_examples <= 0:
+        raise ValueError("--min-examples must be positive.")
+    for name in ("max_mse", "max_mae", "max_abs_bias", "max_expected_calibration_error"):
+        value = getattr(args, name)
+        if value is not None and (not math.isfinite(value) or value < 0.0):
+            raise ValueError(f"--{name.replace('_', '-')} must be finite and non-negative.")
+    if args.min_sign_accuracy is not None and (
+        not math.isfinite(args.min_sign_accuracy) or not 0.0 <= args.min_sign_accuracy <= 1.0
+    ):
+        raise ValueError("--min-sign-accuracy must be between 0 and 1.")
+    if args.min_pearson_correlation is not None and (
+        not math.isfinite(args.min_pearson_correlation) or not -1.0 <= args.min_pearson_correlation <= 1.0
+    ):
+        raise ValueError("--min-pearson-correlation must be between -1 and 1.")
+
+
+def _value_calibration_quality_gates(args: argparse.Namespace, report: ValueCalibrationReport) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    if not _value_calibration_gate_configured(args):
+        return {"configured": False, "passed": True, "checks": checks}
+
+    def add_check(
+        *,
+        metric: str,
+        value: float | int | None,
+        threshold: float | int | None,
+        operator: str,
+        reason: str | None = None,
+    ) -> None:
+        if threshold is None:
+            return
+        passed = False
+        if value is not None:
+            passed = value >= threshold if operator == ">=" else value <= threshold
+        check: dict[str, Any] = {
+            "metric": metric,
+            "operator": operator,
+            "threshold": threshold,
+            "value": value,
+            "passed": passed,
+        }
+        if reason is not None:
+            check["reason"] = reason
+        checks.append(check)
+
+    add_check(metric="examples", value=report.examples, threshold=args.min_examples, operator=">=")
+    add_check(metric="mse", value=report.mse, threshold=args.max_mse, operator="<=")
+    add_check(metric="mae", value=report.mae, threshold=args.max_mae, operator="<=")
+    add_check(metric="abs_bias", value=abs(report.bias), threshold=args.max_abs_bias, operator="<=")
+    add_check(
+        metric="expected_calibration_error",
+        value=report.expected_calibration_error,
+        threshold=args.max_expected_calibration_error,
+        operator="<=",
+    )
+    add_check(metric="sign_accuracy", value=report.sign_accuracy, threshold=args.min_sign_accuracy, operator=">=")
+    add_check(
+        metric="pearson_correlation",
+        value=report.pearson_correlation,
+        threshold=args.min_pearson_correlation,
+        operator=">=",
+        reason="unavailable" if args.min_pearson_correlation is not None and report.pearson_correlation is None else None,
+    )
+    return {
+        "configured": bool(checks),
+        "passed": all(check["passed"] for check in checks),
+        "checks": checks,
+    }
+
+
+def _value_calibration_gate_configured(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, name) is not None
+        for name in (
+            "min_examples",
+            "max_mse",
+            "max_mae",
+            "max_abs_bias",
+            "max_expected_calibration_error",
+            "min_sign_accuracy",
+            "min_pearson_correlation",
+        )
+    )
+
+
+def _print_value_calibration_quality_gates(payload: Mapping[str, Any]) -> None:
+    print("quality_gates:")
+    for check in _sequence(payload.get("checks", ())):
+        check_payload = _mapping(check)
+        status = "pass" if check_payload.get("passed") is True else "fail"
+        reason = check_payload.get("reason")
+        reason_text = f" reason={reason}" if reason is not None else ""
+        print(
+            f"- {check_payload.get('metric')} {check_payload.get('operator')} "
+            f"{check_payload.get('threshold')}: {status} "
+            f"value={_format_manifest_value(check_payload.get('value'))}{reason_text}"
+        )
 
 
 def _iterate(args: argparse.Namespace) -> int:

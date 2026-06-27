@@ -41,6 +41,7 @@ from pokezero.policy import PolicyContext
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+from pokezero.value_calibration import ValueCalibrationReport
 
 
 LEGAL_TWO_ACTION_MASK = (True, True, False, False, False, False, False, False, False)
@@ -1972,6 +1973,190 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(evaluate.call_args.kwargs["bins"], 5)
         self.assertEqual(evaluate.call_args.kwargs["device"], "cpu")
         self.assertEqual(json.loads(stdout.getvalue()), {"examples": 3, "mse": 0.25})
+
+    def test_neural_cli_value_calibration_can_enforce_quality_gates_json(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        report = ValueCalibrationReport(
+            examples=300,
+            mse=0.22,
+            mae=0.31,
+            bias=-0.03,
+            sign_accuracy=0.68,
+            expected_calibration_error=0.11,
+            pearson_correlation=0.42,
+            bins=(),
+            slices=(),
+        )
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), object())),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=report),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--min-examples",
+                    "100",
+                    "--max-expected-calibration-error",
+                    "0.2",
+                    "--min-sign-accuracy",
+                    "0.6",
+                    "--min-pearson-correlation",
+                    "0.3",
+                    "--max-abs-bias",
+                    "0.1",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        gates = payload["quality_gates"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["examples"], 300)
+        self.assertTrue(gates["configured"])
+        self.assertTrue(gates["passed"])
+        self.assertEqual([check["metric"] for check in gates["checks"]], [
+            "examples",
+            "abs_bias",
+            "expected_calibration_error",
+            "sign_accuracy",
+            "pearson_correlation",
+        ])
+
+    def test_neural_cli_value_calibration_quality_gate_failure_returns_nonzero(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        report = ValueCalibrationReport(
+            examples=300,
+            mse=0.22,
+            mae=0.31,
+            bias=-0.03,
+            sign_accuracy=0.68,
+            expected_calibration_error=0.11,
+            pearson_correlation=None,
+            bins=(),
+            slices=(),
+        )
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), object())),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=report),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--min-pearson-correlation",
+                    "0.3",
+                ]
+            )
+
+        self.assertEqual(exit_code, 4)
+        self.assertIn("quality_gates:", stdout.getvalue())
+        self.assertIn("reason=unavailable", stdout.getvalue())
+        self.assertIn("value_calibration_quality_gates_failed: pearson_correlation", stderr.getvalue())
+
+    def test_neural_cli_value_calibration_includes_quality_gates_with_fit_out(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        report = ValueCalibrationReport(
+            examples=300,
+            mse=0.22,
+            mae=0.31,
+            bias=-0.03,
+            sign_accuracy=0.68,
+            expected_calibration_error=0.11,
+            pearson_correlation=0.42,
+            bins=(),
+            slices=(),
+        )
+        model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=(1, 2, 3),
+            category_oov_buckets=4,
+            policy_id="fixture",
+        )
+        fake_training_result = TransformerTrainingResult(
+            model_config=model_config,
+            training_config=TransformerTrainingConfig(),
+            epochs=(
+                TransformerEpochMetrics(
+                    epoch=1,
+                    examples=3,
+                    loss=0.2,
+                    policy_loss=0.1,
+                    policy_accuracy=0.5,
+                ),
+            ),
+        )
+        transform = ValueCalibrationTransform(scale=1.5, bias=-0.2)
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
+            patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform),
+            patch("pokezero.neural_cli.save_transformer_checkpoint"),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=report),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--eval-data",
+                    "eval-rollouts.jsonl",
+                    "--fit-out",
+                    "calibrated.pt",
+                    "--min-sign-accuracy",
+                    "0.6",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["checkpoint"], "calibrated.pt")
+        self.assertEqual(payload["report"]["examples"], 300)
+        self.assertTrue(payload["quality_gates"]["passed"])
+
+    def test_neural_cli_value_calibration_rejects_non_finite_quality_gate(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint") as load,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--max-mae",
+                    "nan",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        load.assert_not_called()
+        self.assertIn("--max-mae must be finite and non-negative", stderr.getvalue())
 
     def test_neural_cli_value_calibration_can_save_calibrated_checkpoint(self) -> None:
         if not torch_available():
