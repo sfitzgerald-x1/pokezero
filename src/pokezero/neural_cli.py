@@ -100,6 +100,7 @@ FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
 NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
 NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v1"
+FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
         "iterations": 2,
@@ -896,6 +897,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--require-sample-sized",
         action="store_true",
         help="Quality-gate row pass requires foundation_evidence_status=present_and_sample_sized.",
+    )
+    foundation_compare.add_argument(
+        "--candidate-source",
+        choices=FOUNDATION_COMPARE_CANDIDATE_SOURCES,
+        default="latest",
+        help=(
+            "Which candidate row drives comparison metrics and quality gates. "
+            "'latest' preserves the historical latest-checkpoint view; 'latest-accepted' uses the "
+            "collector-retained checkpoint when a gated run rejected newer candidates; "
+            "'best-max-damage' uses the best manifest max-damage yardstick row."
+        ),
     )
     foundation_compare.add_argument(
         "--min-max-damage-games",
@@ -2427,12 +2439,13 @@ def _foundation_report_payload(summary_path: Path, summary: Mapping[str, Any]) -
 
 def _foundation_compare(args: argparse.Namespace) -> int:
     quality_gate_config = _foundation_quality_gate_config_from_args(args)
-    entries = [_foundation_compare_entry_or_error(path) for path in args.paths]
+    entries = [_foundation_compare_entry_or_error(path, candidate_source=args.candidate_source) for path in args.paths]
     for entry in entries:
         entry["quality_gate"] = _foundation_quality_gate(entry, quality_gate_config)
     payload = {
         "schema_version": NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION,
         "summary_count": len(args.paths),
+        "candidate_source": args.candidate_source,
         "quality_gate": quality_gate_config,
         "entries": entries,
     }
@@ -2623,9 +2636,9 @@ def _append_max_quality_check(
     )
 
 
-def _foundation_compare_entry_or_error(path: Path) -> dict[str, Any]:
+def _foundation_compare_entry_or_error(path: Path, *, candidate_source: str) -> dict[str, Any]:
     try:
-        return _foundation_compare_entry(path)
+        return _foundation_compare_entry(path, candidate_source=candidate_source)
     except Exception as exc:
         return {
             "label": str(path),
@@ -2637,6 +2650,10 @@ def _foundation_compare_entry_or_error(path: Path) -> dict[str, Any]:
             "duration_seconds": None,
             "latest_iteration": None,
             "latest_checkpoint_path": None,
+            "candidate_source": candidate_source,
+            "candidate_iteration": None,
+            "candidate_checkpoint_path": None,
+            "candidate_selection_error": str(exc),
             "foundation_evidence_status": "unknown",
             "reasons": [],
             "load_error": str(exc),
@@ -2654,7 +2671,7 @@ def _foundation_compare_entry_or_error(path: Path) -> dict[str, Any]:
         }
 
 
-def _foundation_compare_entry(path: Path) -> dict[str, Any]:
+def _foundation_compare_entry(path: Path, *, candidate_source: str) -> dict[str, Any]:
     summary_path, summary = _load_foundation_summary(path)
     recipe = _optional_mapping(summary.get("recipe"))
     foundation = _optional_mapping(summary.get("foundation"))
@@ -2662,8 +2679,22 @@ def _foundation_compare_entry(path: Path) -> dict[str, Any]:
     manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
     iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ()))) if manifest else ()
     curves = _benchmark_opponent_curves(iterations) if iterations else {}
+    selected_iteration, candidate_error = _select_foundation_candidate_iteration(
+        iterations=iterations,
+        manifest=manifest,
+        candidate_source=candidate_source,
+    )
+    selected_iterations = (selected_iteration,) if selected_iteration is not None else ()
+    selected_curves = _benchmark_opponent_curves(selected_iterations) if selected_iterations else {}
     if iterations:
-        readiness = _foundation_readiness_report(iterations)
+        readiness = _foundation_readiness_report(selected_iterations) if selected_iteration is not None else _missing_foundation_candidate_readiness(candidate_error)
+    elif candidate_source != "latest":
+        candidate_error = "candidate source requires a loaded manifest"
+        readiness = _missing_foundation_candidate_readiness(candidate_error)
+    candidate_iteration = _int_or_none(selected_iteration.get("iteration")) if selected_iteration is not None else None
+    candidate_checkpoint_path = (
+        _string_or_none(selected_iteration.get("checkpoint_path")) if selected_iteration is not None else None
+    )
     return {
         "label": _foundation_compare_label(summary_path, recipe),
         "summary_path": str(summary_path),
@@ -2673,10 +2704,17 @@ def _foundation_compare_entry(path: Path) -> dict[str, Any]:
         "run_dir": _string_or_none(recipe.get("run_dir")),
         "duration_seconds": _float_or_none(summary.get("duration_seconds")),
         "latest_iteration": _coalesce_optional_int(
+            iterations[-1].get("iteration") if iterations else readiness.get("latest_iteration"),
             foundation.get("latest_iteration"),
-            readiness.get("latest_iteration"),
         ),
-        "latest_checkpoint_path": _string_or_none(foundation.get("latest_checkpoint_path")),
+        "latest_checkpoint_path": _string_or_none(_optional_mapping(manifest).get("latest_checkpoint_path"))
+        or _string_or_none(foundation.get("latest_checkpoint_path")),
+        "candidate_source": candidate_source,
+        "candidate_iteration": candidate_iteration
+        if candidate_iteration is not None
+        else _coalesce_optional_int(readiness.get("latest_iteration"), foundation.get("latest_iteration")),
+        "candidate_checkpoint_path": candidate_checkpoint_path or _string_or_none(foundation.get("latest_checkpoint_path")),
+        "candidate_selection_error": candidate_error,
         "foundation_evidence_status": _string_or_none(readiness.get("foundation_evidence_status")) or "unknown",
         "reasons": [str(reason) for reason in _sequence(readiness.get("reasons", ()))],
         "manifest_loaded": manifest is not None,
@@ -2684,12 +2722,95 @@ def _foundation_compare_entry(path: Path) -> dict[str, Any]:
         "manifest_error": manifest_error,
         "value_calibration": _foundation_compare_value_calibration(readiness),
         "yardsticks": {
-            policy_id: _foundation_compare_yardstick(policy_id, curves, readiness)
+            policy_id: _foundation_compare_yardstick(policy_id, selected_curves, readiness)
             for policy_id in ("max-damage", "simple-legal", "random-legal")
         },
         "best_yardsticks": {
             "max-damage": _foundation_compare_best_yardstick("max-damage", curves, readiness),
         },
+    }
+
+
+def _select_foundation_candidate_iteration(
+    *,
+    iterations: tuple[Mapping[str, Any], ...],
+    manifest: Mapping[str, Any] | None,
+    candidate_source: str,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    if candidate_source not in FOUNDATION_COMPARE_CANDIDATE_SOURCES:
+        raise ValueError(f"unsupported foundation candidate source: {candidate_source!r}.")
+    if not iterations:
+        return None, "manifest has no iterations"
+    if candidate_source == "latest":
+        return iterations[-1], None
+    if candidate_source == "latest-accepted":
+        checkpoint_path = _string_or_none(_optional_mapping(manifest).get("latest_accepted_checkpoint_path"))
+        if checkpoint_path is None:
+            checkpoint_path = _checkpoint_path_from_policy_spec(_string_or_none(_optional_mapping(manifest).get("current_policy_spec")))
+        if checkpoint_path is None:
+            return None, "latest accepted checkpoint path unavailable"
+        selected = _find_foundation_iteration_by_checkpoint(iterations, checkpoint_path)
+        if selected is None:
+            return None, f"latest accepted checkpoint not found in iterations: {checkpoint_path}"
+        return selected, None
+    curves = _benchmark_opponent_curves(iterations)
+    best = _best_curve_entry(curves, "max-damage")
+    if best is None:
+        return None, "max-damage yardstick unavailable"
+    selected = None
+    checkpoint_path = _string_or_none(best.get("checkpoint_path"))
+    if checkpoint_path is not None:
+        selected = _find_foundation_iteration_by_checkpoint(iterations, checkpoint_path)
+    if selected is None:
+        best_iteration = _int_or_none(best.get("iteration"))
+        selected = _find_foundation_iteration_by_number(iterations, best_iteration)
+    if selected is None:
+        return None, "best max-damage iteration not found in manifest"
+    return selected, None
+
+
+def _checkpoint_path_from_policy_spec(policy_spec: str | None) -> str | None:
+    if policy_spec is None:
+        return None
+    if policy_spec.startswith("neural:"):
+        return policy_spec[len("neural:") :]
+    return None
+
+
+def _find_foundation_iteration_by_checkpoint(
+    iterations: tuple[Mapping[str, Any], ...],
+    checkpoint_path: str,
+) -> Mapping[str, Any] | None:
+    for iteration in iterations:
+        if _string_or_none(iteration.get("checkpoint_path")) == checkpoint_path:
+            return iteration
+    return None
+
+
+def _find_foundation_iteration_by_number(
+    iterations: tuple[Mapping[str, Any], ...],
+    iteration_number: int | None,
+) -> Mapping[str, Any] | None:
+    if iteration_number is None:
+        return None
+    for iteration in iterations:
+        if _int_or_none(iteration.get("iteration")) == iteration_number:
+            return iteration
+    return None
+
+
+def _missing_foundation_candidate_readiness(reason: str | None) -> dict[str, Any]:
+    reasons = ["candidate_selection_failed"]
+    if reason:
+        reasons.append(reason)
+    return {
+        "latest_iteration": None,
+        "milestone_benchmark_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
+        "value_calibration": {"available": False},
+        "max_damage_yardstick": {"available": False, "opponent_policy_id": "max-damage"},
+        "best_max_damage_yardstick": {"available": False, "opponent_policy_id": "max-damage"},
+        "foundation_evidence_status": "incomplete",
+        "reasons": reasons,
     }
 
 
@@ -2811,6 +2932,7 @@ def _foundation_compare_label(summary_path: Path, recipe: Mapping[str, Any]) -> 
 def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     print("neural_foundation_compare:")
     print("note: rates are candidate wins / total games; this is not an MCTS verdict.")
+    print(f"candidate_source: {_format_manifest_value(payload.get('candidate_source'))}")
     quality_gate_config = _optional_mapping(payload.get("quality_gate"))
     entries = tuple(_mapping(entry) for entry in _sequence(payload.get("entries", ())))
     if not entries:
@@ -2835,7 +2957,7 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
             f"{_clip_table_cell(entry.get('status'), 7):>7} "
             f"{_clip_table_cell(entry.get('profile'), 7):>7} "
             f"{_clip_table_cell(entry.get('variant'), 15):>15} "
-            f"{_format_manifest_value(entry.get('latest_iteration')):>4} "
+            f"{_format_manifest_value(entry.get('candidate_iteration')):>4} "
             f"{_clip_table_cell(entry.get('foundation_evidence_status'), 24):>24} "
             f"{_foundation_gate_status(gate):>5} "
             f"{_foundation_rate(max_damage):>7} "
@@ -2854,7 +2976,8 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
         error_suffix = f" load_error={_format_manifest_value(load_error)}" if load_error is not None else ""
         print(
             f"- {_format_manifest_value(entry.get('label'))}: "
-            f"checkpoint={_format_manifest_value(entry.get('latest_checkpoint_path'))} "
+            f"candidate={_format_manifest_value(entry.get('candidate_checkpoint_path'))} "
+            f"latest={_format_manifest_value(entry.get('latest_checkpoint_path'))} "
             f"manifest={manifest_state}"
             f"{error_suffix}"
         )
@@ -2865,7 +2988,7 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     if any(best.get("available") is True for _, best in best_entries):
         print("")
         print("best_yardsticks:")
-        print("note: best fixed-yardstick rows are selection visibility; quality gates still use latest rows.")
+        print("note: best fixed-yardstick rows are selection visibility; quality gates use the selected candidate source.")
         for entry, best in best_entries:
             if best.get("available") is True:
                 print(

@@ -2953,6 +2953,113 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("best_yardsticks:", output)
         self.assertIn("max_damage=iter=1 win_rate=0.400 games=20 cap=2 sample=below_milestone(20/300) checkpoint=", output)
 
+    def test_neural_cli_foundation_compare_can_use_latest_accepted_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "yardstick" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=1,
+                simple_wins=4,
+                random_wins=8,
+            )
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            accepted_checkpoint = manifest["iterations"][0]["checkpoint_path"]
+            manifest["latest_accepted_checkpoint_path"] = accepted_checkpoint
+            manifest["current_policy_spec"] = f"neural:{accepted_checkpoint}"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="temporal-gru",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(summary_path),
+                        "--candidate-source",
+                        "latest-accepted",
+                        "--min-max-damage-win-rate",
+                        "0.2",
+                        "--require-quality-pass",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["candidate_source"], "latest-accepted")
+        self.assertEqual(entry["latest_iteration"], 2)
+        self.assertEqual(entry["candidate_iteration"], 1)
+        self.assertEqual(entry["candidate_checkpoint_path"], accepted_checkpoint)
+        self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.25)
+        self.assertEqual(entry["quality_gate"]["status"], "pass")
+
+    def test_neural_cli_foundation_compare_can_use_best_max_damage_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "anti-aggression" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            _rewrite_neural_manifest_yardstick(
+                run_dir / "manifest.json",
+                max_damage_wins=3,
+                simple_wins=8,
+                random_wins=12,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=9,
+                simple_wins=13,
+                random_wins=18,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=3,
+                max_damage_wins=2,
+                simple_wins=4,
+                random_wins=6,
+            )
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(summary_path),
+                        "--candidate-source",
+                        "best-max-damage",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["candidate_source"], "best-max-damage")
+        self.assertEqual(entry["latest_iteration"], 3)
+        self.assertEqual(entry["candidate_iteration"], 2)
+        self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.45)
+        self.assertEqual(entry["yardsticks"]["simple-legal"]["win_rate"], 0.65)
+        self.assertEqual(entry["yardsticks"]["random-legal"]["win_rate"], 0.9)
+        self.assertEqual(entry["best_yardsticks"]["max-damage"]["iteration"], 2)
+
     def test_neural_cli_foundation_compare_keeps_good_rows_when_summary_load_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

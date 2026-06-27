@@ -309,10 +309,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   including latest fixed-yardstick rates, the best observed `max-damage` yardstick checkpoint, and
   value calibration signals, so WS-A/WS-E arms can be selected from comparable artifacts before
   spending more time on search tuning. It also supports caller-supplied quality thresholds for
-  experiment-local gating. Gates intentionally use latest rows; the best row is checkpoint-selection
-  visibility for diagnosing regressions, not a way to relabel a regressed latest run as healthy.
+  experiment-local gating. By default comparison gates use latest rows for continuity, while
+  alternative candidate sources are explicit model-selection modes rather than implicit relabeling.
   Best-row selection prefers sample-sized `max-damage` rows when any exist and labels below-milestone
   rows explicitly when only smoke-sized evidence is available.
+  For yardstick-gated runs where the latest saved checkpoint may be rejected, `foundation-compare`
+  can switch the comparison/gate candidate with `--candidate-source latest-accepted` or
+  `--candidate-source best-max-damage` so model-selection reads do not accidentally judge a
+  non-retained latest checkpoint.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).
