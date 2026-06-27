@@ -144,6 +144,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
     train.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     train.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
+    train.add_argument(
+        "--temporal-aggregator",
+        choices=("mean", "gru"),
+        default="mean",
+        help="How to combine encoded observation history for value/opponent heads.",
+    )
     train.add_argument("--policy-id", default=None, help="Policy id stored in the checkpoint config.")
     train.add_argument(
         "--category-oov-buckets",
@@ -596,6 +602,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
     iterate.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     iterate.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
+    iterate.add_argument(
+        "--temporal-aggregator",
+        choices=("mean", "gru"),
+        default="mean",
+        help="How to combine encoded observation history for value/opponent heads.",
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -652,6 +664,7 @@ def _describe(args: argparse.Namespace) -> int:
         print(f"embedding_dim: {config.embedding_dim}")
         print(f"layers: {config.transformer_layers}")
         print(f"attention_heads: {config.attention_heads}")
+        print(f"temporal_aggregator: {config.temporal_aggregator}")
     return 0
 
 
@@ -709,6 +722,7 @@ def _train(args: argparse.Namespace) -> int:
             attention_heads=args.attention_heads,
             feedforward_dim=args.feedforward_dim,
             dropout=args.dropout,
+            temporal_aggregator=args.temporal_aggregator,
         )
         # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
         # the env builds at encode time, so rows align deterministically. (The legacy training-data
@@ -1391,6 +1405,7 @@ def _iterate(args: argparse.Namespace) -> int:
         attention_heads=args.attention_heads,
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
+        temporal_aggregator=args.temporal_aggregator,
     )
     # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
     # model learns are exactly the rows the env encodes.

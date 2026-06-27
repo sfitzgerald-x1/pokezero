@@ -104,6 +104,7 @@ class TransformerPolicyConfig:
     category_vocab: tuple[str, ...] = ()
     category_oov_buckets: int = 0
     value_activation: str = "tanh"
+    temporal_aggregator: str = "mean"
 
     @classmethod
     def compact_category(
@@ -164,6 +165,8 @@ class TransformerPolicyConfig:
             raise ValueError("dropout must be in [0, 1).")
         if self.value_activation not in {"linear", "tanh"}:
             raise ValueError("value_activation must be 'linear' or 'tanh'.")
+        if self.temporal_aggregator not in {"mean", "gru"}:
+            raise ValueError("temporal_aggregator must be 'mean' or 'gru'.")
         # The legacy hash-bucket embedding is retired: a compact category vocabulary is
         # required. Build configs via TransformerPolicyConfig.compact_category(...).
         if not self.category_vocab:
@@ -214,6 +217,7 @@ class TransformerPolicyConfig:
             # Historical checkpoints were trained with an unbounded linear value head. Keep that
             # behavior when loading configs that predate the explicit value activation field.
             value_activation=_str_field(payload, "value_activation", "linear"),
+            temporal_aggregator=_str_field(payload, "temporal_aggregator", "mean"),
         )
 
 
@@ -396,6 +400,11 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 norm_first=True,
             )
             self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
+            self.temporal_gru = (
+                nn.GRU(config.embedding_dim, config.embedding_dim, batch_first=True)
+                if config.temporal_aggregator == "gru"
+                else None
+            )
             self.policy_head = nn.Linear(config.embedding_dim, 1)
             self.value_head = nn.Linear(config.embedding_dim, 1)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
@@ -426,7 +435,11 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             x = x.view(batch_size, window_size * token_count, self.config.embedding_dim)
             valid_tokens = (attention_mask.bool() & history_mask.bool().unsqueeze(-1)).view(batch_size, window_size * token_count)
             encoded = self.encoder(x, src_key_padding_mask=~valid_tokens)
-            pooled = _masked_mean(encoded, valid_tokens)
+            pooled = self._pool_encoded_history(
+                encoded=encoded,
+                attention_mask=attention_mask.bool(),
+                history_mask=history_mask.bool(),
+            )
             latest_action_start = ((window_size - 1) * token_count) + ACTION_CANDIDATE_TOKEN_OFFSET
             action_tokens = encoded[:, latest_action_start : latest_action_start + ACTION_COUNT, :]
             raw_value = self.value_head(pooled).squeeze(-1)
@@ -436,6 +449,35 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 value=value,
                 opponent_action_logits=self.opponent_action_head(pooled),
             )
+
+        def _pool_encoded_history(self, *, encoded: Any, attention_mask: Any, history_mask: Any) -> Any:
+            batch_size, window_size = history_mask.shape
+            token_count = self.config.token_count
+            embedding_dim = self.config.embedding_dim
+            valid_tokens = (attention_mask & history_mask.unsqueeze(-1)).view(batch_size, window_size * token_count)
+            if self.temporal_gru is None:
+                return _masked_mean(encoded, valid_tokens)
+
+            encoded_by_turn = encoded.view(batch_size, window_size, token_count, embedding_dim)
+            turn_embeddings = _masked_mean(
+                encoded_by_turn.reshape(batch_size * window_size, token_count, embedding_dim),
+                (attention_mask & history_mask.unsqueeze(-1)).reshape(batch_size * window_size, token_count),
+            ).view(batch_size, window_size, embedding_dim)
+            raw_valid_lengths = history_mask.long().sum(dim=1)
+            valid_lengths = raw_valid_lengths.clamp(min=1)
+            start_offsets = (window_size - valid_lengths).unsqueeze(1)
+            time_offsets = torch.arange(window_size, device=encoded.device).unsqueeze(0)
+            source_indices = (start_offsets + time_offsets).clamp(max=window_size - 1)
+            gather_indices = source_indices.unsqueeze(-1).expand(batch_size, window_size, embedding_dim)
+            compacted_turns = turn_embeddings.gather(dim=1, index=gather_indices)
+            packed_turns = nn.utils.rnn.pack_padded_sequence(
+                compacted_turns,
+                valid_lengths.cpu(),
+                batch_first=True,
+                enforce_sorted=False,
+            )
+            _, hidden = self.temporal_gru(packed_turns)
+            return torch.where(raw_valid_lengths.unsqueeze(-1) > 0, hidden[-1], torch.zeros_like(hidden[-1]))
 
 else:
 
