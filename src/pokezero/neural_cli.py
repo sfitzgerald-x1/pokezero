@@ -83,6 +83,20 @@ from .source_metadata import collect_source_metadata
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
 NEURAL_ITERATE_EXPERIMENT_PRESETS = ("none", "foundation-arms-race")
+FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
+    "objective": "ppo",
+    "mirror_match": True,
+    "collector_advancement_mode": "always",
+    "collection_temperature": 1.4,
+    "historical_opponent_selection": "spread",
+    "evaluation_games": 200,
+    "value_calibration": True,
+    "value_selection": True,
+    "value_selection_metric": "pearson_correlation",
+    "value_selection_heldout_games": 32,
+    "entropy_coef": 0.01,
+    "ppo_target_mode": "gae",
+}
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
 NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
@@ -99,10 +113,10 @@ NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
         "iterations": 3,
         "games_per_iteration": 256,
         "workers": 16,
-        "evaluation_games": 200,
+        "evaluation_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"]),
         "epochs": 1,
         "max_batches": None,
-        "value_selection_heldout_games": 32,
+        "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
     },
 }
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
@@ -1863,20 +1877,36 @@ def _apply_iterate_experiment_preset(args: argparse.Namespace) -> None:
     if args.experiment_preset != "foundation-arms-race":
         raise ValueError(f"unsupported neural iterate experiment preset: {args.experiment_preset!r}.")
 
-    _set_preset_default(args, "objective", "ppo")
-    _set_preset_default(args, "mirror_match", True)
-    _set_preset_default(args, "collector_advancement_mode", "always")
-    _set_preset_default(args, "collection_temperature", 1.4)
-    _set_preset_default(args, "historical_opponent_selection", "spread")
-    _set_preset_default(args, "evaluation_games", 200)
-    _set_preset_default(args, "value_calibration", True)
-    _set_preset_default(args, "value_selection", True)
-    _set_preset_default(args, "value_selection_metric", "pearson_correlation")
-    _set_preset_default(args, "value_selection_heldout_games", 32)
+    _set_preset_default(args, "objective", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["objective"])
+    _set_preset_default(args, "mirror_match", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["mirror_match"])
+    _set_preset_default(
+        args,
+        "collector_advancement_mode",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collector_advancement_mode"],
+    )
+    _set_preset_default(args, "collection_temperature", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collection_temperature"])
+    _set_preset_default(
+        args,
+        "historical_opponent_selection",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["historical_opponent_selection"],
+    )
+    _set_preset_default(args, "evaluation_games", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"])
+    _set_preset_default(args, "value_calibration", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_calibration"])
+    _set_preset_default(args, "value_selection", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection"])
+    _set_preset_default(
+        args,
+        "value_selection_metric",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_metric"],
+    )
+    _set_preset_default(
+        args,
+        "value_selection_heldout_games",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"],
+    )
 
     if args.objective == "ppo":
-        _set_preset_default(args, "entropy_coef", 0.01)
-        _set_preset_default(args, "ppo_target_mode", "gae")
+        _set_preset_default(args, "entropy_coef", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["entropy_coef"])
+        _set_preset_default(args, "ppo_target_mode", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["ppo_target_mode"])
 
     explicit_options = getattr(args, "_explicit_cli_options", frozenset())
     benchmark_references = list(args.benchmark_reference_policy or ())
@@ -1959,6 +1989,7 @@ def _foundation_run(args: argparse.Namespace) -> int:
     _write_json(summary_path, summary)
     if completed.returncode == 0:
         print("neural_foundation_run: PASS")
+        print("note: PASS means the wrapper command exited 0; inspect benchmarks and foundation readiness for strength.")
     else:
         print(f"error: neural foundation run failed with exit code {completed.returncode}", file=sys.stderr)
         if completed.stderr:
@@ -1978,6 +2009,7 @@ def _foundation_report(args: argparse.Namespace) -> int:
     foundation = _optional_mapping(summary.get("foundation"))
     readiness = _optional_mapping(foundation.get("foundation_readiness"))
     print("neural_foundation_report:")
+    print("note: wrapper status is process health only, not policy-strength evidence.")
     print(f"summary: {summary_path}")
     print(f"status: {status}")
     print(f"started_at: {_format_manifest_value(summary.get('started_at'))}")
@@ -1999,6 +2031,7 @@ def _foundation_report(args: argparse.Namespace) -> int:
 
 def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
     resolved = _foundation_resolved_options(args)
+    explicit_options = getattr(args, "_explicit_cli_options", frozenset())
     argv = [
         sys.executable,
         "-m",
@@ -2018,18 +2051,18 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         str(args.initial_policy),
         "--experiment-preset",
         "foundation-arms-race",
-        "--evaluation-games",
-        str(resolved["evaluation_games"]),
         "--epochs",
         str(resolved["epochs"]),
-        "--value-selection-heldout-games",
-        str(resolved["value_selection_heldout_games"]),
         "--seed-start",
         str(args.seed_start),
         "--evaluation-seed-start",
         str(args.evaluation_seed_start),
         "--json",
     ]
+    if args.profile == "smoke" or "evaluation_games" in explicit_options:
+        argv.extend(["--evaluation-games", str(resolved["evaluation_games"])])
+    if args.profile == "smoke" or "value_selection_heldout_games" in explicit_options:
+        argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
     if resolved["max_batches"] is not None:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if args.device is not None:
@@ -2045,6 +2078,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "showdown_root": str(args.showdown_root),
         "initial_policy": str(args.initial_policy),
         "experiment_preset": "foundation-arms-race",
+        "effective_config_source": "nested neural manifest invocation_config after neural iterate applies the preset",
         "resolved_options": resolved,
         "command": {
             "argv": argv,
@@ -2089,7 +2123,7 @@ def _foundation_max_batches(value: int | None, default: int | None) -> int | Non
 
 
 def _validate_foundation_run_paths(run_dir: Path, *, summary_path: Path, resume: bool) -> None:
-    if summary_path.exists():
+    if summary_path.exists() and not resume:
         raise ValueError(f"summary path already exists: {summary_path}")
     if run_dir.exists() and not resume:
         raise ValueError(f"run directory already exists: {run_dir}; use --resume or choose a fresh --run-dir.")
