@@ -511,6 +511,36 @@ class DatasetTest(unittest.TestCase):
         self.assertAlmostEqual(examples[2].ppo_advantage, 0.5)
         self.assertAlmostEqual(examples[2].ppo_value_target, 1.0)
 
+    def test_gae_ppo_targets_fall_back_for_player_with_dropped_value_estimate(self) -> None:
+        trajectory = BattleTrajectory(battle_id="gae", format_id="gen3randombattle", seed=5)
+        trajectory.append(step(player_id="p1", turn_index=0, value=5, reward=0.0, value_estimate=0.2))
+        trajectory.append(step(player_id="p1", turn_index=1, value=6, reward=0.0))
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+        record = RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "neural"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+
+        examples = list(
+            examples_from_record(
+                record,
+                config=TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=1.0),
+            )
+        )
+
+        self.assertAlmostEqual(examples[0].return_value, 1.0)
+        self.assertAlmostEqual(examples[1].return_value, 1.0)
+        self.assertIsNone(examples[0].ppo_advantage)
+        self.assertIsNone(examples[0].ppo_value_target)
+        self.assertIsNone(examples[1].ppo_advantage)
+        self.assertIsNone(examples[1].ppo_value_target)
+
     def test_training_batch_preserves_labels_and_optional_field_masks(self) -> None:
         examples = list(examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=2)))
 
@@ -524,8 +554,6 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(batch.opponent_action_mask, (True, False))
         self.assertEqual(batch.action_probabilities, (0.5, 0.0))
         self.assertEqual(batch.action_probability_mask, (True, False))
-        self.assertEqual(batch.value_estimates, (0.0, 0.0))
-        self.assertEqual(batch.value_estimate_mask, (False, False))
         self.assertEqual(batch.ppo_advantages, (0.0, 0.0))
         self.assertEqual(batch.ppo_advantage_mask, (False, False))
         self.assertEqual(batch.ppo_value_targets, (0.0, 0.0))

@@ -106,7 +106,7 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(transform.scale, 0.0)
         self.assertAlmostEqual(transform.bias, 0.0)
 
-    def test_calibration_dataset_config_matches_training_target_config(self) -> None:
+    def test_calibration_dataset_config_matches_training_return_target_config(self) -> None:
         training_config = TransformerTrainingConfig(
             window_size=3,
             discount=0.75,
@@ -135,8 +135,8 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(dataset_config.faint_delta_return_weight, 0.3)
         self.assertEqual(dataset_config.turn_penalty_after, 20)
         self.assertEqual(dataset_config.turn_penalty, 0.01)
-        self.assertEqual(dataset_config.ppo_target_mode, "gae")
-        self.assertEqual(dataset_config.gae_lambda, 0.8)
+        self.assertEqual(dataset_config.ppo_target_mode, "returns")
+        self.assertEqual(dataset_config.gae_lambda, 0.95)
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():
@@ -352,7 +352,7 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertAlmostEqual(report.bias, -0.3)
         self.assertAlmostEqual(transform.bias, 0.3)
 
-    def test_value_calibration_uses_ppo_gae_value_targets_when_available(self) -> None:
+    def test_value_calibration_uses_outcome_returns_when_ppo_gae_is_configured(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
         torch = require_torch()
@@ -429,9 +429,9 @@ class ValueCalibrationTest(unittest.TestCase):
             )
 
         self.assertEqual(report.examples, 2)
-        self.assertAlmostEqual(report.mae, 0.75)
-        self.assertAlmostEqual(report.bias, -0.75)
-        self.assertAlmostEqual(transform.bias, 0.75)
+        self.assertAlmostEqual(report.mae, 1.0)
+        self.assertAlmostEqual(report.bias, -1.0)
+        self.assertAlmostEqual(transform.bias, 1.0)
 
     def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
         if not torch_available():

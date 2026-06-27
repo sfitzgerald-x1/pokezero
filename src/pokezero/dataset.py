@@ -101,8 +101,6 @@ class TrainingBatch:
     action_indices: tuple[int, ...]
     rewards: tuple[float, ...]
     returns: tuple[float, ...]
-    value_estimates: tuple[float, ...]
-    value_estimate_mask: tuple[bool, ...]
     ppo_advantages: tuple[float, ...]
     ppo_advantage_mask: tuple[bool, ...]
     ppo_value_targets: tuple[float, ...]
@@ -132,8 +130,6 @@ class TrainingBatch:
             ("legal_action_mask", self.legal_action_mask),
             ("rewards", self.rewards),
             ("returns", self.returns),
-            ("value_estimates", self.value_estimates),
-            ("value_estimate_mask", self.value_estimate_mask),
             ("ppo_advantages", self.ppo_advantages),
             ("ppo_advantage_mask", self.ppo_advantage_mask),
             ("ppo_value_targets", self.ppo_value_targets),
@@ -250,8 +246,6 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         action_indices=tuple(example.action_index for example in examples),
         rewards=tuple(example.reward for example in examples),
         returns=tuple(example.return_value for example in examples),
-        value_estimates=tuple(_optional_float(example.value_estimate) for example in examples),
-        value_estimate_mask=tuple(example.value_estimate is not None for example in examples),
         ppo_advantages=tuple(_optional_float(example.ppo_advantage) for example in examples),
         ppo_advantage_mask=tuple(example.ppo_advantage is not None for example in examples),
         ppo_value_targets=tuple(_optional_float(example.ppo_value_target) for example in examples),
@@ -386,6 +380,7 @@ def _ppo_targets_by_step_index(
             running_advantage = delta + (config.discount * config.gae_lambda * running_advantage)
             targets_by_step_index[step_index] = _PPOTarget(
                 advantage=running_advantage,
+                # Value loss remains clipped to the training target range; policy advantage stays unclipped.
                 value_target=_clip_return_value(value_estimate + running_advantage),
             )
     return targets_by_step_index

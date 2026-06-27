@@ -522,8 +522,6 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "legal_action_mask": torch_module.tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
         "action_indices": torch_module.tensor(batch.action_indices, dtype=torch_module.long, device=device),
         "returns": torch_module.tensor(batch.returns, dtype=torch_module.float32, device=device),
-        "value_estimates": torch_module.tensor(batch.value_estimates, dtype=torch_module.float32, device=device),
-        "value_estimate_mask": torch_module.tensor(batch.value_estimate_mask, dtype=torch_module.bool, device=device),
         "ppo_advantages": torch_module.tensor(batch.ppo_advantages, dtype=torch_module.float32, device=device),
         "ppo_advantage_mask": torch_module.tensor(batch.ppo_advantage_mask, dtype=torch_module.bool, device=device),
         "ppo_value_targets": torch_module.tensor(batch.ppo_value_targets, dtype=torch_module.float32, device=device),
