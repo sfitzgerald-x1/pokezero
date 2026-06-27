@@ -1079,6 +1079,31 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["current_policy_spec"], second_manifest["checkpoint_policy_spec"])
         self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
 
+    def test_run_neural_selfplay_iterations_always_mode_preserves_gate_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(candidate_beats_incumbent=True):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "beat_incumbent")
+        self.assertEqual(run_manifest["latest_accepted_checkpoint_path"], str(run_dir / "iteration-0001" / "transformer-policy.pt"))
+
     def test_run_neural_selfplay_iterations_always_mode_preserves_initial_neural_accepted_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"

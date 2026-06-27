@@ -1147,6 +1147,8 @@ def _promotion_advancement_decision(
 
 
 def _always_advance_collector_decision(decision: NeuralAdvancementDecision) -> NeuralAdvancementDecision:
+    if decision.advance_collector:
+        return decision
     return replace(decision, advance_collector=True, reason="collector_advancement_mode_always")
 
 
