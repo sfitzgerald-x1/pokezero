@@ -1809,6 +1809,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("0.250000", output)
         self.assertIn("0.7500", output)
         self.assertIn("benchmark_opponent_curves:", output)
+        self.assertIn("note: fixed yardsticks only; rates are candidate wins / total games.", output)
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- simple-legal: 1:1.000/20g", output)
         self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
@@ -1819,6 +1820,105 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("0.875", output)
         self.assertIn("0.125", output)
         self.assertIn("1.750", output)
+
+    def test_neural_cli_report_omits_incumbent_from_yardstick_curves(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["iterations"][0]["benchmark"]["head_to_heads"].append(
+                {
+                    "label": "entity-test-iter-0001 vs entity-test-iter-0000",
+                    "first_policy_id": "entity-test-iter-0001",
+                    "second_policy_id": "entity-test-iter-0000",
+                    "games": 20,
+                    "first_policy_wins": 11,
+                    "second_policy_wins": 9,
+                    "ties": 0,
+                    "capped_games": 0,
+                }
+            )
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("benchmark_opponent_curves:", output)
+        self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
+        self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
+        self.assertNotIn("entity-test-iter-0000", output)
+
+    def test_neural_cli_report_yardstick_curves_fall_back_to_legacy_matchups(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            benchmark = manifest["iterations"][0]["benchmark"]
+            benchmark["head_to_heads"] = []
+            benchmark["matchups"] = [
+                {
+                    "label": "entity-test-iter-0001 vs random-legal",
+                    "p1_policy_id": "entity-test-iter-0001",
+                    "p2_policy_id": "random-legal",
+                    "seed_start": 1,
+                    "metrics": {
+                        "games": 10,
+                        "elapsed_seconds": 1.0,
+                        "total_decision_rounds": 20,
+                        "total_simulator_turns": 20,
+                        "p1_wins": 6,
+                        "p2_wins": 4,
+                        "ties": 0,
+                        "capped_games": 1,
+                    },
+                },
+                {
+                    "label": "random-legal vs entity-test-iter-0001",
+                    "p1_policy_id": "random-legal",
+                    "p2_policy_id": "entity-test-iter-0001",
+                    "seed_start": 11,
+                    "metrics": {
+                        "games": 10,
+                        "elapsed_seconds": 1.0,
+                        "total_decision_rounds": 20,
+                        "total_simulator_turns": 20,
+                        "p1_wins": 5,
+                        "p2_wins": 5,
+                        "ties": 0,
+                        "capped_games": 2,
+                    },
+                },
+                {
+                    "label": "entity-test-iter-0001 vs entity-test-iter-0000",
+                    "p1_policy_id": "entity-test-iter-0001",
+                    "p2_policy_id": "entity-test-iter-0000",
+                    "seed_start": 21,
+                    "metrics": {
+                        "games": 10,
+                        "elapsed_seconds": 1.0,
+                        "total_decision_rounds": 20,
+                        "total_simulator_turns": 20,
+                        "p1_wins": 7,
+                        "p2_wins": 3,
+                        "ties": 0,
+                        "capped_games": 0,
+                    },
+                },
+            ]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("benchmark_opponent_curves:", output)
+        self.assertIn("- random-legal: 1:0.550/20g,cap=3", output)
+        self.assertNotIn("entity-test-iter-0000", output)
 
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(
@@ -2005,7 +2105,8 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
         "current_policy_spec": "random-legal",
         "opponent_policy_specs": ["random-legal"],
         "opponent_pool_config": {},
-        "invocation_config": {},
+        "invocation_config": {"benchmark_reference_policy_specs": ["max-damage"]},
+        "benchmark_reference_policy_specs": ["max-damage"],
         "training_rollout_paths": [str(iteration_dir / "training-rollouts.jsonl")],
         "seed_start": 20,
         "worker_count": 2,

@@ -8,7 +8,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sys
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .cli_audit import (
     add_post_iteration_audit_arguments,
@@ -75,6 +75,16 @@ from .eval_cli import _add_gate_arguments, _gate_config_from_args
 
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
+_DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
+_NAMED_REPORT_POLICY_IDS = frozenset(
+    {
+        "random-legal",
+        "simple-legal",
+        "scripted-teacher",
+        "max-damage",
+        "aggressive-damage",
+    }
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1741,6 +1751,7 @@ def _print_benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) 
         return
     print("")
     print("benchmark_opponent_curves:")
+    print("note: fixed yardsticks only; rates are candidate wins / total games.")
     for opponent, entries in curves.items():
         cells = " ".join(
             f"{entry['iteration']}:{entry['win_rate']:.3f}/{entry['games']}g"
@@ -1756,35 +1767,128 @@ def _benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) -> dic
         candidate_policy_id = _iteration_policy_id(iteration)
         if not candidate_policy_id:
             continue
+        yardstick_policy_ids = _benchmark_yardstick_policy_ids(iteration)
         benchmark = _optional_mapping(iteration.get("benchmark"))
         head_to_heads = tuple(_mapping(item) for item in _sequence(benchmark.get("head_to_heads", ())))
-        for head_to_head in head_to_heads:
-            first_policy_id = _string_or_none(head_to_head.get("first_policy_id"))
-            second_policy_id = _string_or_none(head_to_head.get("second_policy_id"))
-            if first_policy_id == candidate_policy_id:
-                opponent_policy_id = second_policy_id
-                wins = _int_or_none(head_to_head.get("first_policy_wins"))
-                win_rate = _float_or_none(head_to_head.get("first_policy_win_rate"))
-            elif second_policy_id == candidate_policy_id:
-                opponent_policy_id = first_policy_id
-                wins = _int_or_none(head_to_head.get("second_policy_wins"))
-                win_rate = _float_or_none(head_to_head.get("second_policy_win_rate"))
-            else:
-                continue
-            games = _int_or_none(head_to_head.get("games")) or 0
-            if not opponent_policy_id or games <= 0:
-                continue
-            if win_rate is None:
-                win_rate = (wins or 0) / games
+        entries = (
+            _benchmark_curve_entries_from_head_to_heads(
+                head_to_heads,
+                candidate_policy_id=candidate_policy_id,
+                yardstick_policy_ids=yardstick_policy_ids,
+            )
+            if head_to_heads
+            else _benchmark_curve_entries_from_matchups(
+                tuple(_mapping(item) for item in _sequence(benchmark.get("matchups", ()))),
+                candidate_policy_id=candidate_policy_id,
+                yardstick_policy_ids=yardstick_policy_ids,
+            )
+        )
+        for opponent_policy_id, entry in entries.items():
             curves.setdefault(opponent_policy_id, []).append(
                 {
                     "iteration": int(iteration.get("iteration", 0)),
-                    "win_rate": float(win_rate),
-                    "games": games,
-                    "capped_games": _int_or_none(head_to_head.get("capped_games")) or 0,
+                    **entry,
                 }
             )
     return curves
+
+
+def _benchmark_yardstick_policy_ids(iteration: Mapping[str, Any]) -> frozenset[str]:
+    ids = set(_DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS)
+    for spec in _benchmark_reference_policy_specs(iteration):
+        policy_id = _report_policy_id_from_spec(spec)
+        if policy_id is not None:
+            ids.add(policy_id)
+    return frozenset(ids)
+
+
+def _benchmark_reference_policy_specs(iteration: Mapping[str, Any]) -> tuple[str, ...]:
+    specs: list[str] = []
+    specs.extend(_string_items(iteration.get("benchmark_reference_policy_specs")))
+    invocation_config = _optional_mapping(iteration.get("invocation_config"))
+    specs.extend(_string_items(invocation_config.get("benchmark_reference_policy_specs") if invocation_config else ()))
+    return tuple(dict.fromkeys(specs))
+
+
+def _string_items(value: object) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes, Mapping)) or not hasattr(value, "__iter__"):
+        return ()
+    return tuple(item for item in (_string_or_none(item) for item in value) if item is not None)
+
+
+def _report_policy_id_from_spec(spec: str) -> str | None:
+    body = spec.strip().partition("?")[0].strip().lower()
+    return body if body in _NAMED_REPORT_POLICY_IDS else None
+
+
+def _benchmark_curve_entries_from_head_to_heads(
+    head_to_heads: Iterable[Mapping[str, Any]],
+    *,
+    candidate_policy_id: str,
+    yardstick_policy_ids: frozenset[str],
+) -> dict[str, dict[str, float | int]]:
+    entries: dict[str, dict[str, float | int]] = {}
+    for head_to_head in head_to_heads:
+        first_policy_id = _string_or_none(head_to_head.get("first_policy_id"))
+        second_policy_id = _string_or_none(head_to_head.get("second_policy_id"))
+        if first_policy_id == candidate_policy_id:
+            opponent_policy_id = second_policy_id
+            wins = _int_or_none(head_to_head.get("first_policy_wins"))
+            win_rate = _float_or_none(head_to_head.get("first_policy_win_rate"))
+        elif second_policy_id == candidate_policy_id:
+            opponent_policy_id = first_policy_id
+            wins = _int_or_none(head_to_head.get("second_policy_wins"))
+            win_rate = _float_or_none(head_to_head.get("second_policy_win_rate"))
+        else:
+            continue
+        games = _int_or_none(head_to_head.get("games")) or 0
+        if not opponent_policy_id or opponent_policy_id not in yardstick_policy_ids or games <= 0:
+            continue
+        if win_rate is None:
+            win_rate = (wins or 0) / games
+        entries[opponent_policy_id] = {
+            "win_rate": float(win_rate),
+            "games": games,
+            "capped_games": _int_or_none(head_to_head.get("capped_games")) or 0,
+        }
+    return entries
+
+
+def _benchmark_curve_entries_from_matchups(
+    matchups: Iterable[Mapping[str, Any]],
+    *,
+    candidate_policy_id: str,
+    yardstick_policy_ids: frozenset[str],
+) -> dict[str, dict[str, float | int]]:
+    accumulators: dict[str, dict[str, int]] = {}
+    for matchup in matchups:
+        p1_policy_id = _string_or_none(matchup.get("p1_policy_id"))
+        p2_policy_id = _string_or_none(matchup.get("p2_policy_id"))
+        metrics = _mapping(matchup.get("metrics", {}))
+        games = _int_or_none(metrics.get("games")) or 0
+        if p1_policy_id == candidate_policy_id:
+            opponent_policy_id = p2_policy_id
+            wins = _int_or_none(metrics.get("p1_wins")) or 0
+        elif p2_policy_id == candidate_policy_id:
+            opponent_policy_id = p1_policy_id
+            wins = _int_or_none(metrics.get("p2_wins")) or 0
+        else:
+            continue
+        if not opponent_policy_id or opponent_policy_id not in yardstick_policy_ids or games <= 0:
+            continue
+        entry = accumulators.setdefault(opponent_policy_id, {"wins": 0, "games": 0, "capped_games": 0})
+        entry["wins"] += wins
+        entry["games"] += games
+        entry["capped_games"] += _int_or_none(metrics.get("capped_games")) or 0
+    return {
+        opponent: {
+            "win_rate": values["wins"] / values["games"],
+            "games": values["games"],
+            "capped_games": values["capped_games"],
+        }
+        for opponent, values in accumulators.items()
+        if values["games"] > 0
+    }
 
 
 def _string_or_none(value: object) -> str | None:
