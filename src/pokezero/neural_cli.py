@@ -103,6 +103,7 @@ NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v
 NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_plan.v1"
 NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_summary.v1"
 FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
+FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES = frozenset({"scripted-teacher", "aggressive-damage"})
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
         "iterations": 2,
@@ -129,36 +130,52 @@ NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
         "opponent_action_loss_weight": None,
         "temporal_aggregator": None,
         "opponent_policies": None,
+        "teacher_cut": False,
+    },
+    "teacher-cut": {
+        "description": (
+            "Run the clean teacher-cut WS-A experiment: PPO self-play with no fixed "
+            "teacher/heuristic training opponents after any one-shot initial policy."
+        ),
+        "opponent_action_loss_weight": None,
+        "temporal_aggregator": None,
+        "opponent_policies": (),
+        "teacher_cut": True,
     },
     "opponent-signal": {
         "description": "Increase opponent-action auxiliary supervision for an H3 foundation ablation.",
         "opponent_action_loss_weight": 1.0,
         "temporal_aggregator": None,
         "opponent_policies": None,
+        "teacher_cut": False,
     },
     "temporal-gru": {
         "description": "Use the GRU temporal aggregator as a WS-E/WS-A value/base-net ablation.",
         "opponent_action_loss_weight": None,
         "temporal_aggregator": "gru",
         "opponent_policies": None,
+        "teacher_cut": False,
     },
     "opponent-signal-gru": {
         "description": "Combine opponent-action auxiliary supervision with the GRU temporal aggregator.",
         "opponent_action_loss_weight": 1.0,
         "temporal_aggregator": "gru",
         "opponent_policies": None,
+        "teacher_cut": False,
     },
     "anti-aggression": {
         "description": "Add aggressive-damage to the fixed opponent pool for targeted counterplay pressure.",
         "opponent_action_loss_weight": None,
         "temporal_aggregator": None,
         "opponent_policies": ("random-legal", "simple-legal", "aggressive-damage"),
+        "teacher_cut": False,
     },
     "anti-aggression-gru": {
         "description": "Combine aggressive-damage fixed-opponent pressure with the GRU temporal aggregator.",
         "opponent_action_loss_weight": None,
         "temporal_aggregator": "gru",
         "opponent_policies": ("random-legal", "simple-legal", "aggressive-damage"),
+        "teacher_cut": False,
     },
 }
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
@@ -625,6 +642,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
+    )
+    iterate.add_argument(
+        "--no-fixed-opponents",
+        action="store_true",
+        help=(
+            "Use no fixed training opponents. Requires --mirror-match so collection can "
+            "start from current-vs-current self-play."
+        ),
     )
     iterate.add_argument(
         "--benchmark-reference-policy",
@@ -2218,7 +2243,12 @@ def _iterate(args: argparse.Namespace) -> int:
     _apply_iterate_experiment_preset(args)
     # Fail fast: eval-only baselines (max-damage) cannot seed self-play training.
     reject_eval_only_specs([args.initial_policy], role="self-play initial policy")
-    reject_eval_only_specs(args.opponent_policy or (), role="self-play training opponent")
+    if args.no_fixed_opponents and args.opponent_policy:
+        raise ValueError("--no-fixed-opponents cannot be combined with --opponent-policy.")
+    opponent_policy_specs = () if args.no_fixed_opponents else (args.opponent_policy or ("random-legal", "simple-legal"))
+    reject_eval_only_specs(opponent_policy_specs, role="self-play training opponent")
+    if args.no_fixed_opponents and not args.mirror_match:
+        raise ValueError("--no-fixed-opponents requires --mirror-match.")
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.collector_advancement_mode != "incumbent-gate":
@@ -2303,7 +2333,7 @@ def _iterate(args: argparse.Namespace) -> int:
     initial_policy = policy_spec_with_showdown_root(args.initial_policy, args.showdown_root)
     opponent_policies = tuple(
         policy_spec_with_showdown_root(spec, args.showdown_root)
-        for spec in (args.opponent_policy or ("random-legal", "simple-legal"))
+        for spec in opponent_policy_specs
     )
     # Eval-only references (e.g. max-damage) are allowed here but never seed training above.
     benchmark_references = tuple(
@@ -3582,6 +3612,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--value-ranking-margin", str(resolved["value_ranking_margin"])])
     for opponent_policy in _sequence_or_empty(resolved["opponent_policies"]):
         argv.extend(["--opponent-policy", str(opponent_policy)])
+    if resolved["no_fixed_opponents"]:
+        argv.append("--no-fixed-opponents")
     if resolved["temporal_aggregator"] is not None:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
     if resolved["collector_advancement_mode"] is not None:
@@ -3596,6 +3628,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "profile": args.profile,
         "variant": args.variant,
         "variant_description": str(NEURAL_FOUNDATION_VARIANTS[args.variant]["description"]),
+        "experiment_contract": _foundation_experiment_contract(args, resolved),
         "run_dir": str(args.run_dir),
         "manifest_path": str(args.run_dir / "manifest.json"),
         "showdown_root": str(args.showdown_root),
@@ -3613,6 +3646,9 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
 def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     profile = NEURAL_FOUNDATION_PROFILES[args.profile]
     variant = NEURAL_FOUNDATION_VARIANTS[args.variant]
+    teacher_cut = bool(variant["teacher_cut"])
+    if teacher_cut:
+        _validate_teacher_cut_foundation_args(args)
     opponent_action_loss_weight = (
         args.opponent_action_loss_weight
         if args.opponent_action_loss_weight is not None
@@ -3644,7 +3680,9 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "value_ranking_margin": args.value_ranking_margin,
         "temporal_aggregator": temporal_aggregator,
         "opponent_policies": list(opponent_policies) if opponent_policies is not None else None,
+        "no_fixed_opponents": teacher_cut and opponent_policies == (),
         "collector_advancement_mode": args.collector_advancement_mode,
+        "teacher_cut": teacher_cut,
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
@@ -3668,6 +3706,45 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     if any(not str(policy).strip() for policy in opponent_policy_values):
         raise ValueError("opponent-policy entries must be non-empty.")
     return resolved
+
+
+def _validate_teacher_cut_foundation_args(args: argparse.Namespace) -> None:
+    if args.opponent_policy is not None:
+        raise ValueError("--variant teacher-cut does not allow fixed --opponent-policy training opponents.")
+    initial_body = _policy_spec_name(args.initial_policy)
+    if initial_body in FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES:
+        raise ValueError(
+            f"--variant teacher-cut cannot use {initial_body!r} as the live initial policy; "
+            "use a checkpoint spec such as neural:/path/to/bootstrap.pt for one-shot initialization."
+        )
+
+
+def _foundation_experiment_contract(args: argparse.Namespace, resolved: Mapping[str, Any]) -> dict[str, Any]:
+    teacher_cut = bool(resolved.get("teacher_cut"))
+    contract: dict[str, Any] = {
+        "name": "teacher-cut" if teacher_cut else "foundation-arms-race",
+        "teacher_cut": teacher_cut,
+    }
+    if not teacher_cut:
+        return contract
+    return {
+        **contract,
+        "goal": "test whether PPO self-play can exceed the scripted-teacher ceiling after one-shot initialization",
+        "teacher_allowed_as_initial_checkpoint_only": True,
+        "live_initial_policy": str(args.initial_policy),
+        "forbidden_live_training_policy_names": sorted(FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES),
+        "fixed_training_opponents": [],
+        "uses_mirror_self_play": True,
+        "collector_advancement_mode": resolved.get("collector_advancement_mode")
+        or FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collector_advancement_mode"],
+        "reward_signal": "game_outcome_only",
+        "eval_yardstick": "max-damage",
+        "strength_claim_min_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
+    }
+
+
+def _policy_spec_name(policy_spec: str) -> str:
+    return str(policy_spec).strip().partition("?")[0].strip().lower()
 
 
 def _sequence_or_empty(value: Any) -> tuple[Any, ...]:
