@@ -181,8 +181,8 @@ async function startBattle(command) {
   const players = command.players || {};
   const startOptions = { formatid, strictChoices: true };
   if (seed) startOptions.seed = seed;
-  const p1 = { name: players.p1 || "PokeZero p1" };
-  const p2 = { name: players.p2 || "PokeZero p2" };
+  const p1 = normalizePlayerOptions(players.p1, "PokeZero p1");
+  const p2 = normalizePlayerOptions(players.p2, "PokeZero p2");
   if (seed) {
     p1.seed = deriveSeed(seed, "p1");
     p2.seed = deriveSeed(seed, "p2");
@@ -193,6 +193,21 @@ async function startBattle(command) {
       `>player p2 ${JSON.stringify(p2)}`
   );
   emit({ type: "started", battleId, formatid, seed: seed || null });
+}
+
+// Player options accept either the legacy string form (just a name, used by random battles) or an
+// object carrying { name, team }. A custom packed team string is passed straight through to
+// Pokemon Showdown's player options; omitting it preserves random-battle behavior.
+function normalizePlayerOptions(value, fallbackName) {
+  if (value && typeof value === "object") {
+    const name = typeof value.name === "string" && value.name ? value.name : fallbackName;
+    const options = { name };
+    if (typeof value.team === "string" && value.team) {
+      options.team = value.team;
+    }
+    return options;
+  }
+  return { name: typeof value === "string" && value ? value : fallbackName };
 }
 
 function requireBattle(command) {

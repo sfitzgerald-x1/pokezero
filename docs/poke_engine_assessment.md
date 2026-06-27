@@ -100,6 +100,25 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
 4. Validate one-turn instruction outcomes against Showdown for a small fixture matrix:
    damage move, status move, switch, forced switch, faint, Spikes, Toxic, Substitute, Hidden Power,
    Intimidate, and Flash Fire.
+   **Partially addressed: the Showdown ground-truth side now exists.**
+   `src/pokezero/showdown_fixture.py` adds a curated one-turn fixture runner: `FixturePokemon` +
+   `pack_team(...)` build Showdown packed-team strings for simple Gen 3 sets, and
+   `run_one_turn_fixture(...)` starts a one-battle `BattleStream` (custom Gen 3 format
+   `gen3customgame`, discovered from the built checkout) with two supplied teams, two first-turn
+   choices, and a deterministic seed, returning a structured `OneTurnFixtureResult` (omniscient
+   protocol lines, both seats' opening requests, submitted choices, terminal flag, and any
+   `|error|`/protocol error lines). To carry curated teams, `scripts/battle_bridge.mjs` `start` now
+   accepts per-player `{name, team}` options and passes the packed team through to Showdown while the
+   string-name form preserves existing random-battle behavior. Tests cover packed-team generation and
+   the bridge start payload without the poke-engine wheel; a node + built-checkout integration test
+   runs one deterministic turn (Charmander/Ember vs. Squirtle/Water Gun) and asserts both moves fire
+   with no `|error|` lines. This is **Showdown ground truth only** — it does not yet build or compare
+   against a `poke_engine` state. The runner submits one pair of choices and returns at the next
+   boundary, so matrix rows that create a faint followed by a forced-switch request will need a
+   follow-up replacement driver before they can be fully resolved.
+   **Remaining:** drive the curated fixtures through the poke-engine adapter (step 2) and assert
+   instruction outcome equivalence across the full matrix above; engine outcome equivalence is still
+   unproven.
 5. Benchmark apply/reverse branch throughput against the current replay-from-root branch harness.
 6. If equivalence and speed are good, add an optional search backend that keeps Showdown as final
    benchmark/evaluation truth.
