@@ -400,8 +400,10 @@ python -m pokezero.neural_cli value-calibration \
 ```
 
 Use held-out `--eval-data` for the reported read. `--fit-method affine` preserves the legacy linear
-correction; `--fit-method isotonic` stores a monotone empirical mapping. Either transform is WS-E
-calibration plumbing, not policy-strength evidence until benchmarked against fixed yardsticks.
+correction; `--fit-method isotonic` stores a monotone empirical mapping. Isotonic has more degrees
+of freedom than affine and should use substantially more fit data plus held-out quality gates before
+being trusted. Either transform is WS-E calibration plumbing, not policy-strength evidence until
+benchmarked against fixed yardsticks.
 
 Use the generated checkpoint as the first self-play policy:
 

@@ -1594,9 +1594,9 @@ def _value_calibration(args: argparse.Namespace) -> int:
                 "pass --eval-data for a held-out calibration read.",
                 file=sys.stderr,
             )
-        if transform.method == "affine" and abs(transform.scale) <= 1e-6:
+        if _value_calibration_transform_value_blind(transform):
             print(
-                "warning: fitted value calibration scale is near zero; the calibrated checkpoint will make "
+                "warning: fitted value calibration transform is near-constant; the calibrated checkpoint will make "
                 "value-head search nearly value-blind.",
                 file=sys.stderr,
             )
@@ -2785,6 +2785,15 @@ def _format_value_calibration_transform(transform: Any) -> str:
         f"scale={transform.scale:.6f} bias={transform.bias:.6f} "
         f"clip=[{transform.clip_min:.1f},{transform.clip_max:.1f}]"
     )
+
+
+def _value_calibration_transform_value_blind(transform: Any) -> bool:
+    if getattr(transform, "method", "affine") == "isotonic":
+        calibrated_values = tuple(float(value) for _, value in getattr(transform, "points", ()))
+        if not calibrated_values:
+            return True
+        return max(calibrated_values) - min(calibrated_values) <= 1e-6
+    return abs(float(getattr(transform, "scale", 0.0))) <= 1e-6
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

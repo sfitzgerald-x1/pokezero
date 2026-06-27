@@ -175,7 +175,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   also fit a calibration transform and save a calibrated checkpoint copy; pass a separate
   `--eval-data` set for a held-out calibration read. The default `--fit-method affine` preserves the
   legacy linear correction, while `--fit-method isotonic` stores a monotone empirical mapping for
-  non-linear post-hoc calibration experiments. It also supports opt-in quality gates such as
+  non-linear post-hoc calibration experiments. Isotonic can overfit small fit sets, so treat held-out
+  evaluation and gates as required for any useful read. It also supports opt-in quality gates such as
   `--min-sign-accuracy`, `--max-expected-calibration-error`, and `--min-pearson-correlation` so
   experiment scripts can fail a weak value-head read without hardcoding project-wide readiness
   thresholds. Value-head consumers such as search leaf scoring read the stored transform when

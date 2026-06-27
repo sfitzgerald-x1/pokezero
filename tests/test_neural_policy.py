@@ -2280,6 +2280,55 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["value_calibration_transform"]["method"], "isotonic")
         self.assertEqual(len(payload["value_calibration_transform"]["points"]), 3)
 
+    def test_neural_cli_value_calibration_warns_on_collapsed_isotonic_transform(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"examples": 3, "mae": 0.1}
+
+        fake_training_result = TransformerTrainingResult(
+            model_config=TransformerPolicyConfig.compact_category(
+                category_vocab=(1, 2, 3),
+                category_oov_buckets=4,
+                policy_id="fixture",
+            ),
+            training_config=TransformerTrainingConfig(),
+            epochs=(),
+        )
+        transform = ValueCalibrationTransform(
+            method="isotonic",
+            points=((-1.0, 0.0), (1.0, 0.0)),
+        )
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
+            patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform),
+            patch("pokezero.neural_cli.save_transformer_checkpoint"),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()),
+            patch("sys.stdout", new_callable=io.StringIO),
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--fit-out",
+                    "calibrated.pt",
+                    "--fit-method",
+                    "isotonic",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("near-constant", stderr.getvalue())
+        self.assertIn("value-head search nearly value-blind", stderr.getvalue())
+
     def test_neural_cli_value_calibration_rejects_eval_data_without_fit_out(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
