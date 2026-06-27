@@ -56,10 +56,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   a privileged benchmark safety guard and is not a substitute for full hidden-information
   determinization.
   The play benchmark also has an opt-in conservative value gate (`--min-value-improvement`) that
-  keeps the raw policy-prior action unless the search-selected action beats it by a configurable
+  keeps the raw policy-prior action unless the configured root-selected action beats it by a configurable
   value margin; aggregate diagnostics report gate uses/checks so M0 runs can tell whether the knob
-  is actually changing decisions. This gate qualifies the action selected by the current PUCT
-  scoring rule; it is not an exhaustive "highest value branch" selector.
+  is actually changing decisions.
   The same benchmark can now switch root selection between current PUCT-score selection and pure
   branch-value selection (`--selection-mode puct|value`), which isolates whether the near-term M0
   issue is the branch value signal or the PUCT prior/score mixer.

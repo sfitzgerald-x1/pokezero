@@ -17,6 +17,7 @@ from .search import (
     ActionPriorVector,
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
+    PUCTBranchSearchResult,
     player_observation_history,
     puct_branch_search,
 )
@@ -173,7 +174,7 @@ class RootPUCTSearchPolicy:
             if callable(close):
                 close()
 
-        search_best = _selected_candidate(search.candidates, mode=self.selection_mode)
+        search_best = _selected_candidate(search, mode=self.selection_mode)
         best = search_best
         gate_metadata = {}
         if self.minimum_value_improvement is not None:
@@ -269,16 +270,14 @@ def _best_value_candidate(
 
 
 def _selected_candidate(
-    candidates: tuple[PUCTBranchSearchCandidate, ...],
+    search: PUCTBranchSearchResult,
     *,
     mode: str,
 ) -> PUCTBranchSearchCandidate:
     if mode == "puct":
-        if not candidates:
-            raise ValueError("root PUCT search produced no candidates.")
-        return max(candidates, key=lambda candidate: (candidate.score, candidate.value, -candidate.action_index))
+        return search.best_candidate
     if mode == "value":
-        return _best_value_candidate(candidates)
+        return _best_value_candidate(search.candidates)
     raise ValueError("selection mode must be 'puct' or 'value'.")
 
 
