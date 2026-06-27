@@ -1466,12 +1466,14 @@ def _print_iterate_summary(result) -> None:
     print(f"run_dir: {result.run_dir}")
     for iteration in result.iterations:
         final_epoch = iteration.training.final_metrics
+        ppo_diagnostics = _format_live_ppo_diagnostics(final_epoch)
         print(
             f"iteration={iteration.iteration} games={iteration.metrics.games} "
             f"checkpoint={iteration.checkpoint_path} "
             f"loss={final_epoch.loss:.6f} "
             f"policy_accuracy={final_epoch.policy_accuracy:.4f} "
             f"promotion={_promotion_status(getattr(iteration, 'promotion', None))}"
+            f"{ppo_diagnostics}"
         )
         value_selection = getattr(iteration, "value_selection", None)
         if value_selection is not None:
@@ -1487,6 +1489,19 @@ def _print_iterate_summary(result) -> None:
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
     print(f"manifest: {result.run_dir / 'manifest.json'}")
+
+
+def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
+    ppo_valid_fraction = getattr(final_epoch, "ppo_valid_fraction", None)
+    ppo_clip_fraction = getattr(final_epoch, "ppo_clip_fraction", None)
+    ppo_entropy = getattr(final_epoch, "ppo_entropy", None)
+    if ppo_valid_fraction is None and ppo_clip_fraction is None and ppo_entropy is None:
+        return ""
+    return (
+        f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
+        f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
+        f" ppo_ent={_format_optional_float(ppo_entropy)}"
+    )
 
 
 def _report(args: argparse.Namespace) -> int:

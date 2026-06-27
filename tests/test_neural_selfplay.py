@@ -28,7 +28,7 @@ from pokezero.neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from pokezero.neural_cli import main as neural_cli_main
+from pokezero.neural_cli import _print_iterate_summary, main as neural_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure
@@ -1697,6 +1697,72 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("0.875", output)
         self.assertIn("0.125", output)
         self.assertIn("1.750", output)
+
+    def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
+        result = SimpleNamespace(
+            run_dir=Path("/tmp/run"),
+            latest_checkpoint_path=Path("/tmp/run/iteration-0001/transformer-policy.pt"),
+            iterations=[
+                SimpleNamespace(
+                    iteration=1,
+                    metrics=SimpleNamespace(games=3),
+                    checkpoint_path=Path("/tmp/run/iteration-0001/transformer-policy.pt"),
+                    training=SimpleNamespace(
+                        final_metrics=TransformerEpochMetrics(
+                            epoch=1,
+                            examples=6,
+                            loss=0.25,
+                            policy_loss=0.2,
+                            policy_accuracy=0.75,
+                            ppo_valid_fraction=0.875,
+                            ppo_clip_fraction=0.125,
+                            ppo_entropy=1.75,
+                        )
+                    ),
+                    benchmark=None,
+                    promotion=None,
+                )
+            ],
+        )
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            _print_iterate_summary(result)
+
+        output = stdout.getvalue()
+        self.assertIn("ppo_cov=0.875", output)
+        self.assertIn("ppo_clip=0.125", output)
+        self.assertIn("ppo_ent=1.750", output)
+
+    def test_neural_cli_report_renders_missing_ppo_diagnostics_as_dash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            epoch = manifest["iterations"][0]["training"]["epochs"][0]
+            for key in (
+                "ppo_valid_examples",
+                "ppo_valid_fraction",
+                "ppo_advantage_mean",
+                "ppo_advantage_std",
+                "ppo_ratio_mean",
+                "ppo_clip_fraction",
+                "ppo_entropy",
+            ):
+                epoch.pop(key, None)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        self.assertEqual(exit_code, 0)
+        lines = stdout.getvalue().splitlines()
+        header = next(line for line in lines if line.strip().startswith("iter "))
+        data_line = next(line for line in lines if line.split()[:1] == ["1"])
+        columns = dict(zip(header.split(), data_line.split()))
+        self.assertEqual(columns["ppo_cov"], "-")
+        self.assertEqual(columns["ppo_clip"], "-")
+        self.assertEqual(columns["ppo_ent"], "-")
 
     def test_neural_cli_report_can_print_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
