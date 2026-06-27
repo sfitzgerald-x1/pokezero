@@ -210,6 +210,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   improved from `0.6296` to `0.6532`; MAE worsened from `0.8133` to `0.8578`. Treat this as positive
   WS-E signal for value-only fine-tuning, not a final unbiased value-readiness verdict, because the
   reported calibration is on the same held-out paths used for epoch selection.
+  A separate 32-game independent calibration sample then checked that value-tuned checkpoint against
+  fresh self-play rollouts at
+  `runs/foundation-anti-aggression-local-20260627/value-tune-pearson-001/independent-calibration-rollouts.jsonl`.
+  On the same 4,470 independent examples, the original anti-aggression checkpoint measured
+  Pearson `0.1161`, sign `0.5060`, ECE `0.5491`, and MAE `0.9821`; the value-tuned checkpoint
+  measured Pearson `0.1235`, sign `0.5329`, ECE `0.1715`, and MAE `0.9788`. This is positive
+  out-of-sample evidence for calibration magnitude and a small sign/ranking improvement, but the
+  independent Pearson remains far too weak to treat the value head as search-ready.
   A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
   held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
   games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
