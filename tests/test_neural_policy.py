@@ -343,6 +343,56 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(tuple(output.value.shape), (2,))
         self.assertEqual(tuple(output.opponent_action_logits.shape), (2, 9))
 
+    def test_transformer_gru_temporal_aggregator_is_padding_invariant_per_row(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            window_size=3,
+            embedding_dim=8,
+            transformer_layers=1,
+            attention_heads=2,
+            feedforward_dim=16,
+            dropout=0.0,
+            temporal_aggregator="gru",
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        shape = (1, config.window_size, config.token_count)
+        base_inputs = {
+            "categorical_ids": torch.zeros((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.zeros((*shape, config.numeric_feature_count), dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.tensor(((False, True, True),), dtype=torch.bool),
+        }
+        with torch.no_grad():
+            base_inputs["numeric_features"][:, 1, :, :] = 1.0
+            base_inputs["numeric_features"][:, 2, :, :] = 2.0
+        other_inputs = {
+            "categorical_ids": torch.ones((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.full((*shape, config.numeric_feature_count), 7.0, dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.tensor(((False, False, True),), dtype=torch.bool),
+        }
+        batched_inputs = {
+            name: torch.cat((base_inputs[name], other_inputs[name]), dim=0)
+            for name in base_inputs
+        }
+
+        with torch.no_grad():
+            single_output = model(**base_inputs)
+            batched_output = model(**batched_inputs)
+
+        self.assertTrue(torch.allclose(single_output.policy_logits[0], batched_output.policy_logits[0], atol=1e-6))
+        self.assertTrue(torch.allclose(single_output.value[0], batched_output.value[0], atol=1e-6))
+        self.assertTrue(
+            torch.allclose(single_output.opponent_action_logits[0], batched_output.opponent_action_logits[0], atol=1e-6)
+        )
+
     def test_evaluate_transformer_action_priors_masks_illegal_actions(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")

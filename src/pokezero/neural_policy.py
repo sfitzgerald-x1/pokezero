@@ -454,8 +454,8 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             batch_size, window_size = history_mask.shape
             token_count = self.config.token_count
             embedding_dim = self.config.embedding_dim
-            valid_tokens = (attention_mask & history_mask.unsqueeze(-1)).view(batch_size, window_size * token_count)
             if self.temporal_gru is None:
+                valid_tokens = (attention_mask & history_mask.unsqueeze(-1)).view(batch_size, window_size * token_count)
                 return _masked_mean(encoded, valid_tokens)
 
             encoded_by_turn = encoded.view(batch_size, window_size, token_count, embedding_dim)
@@ -465,6 +465,9 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             ).view(batch_size, window_size, embedding_dim)
             raw_valid_lengths = history_mask.long().sum(dim=1)
             valid_lengths = raw_valid_lengths.clamp(min=1)
+            # Observation windows are left-padded: invalid turns form a prefix and valid turns form
+            # a chronological suffix. Compact that suffix before packing so the GRU sees only real
+            # history steps in oldest-to-newest order.
             start_offsets = (window_size - valid_lengths).unsqueeze(1)
             time_offsets = torch.arange(window_size, device=encoded.device).unsqueeze(0)
             source_indices = (start_offsets + time_offsets).clamp(max=window_size - 1)
