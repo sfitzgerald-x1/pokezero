@@ -249,13 +249,38 @@ def run_poke_engine_reversible_smoke(
         raise PokeEngineUnavailableError("Missing smoke-test API: " + ", ".join(missing))
 
     state = _basic_gen3_smoke_state(engine)
+    return run_reversible_smoke_on_state(
+        engine,
+        state,
+        "ember",
+        "watergun",
+        max_instruction_checks=max_instruction_checks,
+    )
+
+
+def run_reversible_smoke_on_state(
+    engine: Any,
+    state: Any,
+    move_one: str,
+    move_two: str,
+    *,
+    max_instruction_checks: int = 8,
+) -> PokeEngineReversibleSmokeResult:
+    """Generate instructions for ``state`` and verify apply/reverse round-trips.
+
+    This is the shared core used both by :func:`run_poke_engine_reversible_smoke`
+    (which builds its own minimal state) and by the fixture adapter, which builds
+    a state from a curated :class:`~pokezero.poke_engine_adapter.BattleSpec`. It
+    deliberately makes no Showdown comparison; it only proves the reversible seam.
+    """
+
     original = state.to_string()
     if engine.State.from_string(original).to_string() != original:
-        raise PokeEngineUnavailableError("poke-engine State.from_string did not round-trip the smoke state")
+        raise PokeEngineUnavailableError("poke-engine State.from_string did not round-trip the state")
 
-    instructions = tuple(engine.generate_instructions(state, "ember", "watergun"))
+    instructions = tuple(engine.generate_instructions(state, move_one, move_two))
     if not instructions:
-        raise PokeEngineUnavailableError("poke-engine generated no instructions for the smoke state")
+        raise PokeEngineUnavailableError("poke-engine generated no instructions for the state")
 
     checked = instructions[:max_instruction_checks]
     mutated_any_state = False
