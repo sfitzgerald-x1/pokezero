@@ -447,6 +447,11 @@ Steps:
    evidence that the GRU arm can find a stronger early checkpoint, but the always-advance foundation
    loop still forgets/regresses; the next WS-A lever should focus on retention/advancement or
    training-signal changes rather than simply continuing the same GRU run.
+   The neural foundation wrapper now supports `--collector-advancement-mode yardstick-gate` for this
+   retention follow-up. This mode keeps the fixed `max-damage` benchmark as a cheap collector
+   retention yardstick: the first candidate initializes the baseline, and later candidates become the
+   next rollout collector only when they beat the best accepted `max-damage` win rate so far. This is
+   not a final promotion gate, but it directly targets the GRU/H3 always-advance regression pattern.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure

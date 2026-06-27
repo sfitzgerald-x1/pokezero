@@ -184,12 +184,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "--initial-policy",
                         "random-legal",
                         "--collector-advancement-mode",
-                        "always",
+                        "yardstick-gate",
                     ]
                 )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(run.call_args.kwargs["collector_advancement_mode"], "always")
+        self.assertEqual(run.call_args.kwargs["collector_advancement_mode"], "yardstick-gate")
 
     def test_neural_cli_iterate_rejects_always_advance_with_auto_promote(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
@@ -1431,7 +1431,93 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])
         self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
 
-    def test_run_neural_selfplay_iterations_rejects_always_mode_with_auto_promotion(self) -> None:
+    def test_run_neural_selfplay_iterations_yardstick_gate_retains_best_collector(self) -> None:
+        collected = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(
+                collected=collected,
+                candidate_beats_incumbent=False,
+                candidate_yardstick_win_rates=(0.4, 0.3, 0.5),
+            ):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=3,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    benchmark_reference_policy_specs=("max-damage",),
+                    evaluation_games=10,
+                    collector_advancement_mode="yardstick-gate",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            third_manifest = json.loads((run_dir / "iteration-0003" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual(
+            [call["current_policy_spec"] for call in collected],
+            [
+                "random-legal",
+                first_manifest["checkpoint_policy_spec"],
+                first_manifest["checkpoint_policy_spec"],
+            ],
+        )
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "yardstick_baseline_initialized")
+        self.assertEqual(first_manifest["advancement"]["yardstick_policy_id"], "max-damage")
+        self.assertAlmostEqual(first_manifest["advancement"]["yardstick_win_rate"], 0.4)
+        self.assertIsNone(first_manifest["advancement"]["previous_best_yardstick_win_rate"])
+        self.assertFalse(second_manifest["advancement"]["advance_collector"])
+        self.assertEqual(second_manifest["advancement"]["reason"], "failed_to_beat_yardstick_best")
+        self.assertAlmostEqual(second_manifest["advancement"]["yardstick_win_rate"], 0.3)
+        self.assertAlmostEqual(second_manifest["advancement"]["previous_best_yardstick_win_rate"], 0.4)
+        self.assertEqual(second_manifest["next_current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertTrue(third_manifest["advancement"]["advance_collector"])
+        self.assertEqual(third_manifest["advancement"]["reason"], "beat_yardstick_best")
+        self.assertAlmostEqual(third_manifest["advancement"]["yardstick_win_rate"], 0.5)
+        self.assertAlmostEqual(third_manifest["advancement"]["previous_best_yardstick_win_rate"], 0.4)
+        self.assertEqual(run_manifest["current_policy_spec"], third_manifest["checkpoint_policy_spec"])
+        self.assertEqual(
+            run_manifest["latest_accepted_checkpoint_path"],
+            str(run_dir / "iteration-0003" / "transformer-policy.pt"),
+        )
+
+    def test_run_neural_selfplay_iterations_yardstick_gate_requires_yardstick_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(omit_yardstick_benchmark=True):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    benchmark_reference_policy_specs=("max-damage",),
+                    evaluation_games=10,
+                    collector_advancement_mode="yardstick-gate",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertFalse(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "missing_yardstick_benchmark")
+        self.assertEqual(first_manifest["next_current_policy_spec"], "random-legal")
+        self.assertEqual(run_manifest["current_policy_spec"], "random-legal")
+        self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
+
+    def test_run_neural_selfplay_iterations_rejects_non_incumbent_mode_with_auto_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patched_neural_selfplay_dependencies():
                 with self.assertRaisesRegex(ValueError, "cannot be combined with auto promotion"):
@@ -1447,7 +1533,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                             registry_path=Path(temp_dir) / "promotions.json",
                             gate_config=PromotionGateConfig(require_benchmark=False),
                         ),
-                        collector_advancement_mode="always",
+                        collector_advancement_mode="yardstick-gate",
                     )
 
     def test_run_neural_selfplay_iterations_post_iteration_audit_stops_before_next_iteration(self) -> None:
@@ -1993,7 +2079,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("repo_root: /repo", output)
         self.assertIn("iterations: 1", output)
         self.assertIn("bench_wr", output)
-        self.assertIn("inc_wr", output)
+        self.assertIn("gate_wr", output)
         self.assertIn("val_sign", output)
         self.assertIn("val_ece", output)
         self.assertIn("ppo_cov", output)
@@ -2429,6 +2515,32 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "mean")
         self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "mean")
+
+    def test_neural_cli_foundation_collector_advancement_override_respects_explicit_value(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-gru-yardstick",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "temporal-gru",
+                    "--collector-advancement-mode",
+                    "yardstick-gate",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["collector_advancement_mode"], "yardstick-gate")
+        self.assertEqual(argv[argv.index("--collector-advancement-mode") + 1], "yardstick-gate")
 
     def test_neural_cli_foundation_opponent_signal_variant_respects_explicit_loss_override(self) -> None:
         with (
@@ -3398,6 +3510,8 @@ def patched_neural_selfplay_dependencies(
     captured_benchmarks: list | None = None,
     captured_calibrations: list | None = None,
     candidate_beats_incumbent: bool | tuple[bool, ...] = True,
+    candidate_yardstick_win_rates: float | tuple[float, ...] | None = None,
+    omit_yardstick_benchmark: bool = False,
 ):
     collected = collected if collected is not None else []
     trained_paths = trained_paths if trained_paths is not None else []
@@ -3491,12 +3605,50 @@ def patched_neural_selfplay_dependencies(
             candidate_wins = candidate_beats_incumbent[min(call_index, len(candidate_beats_incumbent) - 1)]
         else:
             candidate_wins = candidate_beats_incumbent
+        if isinstance(candidate_yardstick_win_rates, tuple):
+            yardstick_win_rate = candidate_yardstick_win_rates[
+                min(call_index, len(candidate_yardstick_win_rates) - 1)
+            ]
+        else:
+            yardstick_win_rate = candidate_yardstick_win_rates
         captured_benchmarks.append(kwargs)
         matchup_results = []
         games = kwargs["games"]
         for matchup in kwargs["matchups"]:
             p1_is_candidate = str(matchup.p1_policy.policy_id).startswith("entity-test-iter-")
             p2_is_candidate = str(matchup.p2_policy.policy_id).startswith("entity-test-iter-")
+            if (
+                omit_yardstick_benchmark
+                and "max-damage" in {str(matchup.p1_policy.policy_id), str(matchup.p2_policy.policy_id)}
+            ):
+                continue
+            if (
+                yardstick_win_rate is not None
+                and "max-damage" in {str(matchup.p1_policy.policy_id), str(matchup.p2_policy.policy_id)}
+                and p1_is_candidate != p2_is_candidate
+            ):
+                candidate_win_count = int(round(games * yardstick_win_rate))
+                p1_wins = candidate_win_count if p1_is_candidate else games - candidate_win_count
+                p2_wins = games - p1_wins
+                matchup_results.append(
+                    BenchmarkMatchupResult(
+                        label=matchup.label,
+                        p1_policy_id=str(matchup.p1_policy.policy_id),
+                        p2_policy_id=str(matchup.p2_policy.policy_id),
+                        seed_start=kwargs["seed_start"],
+                        metrics=CollectionMetrics(
+                            games=games,
+                            elapsed_seconds=1.0,
+                            total_decision_rounds=games,
+                            total_simulator_turns=games,
+                            p1_wins=p1_wins,
+                            p2_wins=p2_wins,
+                            ties=0,
+                            capped_games=0,
+                        ),
+                    )
+                )
+                continue
             if p1_is_candidate and p2_is_candidate:
                 candidate_number = int(str(matchup.p1_policy.policy_id).rsplit("-", maxsplit=1)[-1])
                 p1_is_candidate = candidate_number == max(

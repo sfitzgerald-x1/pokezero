@@ -477,7 +477,7 @@ Inspect a neural self-play run without loading torch:
 python -m pokezero.neural_cli report --run-dir runs/neural-selfplay
 ```
 
-The neural report is read-only and summarizes the run manifest's current policy, latest checkpoint, source provenance, per-iteration blended benchmark win rate, incumbent win rate, advancement state, promotion state, and transformer training metrics. Use `--json` for the raw manifest.
+The neural report is read-only and summarizes the run manifest's current policy, latest checkpoint, source provenance, per-iteration blended benchmark win rate, advancement-gate win rate, advancement state, promotion state, and transformer training metrics. Use `--json` for the raw manifest.
 
 For the current CPU foundation experiment, prefer the preset-backed wrapper so smoke and pilot runs
 share one auditable recipe:
@@ -548,6 +548,23 @@ value/base-net ablation. Use `--variant opponent-signal-gru` when the question i
 opponent-signal change and GRU temporal aggregation combine better than either lever alone. These
 variants pass `--temporal-aggregator gru` to `neural_cli iterate`; they are foundation arms to compare
 with `foundation-compare`, not MCTS verdicts.
+
+When an arm finds a stronger early checkpoint but regresses under the preset's always-advance
+collector policy, rerun the same recipe with yardstick-gated collector retention:
+
+```bash
+python -m pokezero.neural_cli foundation-run \
+  --run-dir runs/foundation-gru-yardstick \
+  --showdown-root /path/to/pokemon-showdown \
+  --profile pilot \
+  --variant temporal-gru \
+  --collector-advancement-mode yardstick-gate
+```
+
+This keeps `max-damage` as an eval-only yardstick and only advances the next rollout collector when
+the candidate beats the best previously accepted `max-damage` win rate in that run. It is a retention
+guardrail for foundation experiments, not a replacement for promotion gates or sample-sized MCTS
+evaluation.
 
 Audit a run for regression-health checks that are cheap to run on CPU:
 
