@@ -34,7 +34,7 @@ from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.neural_policy import TorchUnavailableError, torch_available
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
-from pokezero.policy import RandomLegalPolicy, ScriptedTeacherPolicy
+from pokezero.policy import PolicyDecision, RandomLegalPolicy, ScriptedTeacherPolicy
 from pokezero.replay_benchmark import (
     ReplayPrefixBenchmarkReport,
     ReplayPrefixTiming,
@@ -133,6 +133,24 @@ class SeedRecordingEnv(OneTurnEnv):
     def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
         self.reset_seeds.append(seed)
         super().reset(seed=seed, format_id=format_id)
+
+
+class MetadataPolicy:
+    policy_id = "root-puct-diagnostic"
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        return PolicyDecision(
+            action_index=0,
+            policy_id=self.policy_id,
+            metadata={
+                "policy_family": "root-puct-search",
+                "root_puct_fallback": False,
+                "root_puct_candidate_count": 3,
+                "root_puct_elapsed_seconds": 0.25,
+                "root_puct_selected_value": 0.5,
+                "root_puct_selected_score": 0.75,
+            },
+        )
 
 
 def integration_config() -> LocalShowdownConfig | None:
@@ -264,6 +282,28 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(result.metrics.games, 2)
             self.assertEqual(result.metrics.p1_wins, 2)
             self.assertEqual(result.metrics.total_decision_rounds, 2)
+
+    def test_benchmark_rollouts_summarizes_policy_decision_metadata(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup("root-puct vs random", MetadataPolicy(), RandomLegalPolicy()),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-diagnostic"]["decisions"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_searches"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_fallbacks"], 0)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_candidate_count"], 3.0)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_elapsed_seconds"], 0.25)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_value"], 0.5)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_score"], 0.75)
+        self.assertEqual(summary["random-legal"]["decisions"], 2)
+        self.assertNotIn("root_puct_searches", summary["random-legal"])
 
     def test_benchmark_rollouts_reuses_seed_range_for_each_matchup(self) -> None:
         reset_seeds = []

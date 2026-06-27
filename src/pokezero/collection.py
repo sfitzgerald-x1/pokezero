@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import sys
 import threading
 from time import perf_counter
-from typing import TYPE_CHECKING, Callable, Iterable, Iterator, Mapping, TextIO
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, TextIO
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
@@ -171,6 +171,7 @@ class CollectionMetrics:
     capped_games: int
     peak_rss_mb: float | None = None
     peak_rss_mb_by_phase: Mapping[str, float | None] | None = None
+    policy_decision_summary: Mapping[str, Mapping[str, Any]] | None = None
 
     @property
     def games_per_second(self) -> float:
@@ -206,6 +207,16 @@ class CollectionMetrics:
             **(
                 {"peak_rss_mb_by_phase": dict(self.peak_rss_mb_by_phase)}
                 if self.peak_rss_mb_by_phase
+                else {}
+            ),
+            **(
+                {
+                    "policy_decision_summary": {
+                        key: dict(value)
+                        for key, value in self.policy_decision_summary.items()
+                    }
+                }
+                if self.policy_decision_summary
                 else {}
             ),
         }
@@ -866,6 +877,7 @@ class _MetricsAccumulator:
     p2_wins: int = 0
     ties: int = 0
     capped_games: int = 0
+    policy_summaries: dict[str, "_PolicyDecisionAccumulator"] = field(default_factory=dict)
 
     def add(self, record: RolloutRecord) -> None:
         self.games += 1
@@ -879,6 +891,14 @@ class _MetricsAccumulator:
             self.ties += 1
         if record.terminal.capped:
             self.capped_games += 1
+        for step in record.trajectory.steps:
+            metadata = step.metadata
+            policy_id = str(metadata.get("policy_id") or "unknown")
+            summary = self.policy_summaries.get(policy_id)
+            if summary is None:
+                summary = _PolicyDecisionAccumulator()
+                self.policy_summaries[policy_id] = summary
+            summary.add(metadata)
 
     def to_metrics(self, *, elapsed_seconds: float, peak_rss_mb: float | None = None) -> CollectionMetrics:
         return CollectionMetrics(
@@ -891,7 +911,103 @@ class _MetricsAccumulator:
             ties=self.ties,
             capped_games=self.capped_games,
             peak_rss_mb=peak_rss_mb,
+            policy_decision_summary={
+                policy_id: summary.to_dict()
+                for policy_id, summary in sorted(self.policy_summaries.items())
+            },
         )
+
+
+@dataclass
+class _PolicyDecisionAccumulator:
+    decisions: int = 0
+    root_puct_searches: int = 0
+    root_puct_fallbacks: int = 0
+    root_puct_elapsed_seconds_total: float = 0.0
+    root_puct_candidate_count_total: int = 0
+    root_puct_candidate_count_samples: int = 0
+    root_puct_selected_value_total: float = 0.0
+    root_puct_selected_value_samples: int = 0
+    root_puct_selected_score_total: float = 0.0
+    root_puct_selected_score_samples: int = 0
+    root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
+
+    def add(self, metadata: Mapping[str, Any]) -> None:
+        self.decisions += 1
+        if metadata.get("policy_family") != "root-puct-search":
+            return
+        if bool(metadata.get("root_puct_fallback")):
+            self.root_puct_fallbacks += 1
+            reason = str(metadata.get("root_puct_fallback_reason") or "unknown")
+            self.root_puct_fallback_reasons[reason] = (
+                self.root_puct_fallback_reasons.get(reason, 0) + 1
+            )
+            return
+        self.root_puct_searches += 1
+        elapsed_seconds = _metadata_optional_float(metadata.get("root_puct_elapsed_seconds"))
+        if elapsed_seconds is not None:
+            self.root_puct_elapsed_seconds_total += elapsed_seconds
+        candidate_count = _metadata_optional_int(metadata.get("root_puct_candidate_count"))
+        if candidate_count is not None:
+            self.root_puct_candidate_count_total += candidate_count
+            self.root_puct_candidate_count_samples += 1
+        selected_value = _metadata_optional_float(metadata.get("root_puct_selected_value"))
+        if selected_value is not None:
+            self.root_puct_selected_value_total += selected_value
+            self.root_puct_selected_value_samples += 1
+        selected_score = _metadata_optional_float(metadata.get("root_puct_selected_score"))
+        if selected_score is not None:
+            self.root_puct_selected_score_total += selected_score
+            self.root_puct_selected_score_samples += 1
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"decisions": self.decisions}
+        if self.root_puct_searches or self.root_puct_fallbacks:
+            result.update(
+                {
+                    "root_puct_searches": self.root_puct_searches,
+                    "root_puct_fallbacks": self.root_puct_fallbacks,
+                }
+            )
+            if self.root_puct_searches:
+                result["root_puct_average_elapsed_seconds"] = (
+                    self.root_puct_elapsed_seconds_total / self.root_puct_searches
+                )
+            if self.root_puct_candidate_count_samples:
+                result["root_puct_average_candidate_count"] = (
+                    self.root_puct_candidate_count_total / self.root_puct_candidate_count_samples
+                )
+            if self.root_puct_selected_value_samples:
+                result["root_puct_average_selected_value"] = (
+                    self.root_puct_selected_value_total / self.root_puct_selected_value_samples
+                )
+            if self.root_puct_selected_score_samples:
+                result["root_puct_average_selected_score"] = (
+                    self.root_puct_selected_score_total / self.root_puct_selected_score_samples
+                )
+            if self.root_puct_fallback_reasons:
+                result["root_puct_fallback_reasons"] = dict(
+                    sorted(self.root_puct_fallback_reasons.items())
+                )
+        return result
+
+
+def _metadata_optional_float(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass

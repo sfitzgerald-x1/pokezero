@@ -62,6 +62,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `--games 4` against `max-damage`: raw scored 3/8, root-PUCT scored 2/8, both with zero capped
   games. This is too small to decide strength, but it is negative search-lift evidence for the
   current shallow operator and confirms active-search throughput around 3 decisions/s.
+  Benchmark JSON now includes root-PUCT decision diagnostics so follow-up M0 runs can see search
+  counts, fallbacks, candidate counts, selected values/scores, and per-decision search latency.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
