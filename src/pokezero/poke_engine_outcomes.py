@@ -14,6 +14,15 @@ It is **honest feasibility evidence, not an adoption gate.** As of poke-engine
 :func:`compare_one_turn_outcome` reports ``matched=False`` for the curated
 Charmander/Squirtle damage smoke. That mismatch is surfaced, not hidden.
 
+When a mismatch is found, :func:`build_one_turn_damage_diagnostic` gathers structured,
+serializable evidence about *where* it lives -- observed vs. engine per-side damage
+deltas, the Python request-derived active-state summary fed into state construction
+(stats/hp/moves from the Showdown request, types from the dex), and the engine's direct
+``calculate_damage`` output when the binding exposes it -- and reports a conservative
+``likely_mismatch_surface`` without claiming a root cause it has not proven. The
+summaries describe the *input* to ``build_poke_engine_state``; they do not prove the
+engine's internal state is faithful (that would need separate engine-state inspection).
+
 Scope is **singles, move-vs-move only.** The module is optional and lazy: importing
 it never requires the native wheel (the real engine is imported only when a
 comparison actually runs and no fake ``module`` is supplied). It is deliberately
@@ -23,6 +32,7 @@ disconnected from rollout, training, search, benchmarks, and self-play.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import re
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
@@ -513,6 +523,430 @@ def compare_one_turn_outcome(
     )
 
 
+# --- damage-mismatch diagnostic -------------------------------------------
+#
+# The comparator above answers "does any engine branch reproduce Showdown's exact
+# HP?" (no, on 0.0.47). The diagnostic below answers the *next* question -- given
+# a mismatch, what surface is it on? It gathers structured, serializable evidence
+# (request-derived state summaries, observed vs. engine per-side damage deltas, and
+# the engine's direct calculate_damage output when the binding exposes it) so the
+# difference can be narrowed without guessing. It is deliberately conservative: it
+# reports where the evidence points, not a root cause it has not proven.
+
+
+@dataclass(frozen=True)
+class ActiveStateSummary:
+    """Summary of one seat's active Pokemon as fed into state construction.
+
+    Fields come from the Python :class:`SideSpec` the comparator builds: stats, hp,
+    level, ability, item, and moves are taken from the Showdown opening request, and
+    types are dex-derived. This is the *input* to ``build_poke_engine_state`` -- so a
+    summary that matches the Showdown request shows the Python request-derived spec is
+    faithful, but it does NOT prove the engine's internal state matches it (that would
+    need separate engine-state inspection), nor does it say anything about the engine's
+    damage math.
+    """
+
+    species: str
+    level: int
+    hp: int
+    maxhp: int
+    types: tuple[str, ...]
+    ability: str | None
+    item: str | None
+    attack: int
+    defense: int
+    special_attack: int
+    special_defense: int
+    speed: int
+    moves: tuple[tuple[str, int], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "species": self.species,
+            "level": self.level,
+            "hp": self.hp,
+            "maxhp": self.maxhp,
+            "types": list(self.types),
+            "ability": self.ability,
+            "item": self.item,
+            "attack": self.attack,
+            "defense": self.defense,
+            "special_attack": self.special_attack,
+            "special_defense": self.special_defense,
+            "speed": self.speed,
+            "moves": [{"id": move_id, "pp": pp} for move_id, pp in self.moves],
+        }
+
+
+@dataclass(frozen=True)
+class ObservedDamage:
+    """Showdown's observed per-side damage, derived from the opening request HP."""
+
+    opening_hp: tuple[int, int]
+    final_hp: tuple[int, int]
+    deltas: tuple[int, int]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "opening_hp": list(self.opening_hp),
+            "final_hp": list(self.final_hp),
+            "deltas": list(self.deltas),
+        }
+
+
+@dataclass(frozen=True)
+class EngineBranchDamageSummary:
+    """One engine branch's final HP plus its per-side damage deltas from opening HP."""
+
+    percentage: float
+    final_hp: tuple[int, int]
+    deltas: tuple[int, int]
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "percentage": self.percentage,
+            "final_hp": list(self.final_hp),
+            "deltas": list(self.deltas),
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
+class DirectCalculateDamageDiagnostic:
+    """Direct ``calculate_damage`` output for both turn orders, or why it is unavailable.
+
+    ``supported=False`` is the expected, non-fatal outcome when the binding lacks
+    ``calculate_damage``, raises, or returns a shape we cannot serialize; ``reason``
+    then explains which. ``supported=True`` carries the coerced JSON-able output for
+    ``side_one_moves_first=True`` and ``=False``.
+    """
+
+    supported: bool
+    output_side_one_first: Any | None
+    output_side_two_first: Any | None
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "supported": self.supported,
+            "side_one_moves_first": self.output_side_one_first,
+            "side_two_moves_first": self.output_side_two_first,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class OneTurnDamageDiagnostic:
+    """Serializable evidence bundle for a compared one-turn damage fixture.
+
+    This intentionally records a mismatch as a mismatch (``matched=False``). The
+    ``likely_mismatch_surface`` is a *conservative* read of the gathered evidence,
+    not a proven root cause.
+    """
+
+    supported: bool
+    matched: bool
+    p1_move: str | None
+    p2_move: str | None
+    observed: ObservedDamage | None
+    side_one_state: ActiveStateSummary | None
+    side_two_state: ActiveStateSummary | None
+    engine_branches: tuple[EngineBranchDamageSummary, ...]
+    direct_calculate_damage: DirectCalculateDamageDiagnostic | None
+    likely_mismatch_surface: str
+    notes: tuple[str, ...] = field(default_factory=tuple)
+    reason: str | None = None
+
+    def engine_delta_tuples(self) -> tuple[tuple[int, int], ...]:
+        seen: list[tuple[int, int]] = []
+        for branch in self.engine_branches:
+            if branch.deltas not in seen:
+                seen.append(branch.deltas)
+        return tuple(seen)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "supported": self.supported,
+            "matched": self.matched,
+            "p1_move": self.p1_move,
+            "p2_move": self.p2_move,
+            "observed": self.observed.to_dict() if self.observed is not None else None,
+            "side_one_state": self.side_one_state.to_dict() if self.side_one_state is not None else None,
+            "side_two_state": self.side_two_state.to_dict() if self.side_two_state is not None else None,
+            "engine_branches": [branch.to_dict() for branch in self.engine_branches],
+            "engine_delta_tuples": [list(t) for t in self.engine_delta_tuples()],
+            "direct_calculate_damage": (
+                self.direct_calculate_damage.to_dict() if self.direct_calculate_damage is not None else None
+            ),
+            "likely_mismatch_surface": self.likely_mismatch_surface,
+            "notes": list(self.notes),
+            "reason": self.reason,
+        }
+
+    def summary(self) -> str:
+        if not self.supported:
+            return f"damage diagnostic UNSUPPORTED: {self.reason or 'unknown reason'}"
+        status = "MATCH" if self.matched else "MISMATCH"
+        observed = self.observed.deltas if self.observed is not None else None
+        return (
+            f"one-turn damage {status}: observed deltas {observed} vs. engine deltas "
+            f"{list(self.engine_delta_tuples())}; likely surface: {self.likely_mismatch_surface}"
+        )
+
+
+def active_state_summary_from_side(side: SideSpec) -> ActiveStateSummary:
+    """Summarize the active Pokemon of a request-derived :class:`SideSpec`."""
+
+    mon = side.pokemon[int(side.active_index)]
+    return ActiveStateSummary(
+        species=mon.id,
+        level=mon.level,
+        hp=mon.hp,
+        maxhp=mon.maxhp,
+        types=tuple(mon.types),
+        ability=mon.ability,
+        item=mon.item,
+        attack=mon.attack,
+        defense=mon.defense,
+        special_attack=mon.special_attack,
+        special_defense=mon.special_defense,
+        speed=mon.speed,
+        moves=tuple((move.id, int(move.pp)) for move in mon.moves),
+    )
+
+
+def _active_request_member(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    side = request.get("side") if isinstance(request, Mapping) else None
+    pokemon = side.get("pokemon") if isinstance(side, Mapping) else None
+    if not isinstance(pokemon, list) or not pokemon:
+        raise ValueError("request side has no pokemon list")
+    for member in pokemon:
+        if isinstance(member, Mapping) and member.get("active"):
+            return member
+    first = pokemon[0]
+    if not isinstance(first, Mapping):
+        raise ValueError("request side pokemon[0] is not a mapping")
+    return first
+
+
+def opening_active_hp(result: "OneTurnFixtureResult") -> tuple[int, int]:
+    """Opening active HP ``(p1, p2)`` parsed from each seat's request condition."""
+
+    if result.p1_request is None or result.p2_request is None:
+        raise ValueError("fixture result is missing an opening request for one or both seats")
+    p1_hp, _ = parse_condition(str(_active_request_member(result.p1_request).get("condition", "")))
+    p2_hp, _ = parse_condition(str(_active_request_member(result.p2_request).get("condition", "")))
+    return p1_hp, p2_hp
+
+
+def observed_damage_from_result(result: "OneTurnFixtureResult") -> ObservedDamage:
+    """Compute Showdown's observed per-side damage from opening request HP."""
+
+    opening = opening_active_hp(result)
+    final = observed_final_active_hp(result)
+    deltas = (opening[0] - final[0], opening[1] - final[1])
+    return ObservedDamage(opening_hp=opening, final_hp=final, deltas=deltas)
+
+
+def _coerce_jsonable(value: Any) -> tuple[bool, Any]:
+    """Coerce ``value`` to a JSON-serializable shape, reporting success.
+
+    Accepts ``None``, scalars, and (recursively) lists/tuples/mappings of them.
+    Anything else (an opaque binding object, say) is rejected so the caller can
+    record an explicit unsupported reason instead of emitting a non-serializable
+    blob.
+    """
+
+    if value is None or isinstance(value, (str, bool)):
+        return True, value
+    if isinstance(value, (int, float)):
+        # Reject non-finite floats (NaN/inf): they are not strict-JSON-safe and
+        # would only round-trip under json.dumps(..., allow_nan=True).
+        if isinstance(value, float) and not math.isfinite(value):
+            return False, None
+        return True, value
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            ok, coerced = _coerce_jsonable(item)
+            if not ok:
+                return False, None
+            out[str(key)] = coerced
+        return True, out
+    if isinstance(value, (list, tuple)):
+        items: list[Any] = []
+        for item in value:
+            ok, coerced = _coerce_jsonable(item)
+            if not ok:
+                return False, None
+            items.append(coerced)
+        return True, items
+    return False, None
+
+
+def direct_calculate_damage_diagnostic(
+    engine: Any,
+    state: Any,
+    move_one: str,
+    move_two: str,
+) -> DirectCalculateDamageDiagnostic:
+    """Probe ``engine.calculate_damage`` for both turn orders, never raising.
+
+    Signature probed: ``calculate_damage(state, side_one_move, side_two_move,
+    side_one_moves_first)``. Returns ``supported=False`` with a reason when the
+    function is absent, raises, or returns a shape we cannot serialize.
+    """
+
+    calc = getattr(engine, "calculate_damage", None)
+    if not callable(calc):
+        return DirectCalculateDamageDiagnostic(
+            supported=False,
+            output_side_one_first=None,
+            output_side_two_first=None,
+            reason="engine exposes no callable calculate_damage",
+        )
+
+    coerced: dict[bool, Any] = {}
+    for side_one_moves_first in (True, False):
+        try:
+            raw = calc(state, move_one, move_two, side_one_moves_first)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must survive engine quirks
+            return DirectCalculateDamageDiagnostic(
+                supported=False,
+                output_side_one_first=None,
+                output_side_two_first=None,
+                reason=(
+                    f"calculate_damage raised for side_one_moves_first="
+                    f"{side_one_moves_first}: {type(exc).__name__}: {exc}"
+                ),
+            )
+        ok, value = _coerce_jsonable(raw)
+        if not ok:
+            return DirectCalculateDamageDiagnostic(
+                supported=False,
+                output_side_one_first=None,
+                output_side_two_first=None,
+                reason=(
+                    f"calculate_damage returned an unrecognized/unserializable shape for "
+                    f"side_one_moves_first={side_one_moves_first}: {type(raw).__name__}"
+                ),
+            )
+        coerced[side_one_moves_first] = value
+
+    return DirectCalculateDamageDiagnostic(
+        supported=True,
+        output_side_one_first=coerced[True],
+        output_side_two_first=coerced[False],
+        reason=None,
+    )
+
+
+def _mismatch_surface_and_notes(
+    *,
+    matched: bool,
+    observed: ObservedDamage,
+    engine_branches: Sequence[EngineBranchDamageSummary],
+) -> tuple[str, tuple[str, ...]]:
+    """Conservatively describe where a damage mismatch appears to live.
+
+    The active-state summaries show only that the *Python* request-derived spec fed
+    into state construction matches the Showdown request; they do NOT prove the
+    engine's internal state is faithful (no engine-state inspection is done here). So
+    a surviving mismatch is left on the broad surface of the engine's damage/data or
+    the spec->engine state-translation path, and the *exact* cause (base power,
+    category, type chart, stat usage, rounding, or a translation defect) is left
+    explicitly unresolved.
+    """
+
+    if matched:
+        return "none", ("engine reproduces the observed one-turn damage outcome",)
+
+    engine_deltas = []
+    for branch in engine_branches:
+        if branch.deltas not in engine_deltas:
+            engine_deltas.append(branch.deltas)
+    notes = (
+        "active-state stats/hp/moves are request-derived and types are dex-derived (see "
+        "side_one_state/side_two_state); these match the Showdown request, but the engine's "
+        "internal state was not separately inspected, so engine-state fidelity is unproven",
+        f"observed per-side damage deltas {list(observed.deltas)} are not reproduced by any "
+        f"engine branch ({[list(d) for d in engine_deltas]})",
+        "exact root cause (move base power/category, type-effectiveness table, stat usage, "
+        "rounding, or a spec->engine state-translation defect) remains UNRESOLVED -- this "
+        "records the surface, not a proven cause",
+    )
+    return "engine damage/data or state-translation path", notes
+
+
+def build_one_turn_damage_diagnostic(
+    result: "OneTurnFixtureResult",
+    dex: "ShowdownDex",
+    *,
+    module: Any | None = None,
+    p1_choice: str | None = None,
+    p2_choice: str | None = None,
+) -> OneTurnDamageDiagnostic:
+    """Build a serializable damage diagnostic for a compared one-turn fixture.
+
+    Mirrors :func:`compare_one_turn_outcome` (same request->state path and move
+    resolution) and layers on observed/engine per-side damage deltas, request-derived
+    active-state summaries, and a (non-raising) direct ``calculate_damage`` probe.
+    Pass a fake ``module`` to keep tests off the native wheel; ``None`` loads it lazily.
+    """
+
+    p1_choice = p1_choice if p1_choice is not None else result.choices.get("p1")
+    p2_choice = p2_choice if p2_choice is not None else result.choices.get("p2")
+    if not p1_choice or not p2_choice:
+        raise ValueError("both p1 and p2 choices are required to build a damage diagnostic")
+
+    move_one = engine_move_for_choice(result.p1_request, p1_choice)
+    move_two = engine_move_for_choice(result.p2_request, p2_choice)
+
+    observed = observed_damage_from_result(result)
+    spec = build_battle_spec_from_result(result, dex)
+    side_one_state = active_state_summary_from_side(spec.side_one)
+    side_two_state = active_state_summary_from_side(spec.side_two)
+
+    engine = require_poke_engine() if module is None else module
+    state = build_poke_engine_state(spec, module=engine)
+    branch_outcomes = enumerate_engine_outcomes(engine, state, move_one, move_two)
+    engine_branches = tuple(
+        EngineBranchDamageSummary(
+            percentage=outcome.percentage,
+            final_hp=outcome.final_hp,
+            deltas=(observed.opening_hp[0] - outcome.final_hp[0], observed.opening_hp[1] - outcome.final_hp[1]),
+            description=outcome.description,
+        )
+        for outcome in branch_outcomes
+    )
+
+    direct = direct_calculate_damage_diagnostic(engine, state, move_one, move_two)
+
+    # Reuse the comparator's matching rule rather than recomputing it inline.
+    matched = compare_outcomes(
+        observed.final_hp, branch_outcomes, p1_move=move_one, p2_move=move_two
+    ).matched
+    surface, notes = _mismatch_surface_and_notes(
+        matched=matched, observed=observed, engine_branches=engine_branches
+    )
+
+    return OneTurnDamageDiagnostic(
+        supported=True,
+        matched=matched,
+        p1_move=move_one,
+        p2_move=move_two,
+        observed=observed,
+        side_one_state=side_one_state,
+        side_two_state=side_two_state,
+        engine_branches=engine_branches,
+        direct_calculate_damage=direct,
+        likely_mismatch_surface=surface,
+        notes=notes,
+    )
+
+
 def run_charmander_squirtle_outcome_comparison(
     *,
     config: "LocalShowdownConfig | None" = None,
@@ -546,3 +980,39 @@ def run_charmander_squirtle_outcome_comparison(
     if dex is None:
         dex = load_showdown_dex_cached(config.resolved_showdown_root())
     return compare_one_turn_outcome(result, dex, module=module)
+
+
+def run_charmander_squirtle_damage_diagnostic(
+    *,
+    config: "LocalShowdownConfig | None" = None,
+    module: Any | None = None,
+    dex: "ShowdownDex | None" = None,
+    seed: int = 7,
+) -> OneTurnDamageDiagnostic:
+    """Build the damage diagnostic for the curated Charmander/Squirtle fixture.
+
+    Runs the same deterministic Showdown turn as
+    :func:`run_charmander_squirtle_outcome_comparison`, then returns a
+    :class:`OneTurnDamageDiagnostic` instead of a bare match/mismatch. Requires a
+    built local Showdown checkout (node) and a poke-engine wheel; intended for the
+    optional real integration test and manual diagnostics only. Not wired into any
+    rollout/training/search path.
+    """
+
+    from .local_showdown import LocalShowdownConfig
+    from .dex import load_showdown_dex_cached
+    from .showdown_fixture import charmander_squirtle_fixture, run_one_turn_fixture
+
+    config = config or LocalShowdownConfig()
+    p1_team, p2_team = charmander_squirtle_fixture()
+    result = run_one_turn_fixture(
+        p1_team=p1_team,
+        p2_team=p2_team,
+        p1_choice="move 1",
+        p2_choice="move 1",
+        seed=seed,
+        config=config,
+    )
+    if dex is None:
+        dex = load_showdown_dex_cached(config.resolved_showdown_root())
+    return build_one_turn_damage_diagnostic(result, dex, module=module)

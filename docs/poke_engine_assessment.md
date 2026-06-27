@@ -143,10 +143,40 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
    integration test runs only with a built Showdown checkout + node + poke-engine and asserts the
    comparator executes and reports the known mismatch (it does not fake a pass).
 
+   **Mismatch diagnostic exists (diagnosis, not adoption).** `poke_engine_outcomes` now also builds a
+   serializable `OneTurnDamageDiagnostic` (`build_one_turn_damage_diagnostic(...)`, with
+   `run_charmander_squirtle_damage_diagnostic(...)` for the curated fixture). It records, for the
+   compared turn: Showdown's observed final HP and per-side damage **deltas** from the opening request
+   HP; an active-state summary for each seat (species, level, hp/maxhp, ability, item, atk/def/spa/spd/
+   spe, and move ids/pp from the Showdown request, plus dex-derived types); each engine branch's
+   percentage, final HP, per-side deltas, and description; and the engine's direct
+   `calculate_damage(state, m1, m2, side_one_moves_first)` output for both turn orders when the binding
+   exposes it (reported as an explicit unsupported reason, not an exception, when the function is
+   missing, raises, or returns an unrecognized/non-finite shape).
+
+   The diagnostic's `likely_mismatch_surface` is deliberately conservative. The active-state summaries
+   are the *Python* request-derived spec fed into `build_poke_engine_state` (stats/hp/moves from the
+   request, types from the dex); confirming they match the Showdown request shows the request-derived
+   spec is faithful, but it does **not** prove the engine's internal state matches — no engine-state
+   inspection is done. So the surviving mismatch is left on the broad surface of the engine's
+   damage/data or the spec→engine state-translation path
+   (`likely_mismatch_surface = "engine damage/data or state-translation path"`). The **exact** root
+   cause — move base power/category, type-effectiveness table, stat usage, rounding, or a translation
+   defect — remains **UNRESOLVED**; the diagnostic records the surface, not a proven cause, and still
+   reports `matched=False`. Unit tests cover the assembler end-to-end against a fake engine (both
+   matched and mismatched branches, engine-branch deltas, surface/notes, and direct-`calculate_damage`
+   payload propagation with no native wheel or built Showdown), observed-delta computation, the
+   request-derived active-state summary (no wheel), the strict-JSON `_coerce_jsonable` guard (non-finite
+   floats rejected), and the direct-`calculate_damage` probe (simple shape plus graceful unsupported on
+   missing/raising/unknown shape); an optional real integration test (built Showdown + node +
+   poke-engine 0.0.47) asserts the diagnostic runs, records the known mismatch, and exposes a
+   serializable, non-empty direct `calculate_damage` output (the local 0.0.47 binding supports it). It
+   is fixture-only and is not wired into rollout/training/search/benchmarks/self-play.
+
    **Remaining:** extend the comparator across the full matrix above (status, switch, forced switch,
    faint, Spikes, Toxic, Substitute, Hidden Power, Intimidate, Flash Fire), and reconcile the Gen 3
-   damage/data/mechanics difference (or pin an engine build/config that matches) before engine outcome
-   equivalence can be considered proven; today it is unproven.
+   damage/data/mechanics difference the diagnostic now surfaces (or pin an engine build/config that
+   matches) before engine outcome equivalence can be considered proven; today it is unproven.
 5. Benchmark apply/reverse branch throughput against the current replay-from-root branch harness.
 6. If equivalence and speed are good, add an optional search backend that keeps Showdown as final
    benchmark/evaluation truth.
