@@ -787,6 +787,8 @@ def _training_input_paths_for_objective(
     iteration_training_rollout_path: Path,
     training_rollout_history: tuple[Path, ...],
 ) -> tuple[Path, ...]:
+    # PPO is on-policy enough that replaying older iteration shards as policy-gradient data makes
+    # the behavior-policy ratio stale. If future on-policy objectives are added, route them here too.
     if objective == "ppo":
         return (iteration_training_rollout_path,)
     return training_rollout_history

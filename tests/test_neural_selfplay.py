@@ -405,6 +405,47 @@ class NeuralSelfPlayTest(unittest.TestCase):
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
         ])
 
+    def test_run_neural_selfplay_iterations_keeps_ppo_training_iteration_only_with_value_selection(self) -> None:
+        trained_paths = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(trained_paths=trained_paths):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="ppo",
+                    ),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=3,
+                    evaluation_games=1,
+                    value_selection_config=NeuralValueSelectionConfig(scope="history"),
+                )
+
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            [[path.parent.name for path in paths] for paths in trained_paths],
+            [["iteration-0001"], ["iteration-0002"]],
+        )
+        self.assertEqual(second_manifest["training_input_paths"], [
+            str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
+        ])
+        self.assertEqual(result.iterations[1].value_selection["paths"], [
+            str(run_dir / "iteration-0001" / "training-rollouts.jsonl"),
+            str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
+        ])
+
     def test_run_neural_selfplay_iterations_records_value_calibration(self) -> None:
         captured_calibrations = []
 
@@ -2198,14 +2239,20 @@ def patched_neural_selfplay_dependencies(
         )
 
     class FakeValueCalibrationReport:
+        mse = 0.25
+        mae = 0.5
+        bias = -0.1
+        sign_accuracy = 0.75
+        expected_calibration_error = 0.2
+
         def to_dict(self) -> dict:
             return {
                 "examples": 4,
-                "mse": 0.25,
-                "mae": 0.5,
-                "bias": -0.1,
-                "sign_accuracy": 0.75,
-                "expected_calibration_error": 0.2,
+                "mse": self.mse,
+                "mae": self.mae,
+                "bias": self.bias,
+                "sign_accuracy": self.sign_accuracy,
+                "expected_calibration_error": self.expected_calibration_error,
                 "bins": [],
                 "slices": [],
             }
