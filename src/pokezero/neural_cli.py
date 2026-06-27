@@ -103,9 +103,8 @@ NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v
 NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_plan.v1"
 NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_summary.v1"
 FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
-FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES = frozenset(
-    {"scripted-teacher", "aggressive-damage", "max-damage"}
-)
+FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES = frozenset({"random-legal"})
+FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES = ("linear:", "neural:")
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
         "iterations": 2,
@@ -3615,6 +3614,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
     for opponent_policy in _sequence_or_empty(resolved["opponent_policies"]):
         argv.extend(["--opponent-policy", str(opponent_policy)])
     if resolved["no_fixed_opponents"]:
+        argv.append("--mirror-match")
         argv.append("--no-fixed-opponents")
     if resolved["temporal_aggregator"] is not None:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
@@ -3714,11 +3714,36 @@ def _validate_teacher_cut_foundation_args(args: argparse.Namespace) -> None:
     if args.opponent_policy is not None:
         raise ValueError("--variant teacher-cut does not allow fixed --opponent-policy training opponents.")
     initial_body = _policy_spec_name(args.initial_policy)
-    if initial_body in FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES:
-        raise ValueError(
-            f"--variant teacher-cut cannot use {initial_body!r} as the live initial policy; "
-            "use a checkpoint spec such as neural:/path/to/bootstrap.pt for one-shot initialization."
-        )
+    if (
+        initial_body in FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES
+        or initial_body.startswith(FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES)
+    ):
+        return
+    allowed = ", ".join(
+        sorted(FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES)
+        + [f"{prefix}/path/to/checkpoint" for prefix in FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES]
+    )
+    raise ValueError(
+        f"--variant teacher-cut initial policy must be random-legal or a learned checkpoint spec; "
+        f"got {initial_body!r}. Allowed forms: {allowed}."
+    )
+
+
+def _foundation_reward_signal_contract(args: argparse.Namespace, resolved: Mapping[str, Any]) -> str:
+    # Foundation-plan does not expose reward-shaping flags. If that changes, keep this contract
+    # derived from resolved options rather than letting the recipe overstate the experiment.
+    return "game_outcome_only"
+
+
+def _foundation_eval_yardstick_contract(args: argparse.Namespace, resolved: Mapping[str, Any]) -> str:
+    return "max-damage"
+
+
+def _foundation_teacher_cut_allowed_initial_policy_forms() -> list[str]:
+    return (
+        sorted(FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES)
+        + [f"{prefix}/path/to/checkpoint" for prefix in FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES]
+    )
 
 
 def _foundation_experiment_contract(args: argparse.Namespace, resolved: Mapping[str, Any]) -> dict[str, Any]:
@@ -3734,13 +3759,13 @@ def _foundation_experiment_contract(args: argparse.Namespace, resolved: Mapping[
         "goal": "test whether PPO self-play can exceed the scripted-teacher ceiling after one-shot initialization",
         "teacher_allowed_as_initial_checkpoint_only": True,
         "live_initial_policy": str(args.initial_policy),
-        "forbidden_live_training_policy_names": sorted(FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES),
+        "allowed_live_initial_policy_forms": _foundation_teacher_cut_allowed_initial_policy_forms(),
         "fixed_training_opponents": [],
         "uses_mirror_self_play": True,
         "collector_advancement_mode": resolved.get("collector_advancement_mode")
         or FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collector_advancement_mode"],
-        "reward_signal": "game_outcome_only",
-        "eval_yardstick": "max-damage",
+        "reward_signal": _foundation_reward_signal_contract(args, resolved),
+        "eval_yardstick": _foundation_eval_yardstick_contract(args, resolved),
         "strength_claim_min_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
     }
 

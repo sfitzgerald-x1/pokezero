@@ -440,6 +440,31 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("--no-fixed-opponents requires --mirror-match", stderr.getvalue())
 
+    def test_neural_cli_iterate_no_fixed_opponents_rejects_fixed_opponent_policy(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "8",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--initial-policy",
+                    "neural:/tmp/bootstrap.pt",
+                    "--mirror-match",
+                    "--no-fixed-opponents",
+                    "--opponent-policy",
+                    "random-legal",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--no-fixed-opponents cannot be combined with --opponent-policy", stderr.getvalue())
+
     def test_neural_cli_iterate_wires_value_ranking_loss_config(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
@@ -2524,10 +2549,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertTrue(recipe["resolved_options"]["no_fixed_opponents"])
         self.assertEqual(recipe["resolved_options"]["opponent_policies"], [])
         self.assertIn("--no-fixed-opponents", argv)
+        self.assertIn("--mirror-match", argv)
         self.assertNotIn("--opponent-policy", argv)
         self.assertIn("--experiment-preset", argv)
         contract = recipe["experiment_contract"]
         self.assertTrue(contract["teacher_cut"])
+        self.assertIn("neural:/path/to/checkpoint", contract["allowed_live_initial_policy_forms"])
         self.assertEqual(contract["fixed_training_opponents"], [])
         self.assertEqual(contract["reward_signal"], "game_outcome_only")
         self.assertEqual(contract["eval_yardstick"], "max-damage")
@@ -2553,7 +2580,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("does not allow fixed --opponent-policy", stderr.getvalue())
 
     def test_neural_cli_foundation_teacher_cut_rejects_live_heuristic_initial_policy(self) -> None:
-        for policy_spec in ("scripted-teacher", "aggressive-damage", "max-damage"):
+        for policy_spec in ("scripted-teacher?foo=bar", "aggressive-damage", "max-damage", "Simple-Legal"):
             with self.subTest(policy_spec=policy_spec):
                 with patch("sys.stderr", new_callable=io.StringIO) as stderr:
                     exit_code = neural_cli_main(
@@ -2572,7 +2599,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     )
 
                 self.assertEqual(exit_code, 1)
-                self.assertIn(f"cannot use {policy_spec!r} as the live initial policy", stderr.getvalue())
+                self.assertIn("initial policy must be random-legal or a learned checkpoint spec", stderr.getvalue())
 
     def test_neural_cli_foundation_opponent_signal_variant_sets_auxiliary_loss(self) -> None:
         with (
