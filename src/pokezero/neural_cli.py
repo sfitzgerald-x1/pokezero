@@ -51,6 +51,7 @@ from .value_calibration import (
     VALUE_SELECTION_METRICS,
     ValueCalibrationReport,
     evaluate_value_calibration,
+    fit_value_calibration_transform,
     value_selection_metric_direction,
     value_selection_metric_value,
     value_selection_score,
@@ -377,6 +378,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     value_calibration.add_argument("--batch-size", type=int, default=128, help="Evaluation batch size.")
     value_calibration.add_argument("--bins", type=int, default=10, help="Number of prediction bins across [-1, 1].")
     value_calibration.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    value_calibration.add_argument(
+        "--fit-out",
+        type=Path,
+        default=None,
+        help="Optional output checkpoint path. Fits an affine value calibration transform on --data and saves a calibrated checkpoint copy.",
+    )
     value_calibration.add_argument("--json", action="store_true", help="Print calibration results as JSON.")
     value_calibration.set_defaults(func=_value_calibration)
 
@@ -1253,6 +1260,17 @@ def _value_calibration(args: argparse.Namespace) -> int:
     require_torch()
     device = resolve_torch_device(args.device)
     model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
+    transform = None
+    if args.fit_out is not None:
+        transform = fit_value_calibration_transform(
+            model=model,
+            training_result=training_result,
+            paths=args.data,
+            batch_size=args.batch_size,
+            device=device,
+        )
+        training_result = replace(training_result, value_calibration_transform=transform)
+        save_transformer_checkpoint(args.fit_out, model, result=training_result)
     report = evaluate_value_calibration(
         model=model,
         training_result=training_result,
@@ -1262,8 +1280,23 @@ def _value_calibration(args: argparse.Namespace) -> int:
         device=device,
     )
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        payload = report.to_dict()
+        if args.fit_out is not None:
+            payload = {
+                "checkpoint": str(args.fit_out),
+                "value_calibration_transform": transform.to_dict() if transform is not None else None,
+                "report": payload,
+            }
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        if args.fit_out is not None and transform is not None:
+            print(
+                "value_calibration_transform: "
+                f"scale={transform.scale:.6f} bias={transform.bias:.6f} "
+                f"clip=[{transform.clip_min:.1f},{transform.clip_max:.1f}]"
+            )
+            print(f"calibrated_checkpoint: {args.fit_out}")
+            print("")
         print_value_calibration_report(report)
     return 0
 

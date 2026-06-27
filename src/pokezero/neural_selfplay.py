@@ -1376,11 +1376,14 @@ def _next_value_selection_seed_start(iteration: Mapping[str, Any], *, default_se
 
 
 def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any]:
-    return {
+    payload = {
         "model_config": result.model_config.to_dict(),
         "config": result.training_config.to_dict(),
         "epochs": [metrics.to_dict() for metrics in result.epochs],
     }
+    if result.value_calibration_transform is not None:
+        payload["value_calibration_transform"] = result.value_calibration_transform.to_dict()
+    return payload
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
