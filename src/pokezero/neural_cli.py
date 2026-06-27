@@ -3271,7 +3271,8 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         selection_paths = train_paths
     calibration_paths = list(args.calibration_data or selection_paths)
     selection_paths_fallback_to_train = selection_paths == train_paths
-    calibration_reuses_selection_paths = calibration_paths == selection_paths
+    calibration_reuses_selection_paths = _foundation_paths_overlap(calibration_paths, selection_paths)
+    calibration_overlaps_train_paths = _foundation_paths_overlap(calibration_paths, train_paths)
     warnings = []
     if selection_paths_fallback_to_train:
         warnings.append(
@@ -3285,6 +3286,13 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "code": "calibration_reuses_value_selection_data",
                 "message": "Value calibration is reported on the same paths used for epoch selection; treat it as selection-set calibration, not a final unbiased read.",
+            }
+        )
+    if calibration_overlaps_train_paths and not selection_paths_fallback_to_train:
+        warnings.append(
+            {
+                "code": "calibration_overlaps_training_data",
+                "message": "Value calibration overlaps training rollout paths; treat calibration metrics as in-sample and provide independent calibration data for a final read.",
             }
         )
     recipe = _optional_mapping(summary.get("recipe"))
@@ -3352,6 +3360,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "calibration_paths": [str(path) for path in calibration_paths],
         "selection_paths_fallback_to_train": selection_paths_fallback_to_train,
         "calibration_reuses_selection_paths": calibration_reuses_selection_paths,
+        "calibration_overlaps_train_paths": calibration_overlaps_train_paths,
         "warnings": warnings,
         "config": {
             "epochs": args.epochs,
@@ -3388,6 +3397,18 @@ def _foundation_iteration_paths(
         return paths
     singular = _string_or_none(iteration.get(singular_key))
     return [Path(singular)] if singular is not None else []
+
+
+def _foundation_paths_overlap(left: Sequence[Path], right: Sequence[Path]) -> bool:
+    return bool(_foundation_path_identities(left) & _foundation_path_identities(right))
+
+
+def _foundation_path_identities(paths: Sequence[Path]) -> set[str]:
+    identities: set[str] = set()
+    for path in paths:
+        identities.add(str(path))
+        identities.add(str(path.expanduser().resolve(strict=False)))
+    return identities
 
 
 def _print_foundation_value_tune_warnings(recipe: Mapping[str, Any]) -> None:
