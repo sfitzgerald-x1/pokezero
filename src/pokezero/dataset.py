@@ -24,7 +24,8 @@ class TrajectoryDatasetConfig:
     returns are derived from the battle result rather than sparse per-step
     rewards, so asymmetric final rounds still label both players' histories.
     Optional shaping terms are player-relative and use only metadata already
-    present in that player's observation.
+    present in that player's observation. Final return targets are clipped to
+    [-1, 1] to stay compatible with bounded value heads.
     """
 
     window_size: int = 1
@@ -299,10 +300,14 @@ def _discounted_returns_by_step_index(
             capped_terminal_value=config.capped_terminal_value,
         )
         for step_index in reversed(step_indices):
-            shaped_return = running_return + shaping_rewards.get(step_index, 0.0)
+            shaped_return = _clip_return_value(running_return + shaping_rewards.get(step_index, 0.0))
             returns_by_step_index[step_index] = shaped_return
             running_return = shaped_return * config.discount
     return returns_by_step_index
+
+
+def _clip_return_value(value: float) -> float:
+    return min(1.0, max(-1.0, value))
 
 
 def _shaping_rewards_by_step_index(
