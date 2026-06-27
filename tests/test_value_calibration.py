@@ -97,17 +97,53 @@ class ValueCalibrationTest(unittest.TestCase):
             bias=-0.25,
             sign_accuracy=0.75,
             expected_calibration_error=0.12,
+            pearson_correlation=0.62,
             bins=(),
             slices=(),
         )
 
         self.assertEqual(value_selection_metric_direction("mae"), "min")
         self.assertEqual(value_selection_metric_direction("sign_accuracy"), "max")
+        self.assertEqual(value_selection_metric_direction("pearson_correlation"), "max")
         self.assertEqual(value_selection_metric_value(report, "abs_bias"), 0.25)
+        self.assertEqual(value_selection_metric_value(report, "pearson_correlation"), 0.62)
         self.assertEqual(value_selection_score(0.4, "mae"), -0.4)
         self.assertEqual(value_selection_score(0.75, "sign_accuracy"), 0.75)
+        self.assertEqual(value_selection_score(0.62, "pearson_correlation"), 0.62)
         with self.assertRaisesRegex(ValueError, "unsupported value selection metric"):
             value_selection_metric_direction("not-a-metric")
+
+    def test_value_selection_metric_rejects_unavailable_correlation(self) -> None:
+        report = ValueCalibrationReport(
+            examples=4,
+            mse=0.36,
+            mae=0.4,
+            bias=-0.25,
+            sign_accuracy=0.75,
+            expected_calibration_error=0.12,
+            pearson_correlation=None,
+            bins=(),
+            slices=(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "pearson_correlation"):
+            value_selection_metric_value(report, "pearson_correlation")
+
+    def test_value_selection_metric_rejects_non_finite_correlation(self) -> None:
+        report = ValueCalibrationReport(
+            examples=4,
+            mse=0.36,
+            mae=0.4,
+            bias=-0.25,
+            sign_accuracy=0.75,
+            expected_calibration_error=0.12,
+            pearson_correlation=float("nan"),
+            bins=(),
+            slices=(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            value_selection_metric_value(report, "pearson_correlation")
 
     def test_fit_affine_value_calibration_transform_maps_predictions_to_returns(self) -> None:
         transform = fit_affine_value_calibration_transform(

@@ -232,7 +232,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-selection-metric",
         choices=VALUE_SELECTION_METRICS,
         default="mae",
-        help="Held-out value metric used by --value-selection-data; sign_accuracy is maximized, others are minimized.",
+        help=(
+            "Held-out value metric used by --value-selection-data; sign_accuracy and pearson_correlation "
+            "are maximized, others are minimized. pearson_correlation measures affine-invariant "
+            "linear association, not calibration by itself."
+        ),
     )
     train.add_argument(
         "--value-selection-out",
@@ -662,7 +666,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-selection-metric",
         choices=VALUE_SELECTION_METRICS,
         default="mae",
-        help="Value metric used by --value-selection; sign_accuracy is maximized, others are minimized.",
+        help=(
+            "Value metric used by --value-selection; sign_accuracy and pearson_correlation are maximized, "
+            "others are minimized. pearson_correlation measures affine-invariant linear association, "
+            "not calibration by itself."
+        ),
     )
     iterate.add_argument("--value-selection-batch-size", type=int, default=128, help="Per-epoch value-selection batch size.")
     iterate.add_argument("--value-selection-bins", type=int, default=10, help="Per-epoch value-selection bin count.")
@@ -945,17 +953,28 @@ def _train_with_value_selection(
             bins=bins,
             device=device,
         )
-        metric_value = value_selection_metric_value(report, selection_metric)
-        score = value_selection_score(metric_value, selection_metric)
+        try:
+            metric_value = value_selection_metric_value(report, selection_metric)
+            score = value_selection_score(metric_value, selection_metric)
+            metric_unavailable_reason = None
+        except ValueError as exc:
+            if selection_metric != "pearson_correlation":
+                raise
+            metric_value = None
+            score = None
+            metric_unavailable_reason = str(exc)
         epoch = epoch_metric.epoch
-        selection_reports.append(
-            {
-                "epoch": epoch,
-                "metric_value": metric_value,
-                "training_metrics": epoch_metric.to_dict(),
-                "report": report.to_dict(),
-            }
-        )
+        selection_entry: dict[str, object] = {
+            "epoch": epoch,
+            "metric_value": metric_value,
+            "training_metrics": epoch_metric.to_dict(),
+            "report": report.to_dict(),
+        }
+        if metric_unavailable_reason is not None:
+            selection_entry["metric_unavailable_reason"] = metric_unavailable_reason
+        selection_reports.append(selection_entry)
+        if score is None:
+            return
         if best_score is None or score > best_score:
             best_score = score
             best_metric_value = metric_value
@@ -970,7 +989,7 @@ def _train_with_value_selection(
         epoch_callback=evaluate_epoch,
     )
     if best_state is None or best_epoch is None or best_metric_value is None:
-        raise ValueError("value selection produced no epoch reports.")
+        raise ValueError("value selection produced no selectable epoch reports.")
     model.load_state_dict(best_state)
     selected_result = TransformerTrainingResult(
         model_config=model_config,

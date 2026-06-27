@@ -17,7 +17,14 @@ from .neural_policy import (
 )
 
 PathInput = str | PathLike[str] | Path
-VALUE_SELECTION_METRICS = ("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias")
+VALUE_SELECTION_METRICS = (
+    "mae",
+    "mse",
+    "expected_calibration_error",
+    "sign_accuracy",
+    "pearson_correlation",
+    "abs_bias",
+)
 
 
 @dataclass(frozen=True)
@@ -220,22 +227,32 @@ def fit_affine_value_calibration_transform(
 
 def value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
     if metric == "mae":
-        return float(report.mae)
+        return _finite_value_selection_metric(float(report.mae), metric)
     if metric == "mse":
-        return float(report.mse)
+        return _finite_value_selection_metric(float(report.mse), metric)
     if metric == "expected_calibration_error":
-        return float(report.expected_calibration_error)
+        return _finite_value_selection_metric(float(report.expected_calibration_error), metric)
     if metric == "sign_accuracy":
-        return float(report.sign_accuracy)
+        return _finite_value_selection_metric(float(report.sign_accuracy), metric)
+    if metric == "pearson_correlation":
+        if report.pearson_correlation is None:
+            raise ValueError("pearson_correlation value selection requires non-constant predictions and returns.")
+        return _finite_value_selection_metric(float(report.pearson_correlation), metric)
     if metric == "abs_bias":
-        return abs(float(report.bias))
+        return _finite_value_selection_metric(abs(float(report.bias)), metric)
     raise ValueError(f"unsupported value selection metric: {metric!r}.")
+
+
+def _finite_value_selection_metric(value: float, metric: str) -> float:
+    if not math.isfinite(value):
+        raise ValueError(f"{metric} value selection requires a finite metric value.")
+    return value
 
 
 def value_selection_metric_direction(metric: str) -> str:
     if metric not in VALUE_SELECTION_METRICS:
         raise ValueError(f"unsupported value selection metric: {metric!r}.")
-    return "max" if metric == "sign_accuracy" else "min"
+    return "max" if metric in {"sign_accuracy", "pearson_correlation"} else "min"
 
 
 def value_selection_score(metric_value: float, metric: str) -> float:

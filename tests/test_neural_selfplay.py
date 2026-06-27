@@ -746,13 +746,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
     def test_run_neural_selfplay_iterations_value_selection_history_scope_uses_accumulated_paths(self) -> None:
         class FakeReport:
-            def __init__(self, *, sign_accuracy: float) -> None:
+            def __init__(self, *, pearson_correlation: float | None) -> None:
                 self.examples = 4
                 self.mse = 0.25
                 self.mae = 0.5
                 self.bias = 0.0
-                self.sign_accuracy = sign_accuracy
+                self.sign_accuracy = 0.5
                 self.expected_calibration_error = 0.2
+                self.pearson_correlation = pearson_correlation
 
             def to_dict(self) -> dict:
                 return {
@@ -762,6 +763,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "bias": self.bias,
                     "sign_accuracy": self.sign_accuracy,
                     "expected_calibration_error": self.expected_calibration_error,
+                    "pearson_correlation": self.pearson_correlation,
                     "bins": [],
                     "slices": [],
                 }
@@ -773,7 +775,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 patched_neural_selfplay_dependencies(),
                 patch(
                     "pokezero.neural_selfplay.evaluate_value_calibration",
-                    side_effect=[FakeReport(sign_accuracy=0.4), FakeReport(sign_accuracy=0.8)],
+                    side_effect=[
+                        FakeReport(pearson_correlation=None),
+                        FakeReport(pearson_correlation=0.4),
+                        FakeReport(pearson_correlation=None),
+                        FakeReport(pearson_correlation=0.8),
+                    ],
                 ) as evaluate,
             ):
                 result = run_neural_selfplay_iterations(
@@ -783,12 +790,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     env_factory=lambda: None,  # type: ignore[return-value]
                     rollout_config=RolloutConfig(max_decision_rounds=5),
                     model_config=_entity_test_model_config(),
-                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=2, batch_size=2, device="cpu"),
                     fixed_opponent_policy_specs=("random-legal",),
                     evaluation_games=1,
                     value_selection_config=NeuralValueSelectionConfig(
                         scope="history",
-                        metric="sign_accuracy",
+                        metric="pearson_correlation",
                         batch_size=3,
                         bins=4,
                     ),
@@ -797,16 +804,24 @@ class NeuralSelfPlayTest(unittest.TestCase):
             second_sidecar = json.loads((run_dir / "iteration-0002" / "value-selection.json").read_text(encoding="utf-8"))
 
         self.assertEqual(evaluate.call_args_list[0].kwargs["paths"], (run_dir / "iteration-0001" / "training-rollouts.jsonl",))
-        self.assertEqual(evaluate.call_args_list[1].kwargs["paths"], (
+        self.assertEqual(evaluate.call_args_list[1].kwargs["paths"], (run_dir / "iteration-0001" / "training-rollouts.jsonl",))
+        self.assertEqual(evaluate.call_args_list[2].kwargs["paths"], (
+            run_dir / "iteration-0001" / "training-rollouts.jsonl",
+            run_dir / "iteration-0002" / "training-rollouts.jsonl",
+        ))
+        self.assertEqual(evaluate.call_args_list[3].kwargs["paths"], (
             run_dir / "iteration-0001" / "training-rollouts.jsonl",
             run_dir / "iteration-0002" / "training-rollouts.jsonl",
         ))
         second_selection = result.iterations[1].value_selection
         self.assertIsNotNone(second_selection)
         self.assertEqual(second_selection["scope"], "history")
-        self.assertEqual(second_selection["metric"], "sign_accuracy")
+        self.assertEqual(second_selection["metric"], "pearson_correlation")
         self.assertEqual(second_selection["metric_direction"], "max")
         self.assertEqual(second_selection["selected_metric_value"], 0.8)
+        self.assertIsNone(second_sidecar["epochs"][0]["metric_value"])
+        self.assertIn("metric_unavailable_reason", second_sidecar["epochs"][0])
+        self.assertEqual(second_sidecar["epochs"][1]["metric_value"], 0.8)
         self.assertEqual(second_sidecar["paths"], [
             str(run_dir / "iteration-0001" / "training-rollouts.jsonl"),
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
