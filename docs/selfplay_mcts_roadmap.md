@@ -200,7 +200,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `neural_cli foundation-value-tune-plan/run/report` now wraps the standalone value-only path for a
   selected foundation candidate (`latest-accepted` by default, or `best-max-damage`) so WS-E
   experiments can fine-tune the value head of the retained base-policy checkpoint without manually
-  reconstructing rollout/checkpoint paths.
+  reconstructing rollout/checkpoint paths. The wrapper can also take explicit `--calibration-data`
+  paths so final calibration reporting can use a third split instead of the epoch-selection set.
   A first local value-only fine-tune on the anti-aggression foundation candidate then ran at
   `runs/foundation-anti-aggression-local-20260627/value-tune-pearson-001`: selected candidate
   iteration 3, `--epochs 3`, `--require-heldout-selection`, Pearson epoch selection, and the

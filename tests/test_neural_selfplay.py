@@ -2884,7 +2884,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["candidate_iteration"], 1)
         self.assertEqual(recipe["out_dir"], str(out_dir))
         self.assertTrue(recipe["selection_paths_fallback_to_train"])
+        self.assertTrue(recipe["calibration_reuses_selection_paths"])
         self.assertIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
+        self.assertIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
         self.assertIn("--objective", argv)
         self.assertIn("value-only", argv)
         self.assertIn("--freeze-non-value-parameters", argv)
@@ -2903,6 +2905,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 str(run_dir / "iteration-0001" / "heldout-a.jsonl"),
                 str(run_dir / "iteration-0001" / "heldout-b.jsonl"),
             ]
+            expected_calibration_paths = [str(run_dir / "iteration-0001" / "fresh-calibration.jsonl")]
             manifest["iterations"][0]["value_selection_training_rollout_paths"] = heldout_paths
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             summary_path = _write_foundation_summary(
@@ -2923,6 +2926,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "--out-dir",
                         str(out_dir),
                         "--require-heldout-selection",
+                        "--calibration-data",
+                        *expected_calibration_paths,
                         "--json",
                     ]
                 )
@@ -2931,15 +2936,65 @@ class NeuralSelfPlayTest(unittest.TestCase):
         argv = recipe["command"]["argv"]
         train_paths = argv[argv.index("--data") + 1 : argv.index("--out")]
         selection_paths = argv[argv.index("--value-selection-data") + 1 : argv.index("--value-selection-metric")]
-        calibration_paths = argv[argv.index("--value-calibration-data") + 1 : argv.index("--value-calibration-out")]
+        actual_calibration_paths = argv[argv.index("--value-calibration-data") + 1 : argv.index("--value-calibration-out")]
         self.assertEqual(exit_code, 0)
         self.assertFalse(recipe["selection_paths_fallback_to_train"])
+        self.assertFalse(recipe["calibration_reuses_selection_paths"])
         self.assertEqual(recipe["selection_paths"], heldout_paths)
+        self.assertEqual(recipe["calibration_paths"], expected_calibration_paths)
         self.assertEqual(train_paths, manifest["iterations"][0]["training_rollout_paths"])
         self.assertEqual(selection_paths, heldout_paths)
-        self.assertEqual(calibration_paths, heldout_paths)
+        self.assertEqual(actual_calibration_paths, expected_calibration_paths)
         self.assertNotIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
-        self.assertIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
+        self.assertNotIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
+        self.assertNotIn("calibration_overlaps_training_data", {warning["code"] for warning in recipe["warnings"]})
+
+    def test_neural_cli_foundation_value_tune_plan_warns_when_calibration_overlaps_training_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "anti-aggression" / "pilot-001"
+            out_dir = Path(temp_dir) / "value-tune"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            heldout_paths = [
+                str(run_dir / "iteration-0001" / "heldout-a.jsonl"),
+                str(run_dir / "iteration-0001" / "heldout-b.jsonl"),
+            ]
+            manifest["iterations"][0]["value_selection_training_rollout_paths"] = heldout_paths
+            training_path = manifest["iterations"][0]["training_rollout_paths"][0]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-value-tune-plan",
+                        str(summary_path),
+                        "--out-dir",
+                        str(out_dir),
+                        "--require-heldout-selection",
+                        "--calibration-data",
+                        training_path,
+                        "--json",
+                    ]
+                )
+
+        recipe = json.loads(stdout.getvalue())
+        warning_codes = {warning["code"] for warning in recipe["warnings"]}
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(recipe["selection_paths_fallback_to_train"])
+        self.assertFalse(recipe["calibration_reuses_selection_paths"])
+        self.assertTrue(recipe["calibration_overlaps_train_paths"])
+        self.assertIn("calibration_overlaps_training_data", warning_codes)
+        self.assertNotIn("calibration_reuses_value_selection_data", warning_codes)
 
     def test_neural_cli_foundation_value_tune_run_writes_summary_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
