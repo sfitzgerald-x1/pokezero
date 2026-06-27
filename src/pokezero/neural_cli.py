@@ -523,6 +523,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
     value_calibration.add_argument("--json", action="store_true", help="Print calibration results as JSON.")
     value_calibration.set_defaults(func=_value_calibration)
 
+    value_calibration_compare = subparsers.add_parser(
+        "value-calibration-compare",
+        help="Fit and compare raw, affine, and isotonic value calibration on held-out rollout data.",
+    )
+    value_calibration_compare.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
+    value_calibration_compare.add_argument(
+        "--data",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="One or more rollout JSONL files used to fit calibration transforms.",
+    )
+    value_calibration_compare.add_argument(
+        "--eval-data",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Held-out rollout JSONL files used to compare raw and calibrated metrics.",
+    )
+    value_calibration_compare.add_argument("--batch-size", type=int, default=128, help="Evaluation batch size.")
+    value_calibration_compare.add_argument("--bins", type=int, default=10, help="Number of prediction bins across [-1, 1].")
+    value_calibration_compare.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    value_calibration_compare.add_argument(
+        "--selection-metric",
+        choices=VALUE_SELECTION_METRICS,
+        default="expected_calibration_error",
+        help="Metric used to select the best reported transform.",
+    )
+    value_calibration_compare.add_argument("--out", type=Path, default=None, help="Optional JSON output path.")
+    value_calibration_compare.add_argument("--json", action="store_true", help="Print comparison results as JSON.")
+    value_calibration_compare.set_defaults(func=_value_calibration_compare)
+
     iterate = subparsers.add_parser("iterate", help="Run neural-policy self-play training iterations.")
     iterate.add_argument("--run-dir", type=Path, required=True, help="Directory for rollouts, checkpoints, and manifests.")
     iterate.add_argument("--iterations", type=int, required=True, help="Number of collect/train/evaluate iterations.")
@@ -1638,6 +1670,115 @@ def _value_calibration(args: argparse.Namespace) -> int:
         print(f"value_calibration_quality_gates_failed: {failed}", file=sys.stderr)
         return 4
     return 0
+
+
+def _value_calibration_compare(args: argparse.Namespace) -> int:
+    require_torch()
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive.")
+    if args.bins <= 0:
+        raise ValueError("--bins must be positive.")
+    device = resolve_torch_device(args.device)
+    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
+    uncalibrated_result = replace(training_result, value_calibration_transform=None)
+    entries: list[dict[str, Any]] = []
+
+    raw_report = evaluate_value_calibration(
+        model=model,
+        training_result=uncalibrated_result,
+        paths=args.eval_data,
+        batch_size=args.batch_size,
+        bins=args.bins,
+        device=device,
+    )
+    entries.append(
+        _value_calibration_compare_entry(
+            method="raw",
+            report=raw_report,
+            transform=None,
+            selection_metric=args.selection_metric,
+        )
+    )
+
+    for method in ("affine", "isotonic"):
+        transform = fit_value_calibration_transform(
+            model=model,
+            training_result=uncalibrated_result,
+            paths=args.data,
+            batch_size=args.batch_size,
+            device=device,
+            method=method,
+        )
+        calibrated_report = evaluate_value_calibration(
+            model=model,
+            training_result=replace(uncalibrated_result, value_calibration_transform=transform),
+            paths=args.eval_data,
+            batch_size=args.batch_size,
+            bins=args.bins,
+            device=device,
+        )
+        entries.append(
+            _value_calibration_compare_entry(
+                method=method,
+                report=calibrated_report,
+                transform=transform,
+                selection_metric=args.selection_metric,
+            )
+        )
+
+    best = max(entries, key=lambda entry: float(entry["selection_score"]))
+    if not math.isfinite(float(best["selection_score"])):
+        raise ValueError(f"{args.selection_metric} is unavailable for all calibration methods.")
+    payload = {
+        "checkpoint": str(args.checkpoint),
+        "fit_paths": [str(path) for path in args.data],
+        "evaluation_paths": [str(path) for path in args.eval_data],
+        "evaluation_held_out": True,
+        "batch_size": args.batch_size,
+        "bins": args.bins,
+        "selection_metric": args.selection_metric,
+        "selection_direction": value_selection_metric_direction(args.selection_metric),
+        "best_method": best["method"],
+        "methods": entries,
+    }
+    if args.out is not None:
+        _write_json(args.out, payload)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print_value_calibration_compare(payload)
+        if args.out is not None:
+            print(f"comparison_json: {args.out}")
+    return 0
+
+
+def _value_calibration_compare_entry(
+    *,
+    method: str,
+    report: ValueCalibrationReport,
+    transform: Any | None,
+    selection_metric: str,
+) -> dict[str, Any]:
+    selection_error = None
+    try:
+        metric_value: float | None = value_selection_metric_value(report, selection_metric)
+        selection_score = value_selection_score(metric_value, selection_metric)
+    except ValueError as exc:
+        metric_value = None
+        selection_score = -math.inf
+        selection_error = str(exc)
+    entry: dict[str, Any] = {
+        "method": method,
+        "selection_metric_value": metric_value,
+        "selection_score": selection_score,
+        "value_blind": _value_calibration_transform_value_blind(transform) if transform is not None else False,
+        "report": report.to_dict(),
+    }
+    if selection_error is not None:
+        entry["selection_error"] = selection_error
+    if transform is not None:
+        entry["value_calibration_transform"] = transform.to_dict()
+    return entry
 
 
 def _validate_value_calibration_gate_args(args: argparse.Namespace) -> None:
@@ -2842,6 +2983,36 @@ def print_value_calibration_report(report: ValueCalibrationReport) -> None:
                 f"{slice_result.expected_calibration_error:9.4f} "
                 f"{correlation}"
             )
+
+
+def print_value_calibration_compare(payload: Mapping[str, Any]) -> None:
+    print("value_calibration_compare:")
+    print(f"checkpoint: {payload['checkpoint']}")
+    print(f"selection_metric: {payload['selection_metric']}")
+    print(f"selection_direction: {payload['selection_direction']}")
+    print(f"best_method: {payload['best_method']}")
+    print("")
+    header = f"{'method':>10} {'examples':>8} {'mse':>9} {'mae':>9} {'bias':>9} {'sign':>7} {'ece':>9} {'corr':>7} {'metric':>9} {'blind':>6}"
+    print(header)
+    print("-" * len(header))
+    for entry in payload["methods"]:
+        report = entry["report"]
+        correlation = report.get("pearson_correlation")
+        correlation_text = "    n/a" if correlation is None else f"{float(correlation):7.4f}"
+        metric_value = entry.get("selection_metric_value")
+        metric_text = "      n/a" if metric_value is None else f"{float(metric_value):9.4f}"
+        print(
+            f"{entry['method']:>10} "
+            f"{int(report['examples']):8d} "
+            f"{float(report['mse']):9.4f} "
+            f"{float(report['mae']):9.4f} "
+            f"{float(report['bias']):9.4f} "
+            f"{float(report['sign_accuracy']):7.4f} "
+            f"{float(report['expected_calibration_error']):9.4f} "
+            f"{correlation_text} "
+            f"{metric_text} "
+            f"{_format_bool(entry.get('value_blind')):>6}"
+        )
 
 
 def print_root_puct_benchmark_report(report: RootPUCTSearchBenchmarkReport) -> None:

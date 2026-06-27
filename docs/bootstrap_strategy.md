@@ -391,18 +391,20 @@ Fit and evaluate a post-hoc value calibration transform before using a checkpoin
 evaluator:
 
 ```bash
-python -m pokezero.neural_cli value-calibration \
+python -m pokezero.neural_cli value-calibration-compare \
   --checkpoint runs/neural-selfplay/iteration-0003/transformer-policy.pt \
   --data runs/neural-selfplay/iteration-0003/training-rollouts.jsonl \
   --eval-data runs/neural-selfplay/iteration-0003/value-selection-training-rollouts.jsonl \
-  --fit-out runs/neural-selfplay/iteration-0003/transformer-policy-isotonic.pt \
-  --fit-method isotonic
+  --selection-metric expected_calibration_error \
+  --out runs/neural-selfplay/iteration-0003/value-calibration-compare.json
 ```
 
-Use held-out `--eval-data` for the reported read. `--fit-method affine` preserves the legacy linear
-correction; `--fit-method isotonic` stores a monotone empirical mapping. Isotonic has more degrees
+The compare command fits affine and isotonic transforms on `--data`, evaluates raw/affine/isotonic
+on held-out `--eval-data`, and records the best method under the selected metric. For saving a
+specific calibrated checkpoint copy, use `value-calibration --fit-out ... --fit-method affine` or
+`--fit-method isotonic` after the held-out comparison supports that choice. Isotonic has more degrees
 of freedom than affine and should use substantially more fit data plus held-out quality gates before
-being trusted. Either transform is WS-E calibration plumbing, not policy-strength evidence until
+being trusted. Any transform is WS-E calibration plumbing, not policy-strength evidence until
 benchmarked against fixed yardsticks.
 
 Use the generated checkpoint as the first self-play policy:
