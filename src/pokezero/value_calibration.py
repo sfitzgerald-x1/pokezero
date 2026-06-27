@@ -128,11 +128,7 @@ def evaluate_value_calibration(
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
-    dataset_config = TrajectoryDatasetConfig(
-        window_size=training_result.training_config.window_size,
-        discount=training_result.training_config.discount,
-        capped_terminal_value=training_result.training_config.capped_terminal_value,
-    )
+    dataset_config = _trajectory_dataset_config_from_training_result(training_result)
     totals = _ValueCalibrationTotals(bin_count=bins)
     slice_totals = _ValueCalibrationSliceTotals(bin_count=bins)
     try:
@@ -181,11 +177,7 @@ def fit_value_calibration_transform(
         model.eval()
     if device is not None and hasattr(model, "to"):
         model.to(device)
-    dataset_config = TrajectoryDatasetConfig(
-        window_size=training_result.training_config.window_size,
-        discount=training_result.training_config.discount,
-        capped_terminal_value=training_result.training_config.capped_terminal_value,
-    )
+    dataset_config = _trajectory_dataset_config_from_training_result(training_result)
     totals = _AffineFitTotals()
     try:
         with torch_module.no_grad():
@@ -245,6 +237,21 @@ def _apply_value_calibration_transform(value: float, transform: object) -> float
     if isinstance(transform, ValueCalibrationTransform):
         return transform.apply(value)
     return float(value)
+
+
+def _trajectory_dataset_config_from_training_result(
+    training_result: TransformerTrainingResult,
+) -> TrajectoryDatasetConfig:
+    training_config = training_result.training_config
+    return TrajectoryDatasetConfig(
+        window_size=training_config.window_size,
+        discount=training_config.discount,
+        capped_terminal_value=training_config.capped_terminal_value,
+        hp_delta_return_weight=training_config.hp_delta_return_weight,
+        faint_delta_return_weight=training_config.faint_delta_return_weight,
+        turn_penalty_after=training_config.turn_penalty_after,
+        turn_penalty=training_config.turn_penalty,
+    )
 
 
 @dataclass
