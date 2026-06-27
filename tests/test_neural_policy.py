@@ -683,6 +683,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(resolve_torch_device("cpu"), "cpu")
         with patch.object(torch.cuda, "is_available", return_value=True):
             self.assertEqual(resolve_torch_device(None), "cuda")
+            self.assertEqual(resolve_torch_device(""), "cuda")
         with patch.object(torch.cuda, "is_available", return_value=False):
             self.assertEqual(resolve_torch_device(None), "cpu")
 
@@ -1519,6 +1520,39 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(evaluate.call_args.kwargs["bins"], 5)
         self.assertEqual(evaluate.call_args.kwargs["device"], "cpu")
         self.assertEqual(json.loads(stdout.getvalue()), {"examples": 3, "mse": 0.25})
+
+    def test_neural_cli_value_calibration_resolves_default_device(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"examples": 3}
+
+        fake_model = object()
+        fake_training_result = object()
+
+        with (
+            patch.object(torch.cuda, "is_available", return_value=True),
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()) as evaluate,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cuda")
+        self.assertEqual(evaluate.call_args.kwargs["device"], "cuda")
 
     def test_neural_cli_train_can_write_value_calibration_artifact(self) -> None:
         if not torch_available():

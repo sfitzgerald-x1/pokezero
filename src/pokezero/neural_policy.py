@@ -1093,7 +1093,7 @@ def _zeros_like(value: Any) -> Any:
 
 
 def resolve_torch_device(device: str | Any | None = None) -> str | Any:
-    if device is not None:
+    if device is not None and device != "":
         return device
     torch_module = require_torch()
     return "cuda" if torch_module.cuda.is_available() else "cpu"

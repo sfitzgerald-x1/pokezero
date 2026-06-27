@@ -1028,14 +1028,15 @@ def _root_puct_counterfactual(args: argparse.Namespace) -> int:
 
 def _value_calibration(args: argparse.Namespace) -> int:
     require_torch()
-    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    device = resolve_torch_device(args.device)
+    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
     report = evaluate_value_calibration(
         model=model,
         training_result=training_result,
         paths=args.data,
         batch_size=args.batch_size,
         bins=args.bins,
-        device=args.device,
+        device=device,
     )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
