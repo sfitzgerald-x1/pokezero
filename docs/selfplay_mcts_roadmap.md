@@ -87,6 +87,11 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `--min-value-improvement 0.25`, the gate changed a few decisions (`8/245`) but raw/root-PUCT still
   both scored 3/8. Both runs had zero fallbacks and zero capped games, so the next M0 work should
   focus on improving the search/value signal itself rather than only adding conservative vetoes.
+  A value-selection probe (`--selection-mode value`) on the same checkpoint and seed range also
+  scored 3/8 vs `max-damage`, matching raw and same-seed PUCT despite selecting from a different
+  value/score profile. That makes "PUCT prior mixing alone" a weaker explanation for the current
+  miss; the more likely M0 bottlenecks are value-head quality, one-ply depth, and opponent/chance
+  modeling.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
