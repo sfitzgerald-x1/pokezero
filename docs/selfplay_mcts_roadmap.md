@@ -246,6 +246,13 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   entropy 0.99 -> 1.26), so temporal memory remains a plausible lever but is not enough by itself;
   the next WS-A work should focus on stronger training signal/opponent-pool pressure rather than
   treating GRU as the bottleneck fix.
+  A generic mixed-pressure pool test then added `scripted-teacher` alongside `aggressive-damage`
+  while keeping mirror self-play, always-advance PPO, and the same 3x256 shape. That was worse, not
+  better: the mixed pool scored 47/200, 49/200, and 43/200 versus `max-damage` (139/600 total,
+  0.232) versus the aggressive-only mean run's 159/600 (0.265), with zero capped games. This narrows
+  the WS-A opponent-pool diagnosis: generic fixed-opponent diversity is not enough. The next pool
+  lever should be a targeted anti-aggression/counterplay curriculum or richer self-play signal that
+  directly rewards exploiting predictable nukes, not simply adding the scripted teacher to the pool.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has
