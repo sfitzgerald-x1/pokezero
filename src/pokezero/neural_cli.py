@@ -1466,12 +1466,14 @@ def _print_iterate_summary(result) -> None:
     print(f"run_dir: {result.run_dir}")
     for iteration in result.iterations:
         final_epoch = iteration.training.final_metrics
+        ppo_diagnostics = _format_live_ppo_diagnostics(final_epoch)
         print(
             f"iteration={iteration.iteration} games={iteration.metrics.games} "
             f"checkpoint={iteration.checkpoint_path} "
             f"loss={final_epoch.loss:.6f} "
             f"policy_accuracy={final_epoch.policy_accuracy:.4f} "
             f"promotion={_promotion_status(getattr(iteration, 'promotion', None))}"
+            f"{ppo_diagnostics}"
         )
         value_selection = getattr(iteration, "value_selection", None)
         if value_selection is not None:
@@ -1487,6 +1489,19 @@ def _print_iterate_summary(result) -> None:
     if result.latest_checkpoint_path is not None:
         print(f"latest_checkpoint: {result.latest_checkpoint_path}")
     print(f"manifest: {result.run_dir / 'manifest.json'}")
+
+
+def _format_live_ppo_diagnostics(final_epoch: Any) -> str:
+    ppo_valid_fraction = getattr(final_epoch, "ppo_valid_fraction", None)
+    ppo_clip_fraction = getattr(final_epoch, "ppo_clip_fraction", None)
+    ppo_entropy = getattr(final_epoch, "ppo_entropy", None)
+    if ppo_valid_fraction is None and ppo_clip_fraction is None and ppo_entropy is None:
+        return ""
+    return (
+        f" ppo_cov={_format_optional_float(ppo_valid_fraction)}"
+        f" ppo_clip={_format_optional_float(ppo_clip_fraction)}"
+        f" ppo_ent={_format_optional_float(ppo_entropy)}"
+    )
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -1512,7 +1527,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
-        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} checkpoint"
+        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} "
+        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_ent':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -1537,6 +1553,9 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(calibration_report.get('sign_accuracy') if calibration_report else None, digits=4):>8} "
             f"{_format_optional_float(calibration_report.get('expected_calibration_error') if calibration_report else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_valid_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_clip_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_entropy') if final_epoch else None):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
 
