@@ -117,6 +117,7 @@ def evaluate_value_calibration(
     if bins <= 0:
         raise ValueError("bins must be positive.")
     torch_module = require_torch()
+    was_training = getattr(model, "training", None)
     if hasattr(model, "eval"):
         model.eval()
     if device is not None and hasattr(model, "to"):
@@ -128,25 +129,29 @@ def evaluate_value_calibration(
     )
     totals = _ValueCalibrationTotals(bin_count=bins)
     slice_totals = _ValueCalibrationSliceTotals(bin_count=bins)
-    with torch_module.no_grad():
-        for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
-            tensors = training_batch_to_torch(batch, device=device)
-            output = model(
-                categorical_ids=tensors["categorical_ids"],
-                numeric_features=tensors["numeric_features"],
-                token_type_ids=tensors["token_type_ids"],
-                attention_mask=tensors["attention_mask"],
-                history_mask=tensors["history_mask"],
-            )
-            predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
-            returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
-            totals.add(predictions=predictions, returns=returns)
-            slice_totals.add(
-                predictions=predictions,
-                returns=returns,
-                turn_indices=tuple(int(value) for value in batch.turn_indices),
-                terminal_capped=tuple(bool(value) for value in batch.terminal_capped),
-            )
+    try:
+        with torch_module.no_grad():
+            for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
+                tensors = training_batch_to_torch(batch, device=device)
+                output = model(
+                    categorical_ids=tensors["categorical_ids"],
+                    numeric_features=tensors["numeric_features"],
+                    token_type_ids=tensors["token_type_ids"],
+                    attention_mask=tensors["attention_mask"],
+                    history_mask=tensors["history_mask"],
+                )
+                predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
+                returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
+                totals.add(predictions=predictions, returns=returns)
+                slice_totals.add(
+                    predictions=predictions,
+                    returns=returns,
+                    turn_indices=tuple(int(value) for value in batch.turn_indices),
+                    terminal_capped=tuple(bool(value) for value in batch.terminal_capped),
+                )
+    finally:
+        if was_training is not None and hasattr(model, "train"):
+            model.train(bool(was_training))
     return totals.to_report(slices=slice_totals.to_slices())
 
 

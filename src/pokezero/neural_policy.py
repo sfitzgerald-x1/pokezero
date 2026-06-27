@@ -690,12 +690,14 @@ def train_transformer_policy(
     if model_config is None:
         raise ValueError("model_config is required (build it with TransformerPolicyConfig.compact_category).")
     resolved_model_config = model_config
-    device = resolved_training_config.device or ("cuda" if torch_module.cuda.is_available() else "cpu")
+    device = resolve_torch_device(resolved_training_config.device)
     if initial_model is None:
         model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
     else:
         _validate_initial_model_config(initial_model, resolved_model_config)
         model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
+    if hasattr(model, "train"):
+        model.train()
     optimizer = torch_module.optim.AdamW(
         model.parameters(),
         lr=resolved_training_config.learning_rate,
@@ -1088,6 +1090,13 @@ def _zeros_like(value: Any) -> Any:
     if isinstance(value, float):
         return 0.0
     return tuple(_zeros_like(item) for item in value)
+
+
+def resolve_torch_device(device: str | Any | None = None) -> str | Any:
+    if device is not None and device != "":
+        return device
+    torch_module = require_torch()
+    return "cuda" if torch_module.cuda.is_available() else "cpu"
 
 
 def _optional_float(value: Any) -> float | None:

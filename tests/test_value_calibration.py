@@ -58,10 +58,18 @@ class ValueCalibrationTest(unittest.TestCase):
         torch = require_torch()
 
         class FakeValueModel:
+            def __init__(self) -> None:
+                self.training = True
+                self.training_during_call: bool | None = None
+
             def eval(self) -> None:
-                pass
+                self.training = False
+
+            def train(self, mode: bool = True) -> None:
+                self.training = bool(mode)
 
             def __call__(self, **kwargs):
+                self.training_during_call = self.training
                 batch_size = int(kwargs["categorical_ids"].shape[0])
                 return SimpleNamespace(value=torch.tensor((0.8, -0.6)[:batch_size]))
 
@@ -101,8 +109,9 @@ class ValueCalibrationTest(unittest.TestCase):
             with path.open("w", encoding="utf-8") as handle:
                 write_rollout_record(handle, record)
 
+            model = FakeValueModel()
             report = evaluate_value_calibration(
-                model=FakeValueModel(),
+                model=model,
                 training_result=SimpleNamespace(training_config=TransformerTrainingConfig(window_size=1)),
                 paths=path,
                 batch_size=2,
@@ -112,6 +121,8 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(report.examples, 2)
         self.assertAlmostEqual(report.mae, (abs(0.8 - 1.0) + abs(-0.6 - -1.0)) / 2)
         self.assertEqual(report.sign_accuracy, 1.0)
+        self.assertFalse(model.training_during_call)
+        self.assertTrue(model.training)
 
     def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
         if not torch_available():

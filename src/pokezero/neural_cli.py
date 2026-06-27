@@ -27,6 +27,7 @@ from .neural_policy import (
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
+    resolve_torch_device,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
@@ -46,6 +47,7 @@ from .search_policy import (
 from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
+    NeuralValueCalibrationConfig,
     _mapping,
     _sequence,
     load_neural_selfplay_run_manifest,
@@ -131,6 +133,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Built Pokemon Showdown checkout root (required: the category vocabulary is the closed Gen 3 randbat universe).",
     )
+    train.add_argument(
+        "--value-calibration-data",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Optional rollout JSONL path(s) used to write a post-train value calibration artifact.",
+    )
+    train.add_argument(
+        "--value-calibration-out",
+        type=Path,
+        default=None,
+        help="Optional JSON output path for --value-calibration-data. Defaults to printing the report.",
+    )
+    train.add_argument("--value-calibration-batch-size", type=int, default=128, help="Post-train calibration batch size.")
+    train.add_argument("--value-calibration-bins", type=int, default=10, help="Post-train calibration bin count.")
     train.set_defaults(func=_train)
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
@@ -461,6 +478,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
     iterate.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     iterate.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
+    iterate.add_argument(
+        "--value-calibration",
+        action="store_true",
+        help="Evaluate value-head calibration after each iteration and store it in the manifest.",
+    )
+    iterate.add_argument(
+        "--value-calibration-scope",
+        choices=("iteration", "history"),
+        default="iteration",
+        help="Calibration data scope: latest iteration training rollouts or full accumulated training history.",
+    )
+    iterate.add_argument("--value-calibration-batch-size", type=int, default=128, help="Per-iteration calibration batch size.")
+    iterate.add_argument("--value-calibration-bins", type=int, default=10, help="Per-iteration calibration bin count.")
     iterate.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
     iterate.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count.")
     iterate.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
@@ -528,6 +558,8 @@ def _describe(args: argparse.Namespace) -> int:
 def _train(args: argparse.Namespace) -> int:
     # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
     require_torch()
+    if args.value_calibration_out is not None and not args.value_calibration_data:
+        raise ValueError("--value-calibration-out requires --value-calibration-data.")
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -592,6 +624,27 @@ def _train(args: argparse.Namespace) -> int:
             )
         print(line)
     print(f"checkpoint: {args.out}")
+    if args.value_calibration_data:
+        value_calibration = evaluate_value_calibration(
+            model=model,
+            training_result=result,
+            paths=args.value_calibration_data,
+            batch_size=args.value_calibration_batch_size,
+            bins=args.value_calibration_bins,
+            device=resolve_torch_device(args.device),
+        )
+        payload = {
+            "paths": [str(path) for path in args.value_calibration_data],
+            "batch_size": args.value_calibration_batch_size,
+            "bins": args.value_calibration_bins,
+            "report": value_calibration.to_dict(),
+        }
+        if args.value_calibration_out is not None:
+            _write_json(args.value_calibration_out, payload)
+            print(f"value_calibration: {args.value_calibration_out}")
+        else:
+            print("")
+            print_value_calibration_report(value_calibration)
     return 0
 
 
@@ -975,14 +1028,15 @@ def _root_puct_counterfactual(args: argparse.Namespace) -> int:
 
 def _value_calibration(args: argparse.Namespace) -> int:
     require_torch()
-    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    device = resolve_torch_device(args.device)
+    model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
     report = evaluate_value_calibration(
         model=model,
         training_result=training_result,
         paths=args.data,
         batch_size=args.batch_size,
         bins=args.bins,
-        device=args.device,
+        device=device,
     )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
@@ -1100,6 +1154,7 @@ def _iterate(args: argparse.Namespace) -> int:
         auto_promotion_config=auto_promotion_config,
         post_iteration_audit_config=post_iteration_audit_config,
         post_iteration_audit_failure_mode=args.audit_failure_mode,
+        value_calibration_config=_value_calibration_config_from_args(args),
         resume=args.resume,
     )
     if args.json:
@@ -1128,6 +1183,16 @@ def _auto_promotion_config_from_args(args: argparse.Namespace) -> NeuralSelfPlay
         label_prefix=label_prefix,
         notes=args.promotion_notes,
         allow_duplicate=args.allow_duplicate_promotion,
+    )
+
+
+def _value_calibration_config_from_args(args: argparse.Namespace) -> NeuralValueCalibrationConfig | None:
+    if not args.value_calibration:
+        return None
+    return NeuralValueCalibrationConfig(
+        scope=args.value_calibration_scope,
+        batch_size=args.value_calibration_batch_size,
+        bins=args.value_calibration_bins,
     )
 
 
@@ -1172,7 +1237,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
-        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'opp_acc':>8} checkpoint"
+        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -1180,6 +1245,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
         metrics = _mapping(iteration.get("collection_metrics", {}))
         final_epoch = _final_epoch_metrics(iteration)
         advancement = _optional_mapping(iteration.get("advancement"))
+        calibration_report = _iteration_value_calibration_report(iteration)
         print(
             f"{int(iteration.get('iteration', 0)):4d} "
             f"{int(metrics.get('games', 0)):5d} "
@@ -1191,6 +1257,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(final_epoch.get('loss') if final_epoch else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('policy_accuracy') if final_epoch else None, digits=4):>8} "
             f"{_format_optional_float(final_epoch.get('value_loss') if final_epoch else None, digits=6):>10} "
+            f"{_format_optional_float(calibration_report.get('sign_accuracy') if calibration_report else None, digits=4):>8} "
+            f"{_format_optional_float(calibration_report.get('expected_calibration_error') if calibration_report else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
@@ -1200,6 +1268,13 @@ def _final_epoch_metrics(iteration: Mapping[str, Any]) -> Mapping[str, Any] | No
     training = _mapping(iteration.get("training", {}))
     epochs = tuple(_mapping(epoch) for epoch in _sequence(training.get("epochs", ())))
     return epochs[-1] if epochs else None
+
+
+def _iteration_value_calibration_report(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    calibration = _optional_mapping(iteration.get("value_calibration"))
+    if not calibration:
+        return None
+    return _optional_mapping(calibration.get("report"))
 
 
 def _benchmark_win_rate(iteration: Mapping[str, Any]) -> float | None:
@@ -1322,6 +1397,13 @@ def _format_optional_float(value: object, *, digits: int = 3) -> str:
     if value is None:
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def print_value_calibration_report(report: ValueCalibrationReport) -> None:
