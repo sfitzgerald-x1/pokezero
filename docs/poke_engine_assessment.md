@@ -52,6 +52,10 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
 ## Proposed Spike
 
 1. Add an optional `poke-engine` dependency path outside the default install.
+   The initial API preflight command is:
+   `python -m pokezero.engine_cli doctor`.
+   This verifies the Python reversible-state API seam and prints the recommended Gen 3 build
+   command; it does not prove Gen 3 mechanics equivalence by itself.
 2. Build a tiny adapter from a curated Showdown Gen 3 battle fixture into a `poke_engine.State`.
 3. Validate legal root actions against the Showdown request payload for both seats.
 4. Validate one-turn instruction outcomes against Showdown for a small fixture matrix:
@@ -70,4 +74,3 @@ Adopt `poke-engine` only if the spike shows:
 - The adapter can preserve player-relative hidden-information boundaries.
 - Integration stays optional so the current Showdown harness remains available as the correctness
   oracle.
-
