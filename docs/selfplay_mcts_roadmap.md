@@ -306,10 +306,13 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   is not a value-quality or strength verdict; it is a guardrail against over-reading search deltas when
   the value/base-net/eval evidence is incomplete.
   `neural_cli foundation-compare` compares multiple foundation-run wrapper summaries side by side,
-  including latest fixed-yardstick rates and value calibration signals, so WS-A/WS-E arms can be
-  selected from comparable artifacts before spending more time on search tuning. It also supports
-  caller-supplied quality thresholds for experiment-local gating, avoiding hardcoded "search ready"
-  claims while still making weak foundation runs fail fast in scripts.
+  including latest fixed-yardstick rates, the best observed `max-damage` yardstick checkpoint, and
+  value calibration signals, so WS-A/WS-E arms can be selected from comparable artifacts before
+  spending more time on search tuning. It also supports caller-supplied quality thresholds for
+  experiment-local gating. Gates intentionally use latest rows; the best row is checkpoint-selection
+  visibility for diagnosing regressions, not a way to relabel a regressed latest run as healthy.
+  Best-row selection prefers sample-sized `max-damage` rows when any exist and labels below-milestone
+  rows explicitly when only smoke-sized evidence is available.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).

@@ -2018,6 +2018,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
             "- max_damage_yardstick: iter=1 win_rate=0.250 games=20 cap=2 sample=below_milestone(20/300)",
             output,
         )
+        self.assertIn(
+            "- best_max_damage_yardstick: iter=1 win_rate=0.250 games=20 cap=2 sample=below_milestone(20/300) checkpoint=",
+            output,
+        )
         self.assertIn("- foundation_evidence_status: incomplete", output)
         self.assertIn("reasons: max_damage_sample_below_milestone", output)
         self.assertIn("0.100000", output)
@@ -2184,8 +2188,75 @@ class NeuralSelfPlayTest(unittest.TestCase):
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("- max_damage_yardstick: missing", output)
+        self.assertIn(
+            "- best_max_damage_yardstick: iter=1 win_rate=0.400 games=300 cap=2 sample=milestone checkpoint=",
+            output,
+        )
         self.assertIn("- foundation_evidence_status: incomplete", output)
         self.assertIn("reasons: max_damage_yardstick_missing", output)
+
+    def test_neural_cli_report_surfaces_best_max_damage_when_latest_regresses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            _rewrite_neural_manifest_yardstick(
+                run_dir / "manifest.json",
+                max_damage_wins=8,
+                simple_wins=10,
+                random_wins=12,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=1,
+                simple_wins=4,
+                random_wins=8,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("- max-damage: 1:0.400/20g,cap=2 2:0.050/20g,cap=2", output)
+        self.assertIn(
+            "- max_damage_yardstick: iter=2 win_rate=0.050 games=20 cap=2 sample=below_milestone(20/300)",
+            output,
+        )
+        self.assertIn(
+            "- best_max_damage_yardstick: iter=1 win_rate=0.400 games=20 cap=2 sample=below_milestone(20/300) checkpoint=",
+            output,
+        )
+
+    def test_neural_cli_report_best_max_damage_prefers_sample_sized_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            write_neural_report_manifest(run_dir)
+            _rewrite_neural_manifest_yardstick(
+                run_dir / "manifest.json",
+                max_damage_wins=20,
+                simple_wins=20,
+                random_wins=20,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                games=300,
+                max_damage_wins=180,
+                simple_wins=180,
+                random_wins=180,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("- max-damage: 1:1.000/20g,cap=2 2:0.600/300g,cap=2", output)
+        self.assertIn(
+            "- best_max_damage_yardstick: iter=2 win_rate=0.600 games=300 cap=2 sample=milestone checkpoint=",
+            output,
+        )
 
     def test_neural_cli_foundation_plan_builds_preset_recipe(self) -> None:
         source = neural_report_source_metadata(branch="scott/foundation", head="abc123", dirty=False)
@@ -2417,6 +2488,58 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(summary["schema_version"], "pokezero.neural_foundation_run_summary.v1")
         self.assertEqual(summary["status"], "passed")
 
+    def test_neural_cli_foundation_report_derives_best_yardstick_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "opponent-signal" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            _rewrite_neural_manifest_yardstick(
+                run_dir / "manifest.json",
+                max_damage_wins=8,
+                simple_wins=10,
+                random_wins=12,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=1,
+                simple_wins=4,
+                random_wins=8,
+            )
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="opponent-signal",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                # The report should prefer manifest-derived latest/best rows over this stale summary.
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["foundation-report", str(summary_path)])
+            with patch("sys.stdout", new_callable=io.StringIO) as json_stdout:
+                json_exit_code = neural_cli_main(["foundation-report", str(summary_path), "--json"])
+
+        output = stdout.getvalue()
+        payload = json.loads(json_stdout.getvalue())
+        readiness = payload["foundation"]["foundation_readiness"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json_exit_code, 0)
+        self.assertIn("latest_checkpoint:", output)
+        self.assertIn(
+            "max_damage_yardstick: iter=2 win_rate=0.050 games=20 cap=2 sample=below_milestone(20/300) checkpoint=",
+            output,
+        )
+        self.assertIn(
+            "best_max_damage_yardstick: iter=1 win_rate=0.400 games=20 cap=2 sample=below_milestone(20/300) checkpoint=",
+            output,
+        )
+        self.assertEqual(readiness["max_damage_yardstick"]["iteration"], 2)
+        self.assertEqual(readiness["max_damage_yardstick"]["win_rate"], 0.05)
+        self.assertEqual(readiness["best_max_damage_yardstick"]["iteration"], 1)
+        self.assertEqual(readiness["best_max_damage_yardstick"]["win_rate"], 0.4)
+
     def test_neural_cli_foundation_compare_summarizes_manifest_yardsticks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -2484,6 +2607,56 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["win_rate"], 0.25)
         self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["source"], "manifest")
         self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["win_rate"], 0.4)
+        self.assertIn("best_yardsticks:", output)
+        self.assertEqual(payload["entries"][1]["best_yardsticks"]["max-damage"]["source"], "manifest")
+        self.assertEqual(payload["entries"][1]["best_yardsticks"]["max-damage"]["win_rate"], 0.4)
+
+    def test_neural_cli_foundation_compare_surfaces_best_max_damage_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "opponent-signal" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            _rewrite_neural_manifest_yardstick(
+                run_dir / "manifest.json",
+                max_damage_wins=8,
+                simple_wins=10,
+                random_wins=12,
+            )
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=1,
+                simple_wins=4,
+                random_wins=8,
+            )
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="opponent-signal",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                # The manifest latest/best rows should be preferred over this fallback.
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["foundation-compare", str(summary_path)])
+            with patch("sys.stdout", new_callable=io.StringIO) as json_stdout:
+                json_exit_code = neural_cli_main(["foundation-compare", str(summary_path), "--json"])
+
+        output = stdout.getvalue()
+        payload = json.loads(json_stdout.getvalue())
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json_exit_code, 0)
+        self.assertEqual(entry["yardsticks"]["max-damage"]["iteration"], 2)
+        self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.05)
+        best = entry["best_yardsticks"]["max-damage"]
+        self.assertEqual(best["iteration"], 1)
+        self.assertEqual(best["win_rate"], 0.4)
+        self.assertEqual(best["source"], "manifest")
+        self.assertIn("best_yardsticks:", output)
+        self.assertIn("max_damage=iter=1 win_rate=0.400 games=20 cap=2 sample=below_milestone(20/300) checkpoint=", output)
 
     def test_neural_cli_foundation_compare_keeps_good_rows_when_summary_load_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2547,6 +2720,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
             stronger_dir = temp_path / "stronger" / "pilot-001"
             write_neural_report_manifest(weak_dir)
             write_neural_report_manifest(stronger_dir)
+            weak_manifest_path = weak_dir / "manifest.json"
+            weak_manifest = json.loads(weak_manifest_path.read_text(encoding="utf-8"))
+            weak_manifest["iterations"][0]["value_calibration"]["report"]["pearson_correlation"] = 0.31
+            weak_manifest_path.write_text(json.dumps(weak_manifest, indent=2), encoding="utf-8")
             _rewrite_neural_manifest_yardstick(
                 stronger_dir / "manifest.json",
                 max_damage_wins=8,
@@ -3007,6 +3184,48 @@ def _rewrite_neural_manifest_yardstick(
         elif opponent == "random-legal":
             result["first_policy_wins"] = random_wins
             result["second_policy_wins"] = int(result["games"]) - random_wins
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _append_neural_report_manifest_iteration(
+    run_dir: Path,
+    *,
+    iteration: int,
+    games: int = 20,
+    max_damage_wins: int,
+    simple_wins: int,
+    random_wins: int,
+) -> None:
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base_iteration = json.loads(json.dumps(manifest["iterations"][0]))
+    iteration_dir = run_dir / f"iteration-{iteration:04d}"
+    iteration_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = iteration_dir / "transformer-policy.pt"
+    checkpoint_path.write_text("checkpoint", encoding="utf-8")
+    policy_id = f"entity-test-iter-{iteration:04d}"
+    base_iteration["iteration"] = iteration
+    base_iteration["checkpoint_path"] = str(checkpoint_path)
+    base_iteration["checkpoint_policy_spec"] = f"neural:{checkpoint_path}"
+    base_iteration["training"]["model_config"]["policy_id"] = policy_id
+    base_iteration["next_current_policy_spec"] = f"neural:{checkpoint_path}"
+    wins_by_opponent = {
+        "max-damage": max_damage_wins,
+        "simple-legal": simple_wins,
+        "random-legal": random_wins,
+    }
+    for result in base_iteration["benchmark"]["head_to_heads"]:
+        opponent = result["second_policy_id"]
+        result["label"] = f"{policy_id} vs {opponent}"
+        result["first_policy_id"] = policy_id
+        result["games"] = games
+        if opponent in wins_by_opponent:
+            result["first_policy_wins"] = wins_by_opponent[opponent]
+            result["second_policy_wins"] = games - wins_by_opponent[opponent]
+    manifest["iterations"].append(base_iteration)
+    manifest["latest_checkpoint_path"] = str(checkpoint_path)
+    manifest["current_policy_spec"] = f"neural:{checkpoint_path}"
+    manifest["latest_accepted_checkpoint_path"] = str(checkpoint_path)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
