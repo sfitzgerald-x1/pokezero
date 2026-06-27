@@ -2133,6 +2133,97 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("- foundation_evidence_status: incomplete", output)
         self.assertIn("reasons: max_damage_yardstick_missing", output)
 
+    def test_neural_cli_foundation_plan_builds_preset_recipe(self) -> None:
+        source = neural_report_source_metadata(branch="scott/foundation", head="abc123", dirty=False)
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=source),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-smoke",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["schema_version"], "pokezero.neural_foundation_plan.v1")
+        self.assertEqual(recipe["source"], source)
+        self.assertEqual(recipe["profile"], "smoke")
+        self.assertEqual(recipe["experiment_preset"], "foundation-arms-race")
+        self.assertEqual(recipe["resolved_options"]["iterations"], 2)
+        self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 8)
+        self.assertEqual(recipe["resolved_options"]["evaluation_games"], 8)
+        self.assertEqual(recipe["resolved_options"]["value_selection_heldout_games"], 4)
+        self.assertIn("iterate", argv)
+        self.assertIn("--experiment-preset", argv)
+        self.assertIn("foundation-arms-race", argv)
+        self.assertIn("--value-selection-heldout-games", argv)
+        self.assertIn("--json", argv)
+
+    def test_neural_cli_foundation_run_writes_summary_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            summary_path = temp_path / "summary.json"
+            source = neural_report_source_metadata(branch="scott/foundation", head="abc123", dirty=True)
+
+            def fake_run(argv, *, stdout, stderr, text):
+                write_neural_report_manifest(run_dir, source=source)
+                manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+                return SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr="category vocab\\n")
+
+            with (
+                patch("pokezero.neural_cli.collect_source_metadata", return_value=source),
+                patch("pokezero.neural_cli.subprocess.run", side_effect=fake_run) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-run",
+                        "--run-dir",
+                        str(run_dir),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--summary-path",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as report_stdout:
+                report_exit_code = neural_cli_main(["foundation-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once()
+        argv = run.call_args.args[0]
+        self.assertIn("--experiment-preset", argv)
+        self.assertIn("foundation-arms-race", argv)
+        self.assertEqual(summary["schema_version"], "pokezero.neural_foundation_run_summary.v1")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["returncode"], 0)
+        self.assertEqual(summary["source"], source)
+        self.assertEqual(summary["recipe"]["profile"], "smoke")
+        self.assertIn("category vocab", summary["stderr_tail"])
+        self.assertTrue(summary["foundation"]["manifest_available"])
+        self.assertEqual(summary["foundation"]["manifest_source"], str(run_dir / "manifest.json"))
+        self.assertEqual(summary["foundation"]["latest_iteration"], 1)
+        self.assertEqual(
+            summary["foundation"]["foundation_readiness"]["foundation_evidence_status"],
+            "incomplete",
+        )
+        self.assertEqual(report_exit_code, 0)
+        report_output = report_stdout.getvalue()
+        self.assertIn("neural_foundation_report:", report_output)
+        self.assertIn("status: passed", report_output)
+        self.assertIn("foundation_evidence_status: incomplete", report_output)
+
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(
             run_dir=Path("/tmp/run"),
