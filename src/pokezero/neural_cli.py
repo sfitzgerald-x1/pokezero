@@ -37,7 +37,12 @@ from .search_benchmark import (
     benchmark_root_puct_counterfactual_rollouts,
     benchmark_root_puct_search,
 )
-from .search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner, policy_opponent_action_planner
+from .search_policy import (
+    RootPUCTSearchPolicy,
+    greedy_opponent_action_planner,
+    policy_opponent_action_planner,
+    prior_top_k_opponent_action_scenario_planner,
+)
 from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
@@ -202,6 +207,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "the fixed benchmark opponent policy to choose the non-search side's root action "
             "from its private observation. Benchmark mode is privileged evaluation plumbing; "
             "stochastic opponents produce one sampled action, not a modal expectation."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--root-opponent-action-scenarios",
+        type=int,
+        default=1,
+        help=(
+            "Number of checkpoint-prior opponent root-action scenarios to average per searched "
+            "candidate. Values above one require --root-opponent-action-policy checkpoint; "
+            "benchmark root-opponent mode intentionally produces one private-observation action."
         ),
     )
     root_puct_play.add_argument(
@@ -637,6 +652,12 @@ def _benchmark(args: argparse.Namespace) -> int:
 
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
+    if args.root_opponent_action_scenarios <= 0:
+        raise ValueError("root opponent action scenarios must be positive.")
+    if args.root_opponent_action_policy == "benchmark" and args.root_opponent_action_scenarios != 1:
+        raise ValueError(
+            "root opponent action scenarios above one require --root-opponent-action-policy checkpoint."
+        )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -711,6 +732,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         benchmark_opponent_spec: str,
     ) -> RootPUCTSearchPolicy:
         root_opponent_player_id = "p2" if search_player_id == "p1" else "p1"
+        opponent_action_scenario_planner = None
         if args.root_opponent_action_policy == "benchmark":
             opponent_action_planner = policy_opponent_action_planner(
                 {root_opponent_player_id: policy_from_spec(benchmark_opponent_spec)},
@@ -718,6 +740,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             )
         else:
             opponent_action_planner = greedy_opponent_action_planner(opponent_prior_fn)
+            if args.root_opponent_action_scenarios > 1:
+                opponent_action_scenario_planner = prior_top_k_opponent_action_scenario_planner(
+                    opponent_prior_fn,
+                    scenario_count=args.root_opponent_action_scenarios,
+                )
         leaf_rollout_policy_factory = None
         leaf_rollout_metadata: Mapping[str, object] = {}
         if leaf_rollout_rounds:
@@ -741,6 +768,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             value_fn=value_fn,
             prior_fn=prior_fn,
             opponent_action_planner=opponent_action_planner,
+            opponent_action_scenario_planner=opponent_action_scenario_planner,
             fallback_policy=make_raw_policy(policy_id=f"{search_policy_id}-fallback"),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,

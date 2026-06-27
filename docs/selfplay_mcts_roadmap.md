@@ -152,6 +152,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   root opponent-action mismatch was a real part of the earlier search miss, while the leaf-depth
   result is not monotonic. Next work should convert this privileged fixed-opponent signal into a
   hidden-info-safe opponent model or determinization path before treating it as M0 progress.
+  The first less-privileged conversion step now exists as `--root-opponent-action-scenarios`:
+  instead of collapsing the simultaneous opponent root action to one greedy checkpoint-prior action,
+  the search policy can enumerate a bounded top-k set from the checkpoint opponent-action head using
+  the acting player's history, run each root candidate against those scenarios, and average branch
+  values by scenario weight. This avoids asking the fixed benchmark opponent for a
+  private-observation root action, but it still keeps the benchmark legal-mask safety guard; that
+  guard is privileged and shapes both scenario support and scenario weights. This remains a harness
+  step, not M0 evidence until measured and not a replacement for belief determinization.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

@@ -144,6 +144,7 @@ class MetadataPolicy:
         include_elapsed: bool = True,
         value_gate_used: bool | None = None,
         root_opponent_action_policy: str | None = None,
+        root_opponent_action_scenario_count: int | None = None,
         leaf_rollout_rounds: int | None = None,
         leaf_rollout_opponent_policy: str | None = None,
         leaf_actual_rounds: dict[str, int] | None = None,
@@ -154,6 +155,7 @@ class MetadataPolicy:
         self.include_elapsed = include_elapsed
         self.value_gate_used = value_gate_used
         self.root_opponent_action_policy = root_opponent_action_policy
+        self.root_opponent_action_scenario_count = root_opponent_action_scenario_count
         self.leaf_rollout_rounds = leaf_rollout_rounds
         self.leaf_rollout_opponent_policy = leaf_rollout_opponent_policy
         self.leaf_actual_rounds = leaf_actual_rounds
@@ -184,6 +186,8 @@ class MetadataPolicy:
             metadata["root_puct_value_gate_used"] = self.value_gate_used
         if self.root_opponent_action_policy is not None:
             metadata["root_puct_opponent_action_policy"] = self.root_opponent_action_policy
+        if self.root_opponent_action_scenario_count is not None:
+            metadata["root_puct_opponent_action_scenario_count"] = self.root_opponent_action_scenario_count
         if self.leaf_rollout_rounds is not None:
             metadata["root_puct_leaf_rollout_rounds"] = self.leaf_rollout_rounds
         if self.leaf_rollout_opponent_policy is not None:
@@ -341,6 +345,7 @@ class CollectionTest(unittest.TestCase):
                     MetadataPolicy(
                         value_gate_used=True,
                         root_opponent_action_policy="benchmark",
+                        root_opponent_action_scenario_count=2,
                         leaf_rollout_rounds=2,
                         leaf_rollout_opponent_policy="benchmark",
                         leaf_actual_rounds={"0": 1, "2": 2},
@@ -365,6 +370,10 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(
             summary["root-puct-diagnostic"]["root_puct_opponent_action_policies"],
             {"benchmark": 2},
+        )
+        self.assertEqual(
+            summary["root-puct-diagnostic"]["root_puct_opponent_action_scenario_counts"],
+            {"2": 2},
         )
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_leaf_rollout_rounds"], {"2": 2})
         self.assertEqual(
@@ -453,6 +462,7 @@ class CollectionTest(unittest.TestCase):
                     MetadataPolicy(
                         leaf_rollout_rounds=2,
                         root_opponent_action_policy="benchmark",
+                        root_opponent_action_scenario_count=2,
                         leaf_rollout_opponent_policy="benchmark",
                         leaf_actual_rounds={"1": 3},
                         leaf_evaluations={"rollout_terminal": 2, "rollout_value_fn": 1},
@@ -478,6 +488,8 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("selection_modes:", output)
         self.assertIn("opponent_action_policies:", output)
         self.assertIn("benchmark=1", output)
+        self.assertIn("opponent_action_scenario_counts:", output)
+        self.assertIn("2=1", output)
         self.assertIn("leaf_rollouts_configured:", output)
         self.assertIn("leaf_rollout_opponents:", output)
         self.assertIn("benchmark=1", output)

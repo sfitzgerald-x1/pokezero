@@ -40,6 +40,7 @@ from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 LEGAL_TWO_ACTION_MASK = (True, True, False, False, False, False, False, False, False)
 LEGAL_ACTION_ONE_MASK = (False, True, False, False, False, False, False, False, False)
+LEGAL_ACTION_ONE_TWO_MASK = (False, True, True, False, False, False, False, False, False)
 
 
 def observation(
@@ -769,6 +770,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
             )
             self.assertEqual(getattr(search_policy.opponent_action_planner, "planner_id"), "checkpoint")
+            self.assertIsNone(search_policy.opponent_action_scenario_planner)
             self.assertEqual(search_policy.opponent_action_planner(context, __import__("random").Random(1)), {"p2": 2})
             return FakeReport()
 
@@ -843,6 +845,98 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 4}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            search_policy = tuple(kwargs["matchups"])[2].p1_policy
+            context = PolicyContext(
+                player_id="p1",
+                decision_round_index=0,
+                battle_id="search-play",
+                format_id="gen3randombattle",
+                seed=7,
+                observation=observation(1),
+                requested_players=("p1", "p2"),
+                trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
+                requested_legal_action_masks={
+                    "p1": LEGAL_TWO_ACTION_MASK,
+                    "p2": LEGAL_ACTION_ONE_TWO_MASK,
+                },
+            )
+            scenarios = search_policy.opponent_action_scenario_planner(context, __import__("random").Random(1))
+            self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 2}, {"p2": 1}])
+            self.assertAlmostEqual(scenarios[0].weight, 0.7 / 0.9)
+            self.assertAlmostEqual(scenarios[1].weight, 0.2 / 0.9)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch(
+                "pokezero.neural_cli.evaluate_transformer_opponent_action_priors",
+                return_value=(0.1, 0.2, 0.7) + (0.0,) * 6,
+            ),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--root-opponent-action-scenarios",
+                    "2",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        matchups = tuple(captured["matchups"])
+        search_policy = matchups[2].p1_policy
+        self.assertEqual(getattr(search_policy.opponent_action_planner, "planner_id"), "checkpoint")
+        self.assertIsNotNone(search_policy.opponent_action_scenario_planner)
+        self.assertEqual(getattr(search_policy.opponent_action_scenario_planner, "planner_id"), "checkpoint-top2")
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_multi_scenarios_with_benchmark_root_opponent(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--root-opponent-action-policy",
+                    "benchmark",
+                    "--root-opponent-action-scenarios",
+                    "2",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("root opponent action scenarios above one", stderr.getvalue())
 
     def test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions(self) -> None:
         if not torch_available():

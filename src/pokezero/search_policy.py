@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import product
 from time import perf_counter
 import math
 import random
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import PlayerId, PokeZeroEnv
@@ -18,12 +19,14 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    _puct_candidate,
     player_observation_history,
     puct_branch_search,
 )
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 OpponentActionPlanner = Callable[[PolicyContext, random.Random], Mapping[PlayerId, int]]
+OpponentActionScenarioPlanner = Callable[[PolicyContext, random.Random], Sequence["OpponentActionScenario"]]
 ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 OpponentActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
@@ -32,6 +35,20 @@ LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
 def no_opponent_action_planner(context: PolicyContext, rng: random.Random) -> Mapping[PlayerId, int]:
     del context, rng
     return {}
+
+
+@dataclass(frozen=True)
+class OpponentActionScenario:
+    actions: Mapping[PlayerId, int]
+    weight: float = 1.0
+    label: str = "single"
+
+    def normalized(self, *, total_weight: float) -> "OpponentActionScenario":
+        return OpponentActionScenario(
+            actions=dict(self.actions),
+            weight=self.weight / total_weight,
+            label=self.label,
+        )
 
 
 def greedy_opponent_action_planner(
@@ -68,6 +85,59 @@ def greedy_opponent_action_planner(
         return opponent_actions
 
     planner.planner_id = "checkpoint"  # type: ignore[attr-defined]
+    return planner
+
+
+def prior_top_k_opponent_action_scenario_planner(
+    prior_fn: OpponentActionPriorFunction,
+    *,
+    scenario_count: int,
+) -> OpponentActionScenarioPlanner:
+    """Enumerate likely opponent root-action scenarios from player-local opponent priors.
+
+    The prior function only sees the acting player's observation history. Requested-opponent legal
+    masks are still a privileged benchmark safety guard, and they affect scenario support and
+    weights so replay branches stay submit-valid. For multi-opponent turns, the final joint scenario
+    set is capped to ``scenario_count`` after combining per-opponent choices.
+    """
+
+    if scenario_count <= 0:
+        raise ValueError("scenario_count must be positive.")
+
+    def planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+        del rng
+        requested_opponents = tuple(player for player in context.requested_players if player != context.player_id)
+        if not requested_opponents:
+            return (OpponentActionScenario(actions={}, weight=1.0, label="no-opponent"),)
+        trajectory = _trajectory_with_current_observation(context)
+        history = player_observation_history(
+            trajectory,
+            player_id=context.player_id,
+            through_decision_round=context.decision_round_index,
+        )
+        priors = tuple(float(value) for value in prior_fn(history))
+        _validate_action_prior_vector(priors, name="opponent action priors")
+        choices_by_player = tuple(
+            (player, _top_prior_action_choices(context, player, priors, limit=scenario_count))
+            for player in requested_opponents
+        )
+        scenarios: list[OpponentActionScenario] = []
+        for combination in product(*(choices for _player, choices in choices_by_player)):
+            actions = {
+                player: action
+                for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
+            }
+            weight = math.prod(weight for _action, weight in combination)
+            label = ",".join(
+                f"{player}:{action}"
+                for (player, _choices), (action, _weight) in zip(choices_by_player, combination, strict=True)
+            )
+            scenarios.append(OpponentActionScenario(actions=actions, weight=weight, label=label))
+        scenarios.sort(key=lambda scenario: (-scenario.weight, tuple(sorted(scenario.actions.items()))))
+        return _normalize_scenarios(tuple(scenarios[:scenario_count]))
+
+    planner.planner_id = f"checkpoint-top{scenario_count}"  # type: ignore[attr-defined]
+    planner.scenario_count = scenario_count  # type: ignore[attr-defined]
     return planner
 
 
@@ -135,6 +205,7 @@ class RootPUCTSearchPolicy:
     policy_id: str = "root-puct-search"
     cpuct: float = 1.25
     opponent_action_planner: OpponentActionPlanner = no_opponent_action_planner
+    opponent_action_scenario_planner: OpponentActionScenarioPlanner | None = None
     fallback_policy: Policy = field(default_factory=RandomLegalPolicy)
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
@@ -162,6 +233,9 @@ class RootPUCTSearchPolicy:
         planner_reset = getattr(self.opponent_action_planner, "reset", None)
         if callable(planner_reset):
             planner_reset()
+        scenario_planner_reset = getattr(self.opponent_action_scenario_planner, "reset", None)
+        if callable(scenario_planner_reset):
+            scenario_planner_reset()
 
     def select_action(
         self,
@@ -191,17 +265,23 @@ class RootPUCTSearchPolicy:
     ) -> PolicyDecision:
         if context.player_id not in context.requested_players:
             return self._fallback(context, rng=rng, reason="player is not requested")
-        opponent_actions = dict(self.opponent_action_planner(context, rng))
-        planner_error = _opponent_action_planner_error(
-            player_id=context.player_id,
-            requested_players=context.requested_players,
-            opponent_actions=opponent_actions,
-        )
-        if planner_error is not None:
-            return self._fallback(context, rng=rng, reason=planner_error)
-        legality_report = _opponent_action_legality_report(context, opponent_actions)
-        if legality_report.error is not None:
-            return self._fallback(context, rng=rng, reason=legality_report.error)
+        try:
+            opponent_scenarios = _opponent_action_scenarios(self, context, rng)
+        except ValueError as exc:
+            return self._fallback(context, rng=rng, reason=str(exc))
+        legality_checked = False
+        for scenario in opponent_scenarios:
+            planner_error = _opponent_action_planner_error(
+                player_id=context.player_id,
+                requested_players=context.requested_players,
+                opponent_actions=scenario.actions,
+            )
+            if planner_error is not None:
+                return self._fallback(context, rng=rng, reason=planner_error)
+            legality_report = _opponent_action_legality_report(context, scenario.actions)
+            legality_checked = legality_checked or legality_report.checked
+            if legality_report.error is not None:
+                return self._fallback(context, rng=rng, reason=legality_report.error)
 
         search_trajectory = _trajectory_with_current_observation(context)
         history = player_observation_history(
@@ -219,19 +299,22 @@ class RootPUCTSearchPolicy:
         env = self.env_factory()
         try:
             try:
-                search = puct_branch_search(
-                    env=env,
-                    trajectory=search_trajectory,
-                    player_id=context.player_id,
-                    prefix_decision_round_count=context.decision_round_index,
-                    legal_action_mask=context.observation.legal_action_mask,
-                    opponent_actions=opponent_actions,
-                    value_fn=self.value_fn,
-                    action_priors=priors,
-                    cpuct=self.cpuct,
-                    leaf_rollout_policies=leaf_rollout_policies,
-                    leaf_rollout_config=self.rollout_config,
-                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                scenario_searches = tuple(
+                    puct_branch_search(
+                        env=env,
+                        trajectory=search_trajectory,
+                        player_id=context.player_id,
+                        prefix_decision_round_count=context.decision_round_index,
+                        legal_action_mask=context.observation.legal_action_mask,
+                        opponent_actions=scenario.actions,
+                        value_fn=self.value_fn,
+                        action_priors=priors,
+                        cpuct=self.cpuct,
+                        leaf_rollout_policies=leaf_rollout_policies,
+                        leaf_rollout_config=self.rollout_config,
+                        leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                    )
+                    for scenario in opponent_scenarios
                 )
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
@@ -241,6 +324,11 @@ class RootPUCTSearchPolicy:
             if callable(close):
                 close()
 
+        search = _aggregate_scenario_searches(
+            scenario_searches,
+            opponent_scenarios=opponent_scenarios,
+            cpuct=self.cpuct,
+        )
         search_best = _selected_candidate(search, mode=self.selection_mode)
         best = search_best
         gate_metadata = {}
@@ -262,10 +350,11 @@ class RootPUCTSearchPolicy:
                 "root_puct_prior_score": prior_best.score,
             }
         leaf_metadata = _leaf_rollout_metadata(
-            search,
+            scenario_searches,
             configured_rounds=self.leaf_rollout_decision_rounds,
         )
-        planner_id = getattr(self.opponent_action_planner, "planner_id", None)
+        planner = self.opponent_action_scenario_planner or self.opponent_action_planner
+        planner_id = getattr(planner, "planner_id", None)
         planner_metadata = (
             {"root_puct_opponent_action_policy": str(planner_id)}
             if planner_id is not None
@@ -284,8 +373,13 @@ class RootPUCTSearchPolicy:
                 "root_puct_selected_score": best.score,
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
-                "root_puct_opponent_actions": dict(opponent_actions),
-                "root_puct_opponent_actions_legality_checked": legality_report.checked,
+                "root_puct_opponent_actions": dict(opponent_scenarios[0].actions),
+                "root_puct_opponent_action_scenario_count": len(opponent_scenarios),
+                "root_puct_opponent_action_scenarios": [
+                    _opponent_action_scenario_payload(scenario)
+                    for scenario in opponent_scenarios
+                ],
+                "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
                 **dict(self.leaf_rollout_metadata),
@@ -361,22 +455,143 @@ def _selected_candidate(
     raise ValueError("selection mode must be 'puct' or 'value'.")
 
 
+def _opponent_action_scenarios(
+    policy: RootPUCTSearchPolicy,
+    context: PolicyContext,
+    rng: random.Random,
+) -> tuple[OpponentActionScenario, ...]:
+    if policy.opponent_action_scenario_planner is not None:
+        return _normalize_scenarios(tuple(policy.opponent_action_scenario_planner(context, rng)))
+    return _normalize_scenarios(
+        (
+            OpponentActionScenario(
+                actions=dict(policy.opponent_action_planner(context, rng)),
+                weight=1.0,
+                label="single",
+            ),
+        )
+    )
+
+
+def _top_prior_action_choices(
+    context: PolicyContext,
+    player: PlayerId,
+    priors: tuple[float, ...],
+    *,
+    limit: int,
+) -> tuple[tuple[int, float], ...]:
+    if limit <= 0:
+        raise ValueError("opponent action scenario limit must be positive.")
+    legal = _requested_legal_action_indices_for_player(context, player)
+    candidate_indices = legal if legal else tuple(range(ACTION_COUNT))
+    ranked = sorted(candidate_indices, key=lambda index: (-priors[index], index))[:limit]
+    if not ranked:
+        raise ValueError(f"no opponent action candidates available for {player}.")
+    total = sum(priors[index] for index in ranked)
+    if total <= 0.0:
+        uniform = 1.0 / len(ranked)
+        return tuple((index, uniform) for index in ranked)
+    return tuple((index, priors[index] / total) for index in ranked)
+
+
+def _normalize_scenarios(
+    scenarios: tuple[OpponentActionScenario, ...],
+) -> tuple[OpponentActionScenario, ...]:
+    if not scenarios:
+        raise ValueError("opponent action scenario planner produced no scenarios.")
+    total_weight = 0.0
+    for scenario in scenarios:
+        if scenario.weight <= 0.0 or not math.isfinite(scenario.weight):
+            raise ValueError("opponent action scenarios must have finite positive weights.")
+        total_weight += scenario.weight
+    if total_weight <= 0.0 or not math.isfinite(total_weight):
+        raise ValueError("opponent action scenario weights must sum to a finite positive value.")
+    return tuple(scenario.normalized(total_weight=total_weight) for scenario in scenarios)
+
+
+def _aggregate_scenario_searches(
+    searches: Sequence[PUCTBranchSearchResult],
+    *,
+    opponent_scenarios: Sequence[OpponentActionScenario],
+    cpuct: float,
+) -> PUCTBranchSearchResult:
+    scenario_searches = tuple(searches)
+    scenarios = tuple(opponent_scenarios)
+    if not scenario_searches:
+        raise ValueError("root PUCT search produced no scenario searches.")
+    if len(scenario_searches) != len(scenarios):
+        raise ValueError("scenario search count must match opponent scenario count.")
+    if len(scenario_searches) == 1:
+        return scenario_searches[0]
+
+    first = scenario_searches[0]
+    action_order = tuple(candidate.action_index for candidate in first.candidates)
+    if not action_order:
+        raise ValueError("root PUCT search produced no candidates.")
+    total_visits = len(action_order)
+    sqrt_total = math.sqrt(total_visits)
+    aggregated_candidates: list[PUCTBranchSearchCandidate] = []
+    for action_index in action_order:
+        weighted_value = 0.0
+        first_candidate: PUCTBranchSearchCandidate | None = None
+        for scenario, search in zip(scenarios, scenario_searches, strict=True):
+            by_action = {candidate.action_index: candidate for candidate in search.candidates}
+            candidate = by_action.get(action_index)
+            if candidate is None:
+                raise ValueError("scenario searches produced mismatched root action candidates.")
+            if first_candidate is None:
+                first_candidate = candidate
+            weighted_value += scenario.weight * candidate.value
+        if first_candidate is None:
+            raise ValueError("root PUCT search produced no candidates.")
+        value_candidate = replace(first_candidate.value_candidate, value=weighted_value)
+        prior = first_candidate.prior
+        aggregated_candidates.append(
+            _puct_candidate(
+                value_candidate=value_candidate,
+                prior=prior,
+                cpuct=cpuct,
+                sqrt_total_visits=sqrt_total,
+            )
+        )
+
+    return PUCTBranchSearchResult(
+        player_id=first.player_id,
+        prefix_decision_round_count=first.prefix_decision_round_count,
+        opponent_actions=dict(scenarios[0].actions),
+        cpuct=cpuct,
+        total_visits=total_visits,
+        candidates=tuple(aggregated_candidates),
+        value_search=first.value_search,
+    )
+
+
+def _opponent_action_scenario_payload(scenario: OpponentActionScenario) -> dict[str, object]:
+    return {
+        "label": scenario.label,
+        "weight": scenario.weight,
+        "actions": dict(scenario.actions),
+    }
+
+
 def _leaf_rollout_metadata(
-    search: PUCTBranchSearchResult,
+    search: PUCTBranchSearchResult | Sequence[PUCTBranchSearchResult],
     *,
     configured_rounds: int,
 ) -> Mapping[str, object]:
     if configured_rounds <= 0:
         return {}
+    searches = (search,) if isinstance(search, PUCTBranchSearchResult) else tuple(search)
     leaf_evaluations: dict[str, int] = {}
     actual_rounds: dict[str, int] = {}
-    for candidate in search.candidates:
-        value_candidate = candidate.value_candidate
-        leaf_evaluations[value_candidate.leaf_evaluation] = (
-            leaf_evaluations.get(value_candidate.leaf_evaluation, 0) + 1
-        )
-        round_key = str(value_candidate.leaf_rollout_decision_round_count)
-        actual_rounds[round_key] = actual_rounds.get(round_key, 0) + 1
+    for scenario_search in searches:
+        for candidate in scenario_search.candidates:
+            value_candidate = candidate.value_candidate
+            leaf_evaluations[value_candidate.leaf_evaluation] = (
+                leaf_evaluations.get(value_candidate.leaf_evaluation, 0) + 1
+            )
+            round_key = str(value_candidate.leaf_rollout_decision_round_count)
+            actual_rounds[round_key] = actual_rounds.get(round_key, 0) + 1
     return {
         "root_puct_leaf_rollout_rounds": configured_rounds,
         "root_puct_leaf_actual_rollout_rounds": dict(sorted(actual_rounds.items())),
