@@ -5,7 +5,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig
-from pokezero.search_benchmark import benchmark_root_puct_search
+from pokezero.search_benchmark import benchmark_root_puct_counterfactual_rollouts, benchmark_root_puct_search
 
 
 def _mask(*legal_indices: int) -> tuple[bool, ...]:
@@ -82,6 +82,45 @@ class TwoRoundBranchEnv:
         self.closed = True
 
 
+class ImmediateOutcomeEnv:
+    def __init__(self) -> None:
+        self.reset_calls: list[tuple[int, str]] = []
+        self.step_calls: list[dict[str, int]] = []
+        self._terminal: TerminalState | None = None
+        self.closed = False
+
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        self.reset_calls.append((seed, format_id))
+        self.step_calls.clear()
+        self._terminal = None
+
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        return _observation(0, 1) if player == "p1" else _observation(0)
+
+    def legal_actions(self, player: str) -> tuple[bool, ...]:
+        return self.observe(player).legal_action_mask
+
+    def requested_players(self) -> tuple[str, ...]:
+        return () if self._terminal is not None else ("p1", "p2")
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.step_calls.append(dict(actions))
+        winner = "p1" if int(actions["p1"]) == 1 else "p2"
+        self._terminal = TerminalState(winner=winner, turn_count=1)
+        return StepResult(
+            observations={},
+            rewards={"p1": 1.0 if winner == "p1" else -1.0, "p2": -1.0 if winner == "p1" else 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
+
+    def terminal(self) -> TerminalState | None:
+        return self._terminal
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class RootPUCTSearchBenchmarkTest(unittest.TestCase):
     def test_benchmark_root_puct_search_reports_prefix_decision_deltas(self) -> None:
         envs: list[TwoRoundBranchEnv] = []
@@ -120,10 +159,63 @@ class RootPUCTSearchBenchmarkTest(unittest.TestCase):
         self.assertEqual(report.to_dict()["evaluated_prefixes"], 2)
         self.assertTrue(envs[0].closed)
 
+    def test_benchmark_root_puct_counterfactual_rollouts_compares_recorded_and_selected_outcomes(self) -> None:
+        envs: list[ImmediateOutcomeEnv] = []
+
+        def env_factory() -> ImmediateOutcomeEnv:
+            env = ImmediateOutcomeEnv()
+            envs.append(env)
+            return env
+
+        report = benchmark_root_puct_counterfactual_rollouts(
+            env_factory=env_factory,
+            policies={"p1": FixedPolicy(0, policy_id="source-p1"), "p2": FixedPolicy(0, policy_id="source-p2")},
+            continuation_policies={
+                "p1": FixedPolicy(0, policy_id="continue-p1"),
+                "p2": FixedPolicy(0, policy_id="continue-p2"),
+            },
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            games=1,
+            prefixes_per_game=1,
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=0.0,
+        )
+
+        self.assertEqual(report.source_decision_rounds, (1,))
+        self.assertEqual(report.evaluated_prefixes, 1)
+        self.assertEqual(report.changed_actions, 1)
+        self.assertEqual(report.improved_actions, 1)
+        self.assertEqual(report.worsened_actions, 0)
+        self.assertEqual(report.average_recorded_rollout_value, -1.0)
+        self.assertEqual(report.average_selected_rollout_value, 1.0)
+        self.assertEqual(report.average_rollout_value_delta, 2.0)
+        self.assertEqual(report.continuation_policy_ids, {"p1": "continue-p1", "p2": "continue-p2"})
+        decision = report.decisions[0]
+        self.assertEqual(decision.recorded_action_index, 0)
+        self.assertEqual(decision.selected_action_index, 1)
+        self.assertEqual(decision.recorded_winner, "p2")
+        self.assertEqual(decision.selected_winner, "p1")
+        self.assertEqual(decision.rollout_value_delta, 2.0)
+        self.assertEqual(report.to_dict()["improved_actions"], 1)
+        self.assertTrue(envs[0].closed)
+
     def test_benchmark_root_puct_search_requires_search_player_policy(self) -> None:
         with self.assertRaisesRegex(ValueError, "search_player"):
             benchmark_root_puct_search(
                 env_factory=TwoRoundBranchEnv,
+                policies={"p1": FixedPolicy(0, policy_id="fixed-p1")},
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                games=1,
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                search_player="p2",
+            )
+
+    def test_benchmark_root_puct_counterfactual_requires_search_player_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "search_player"):
+            benchmark_root_puct_counterfactual_rollouts(
+                env_factory=ImmediateOutcomeEnv,
                 policies={"p1": FixedPolicy(0, policy_id="fixed-p1")},
                 rollout_config=RolloutConfig(max_decision_rounds=3),
                 games=1,

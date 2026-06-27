@@ -229,8 +229,11 @@ from .search import (
 )
 from .search_benchmark import (
     ActionPriorFunction,
+    RootPUCTCounterfactualBenchmarkReport,
+    RootPUCTCounterfactualDecision,
     RootPUCTSearchBenchmarkReport,
     RootPUCTSearchDecision,
+    benchmark_root_puct_counterfactual_rollouts,
     benchmark_root_puct_search,
 )
 from .value_calibration import (
@@ -359,6 +362,8 @@ __all__ = [
     "ReplayPrefixTiming",
     "ReplayImportResult",
     "RolloutRecord",
+    "RootPUCTCounterfactualBenchmarkReport",
+    "RootPUCTCounterfactualDecision",
     "RootPUCTSearchBenchmarkReport",
     "RootPUCTSearchDecision",
     "RunAuditCheck",
@@ -456,6 +461,7 @@ __all__ = [
     "read_rollout_records",
     "record_promotion",
     "action_rounds_from_trajectory",
+    "benchmark_root_puct_counterfactual_rollouts",
     "benchmark_replay_prefixes",
     "benchmark_root_puct_search",
     "require_torch",

@@ -636,6 +636,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_root_puct_counterfactual_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(["root-puct-counterfactual", "--checkpoint", "checkpoint.pt", "--games", "1"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
     def test_neural_cli_iterate_reports_missing_torch_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -782,6 +793,87 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), {"evaluated_prefixes": 2})
+
+    def test_neural_cli_root_puct_counterfactual_wires_continuation_policies(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"average_rollout_value_delta": 0.5}
+
+        fake_model = object()
+        fake_training_result = object()
+        captured = {}
+
+        def fake_benchmark_root_puct_counterfactual_rollouts(**kwargs):
+            captured.update(kwargs)
+            self.assertEqual(kwargs["value_fn"]((observation(1),)), 0.25)
+            self.assertEqual(kwargs["prior_fn"]((observation(1),)), (1.0,) + (0.0,) * 8)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25) as value_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
+            patch(
+                "pokezero.neural_cli.benchmark_root_puct_counterfactual_rollouts",
+                side_effect=fake_benchmark_root_puct_counterfactual_rollouts,
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-counterfactual",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--prefixes-per-game",
+                    "4",
+                    "--seed-start",
+                    "99",
+                    "--max-decision-rounds",
+                    "12",
+                    "--p1-policy",
+                    "random-legal",
+                    "--p2-policy",
+                    "simple-legal",
+                    "--continuation-p1-policy",
+                    "simple-legal",
+                    "--continuation-p2-policy",
+                    "random-legal",
+                    "--search-player",
+                    "p2",
+                    "--cpuct",
+                    "0.75",
+                    "--device",
+                    "cpu",
+                    "--temperature",
+                    "1.5",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
+        self.assertEqual(captured["games"], 3)
+        self.assertEqual(captured["prefixes_per_game"], 4)
+        self.assertEqual(captured["seed_start"], 99)
+        self.assertEqual(captured["search_player"], "p2")
+        self.assertEqual(captured["cpuct"], 0.75)
+        self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
+        self.assertEqual(captured["policies"]["p1"].policy_id, "random-legal")
+        self.assertEqual(captured["policies"]["p2"].policy_id, "simple-legal")
+        self.assertEqual(captured["continuation_policies"]["p1"].policy_id, "simple-legal")
+        self.assertEqual(captured["continuation_policies"]["p2"].policy_id, "random-legal")
+        self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
+        self.assertEqual(value_eval.call_args.kwargs["result"], fake_training_result)
+        self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
+        self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(json.loads(stdout.getvalue()), {"average_rollout_value_delta": 0.5})
 
     def test_neural_cli_value_calibration_wires_checkpoint_and_data(self) -> None:
         if not torch_available():
