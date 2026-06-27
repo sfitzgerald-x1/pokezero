@@ -107,6 +107,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   2.2-2.4 decisions/s. This is exploratory evidence that replacing immediate one-ply leaves may
   matter, but it is not enough to clear M0 or justify scale; the next read should either enlarge
   this leaf-depth probe or improve value/opponent modeling further.
+  A same-seed depth-2 follow-up moved in the same direction: raw again scored 3/8, while
+  root-PUCT with `--leaf-rollout-rounds 2` scored 5/8, with zero capped games and zero search
+  fallbacks across 255 root-PUCT searches. Candidate leaf diagnostics showed 9 immediate terminal
+  branches, 20 one-round continuations, and 1,419 two-round continuations; 80 candidate branches
+  reached rollout terminals and 1,359 still required truncated leaf value evaluation. Active-search
+  throughput stayed around 2.1-2.3 decisions/s. The sample is still too small for a strength claim,
+  but the one-step and two-step probes now both point toward leaf depth/value-target quality as a
+  better next M0 lever than more PUCT-score mixing.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
