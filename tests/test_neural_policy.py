@@ -826,11 +826,87 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(matchups[2].p1_policy.leaf_rollout_decision_rounds, 2)
         self.assertIsNotNone(matchups[2].p1_policy.leaf_rollout_policy_factory)
         self.assertEqual(matchups[2].p1_policy.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
+        self.assertEqual(matchups[2].p1_policy.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
+        self.assertEqual(
+            matchups[2].p1_policy.leaf_rollout_metadata,
+            {"root_puct_leaf_rollout_opponent_policy": "checkpoint"},
+        )
         self.assertTrue(matchups[2].p1_policy.allow_fallback)
         self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 4}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--opponent-policy",
+                    "simple-legal",
+                    "--leaf-rollout-rounds",
+                    "2",
+                    "--leaf-rollout-opponent-policy",
+                    "benchmark",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        matchups = tuple(captured["matchups"])
+        p1_search = matchups[2].p1_policy
+        p2_search = matchups[3].p2_policy
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs simple-legal",
+            "simple-legal vs neural-smoke",
+            "neural-smoke+root-puct vs simple-legal",
+            "simple-legal vs neural-smoke+root-puct",
+        ])
+        self.assertEqual(p1_search.leaf_rollout_decision_rounds, 2)
+        self.assertEqual(p2_search.leaf_rollout_decision_rounds, 2)
+        self.assertIsNotNone(p1_search.leaf_rollout_policy_factory)
+        self.assertIsNotNone(p2_search.leaf_rollout_policy_factory)
+        self.assertEqual(p1_search.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
+        self.assertEqual(p1_search.leaf_rollout_policy_factory("p2").policy_id, "simple-legal")
+        self.assertEqual(p2_search.leaf_rollout_policy_factory("p1").policy_id, "simple-legal")
+        self.assertEqual(p2_search.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
+        self.assertEqual(
+            p1_search.leaf_rollout_metadata,
+            {"root_puct_leaf_rollout_opponent_policy": "benchmark"},
+        )
+        self.assertEqual(
+            p2_search.leaf_rollout_metadata,
+            {"root_puct_leaf_rollout_opponent_policy": "benchmark"},
+        )
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
 
     def test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths(self) -> None:

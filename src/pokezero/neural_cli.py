@@ -46,7 +46,7 @@ from .neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
 from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
@@ -179,6 +179,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Repeatable leaf-depth sweep value. When supplied, root-puct-play-benchmark "
             "creates one root-PUCT policy variant per unique supplied depth on the same seed "
             "range and ignores --leaf-rollout-rounds."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--leaf-rollout-opponent-policy",
+        choices=("checkpoint", "benchmark"),
+        default="checkpoint",
+        help=(
+            "Opponent policy used during bounded leaf rollouts. 'checkpoint' preserves the "
+            "current checkpoint-vs-checkpoint continuation; 'benchmark' uses the fixed "
+            "benchmark opponent for the non-search side. Root simultaneous opponent-action "
+            "planning still uses checkpoint opponent-action priors."
         ),
     )
     root_puct_play.add_argument(
@@ -646,8 +657,12 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     def make_leaf_rollout_policy(
         *,
         search_policy_id: str,
+        search_player_id: str,
+        benchmark_opponent_spec: str,
         player_id: str,
-    ) -> TransformerSoftmaxPolicy:
+    ) -> Policy:
+        if args.leaf_rollout_opponent_policy == "benchmark" and player_id != search_player_id:
+            return policy_from_spec(benchmark_opponent_spec)
         return make_raw_policy(policy_id=f"{search_policy_id}-leaf-{player_id}")
 
     def value_fn(history):
@@ -680,13 +695,21 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         *,
         search_policy_id: str,
         leaf_rollout_rounds: int,
+        search_player_id: str,
+        benchmark_opponent_spec: str,
     ) -> RootPUCTSearchPolicy:
         leaf_rollout_policy_factory = None
+        leaf_rollout_metadata: Mapping[str, object] = {}
         if leaf_rollout_rounds:
             leaf_rollout_policy_factory = lambda player_id: make_leaf_rollout_policy(
                 search_policy_id=search_policy_id,
+                search_player_id=search_player_id,
+                benchmark_opponent_spec=benchmark_opponent_spec,
                 player_id=player_id,
             )
+            leaf_rollout_metadata = {
+                "root_puct_leaf_rollout_opponent_policy": args.leaf_rollout_opponent_policy,
+            }
         return RootPUCTSearchPolicy(
             env_factory=lambda: LocalShowdownEnv(env_config),
             rollout_config=rollout_config,
@@ -701,22 +724,24 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             selection_mode=args.selection_mode,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
+            leaf_rollout_metadata=leaf_rollout_metadata,
         )
 
     opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))
     matchups: list[BenchmarkMatchup] = []
     for opponent_spec in opponent_specs:
-        opponent_id = policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)).policy_id
+        benchmark_opponent_spec = policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)
+        opponent_id = policy_from_spec(benchmark_opponent_spec).policy_id
         matchups.extend(
             (
                 BenchmarkMatchup(
                     f"{raw_policy_id} vs {opponent_id}",
                     make_raw_policy(),
-                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                    policy_from_spec(benchmark_opponent_spec),
                 ),
                 BenchmarkMatchup(
                     f"{opponent_id} vs {raw_policy_id}",
-                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                    policy_from_spec(benchmark_opponent_spec),
                     make_raw_policy(),
                 ),
             )
@@ -730,15 +755,19 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                         make_search_policy(
                             search_policy_id=search_policy_id,
                             leaf_rollout_rounds=leaf_rollout_rounds,
+                            search_player_id="p1",
+                            benchmark_opponent_spec=benchmark_opponent_spec,
                         ),
-                        policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                        policy_from_spec(benchmark_opponent_spec),
                     ),
                     BenchmarkMatchup(
                         f"{opponent_id} vs {search_policy_id}",
-                        policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                        policy_from_spec(benchmark_opponent_spec),
                         make_search_policy(
                             search_policy_id=search_policy_id,
                             leaf_rollout_rounds=leaf_rollout_rounds,
+                            search_player_id="p2",
+                            benchmark_opponent_spec=benchmark_opponent_spec,
                         ),
                     ),
                 )
