@@ -48,9 +48,13 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 - **Context-aware root-PUCT policy adapter** (`PolicyContext`, `RootPUCTSearchPolicy`): the rollout
   driver can now call policies with player-local decision context, and the root-PUCT adapter can
   select actions through a separate branch env without mutating the live rollout. Simultaneous-turn
-  opponent actions are supplied by an explicit planner hook rather than by leaking opponent-private
-  observations; `greedy_opponent_action_planner` can drive that hook from player-local
-  opponent-action priors such as the transformer's auxiliary opponent-action head.
+  opponent actions are supplied by an explicit planner hook; `greedy_opponent_action_planner` can
+  drive that hook from player-local opponent-action priors such as the transformer's auxiliary
+  opponent-action head. In self-play/search benchmarks, the harness can additionally mask planned
+  opponent actions against requested-player legal masks to avoid invalid branch submissions; this is
+  recorded as search metadata. Because the mask includes opponent legal-action availability, this is
+  a privileged benchmark safety guard and is not a substitute for full hidden-information
+  determinization.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
