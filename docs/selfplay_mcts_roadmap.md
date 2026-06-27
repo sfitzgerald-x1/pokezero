@@ -282,6 +282,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   strength metrics.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
   random/simple/max-damage baselines.
+- **Neural self-play report yardstick curves** (`neural_cli report`) — text reports include
+  fixed-opponent benchmark curves such as `max-damage`, `random-legal`, and `simple-legal`, with
+  per-iteration win rate, games, and capped-game counts. This makes WS-F strength reads visible
+  without relying on blended benchmark win rate or TensorBoard-only inspection. Rolling incumbent
+  head-to-heads stay out of this yardstick block because they are advancement evidence, not
+  fixed-strength references.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).
