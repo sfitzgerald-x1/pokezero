@@ -418,6 +418,19 @@ Steps:
    0.3270 to 0.3581, with MAE improving from 0.9484 to 0.9186. This is real positive evidence for
    the H3/base-net direction versus the cold baseline, but it is not yet a search-ready value head:
    max-damage remains far below the M0 target and value ranking is still modest.
+   A resumed H3 continuation then added three more iterations to the same run after fixing neural
+   resume benchmark seed advancement. The continuation used fresh benchmark seed bands
+   `1000600`, `1000800`, and `1001000`. It did not produce sustained base-net improvement:
+   iteration 4 briefly looked healthier (`max-damage=0.100`, `simple-legal=0.412`,
+   `random-legal=0.685`, value sign 0.5985, ECE 0.0942, Pearson 0.2784), but iterations 5 and 6
+   regressed (`max-damage=0.022` then `0.018`, `simple-legal=0.212` then `0.152`,
+   `random-legal=0.432` then `0.370`). The latest iteration 6 value read was present and
+   sample-sized over 21,728 examples (sign 0.5986, ECE 0.1073, Pearson 0.2130), but the latest
+   fixed-yardstick strength is worse than iteration 3 and fails the local foundation quality gate
+   used for this follow-up because `max-damage` is below 0.05. Treat this as negative evidence for
+   simply continuing the same H3 run; the next WS-A lever should change the training signal,
+   initialization, or selection/retention policy rather than expecting more identical iterations to
+   climb.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
