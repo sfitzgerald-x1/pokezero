@@ -875,6 +875,7 @@ class _TorchMetricTotals:
     switch_target_loss: float = 0.0
     switch_target_correct: int = 0
     switch_target_examples: int = 0
+    ppo_objective_examples: int = 0
     ppo_valid_examples: int = 0
     ppo_advantage_sum: float = 0.0
     ppo_advantage_square_sum: float = 0.0
@@ -903,6 +904,7 @@ class _TorchMetricTotals:
             self.switch_target_examples += switch_target_examples
             self.switch_target_loss += float(pieces["switch_target_loss"]) * switch_target_examples
             self.switch_target_correct += int(pieces["switch_target_correct"])
+        self.ppo_objective_examples += int(pieces["ppo_objective_examples"])
         ppo_valid_examples = int(pieces["ppo_valid_examples"])
         if ppo_valid_examples:
             self.ppo_valid_examples += ppo_valid_examples
@@ -941,8 +943,8 @@ class _TorchMetricTotals:
             action_family_accuracy=(self.action_family_correct / self.action_family_examples) if self.action_family_examples else None,
             switch_target_loss=(self.switch_target_loss / self.switch_target_examples) if self.switch_target_examples else None,
             switch_target_accuracy=(self.switch_target_correct / self.switch_target_examples) if self.switch_target_examples else None,
-            ppo_valid_examples=self.ppo_valid_examples if self.ppo_valid_examples else None,
-            ppo_valid_fraction=(self.ppo_valid_examples / self.examples) if self.ppo_valid_examples else None,
+            ppo_valid_examples=self.ppo_valid_examples if self.ppo_objective_examples else None,
+            ppo_valid_fraction=(self.ppo_valid_examples / self.ppo_objective_examples) if self.ppo_objective_examples else None,
             ppo_advantage_mean=ppo_advantage_mean,
             ppo_advantage_std=ppo_advantage_std,
             ppo_ratio_mean=ppo_ratio_mean,
@@ -970,6 +972,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_loss = functional.mse_loss(output.value, tensors["returns"])
+    ppo_objective_examples = 0
     ppo_valid_examples = 0
     ppo_advantage_sum = 0.0
     ppo_advantage_square_sum = 0.0
@@ -984,6 +987,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         family_loss, family_loss_value, family_correct, family_examples = None, 0.0, 0, 0
         switch_loss, switch_loss_value, switch_correct, switch_examples = None, 0.0, 0, 0
     elif config.objective == "ppo":
+        ppo_objective_examples = int(tensors["returns"].numel())
         # Clipped policy-gradient (PPO): importance-weight the chosen action's log-prob by a
         # value-baselined advantage, using the recorded behavior-policy probability. Only
         # examples with a recorded action probability contribute to the policy term.
@@ -1068,6 +1072,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "switch_target_loss": switch_loss_value,
         "switch_target_correct": switch_correct,
         "switch_target_examples": switch_examples,
+        "ppo_objective_examples": ppo_objective_examples,
         "ppo_valid_examples": ppo_valid_examples,
         "ppo_advantage_sum": ppo_advantage_sum,
         "ppo_advantage_square_sum": ppo_advantage_square_sum,

@@ -213,7 +213,7 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `collection.py`) — collect → train → benchmark, with promotion gates (`evaluation.py`).
   PPO training now records objective-health diagnostics in epoch metrics and TensorBoard:
   valid behavior-probability coverage, raw value-baselined advantage mean/std, probability-ratio
-  mean, clip fraction, and policy entropy. These are tuning/audit signals for WS-A, not policy
+  mean, clip fraction, and policy entropy in nats. These are tuning/audit signals for WS-A, not policy
   strength metrics.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
   random/simple/max-damage baselines.
