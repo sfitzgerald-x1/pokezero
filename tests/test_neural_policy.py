@@ -27,6 +27,7 @@ from pokezero.neural_policy import (
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     require_torch,
+    resolve_torch_device,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
@@ -673,6 +674,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.skipTest("PyTorch is installed in this environment.")
         with self.assertRaisesRegex(TorchUnavailableError, "pip install -e"):
             TransformerSoftmaxPolicy(model=object(), result=None)  # type: ignore[arg-type]
+
+    def test_resolve_torch_device_matches_training_default(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        self.assertEqual(resolve_torch_device("cpu"), "cpu")
+        with patch.object(torch.cuda, "is_available", return_value=True):
+            self.assertEqual(resolve_torch_device(None), "cuda")
+        with patch.object(torch.cuda, "is_available", return_value=False):
+            self.assertEqual(resolve_torch_device(None), "cpu")
 
     def test_neural_cli_describe_is_import_safe_without_torch(self) -> None:
         stdout = io.StringIO()
@@ -2019,6 +2031,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 observations=(observation(1),),
                 device="cpu",
             )
+            restored_model.eval()
+            self.assertFalse(restored_model.training)
             _, continued_result = train_transformer_policy(
                 data_path,
                 model_config=TransformerPolicyConfig.compact_category(
@@ -2044,6 +2058,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 ),
                 initial_model=restored_model,
             )
+            self.assertTrue(restored_model.training)
 
         self.assertEqual(result.final_metrics.examples, 2)
         self.assertEqual(continued_result.model_config.policy_id, "neural-smoke-continued")

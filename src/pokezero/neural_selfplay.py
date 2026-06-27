@@ -29,6 +29,7 @@ from .neural_policy import (
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
+    resolve_torch_device,
     save_transformer_checkpoint,
     _validate_initial_model_config,
     train_transformer_policy,
@@ -620,7 +621,7 @@ def _evaluate_iteration_value_calibration(
         paths=paths,
         batch_size=config.batch_size,
         bins=config.bins,
-        device=training.training_config.device,
+        device=resolve_torch_device(training.training_config.device),
     )
     return {
         "scope": config.scope,

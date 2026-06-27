@@ -27,6 +27,7 @@ from .neural_policy import (
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
+    resolve_torch_device,
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
@@ -630,7 +631,7 @@ def _train(args: argparse.Namespace) -> int:
             paths=args.value_calibration_data,
             batch_size=args.value_calibration_batch_size,
             bins=args.value_calibration_bins,
-            device=args.device,
+            device=resolve_torch_device(args.device),
         )
         payload = {
             "paths": [str(path) for path in args.value_calibration_data],
