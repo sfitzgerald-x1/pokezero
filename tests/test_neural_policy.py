@@ -1704,24 +1704,36 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         training_config = TransformerTrainingConfig(epochs=3)
         train_calls = 0
 
-        def fake_train(paths, *, model_config, training_config, initial_model=None):
+        def fake_train(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
             nonlocal train_calls
-            train_calls += 1
             model = initial_model or fake_model
-            model.weight = train_calls
+            metrics = []
+            for epoch in range(1, training_config.epochs + 1):
+                train_calls += 1
+                model.weight = epoch
+                metrics.append(
+                    TransformerEpochMetrics(
+                        epoch=epoch,
+                        examples=2,
+                        loss=float(epoch),
+                        policy_loss=float(epoch),
+                        policy_accuracy=0.5,
+                        value_loss=float(epoch),
+                    )
+                )
+                if epoch_callback is not None:
+                    epoch_callback(
+                        model,
+                        TransformerTrainingResult(
+                            model_config=model_config,
+                            training_config=training_config,
+                            epochs=tuple(metrics),
+                        ),
+                    )
             return model, TransformerTrainingResult(
                 model_config=model_config,
                 training_config=training_config,
-                epochs=(
-                    TransformerEpochMetrics(
-                        epoch=1,
-                        examples=2,
-                        loss=float(train_calls),
-                        policy_loss=float(train_calls),
-                        policy_accuracy=0.5,
-                        value_loss=float(train_calls),
-                    ),
-                ),
+                epochs=tuple(metrics),
             )
 
         reports = [FakeReport(mae=0.4), FakeReport(mae=0.2), FakeReport(mae=0.3)]
@@ -1743,6 +1755,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(model.weight, 2)
         self.assertEqual(model.loaded_state, {"weight": 2})
+        self.assertEqual(train_calls, 3)
         self.assertEqual(result.training_config.epochs, 2)
         self.assertEqual(result.final_metrics.epoch, 2)
         self.assertEqual(payload["selected_epoch"], 2)
@@ -1798,6 +1811,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         str(checkpoint_path),
                         "--showdown-root",
                         "/tmp/showdown",
+                        "--objective",
+                        "value-only",
+                        "--freeze-non-value-parameters",
                         "--value-selection-data",
                         "heldout.jsonl",
                         "--value-selection-metric",
@@ -2467,6 +2483,44 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 ),
                 training_config=TransformerTrainingConfig(batch_size=2, epochs=1, window_size=4, device="cpu"),
             )
+
+    def test_train_transformer_policy_calls_epoch_callback(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+
+            callback_epochs = []
+            _, result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="callback-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=2,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+                epoch_callback=lambda model, epoch_result: callback_epochs.append(epoch_result.final_metrics.epoch),
+            )
+
+        self.assertEqual(callback_epochs, [1, 2])
+        self.assertEqual(result.final_metrics.epoch, 2)
 
 
 if __name__ == "__main__":

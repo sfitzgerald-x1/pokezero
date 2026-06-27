@@ -13,7 +13,7 @@ import json
 from os import PathLike
 from pathlib import Path
 import random
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
@@ -690,6 +690,7 @@ def train_transformer_policy(
     model_config: TransformerPolicyConfig | None = None,
     training_config: TransformerTrainingConfig | None = None,
     initial_model: Any | None = None,
+    epoch_callback: Callable[[Any, TransformerTrainingResult], None] | None = None,
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
@@ -747,6 +748,15 @@ def train_transformer_policy(
         if totals.examples == 0:
             raise ValueError("training data produced no examples.")
         epoch_metrics.append(totals.to_epoch_metrics(epoch))
+        if epoch_callback is not None:
+            epoch_callback(
+                model,
+                TransformerTrainingResult(
+                    model_config=resolved_model_config,
+                    training_config=resolved_training_config,
+                    epochs=tuple(epoch_metrics),
+                ),
+            )
     return model, TransformerTrainingResult(
         model_config=resolved_model_config,
         training_config=resolved_training_config,

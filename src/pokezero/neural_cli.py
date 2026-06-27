@@ -663,6 +663,12 @@ def _train(args: argparse.Namespace) -> int:
         )
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
+    if args.value_selection_data and training_config.objective != "value-only":
+        print(
+            "warning: --value-selection-data selects by held-out value calibration, not policy quality; "
+            "prefer objective=value-only for value-head calibration runs.",
+            file=sys.stderr,
+        )
     value_selection_payload = None
     if args.value_selection_data:
         model, result, value_selection_payload = _train_with_value_selection(
@@ -751,9 +757,6 @@ def _train_with_value_selection(
     if selection_metric not in {"mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias"}:
         raise ValueError(f"unsupported value selection metric: {selection_metric!r}.")
 
-    per_epoch_config = replace(training_config, epochs=1)
-    model = initial_model
-    epoch_metrics = []
     selection_reports = []
     best_state = None
     best_epoch = None
@@ -761,20 +764,9 @@ def _train_with_value_selection(
     best_score = None
     device = resolve_torch_device(training_config.device)
 
-    for epoch in range(1, training_config.epochs + 1):
-        model, one_epoch_result = train_transformer_policy(
-            paths,
-            model_config=model_config,
-            training_config=per_epoch_config,
-            initial_model=model,
-        )
-        epoch_metric = replace(one_epoch_result.final_metrics, epoch=epoch)
-        epoch_metrics.append(epoch_metric)
-        epoch_result = TransformerTrainingResult(
-            model_config=model_config,
-            training_config=replace(training_config, epochs=epoch),
-            epochs=tuple(epoch_metrics),
-        )
+    def evaluate_epoch(model: object, epoch_result: TransformerTrainingResult) -> None:
+        nonlocal best_epoch, best_metric_value, best_score, best_state
+        epoch_metric = epoch_result.final_metrics
         report = evaluate_value_calibration(
             model=model,
             training_result=epoch_result,
@@ -785,6 +777,7 @@ def _train_with_value_selection(
         )
         metric_value = _value_selection_metric_value(report, selection_metric)
         score = _value_selection_score(metric_value, selection_metric)
+        epoch = epoch_metric.epoch
         selection_reports.append(
             {
                 "epoch": epoch,
@@ -799,13 +792,20 @@ def _train_with_value_selection(
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
 
+    model, full_result = train_transformer_policy(
+        paths,
+        model_config=model_config,
+        training_config=training_config,
+        initial_model=initial_model,
+        epoch_callback=evaluate_epoch,
+    )
     if best_state is None or best_epoch is None or best_metric_value is None:
         raise ValueError("value selection produced no epoch reports.")
     model.load_state_dict(best_state)
     selected_result = TransformerTrainingResult(
         model_config=model_config,
         training_config=replace(training_config, epochs=best_epoch),
-        epochs=tuple(epoch_metrics[:best_epoch]),
+        epochs=tuple(full_result.epochs[:best_epoch]),
     )
     payload = {
         "paths": [str(path) for path in selection_paths],
