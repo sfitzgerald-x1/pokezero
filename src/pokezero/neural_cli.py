@@ -232,7 +232,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-selection-metric",
         choices=VALUE_SELECTION_METRICS,
         default="mae",
-        help="Held-out value metric used by --value-selection-data; sign_accuracy is maximized, others are minimized.",
+        help=(
+            "Held-out value metric used by --value-selection-data; sign_accuracy and pearson_correlation "
+            "are maximized, others are minimized."
+        ),
     )
     train.add_argument(
         "--value-selection-out",
@@ -662,7 +665,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--value-selection-metric",
         choices=VALUE_SELECTION_METRICS,
         default="mae",
-        help="Value metric used by --value-selection; sign_accuracy is maximized, others are minimized.",
+        help=(
+            "Value metric used by --value-selection; sign_accuracy and pearson_correlation are maximized, "
+            "others are minimized."
+        ),
     )
     iterate.add_argument("--value-selection-batch-size", type=int, default=128, help="Per-epoch value-selection batch size.")
     iterate.add_argument("--value-selection-bins", type=int, default=10, help="Per-epoch value-selection bin count.")

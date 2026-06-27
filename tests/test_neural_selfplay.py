@@ -746,13 +746,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
     def test_run_neural_selfplay_iterations_value_selection_history_scope_uses_accumulated_paths(self) -> None:
         class FakeReport:
-            def __init__(self, *, sign_accuracy: float) -> None:
+            def __init__(self, *, pearson_correlation: float) -> None:
                 self.examples = 4
                 self.mse = 0.25
                 self.mae = 0.5
                 self.bias = 0.0
-                self.sign_accuracy = sign_accuracy
+                self.sign_accuracy = 0.5
                 self.expected_calibration_error = 0.2
+                self.pearson_correlation = pearson_correlation
 
             def to_dict(self) -> dict:
                 return {
@@ -762,6 +763,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "bias": self.bias,
                     "sign_accuracy": self.sign_accuracy,
                     "expected_calibration_error": self.expected_calibration_error,
+                    "pearson_correlation": self.pearson_correlation,
                     "bins": [],
                     "slices": [],
                 }
@@ -773,7 +775,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 patched_neural_selfplay_dependencies(),
                 patch(
                     "pokezero.neural_selfplay.evaluate_value_calibration",
-                    side_effect=[FakeReport(sign_accuracy=0.4), FakeReport(sign_accuracy=0.8)],
+                    side_effect=[FakeReport(pearson_correlation=0.4), FakeReport(pearson_correlation=0.8)],
                 ) as evaluate,
             ):
                 result = run_neural_selfplay_iterations(
@@ -788,7 +790,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     evaluation_games=1,
                     value_selection_config=NeuralValueSelectionConfig(
                         scope="history",
-                        metric="sign_accuracy",
+                        metric="pearson_correlation",
                         batch_size=3,
                         bins=4,
                     ),
@@ -804,7 +806,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         second_selection = result.iterations[1].value_selection
         self.assertIsNotNone(second_selection)
         self.assertEqual(second_selection["scope"], "history")
-        self.assertEqual(second_selection["metric"], "sign_accuracy")
+        self.assertEqual(second_selection["metric"], "pearson_correlation")
         self.assertEqual(second_selection["metric_direction"], "max")
         self.assertEqual(second_selection["selected_metric_value"], 0.8)
         self.assertEqual(second_sidecar["paths"], [

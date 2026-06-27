@@ -17,7 +17,14 @@ from .neural_policy import (
 )
 
 PathInput = str | PathLike[str] | Path
-VALUE_SELECTION_METRICS = ("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias")
+VALUE_SELECTION_METRICS = (
+    "mae",
+    "mse",
+    "expected_calibration_error",
+    "sign_accuracy",
+    "pearson_correlation",
+    "abs_bias",
+)
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,10 @@ def value_selection_metric_value(report: ValueCalibrationReport, metric: str) ->
         return float(report.expected_calibration_error)
     if metric == "sign_accuracy":
         return float(report.sign_accuracy)
+    if metric == "pearson_correlation":
+        if report.pearson_correlation is None:
+            raise ValueError("pearson_correlation value selection requires non-constant predictions and returns.")
+        return float(report.pearson_correlation)
     if metric == "abs_bias":
         return abs(float(report.bias))
     raise ValueError(f"unsupported value selection metric: {metric!r}.")
@@ -235,7 +246,7 @@ def value_selection_metric_value(report: ValueCalibrationReport, metric: str) ->
 def value_selection_metric_direction(metric: str) -> str:
     if metric not in VALUE_SELECTION_METRICS:
         raise ValueError(f"unsupported value selection metric: {metric!r}.")
-    return "max" if metric == "sign_accuracy" else "min"
+    return "max" if metric in {"sign_accuracy", "pearson_correlation"} else "min"
 
 
 def value_selection_score(metric_value: float, metric: str) -> float:

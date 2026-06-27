@@ -179,8 +179,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   --freeze-non-value-parameters`): warm-starts from an existing checkpoint, trains only the value head,
   and leaves the policy prior intact while calibration is improved. `--value-selection-data` can score
   each standalone-train epoch on held-out calibration and restore the best epoch by
-  MAE/MSE/ECE/sign/bias metric. `neural_cli iterate --value-selection` applies value-based epoch
-  selection inside self-play iterations, writes a per-iteration sidecar, and stores the selected
+  MAE/MSE/ECE/sign/bias/correlation metric. `neural_cli iterate --value-selection` applies value-based
+  epoch selection inside self-play iterations, writes a per-iteration sidecar, and stores the selected
   epoch in the run manifest. By default it selects on iteration/history training rollouts; for a
   cleaner value-calibration read, `--value-selection-heldout-games` collects separate current-policy
   self-play games that are used only for epoch selection and are not added to the training history.

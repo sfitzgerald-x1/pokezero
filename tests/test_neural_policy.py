@@ -2200,15 +2200,22 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 self.weight = int(state["weight"])
 
         class FakeReport:
-            def __init__(self, *, mae: float, sign_accuracy: float = 0.5) -> None:
+            def __init__(
+                self,
+                *,
+                mae: float,
+                sign_accuracy: float = 0.5,
+                pearson_correlation: float | None = None,
+            ) -> None:
                 self.examples = 2
                 self.mse = mae * mae
                 self.mae = mae
                 self.bias = 0.0
                 self.sign_accuracy = sign_accuracy
                 self.expected_calibration_error = mae / 2.0
+                self.pearson_correlation = pearson_correlation
 
-            def to_dict(self) -> dict[str, float | int]:
+            def to_dict(self) -> dict[str, float | int | None]:
                 return {
                     "examples": self.examples,
                     "mse": self.mse,
@@ -2216,6 +2223,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "bias": self.bias,
                     "sign_accuracy": self.sign_accuracy,
                     "expected_calibration_error": self.expected_calibration_error,
+                    "pearson_correlation": self.pearson_correlation,
                 }
 
         fake_model = FakeModel()
@@ -2280,6 +2288,106 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["selected_epoch"], 2)
         self.assertEqual(payload["selected_metric_value"], 0.2)
         self.assertEqual(len(payload["epochs"]), 3)
+
+    def test_value_selection_can_restore_best_epoch_by_pearson_correlation(self) -> None:
+        from pokezero.neural_cli import _train_with_value_selection
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.weight = 0
+                self.loaded_state = None
+
+            def state_dict(self) -> dict[str, int]:
+                return {"weight": self.weight}
+
+            def load_state_dict(self, state: dict[str, int]) -> None:
+                self.loaded_state = dict(state)
+                self.weight = int(state["weight"])
+
+        class FakeReport:
+            def __init__(self, *, pearson_correlation: float) -> None:
+                self.examples = 2
+                self.mse = 0.25
+                self.mae = 0.4
+                self.bias = 0.0
+                self.sign_accuracy = 0.5
+                self.expected_calibration_error = 0.2
+                self.pearson_correlation = pearson_correlation
+
+            def to_dict(self) -> dict[str, float | int | None]:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "pearson_correlation": self.pearson_correlation,
+                }
+
+        fake_model = FakeModel()
+        model_config = TransformerPolicyConfig.compact_category(category_vocab=("species:a",), category_oov_buckets=2)
+        training_config = TransformerTrainingConfig(epochs=3)
+
+        def fake_train(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
+            model = initial_model or fake_model
+            metrics = []
+            for epoch in range(1, training_config.epochs + 1):
+                model.weight = epoch
+                metrics.append(
+                    TransformerEpochMetrics(
+                        epoch=epoch,
+                        examples=2,
+                        loss=float(epoch),
+                        policy_loss=float(epoch),
+                        policy_accuracy=0.5,
+                        value_loss=float(epoch),
+                    )
+                )
+                if epoch_callback is not None:
+                    epoch_callback(
+                        model,
+                        TransformerTrainingResult(
+                            model_config=model_config,
+                            training_config=training_config,
+                            epochs=tuple(metrics),
+                        ),
+                    )
+            return model, TransformerTrainingResult(
+                model_config=model_config,
+                training_config=training_config,
+                epochs=tuple(metrics),
+            )
+
+        reports = [
+            FakeReport(pearson_correlation=0.1),
+            FakeReport(pearson_correlation=0.65),
+            FakeReport(pearson_correlation=0.4),
+        ]
+
+        with (
+            patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=reports),
+        ):
+            model, result, payload = _train_with_value_selection(
+                paths=[Path("train.jsonl")],
+                model_config=model_config,
+                training_config=training_config,
+                initial_model=fake_model,
+                selection_paths=[Path("heldout.jsonl")],
+                selection_metric="pearson_correlation",
+                batch_size=5,
+                bins=4,
+            )
+
+        self.assertEqual(model.weight, 2)
+        self.assertEqual(model.loaded_state, {"weight": 2})
+        self.assertEqual(result.training_config.epochs, 2)
+        self.assertEqual(result.final_metrics.epoch, 2)
+        self.assertEqual(payload["metric"], "pearson_correlation")
+        self.assertEqual(payload["metric_direction"], "max")
+        self.assertEqual(payload["selected_epoch"], 2)
+        self.assertEqual(payload["selected_metric_value"], 0.65)
 
     def test_neural_cli_train_can_write_value_selection_artifact(self) -> None:
         if not torch_available():
