@@ -39,6 +39,7 @@ from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .selfplay import POST_ITERATION_AUDIT_FAILURE_MODES, _report_post_iteration_audit_warnings, collect_selfplay_rollouts
 from .source_metadata import collect_source_metadata
+from .value_calibration import evaluate_value_calibration
 
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
@@ -57,6 +58,28 @@ class NeuralSelfPlayPromotionConfig:
     label_prefix: str | None = "neural-selfplay"
     notes: str | None = None
     allow_duplicate: bool = False
+
+
+@dataclass(frozen=True)
+class NeuralValueCalibrationConfig:
+    scope: str = "iteration"
+    batch_size: int = 128
+    bins: int = 10
+
+    def __post_init__(self) -> None:
+        if self.scope not in {"iteration", "history"}:
+            raise ValueError("value calibration scope must be 'iteration' or 'history'.")
+        if self.batch_size <= 0:
+            raise ValueError("value calibration batch_size must be positive.")
+        if self.bins <= 0:
+            raise ValueError("value calibration bins must be positive.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "batch_size": self.batch_size,
+            "bins": self.bins,
+        }
 
 
 @dataclass(frozen=True)
@@ -104,6 +127,7 @@ class NeuralSelfPlayIterationResult:
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     benchmark_reference_policy_specs: tuple[str, ...] = ()
+    value_calibration: Mapping[str, Any] | None = None
     source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -129,6 +153,7 @@ class NeuralSelfPlayIterationResult:
             "worker_count": self.worker_count,
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
+            "value_calibration": dict(self.value_calibration) if self.value_calibration is not None else None,
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
             "advancement": self.advancement.to_dict() if self.advancement is not None else None,
             "promotion": self.promotion.to_dict() if self.promotion is not None else None,
@@ -245,6 +270,7 @@ def run_neural_selfplay_iterations(
     auto_promotion_config: NeuralSelfPlayPromotionConfig | None = None,
     post_iteration_audit_config: "RunAuditConfig | None" = None,
     post_iteration_audit_failure_mode: str = "strict",
+    value_calibration_config: NeuralValueCalibrationConfig | None = None,
     tensorboard_log_dir: Path | str | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
@@ -343,6 +369,7 @@ def run_neural_selfplay_iterations(
         "benchmark_reference_policy_specs": list(benchmark_references),
         "mirror_match": mirror_match,
         "collection_temperature": collection_temperature,
+        "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -405,6 +432,13 @@ def run_neural_selfplay_iterations(
                 initial_model=current_model,
             )
             save_transformer_checkpoint(checkpoint_path, model, result=training)
+            value_calibration = _evaluate_iteration_value_calibration(
+                model=model,
+                training=training,
+                training_rollout_path=training_rollout_path,
+                training_rollout_history=tuple(training_rollout_history),
+                config=value_calibration_config,
+            )
             benchmark = None
             if evaluation_games:
                 benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
@@ -456,6 +490,7 @@ def run_neural_selfplay_iterations(
                 opponent_pool_config=opponent_pool_manifest_config,
                 invocation_config=invocation_config,
                 benchmark_reference_policy_specs=benchmark_references,
+                value_calibration=value_calibration,
                 source=source_metadata,
             )
             _write_json(iteration_manifest_path, result.to_manifest_dict())
@@ -566,6 +601,34 @@ def run_neural_selfplay_iterations(
         prior_invocation_configs=prior_invocation_configs,
         source=source_metadata,
     )
+
+
+def _evaluate_iteration_value_calibration(
+    *,
+    model: object,
+    training: TransformerTrainingResult,
+    training_rollout_path: Path,
+    training_rollout_history: tuple[Path, ...],
+    config: NeuralValueCalibrationConfig | None,
+) -> Mapping[str, Any] | None:
+    if config is None:
+        return None
+    paths = (training_rollout_path,) if config.scope == "iteration" else training_rollout_history
+    report = evaluate_value_calibration(
+        model=model,
+        training_result=training,
+        paths=paths,
+        batch_size=config.batch_size,
+        bins=config.bins,
+        device=training.training_config.device,
+    )
+    return {
+        "scope": config.scope,
+        "paths": [str(path) for path in paths],
+        "batch_size": config.batch_size,
+        "bins": config.bins,
+        "report": report.to_dict(),
+    }
 
 
 def _enforce_post_iteration_audit(

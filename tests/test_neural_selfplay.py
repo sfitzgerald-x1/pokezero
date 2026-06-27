@@ -21,6 +21,7 @@ from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZe
 from pokezero.neural_selfplay import (
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
     NeuralSelfPlayPromotionConfig,
+    NeuralValueCalibrationConfig,
     _promoted_checkpoint_specs,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
@@ -229,6 +230,44 @@ class NeuralSelfPlayTest(unittest.TestCase):
             ("training-rollouts.jsonl", "training-rollouts.jsonl"),
         ])
         self.assertEqual(trained_initial_models, [None, "entity-test-iter-0001"])
+
+    def test_run_neural_selfplay_iterations_records_value_calibration(self) -> None:
+        captured_calibrations = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(captured_calibrations=captured_calibrations):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=1,
+                    value_calibration_config=NeuralValueCalibrationConfig(scope="iteration", batch_size=7, bins=5),
+                )
+
+            iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual(len(captured_calibrations), 1)
+        self.assertEqual(captured_calibrations[0]["paths"], (run_dir / "iteration-0001" / "training-rollouts.jsonl",))
+        self.assertEqual(captured_calibrations[0]["batch_size"], 7)
+        self.assertEqual(captured_calibrations[0]["bins"], 5)
+        self.assertEqual(captured_calibrations[0]["device"], "cpu")
+        calibration = result.iterations[0].value_calibration
+        self.assertIsNotNone(calibration)
+        self.assertEqual(calibration["scope"], "iteration")
+        self.assertEqual(calibration["paths"], [str(run_dir / "iteration-0001" / "training-rollouts.jsonl")])
+        self.assertEqual(calibration["report"]["sign_accuracy"], 0.75)
+        self.assertEqual(iteration_manifest["value_calibration"], calibration)
+        self.assertEqual(run_manifest["iterations"][0]["value_calibration"], calibration)
+        self.assertEqual(iteration_manifest["invocation_config"]["value_calibration"]["scope"], "iteration")
 
     def test_run_neural_selfplay_iterations_benchmarks_checkpoint(self) -> None:
         captured_benchmarks = []
@@ -1035,11 +1074,15 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("iterations: 1", output)
         self.assertIn("bench_wr", output)
         self.assertIn("inc_wr", output)
+        self.assertIn("val_sign", output)
+        self.assertIn("val_ece", output)
         self.assertIn("0.800", output)
         self.assertIn("0.600", output)
         self.assertIn("0.250000", output)
         self.assertIn("0.7500", output)
         self.assertIn("0.100000", output)
+        self.assertIn("0.7200", output)
+        self.assertIn("0.180000", output)
         self.assertIn("0.5000", output)
 
     def test_neural_cli_report_can_print_json_manifest(self) -> None:
@@ -1191,6 +1234,22 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
                 }
             ],
         },
+        "value_calibration": {
+            "scope": "iteration",
+            "paths": [str(iteration_dir / "training-rollouts.jsonl")],
+            "batch_size": 128,
+            "bins": 10,
+            "report": {
+                "examples": 6,
+                "mse": 0.3,
+                "mae": 0.4,
+                "bias": -0.1,
+                "sign_accuracy": 0.72,
+                "expected_calibration_error": 0.18,
+                "bins": [],
+                "slices": [],
+            },
+        },
         "benchmark": {
             "format_id": "gen3randombattle",
             "max_decision_rounds": 250,
@@ -1273,12 +1332,14 @@ def patched_neural_selfplay_dependencies(
     trained_paths: list | None = None,
     trained_initial_models: list | None = None,
     captured_benchmarks: list | None = None,
+    captured_calibrations: list | None = None,
     candidate_beats_incumbent: bool | tuple[bool, ...] = True,
 ):
     collected = collected if collected is not None else []
     trained_paths = trained_paths if trained_paths is not None else []
     trained_initial_models = trained_initial_models if trained_initial_models is not None else []
     captured_benchmarks = captured_benchmarks if captured_benchmarks is not None else []
+    captured_calibrations = captured_calibrations if captured_calibrations is not None else []
 
     def fake_collect_selfplay_rollouts(**kwargs):
         output_path = kwargs["output_path"]
@@ -1383,6 +1444,23 @@ def patched_neural_selfplay_dependencies(
             matchups=tuple(matchup_results),
         )
 
+    class FakeValueCalibrationReport:
+        def to_dict(self) -> dict:
+            return {
+                "examples": 4,
+                "mse": 0.25,
+                "mae": 0.5,
+                "bias": -0.1,
+                "sign_accuracy": 0.75,
+                "expected_calibration_error": 0.2,
+                "bins": [],
+                "slices": [],
+            }
+
+    def fake_evaluate_value_calibration(**kwargs):
+        captured_calibrations.append(kwargs)
+        return FakeValueCalibrationReport()
+
     return patch.multiple(
         "pokezero.neural_selfplay",
         require_torch=lambda: object(),
@@ -1392,6 +1470,7 @@ def patched_neural_selfplay_dependencies(
         load_transformer_checkpoint=fake_load_transformer_checkpoint,
         load_transformer_policy=fake_load_transformer_policy,
         benchmark_rollouts=fake_benchmark_rollouts,
+        evaluate_value_calibration=fake_evaluate_value_calibration,
     )
 
 

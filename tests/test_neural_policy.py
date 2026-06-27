@@ -18,8 +18,10 @@ from pokezero.neural_policy import (
     EntityTokenTransformerPolicy,
     TorchUnavailableError,
     TransformerSoftmaxPolicy,
+    TransformerEpochMetrics,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
+    TransformerTrainingResult,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
@@ -1506,6 +1508,71 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(evaluate.call_args.kwargs["device"], "cpu")
         self.assertEqual(json.loads(stdout.getvalue()), {"examples": 3, "mse": 0.25})
 
+    def test_neural_cli_train_can_write_value_calibration_artifact(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"examples": 4, "sign_accuracy": 0.75}
+
+        def fake_train(paths, *, model_config, training_config, initial_model=None):
+            return object(), TransformerTrainingResult(
+                model_config=model_config,
+                training_config=training_config,
+                epochs=(
+                    TransformerEpochMetrics(
+                        epoch=1,
+                        examples=4,
+                        loss=0.25,
+                        policy_loss=0.2,
+                        policy_accuracy=0.75,
+                    ),
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "checkpoint.pt"
+            calibration_path = Path(temp_dir) / "value-calibration.json"
+            stdout = io.StringIO()
+            with (
+                patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train) as train,
+                patch("pokezero.neural_cli.save_transformer_checkpoint") as save,
+                patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()) as evaluate,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "train",
+                        "--data",
+                        "train-rollouts.jsonl",
+                        "--out",
+                        str(checkpoint_path),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--value-calibration-data",
+                        "calibration-rollouts.jsonl",
+                        "--value-calibration-out",
+                        str(calibration_path),
+                        "--value-calibration-batch-size",
+                        "9",
+                        "--value-calibration-bins",
+                        "6",
+                    ]
+                )
+
+            payload = json.loads(calibration_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(train.call_args.args[0], [Path("train-rollouts.jsonl")])
+        self.assertEqual(save.call_args.args[0], checkpoint_path)
+        self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("calibration-rollouts.jsonl")])
+        self.assertEqual(evaluate.call_args.kwargs["batch_size"], 9)
+        self.assertEqual(evaluate.call_args.kwargs["bins"], 6)
+        self.assertEqual(payload["paths"], ["calibration-rollouts.jsonl"])
+        self.assertEqual(payload["report"]["sign_accuracy"], 0.75)
+        self.assertIn(f"value_calibration: {calibration_path}", stdout.getvalue())
+
     def test_neural_cli_iterate_wires_arguments(self) -> None:
         fake_epoch = type(
             "FakeEpoch",
@@ -1598,6 +1665,13 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "2048",
                     "--audit-allow-missing-benchmark",
                     "--audit-allow-missing-benchmark-opponents",
+                    "--value-calibration",
+                    "--value-calibration-scope",
+                    "history",
+                    "--value-calibration-batch-size",
+                    "9",
+                    "--value-calibration-bins",
+                    "6",
                     "--json",
                 ]
             )
@@ -1636,6 +1710,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertFalse(kwargs["post_iteration_audit_config"].require_benchmark_opponent_coverage)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_consecutive_promotion_failures, 3)
         self.assertEqual(kwargs["post_iteration_audit_config"].max_benchmark_win_rate_drop, 0.15)
+        self.assertEqual(kwargs["value_calibration_config"].scope, "history")
+        self.assertEqual(kwargs["value_calibration_config"].batch_size, 9)
+        self.assertEqual(kwargs["value_calibration_config"].bins, 6)
 
     @staticmethod
     def _fake_iterate_result():
