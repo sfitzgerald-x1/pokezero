@@ -2835,6 +2835,227 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(readiness["best_max_damage_yardstick"]["iteration"], 1)
         self.assertEqual(readiness["best_max_damage_yardstick"]["win_rate"], 0.4)
 
+    def test_neural_cli_foundation_value_tune_plan_selects_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "anti-aggression" / "pilot-001"
+            out_dir = Path(temp_dir) / "value-tune"
+            write_neural_report_manifest(run_dir)
+            _append_neural_report_manifest_iteration(
+                run_dir,
+                iteration=2,
+                max_damage_wins=1,
+                simple_wins=4,
+                random_wins=8,
+            )
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["latest_accepted_checkpoint_path"] = manifest["iterations"][0]["checkpoint_path"]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-value-tune-plan",
+                        str(summary_path),
+                        "--out-dir",
+                        str(out_dir),
+                        "--epochs",
+                        "2",
+                        "--max-batches",
+                        "3",
+                        "--json",
+                    ]
+                )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["schema_version"], "pokezero.neural_foundation_value_tune_plan.v1")
+        self.assertEqual(recipe["candidate_source"], "latest-accepted")
+        self.assertEqual(recipe["candidate_iteration"], 1)
+        self.assertEqual(recipe["out_dir"], str(out_dir))
+        self.assertTrue(recipe["selection_paths_fallback_to_train"])
+        self.assertIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
+        self.assertIn("--objective", argv)
+        self.assertIn("value-only", argv)
+        self.assertIn("--freeze-non-value-parameters", argv)
+        self.assertIn("--value-selection-data", argv)
+        self.assertIn("--value-calibration-data", argv)
+        self.assertIn("--max-batches", argv)
+
+    def test_neural_cli_foundation_value_tune_plan_routes_heldout_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "anti-aggression" / "pilot-001"
+            out_dir = Path(temp_dir) / "value-tune"
+            write_neural_report_manifest(run_dir)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            heldout_paths = [
+                str(run_dir / "iteration-0001" / "heldout-a.jsonl"),
+                str(run_dir / "iteration-0001" / "heldout-b.jsonl"),
+            ]
+            manifest["iterations"][0]["value_selection_training_rollout_paths"] = heldout_paths
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-value-tune-plan",
+                        str(summary_path),
+                        "--out-dir",
+                        str(out_dir),
+                        "--require-heldout-selection",
+                        "--json",
+                    ]
+                )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        train_paths = argv[argv.index("--data") + 1 : argv.index("--out")]
+        selection_paths = argv[argv.index("--value-selection-data") + 1 : argv.index("--value-selection-metric")]
+        calibration_paths = argv[argv.index("--value-calibration-data") + 1 : argv.index("--value-calibration-out")]
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(recipe["selection_paths_fallback_to_train"])
+        self.assertEqual(recipe["selection_paths"], heldout_paths)
+        self.assertEqual(train_paths, manifest["iterations"][0]["training_rollout_paths"])
+        self.assertEqual(selection_paths, heldout_paths)
+        self.assertEqual(calibration_paths, heldout_paths)
+        self.assertNotIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
+        self.assertIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
+
+    def test_neural_cli_foundation_value_tune_run_writes_summary_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "anti-aggression" / "pilot-001"
+            out_dir = temp_path / "value-tune"
+            summary_path = temp_path / "value-tune-summary.json"
+            write_neural_report_manifest(run_dir)
+            foundation_summary = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+            source = neural_report_source_metadata(branch="scott/value-tune", head="def456", dirty=False)
+
+            def fake_run(argv, *, stdout, stderr, text):
+                calibration_path = Path(argv[argv.index("--value-calibration-out") + 1])
+                calibration_path.parent.mkdir(parents=True, exist_ok=True)
+                calibration_path.write_text(
+                    json.dumps(
+                        {
+                            "report": {
+                                "examples": 12,
+                                "sign_accuracy": 0.75,
+                                "expected_calibration_error": 0.12,
+                                "pearson_correlation": 0.41,
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=0, stdout="checkpoint: value-tuned.pt\n", stderr="value train\n")
+
+            with (
+                patch("pokezero.neural_cli.collect_source_metadata", return_value=source),
+                patch("pokezero.neural_cli.subprocess.run", side_effect=fake_run) as run,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-value-tune-run",
+                        str(foundation_summary),
+                        "--out-dir",
+                        str(out_dir),
+                        "--summary-path",
+                        str(summary_path),
+                        "--epochs",
+                        "2",
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+            with patch("sys.stdout", new_callable=io.StringIO) as report_stdout:
+                report_exit_code = neural_cli_main(["foundation-value-tune-report", str(summary_path)])
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once()
+        argv = run.call_args.args[0]
+        self.assertIn("--objective", argv)
+        self.assertIn("value-only", argv)
+        self.assertEqual(summary["schema_version"], "pokezero.neural_foundation_value_tune_summary.v1")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(summary["returncode"], 0)
+        self.assertEqual(summary["source"], source)
+        self.assertEqual(summary["recipe"]["candidate_iteration"], 1)
+        self.assertEqual(summary["value_calibration"]["report"]["pearson_correlation"], 0.41)
+        self.assertEqual(report_exit_code, 0)
+        report_output = report_stdout.getvalue()
+        self.assertIn("neural_foundation_value_tune_report:", report_output)
+        self.assertIn("status: passed", report_output)
+        self.assertIn("corr=0.4100", report_output)
+
+    def test_neural_cli_foundation_value_tune_rejects_invalid_numeric_options(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-value-tune-plan",
+                    "runs/missing",
+                    "--epochs",
+                    "0",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--epochs must be positive", stderr.getvalue())
+
+    def test_neural_cli_foundation_value_tune_can_require_heldout_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "anti-aggression" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="anti-aggression",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-value-tune-plan",
+                        str(summary_path),
+                        "--require-heldout-selection",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("no value-selection held-out rollout paths", stderr.getvalue())
+
     def test_neural_cli_foundation_compare_summarizes_manifest_yardsticks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

@@ -100,6 +100,8 @@ FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
 NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
 NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v1"
+NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_plan.v1"
+NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_summary.v1"
 FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
@@ -882,6 +884,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     foundation_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
     foundation_report.set_defaults(func=_foundation_report)
 
+    foundation_value_tune_plan = subparsers.add_parser(
+        "foundation-value-tune-plan",
+        help="Print a value-only fine-tune recipe for a selected foundation checkpoint.",
+    )
+    _add_foundation_value_tune_arguments(foundation_value_tune_plan, include_summary_path=False)
+    foundation_value_tune_plan.add_argument("--json", action="store_true", help="Print the recipe as JSON.")
+    foundation_value_tune_plan.set_defaults(func=_foundation_value_tune_plan)
+
+    foundation_value_tune_run = subparsers.add_parser(
+        "foundation-value-tune-run",
+        help="Run value-only fine-tuning for a selected foundation checkpoint and write a summary.",
+    )
+    _add_foundation_value_tune_arguments(foundation_value_tune_run, include_summary_path=True)
+    foundation_value_tune_run.set_defaults(func=_foundation_value_tune_run)
+
+    foundation_value_tune_report = subparsers.add_parser(
+        "foundation-value-tune-report",
+        help="Inspect a foundation value-tune summary artifact.",
+    )
+    foundation_value_tune_report.add_argument("path", type=Path, help="Value-tune output directory or summary JSON path.")
+    foundation_value_tune_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    foundation_value_tune_report.set_defaults(func=_foundation_value_tune_report)
+
     foundation_compare = subparsers.add_parser(
         "foundation-compare",
         help="Compare neural foundation-run summaries without requiring torch.",
@@ -1025,6 +1050,47 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
             type=Path,
             default=None,
             help="Where to write the wrapper summary. Defaults to RUN_DIR/neural-foundation-run-summary.json.",
+        )
+
+
+def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, include_summary_path: bool) -> None:
+    parser.add_argument("path", type=Path, help="Foundation run directory or neural-foundation-run-summary.json path.")
+    parser.add_argument(
+        "--candidate-source",
+        choices=FOUNDATION_COMPARE_CANDIDATE_SOURCES,
+        default="latest-accepted",
+        help="Foundation candidate to value-tune. Defaults to the retained latest accepted checkpoint.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Output directory. Defaults to RUN_DIR/value-tune/CANDIDATE_SOURCE-iteration-NNNN.",
+    )
+    parser.add_argument("--epochs", type=int, default=3, help="Value-only fine-tune epochs.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Value-only fine-tune batch size.")
+    parser.add_argument("--learning-rate", type=float, default=1e-4, help="Value-only fine-tune AdamW learning rate.")
+    parser.add_argument(
+        "--value-selection-metric",
+        choices=VALUE_SELECTION_METRICS,
+        default="pearson_correlation",
+        help="Held-out metric used to select the best value-only epoch.",
+    )
+    parser.add_argument("--value-calibration-batch-size", type=int, default=128, help="Calibration batch size.")
+    parser.add_argument("--value-calibration-bins", type=int, default=10, help="Calibration bin count.")
+    parser.add_argument(
+        "--require-heldout-selection",
+        action="store_true",
+        help="Fail unless the selected candidate has value-selection held-out rollout paths.",
+    )
+    parser.add_argument("--max-batches", type=int, default=None, help="Optional max training batches per epoch for smoke runs.")
+    parser.add_argument("--device", default=None, help="Torch device for the underlying train command.")
+    if include_summary_path:
+        parser.add_argument(
+            "--summary-path",
+            type=Path,
+            default=None,
+            help="Where to write the value-tune summary. Defaults to OUT_DIR/neural-foundation-value-tune-summary.json.",
         )
 
 
@@ -2413,6 +2479,114 @@ def _foundation_report(args: argparse.Namespace) -> int:
     return 0 if status == "passed" else 2
 
 
+def _foundation_value_tune_plan(args: argparse.Namespace) -> int:
+    recipe = _foundation_value_tune_recipe(args)
+    if args.json:
+        print(json.dumps(recipe, indent=2, sort_keys=True))
+        return 0
+    print("neural_foundation_value_tune_plan:")
+    print("purpose: value-only fine-tune for a selected foundation checkpoint")
+    print(f"candidate_source: {recipe['candidate_source']}")
+    print(f"candidate_iteration: {recipe['candidate_iteration']}")
+    print(f"candidate_checkpoint: {recipe['candidate_checkpoint_path']}")
+    print(f"out_dir: {recipe['out_dir']}")
+    _print_foundation_value_tune_warnings(recipe)
+    print("command:")
+    print(recipe["command"]["shell"])
+    return 0
+
+
+def _foundation_value_tune_run(args: argparse.Namespace) -> int:
+    recipe = _foundation_value_tune_recipe(args)
+    out_dir = Path(str(recipe["out_dir"]))
+    summary_path = args.summary_path if args.summary_path is not None else out_dir / "neural-foundation-value-tune-summary.json"
+    _validate_foundation_value_tune_paths(out_dir, summary_path=summary_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    summary: dict[str, Any] = {
+        "schema_version": NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION,
+        "status": "running",
+        "summary_path": str(summary_path),
+        "started_at": _utc_timestamp(),
+        "ended_at": None,
+        "duration_seconds": None,
+        "source": recipe["source"],
+        "recipe": recipe,
+        "returncode": None,
+        "stdout_tail": None,
+        "stderr_tail": None,
+        "artifacts": recipe["artifacts"],
+        "value_calibration": None,
+        "error": None,
+    }
+    _write_json(summary_path, summary)
+    print("neural_foundation_value_tune_run:")
+    print("purpose: value-only fine-tune for a selected foundation checkpoint")
+    print(f"summary: {summary_path}")
+    print(recipe["command"]["shell"], flush=True)
+    try:
+        completed = subprocess.run(recipe["command"]["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["ended_at"] = _utc_timestamp()
+        summary["duration_seconds"] = round(time.perf_counter() - started, 6)
+        summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        _write_json(summary_path, summary)
+        print(f"error: neural foundation value tune raised {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise
+
+    summary["returncode"] = int(completed.returncode)
+    summary["stdout_tail"] = _text_tail(completed.stdout)
+    summary["stderr_tail"] = _text_tail(completed.stderr)
+    summary["value_calibration"] = _load_optional_json_or_error(Path(str(recipe["artifacts"]["value_calibration_path"])))
+    summary["status"] = "passed" if completed.returncode == 0 else "failed"
+    summary["ended_at"] = _utc_timestamp()
+    summary["duration_seconds"] = round(time.perf_counter() - started, 6)
+    _write_json(summary_path, summary)
+    if completed.returncode == 0:
+        print("neural_foundation_value_tune_run: PASS")
+        print("note: PASS means value-only fine-tune completed; inspect calibration before using as a search leaf evaluator.")
+    else:
+        print(f"error: neural foundation value tune failed with exit code {completed.returncode}", file=sys.stderr)
+        if completed.stderr:
+            print(_text_tail(completed.stderr), file=sys.stderr)
+    return int(completed.returncode)
+
+
+def _foundation_value_tune_report(args: argparse.Namespace) -> int:
+    summary_path = args.path / "neural-foundation-value-tune-summary.json" if args.path.is_dir() else args.path
+    summary = _load_json_mapping(summary_path)
+    status = str(summary.get("status", "unknown"))
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0 if status == "passed" else 2
+    recipe = _optional_mapping(summary.get("recipe"))
+    artifacts = _optional_mapping(summary.get("artifacts"))
+    calibration = _optional_mapping(_optional_mapping(summary.get("value_calibration")).get("report"))
+    print("neural_foundation_value_tune_report:")
+    print("note: wrapper status is process health only; inspect calibration metrics for value quality.")
+    print(f"summary: {summary_path}")
+    print(f"status: {status}")
+    print(f"duration_seconds: {_format_manifest_value(summary.get('duration_seconds'))}")
+    print(f"returncode: {_format_manifest_value(summary.get('returncode'))}")
+    print(f"candidate_source: {_format_manifest_value(recipe.get('candidate_source'))}")
+    print(f"candidate_iteration: {_format_manifest_value(recipe.get('candidate_iteration'))}")
+    print(f"candidate_checkpoint: {_format_manifest_value(recipe.get('candidate_checkpoint_path'))}")
+    print(f"value_tuned_checkpoint: {_format_manifest_value(artifacts.get('checkpoint_path'))}")
+    _print_foundation_value_tune_warnings(recipe)
+    if calibration:
+        print(
+            "value_calibration: "
+            f"examples={_format_manifest_value(calibration.get('examples'))} "
+            f"sign={_format_optional_float(calibration.get('sign_accuracy'), digits=4)} "
+            f"ece={_format_optional_float(calibration.get('expected_calibration_error'), digits=6)} "
+            f"corr={_format_optional_float(calibration.get('pearson_correlation'), digits=4)}"
+        )
+    else:
+        print("value_calibration: missing")
+    return 0 if status == "passed" else 2
+
+
 def _foundation_report_payload(summary_path: Path, summary: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(summary)
     payload["summary_source_path"] = str(summary_path)
@@ -3050,6 +3224,208 @@ def _foundation_gate_status(entry: Mapping[str, Any]) -> str:
     if status == "fail":
         return "fail"
     return "-"
+
+
+def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
+    _validate_foundation_value_tune_args(args)
+    summary_path, summary = _load_foundation_summary(args.path)
+    manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
+    if manifest is None:
+        raise ValueError(f"foundation value tune requires a loaded manifest: {manifest_error}")
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    selected_iteration, candidate_error = _select_foundation_candidate_iteration(
+        iterations=iterations,
+        manifest=manifest,
+        candidate_source=args.candidate_source,
+    )
+    if selected_iteration is None:
+        raise ValueError(f"foundation candidate unavailable: {candidate_error}")
+    candidate_iteration = _int_or_none(selected_iteration.get("iteration"))
+    if candidate_iteration is None:
+        raise ValueError("foundation candidate is missing its iteration number.")
+    candidate_checkpoint = _string_or_none(selected_iteration.get("checkpoint_path"))
+    if candidate_checkpoint is None:
+        raise ValueError("foundation candidate is missing checkpoint_path.")
+    train_paths = _foundation_iteration_paths(
+        selected_iteration,
+        plural_key="training_rollout_paths",
+        singular_key="training_rollout_path",
+    )
+    if not train_paths:
+        raise ValueError("foundation candidate is missing training rollout paths.")
+    selection_paths = _foundation_iteration_paths(
+        selected_iteration,
+        plural_key="value_selection_training_rollout_paths",
+        singular_key="value_selection_training_rollout_path",
+    )
+    if not selection_paths:
+        if args.require_heldout_selection:
+            raise ValueError("selected foundation candidate has no value-selection held-out rollout paths.")
+        selection_paths = train_paths
+    selection_paths_fallback_to_train = selection_paths == train_paths
+    warnings = []
+    if selection_paths_fallback_to_train:
+        warnings.append(
+            {
+                "code": "selection_paths_fallback_to_train",
+                "message": "Value selection and calibration are using training rollout paths; calibration is in-sample.",
+            }
+        )
+    warnings.append(
+        {
+            "code": "calibration_reuses_value_selection_data",
+            "message": "Value calibration is reported on the same paths used for epoch selection; treat it as selection-set calibration, not a final unbiased read.",
+        }
+    )
+    recipe = _optional_mapping(summary.get("recipe"))
+    run_dir = Path(
+        _string_or_none(recipe.get("run_dir"))
+        or _string_or_none(manifest.get("run_dir"))
+        or str(summary_path.parent)
+    )
+    out_dir = args.out_dir or run_dir / "value-tune" / f"{args.candidate_source}-iteration-{candidate_iteration:04d}"
+    artifacts = {
+        "checkpoint_path": str(out_dir / "value-tuned-transformer-policy.pt"),
+        "value_selection_path": str(out_dir / "value-selection.json"),
+        "value_calibration_path": str(out_dir / "value-calibration.json"),
+    }
+    argv = [
+        sys.executable,
+        "-m",
+        "pokezero.neural_cli",
+        "train",
+        "--data",
+        *[str(path) for path in train_paths],
+        "--out",
+        artifacts["checkpoint_path"],
+        "--initial-checkpoint",
+        candidate_checkpoint,
+        "--objective",
+        "value-only",
+        "--freeze-non-value-parameters",
+        "--epochs",
+        str(args.epochs),
+        "--batch-size",
+        str(args.batch_size),
+        "--learning-rate",
+        str(args.learning_rate),
+        "--value-selection-data",
+        *[str(path) for path in selection_paths],
+        "--value-selection-metric",
+        str(args.value_selection_metric),
+        "--value-selection-out",
+        artifacts["value_selection_path"],
+        "--value-calibration-data",
+        *[str(path) for path in selection_paths],
+        "--value-calibration-out",
+        artifacts["value_calibration_path"],
+        "--value-calibration-batch-size",
+        str(args.value_calibration_batch_size),
+        "--value-calibration-bins",
+        str(args.value_calibration_bins),
+    ]
+    if args.max_batches is not None:
+        argv.extend(["--max-batches", str(args.max_batches)])
+    if args.device is not None:
+        argv.extend(["--device", str(args.device)])
+    return {
+        "schema_version": NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION,
+        "source": collect_source_metadata(),
+        "summary_path": str(summary_path),
+        "manifest_path": manifest_source,
+        "candidate_source": args.candidate_source,
+        "candidate_iteration": candidate_iteration,
+        "candidate_checkpoint_path": candidate_checkpoint,
+        "out_dir": str(out_dir),
+        "train_paths": [str(path) for path in train_paths],
+        "selection_paths": [str(path) for path in selection_paths],
+        "selection_paths_fallback_to_train": selection_paths_fallback_to_train,
+        "warnings": warnings,
+        "config": {
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "value_selection_metric": args.value_selection_metric,
+            "value_calibration_batch_size": args.value_calibration_batch_size,
+            "value_calibration_bins": args.value_calibration_bins,
+            "require_heldout_selection": args.require_heldout_selection,
+            "max_batches": args.max_batches,
+            "device": args.device,
+        },
+        "artifacts": artifacts,
+        "command": {
+            "argv": argv,
+            "shell": shlex.join(argv),
+        },
+    }
+
+
+def _foundation_iteration_paths(
+    iteration: Mapping[str, Any],
+    *,
+    plural_key: str,
+    singular_key: str,
+) -> list[Path]:
+    paths = []
+    for value in _sequence(iteration.get(plural_key, ())):
+        path_text = _string_or_none(value)
+        if path_text is not None:
+            paths.append(Path(path_text))
+    if paths:
+        return paths
+    singular = _string_or_none(iteration.get(singular_key))
+    return [Path(singular)] if singular is not None else []
+
+
+def _print_foundation_value_tune_warnings(recipe: Mapping[str, Any]) -> None:
+    warnings = tuple(_mapping(warning) for warning in _sequence(recipe.get("warnings", ())))
+    if not warnings:
+        return
+    print("warnings:")
+    for warning in warnings:
+        print(f"- {_format_manifest_value(warning.get('code'))}: {_format_manifest_value(warning.get('message'))}")
+
+
+def _validate_foundation_value_tune_args(args: argparse.Namespace) -> None:
+    if args.epochs <= 0:
+        raise ValueError("--epochs must be positive.")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive.")
+    if args.learning_rate <= 0.0 or not math.isfinite(args.learning_rate):
+        raise ValueError("--learning-rate must be a positive finite value.")
+    if args.value_calibration_batch_size <= 0:
+        raise ValueError("--value-calibration-batch-size must be positive.")
+    if args.value_calibration_bins <= 0:
+        raise ValueError("--value-calibration-bins must be positive.")
+    if args.max_batches is not None and args.max_batches <= 0:
+        raise ValueError("--max-batches must be positive when provided.")
+
+
+def _validate_foundation_value_tune_paths(out_dir: Path, *, summary_path: Path) -> None:
+    if summary_path.exists():
+        raise ValueError(f"summary path already exists: {summary_path}")
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise ValueError(f"value tune output directory already exists and is not empty: {out_dir}")
+
+
+def _load_optional_json(path: Path) -> Mapping[str, Any] | None:
+    if not path.exists():
+        return None
+    return _load_json_mapping(path)
+
+
+def _load_optional_json_or_error(path: Path) -> Mapping[str, Any] | None:
+    try:
+        return _load_optional_json(path)
+    except Exception as exc:
+        return {"load_error": str(exc), "path": str(path)}
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"JSON file must contain an object: {path}")
+    return payload
 
 
 def _clip_table_cell(value: object, width: int) -> str:
