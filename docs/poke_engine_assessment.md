@@ -75,13 +75,28 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
    compatibility on its own. This still only exercises the construction + reversible seam; it is
    **not** Showdown mechanics equivalence.
 
-   Next unowned step: legal-action equivalence (step 3 below). The adapter currently consumes a
-   hand-authored fixture; nothing yet reconstructs a fixture from a Showdown request payload or
-   compares the engine's legal root options against what Showdown offers each seat.
+   Next step: legal-action equivalence (step 3 below). Partially addressed: the comparison
+   scaffolding now exists, but the real engine binding cannot enumerate legal options yet.
 3. Validate legal root actions against the Showdown request payload for both seats.
-   (Next unowned step. The fixture adapter from step 2 is the input side of this; what remains is
-   translating a real Showdown request into a `BattleSpec` and asserting the engine's legal options
-   match Showdown's for both seats, including switches and forced/trapped cases.)
+   **Partially addressed.** `src/pokezero/poke_engine_legal_actions.py` adds the singles-only
+   comparison seam: `request_legal_actions(request)` derives expected labels from a Showdown-style
+   request (active moves in request order minus disabled ones, plus legal bench switches honoring
+   fainted/active/confirmed-`trapped`/`forceSwitch` rules; `maybeTrapped` remains switchable because
+   it is not conclusive), `engine_legal_actions(state, side)` derives labels from the engine's own
+   root-option enumeration, and `compare_legal_actions(...)` returns a `LegalActionEquivalence`
+   (`supported`, `request_actions`, `engine_actions`, `missing_from_engine`, `extra_from_engine`,
+   `reason`). The two sides are derived independently (request payload vs. engine state), so a match
+   is real agreement rather than a tautology.
+
+   The blocker is the binding: poke-engine 0.0.47's Python API exposes no root-option enumerator
+   (no `get_all_options`/`root_get_all_options`; only `generate_instructions(state, m1, m2)`, which
+   takes moves as input rather than listing legal ones). So the engine side currently returns
+   `supported=False` with an actionable reason, and a real-engine test asserts exactly that instead
+   of failing. The fake-provider tests prove the comparison itself is correct once options are
+   available. **Remaining:** a small PyO3 wrapper over Rust `State::root_get_all_options` to export
+   legal options to Python, then re-run `compare_legal_actions` against the real engine for both
+   seats (including switches and forced/trapped cases). This is fixture-only and is not wired into
+   rollout/training/search.
 4. Validate one-turn instruction outcomes against Showdown for a small fixture matrix:
    damage move, status move, switch, forced switch, faint, Spikes, Toxic, Substitute, Hidden Power,
    Intimidate, and Flash Fire.
