@@ -193,6 +193,15 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   even if it fails the incumbent benchmark. This is useful for testing whether the loop can produce
   an actual arms-race progression, but it is not promotion evidence and should stay separate from
   accepted-checkpoint gating.
+  A follow-up smoke at `runs/value-head-wse-local-20260627/always-advance-ppo-smoke` verified that
+  progression path: iteration 2 collected from iteration 1's checkpoint instead of the original
+  value-selected teacher-BC checkpoint, while `latest_accepted_checkpoint` correctly remained the
+  original starting checkpoint. This is still smoke-scale evidence only. Iteration 1 failed the
+  incumbent benchmark at 3/8 and scored 1/8 vs `max-damage`; iteration 2 tied iteration 1 at 4/8
+  and scored 3/8 vs `max-damage`, with zero capped games across both 32-game benchmark bundles.
+  Held-out value-selection ECE remained noisy (0.922 then 0.700), and iteration calibration stayed
+  weak enough that the value/base-net bottleneck remains the near-term focus before larger MCTS
+  reads.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
