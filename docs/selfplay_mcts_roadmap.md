@@ -68,6 +68,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   current shallow operator and confirms active-search throughput around 3 decisions/s.
   Benchmark JSON now includes root-PUCT decision diagnostics so follow-up M0 runs can see search
   counts, fallbacks, candidate counts, selected values/scores, and per-decision search latency.
+  After adding opponent-action legality masking, a repeat `--games 4` probe on the same 64-game
+  teacher-BC checkpoint showed the known invalid-action fallback was resolved (`211` root-PUCT
+  searches, `0` fallbacks), but still did not show strength lift: raw and root-PUCT both scored
+  1/8 vs `max-damage`, with zero capped games and active-search throughput around 2.7-2.8
+  decisions/s. This points back to operator/value quality rather than submit-validity as the next
+  M0 bottleneck.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
