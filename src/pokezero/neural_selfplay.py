@@ -933,6 +933,18 @@ def _tensorboard_scalars(
             scalars["train/policy_accuracy"] = float(last.policy_accuracy)
         if last.value_loss is not None:
             scalars["train/value_loss"] = float(last.value_loss)
+        if last.ppo_valid_fraction is not None:
+            scalars["ppo/valid_fraction"] = float(last.ppo_valid_fraction)
+        if last.ppo_advantage_mean is not None:
+            scalars["ppo/advantage_mean"] = float(last.ppo_advantage_mean)
+        if last.ppo_advantage_std is not None:
+            scalars["ppo/advantage_std"] = float(last.ppo_advantage_std)
+        if last.ppo_ratio_mean is not None:
+            scalars["ppo/ratio_mean"] = float(last.ppo_ratio_mean)
+        if last.ppo_clip_fraction is not None:
+            scalars["ppo/clip_fraction"] = float(last.ppo_clip_fraction)
+        if last.ppo_entropy is not None:
+            scalars["ppo/entropy"] = float(last.ppo_entropy)
     if benchmark is not None:
         for result in benchmark.head_to_head_results:
             if result.first_policy_id == candidate_policy_id:

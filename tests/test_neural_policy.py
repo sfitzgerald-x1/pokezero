@@ -367,6 +367,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertLess(metrics["policy_loss"], 0.0)  # positive advantage -> negative policy loss
         self.assertAlmostEqual(metrics["value_loss"], 1.0, places=5)  # MSE(0, 1)
+        self.assertEqual(metrics["ppo_valid_examples"], 3)
+        self.assertAlmostEqual(metrics["ppo_advantage_sum"], 3.0, places=5)
+        self.assertAlmostEqual(metrics["ppo_advantage_square_sum"], 3.0, places=5)
+        self.assertAlmostEqual(metrics["ppo_ratio_sum"], 3.0, places=5)
+        self.assertEqual(metrics["ppo_clip_count"], 0)
+        self.assertAlmostEqual(metrics["ppo_entropy_sum"], 3.0 * torch.log(torch.tensor(9.0)).item(), places=5)
         # Behavior-cloning objective on the same tensors yields a positive CE policy loss.
         bc_loss, bc_metrics = _transformer_loss(output, tensors, TransformerTrainingConfig())
         self.assertGreater(bc_metrics["policy_loss"], 0.0)
@@ -645,6 +651,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         config = TransformerTrainingConfig(objective="ppo", normalize_advantage=False, opponent_action_loss_weight=0.0, clip_epsilon=0.2)
         _, metrics = _transformer_loss(output, tensors, config)
         self.assertAlmostEqual(metrics["policy_loss"], -1.2, places=2)
+        self.assertEqual(metrics["ppo_valid_examples"], 1)
+        self.assertEqual(metrics["ppo_clip_count"], 1)
+        self.assertGreater(metrics["ppo_ratio_sum"], 1.2)
 
     def test_ppo_masks_examples_without_positive_behavior_prob(self) -> None:
         if not torch_available():
@@ -666,11 +675,128 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         all_masked = {**base, "action_probabilities": torch.full((2,), 1.0 / 9.0), "action_probability_mask": torch.zeros(2, dtype=torch.bool)}
         loss, metrics = _transformer_loss(output, all_masked, config)
         self.assertEqual(metrics["policy_loss"], 0.0)
+        self.assertEqual(metrics["ppo_objective_examples"], 2)
+        self.assertEqual(metrics["ppo_valid_examples"], 0)
         self.assertTrue(torch.isfinite(loss))
         # A zero behavior probability is excluded even if its mask flag is set.
         zero_prob = {**base, "action_probabilities": torch.tensor([0.0, 1.0 / 9.0]), "action_probability_mask": torch.ones(2, dtype=torch.bool)}
-        loss2, _ = _transformer_loss(output, zero_prob, config)
+        loss2, zero_prob_metrics = _transformer_loss(output, zero_prob, config)
+        self.assertEqual(zero_prob_metrics["ppo_valid_examples"], 1)
         self.assertTrue(torch.isfinite(loss2))
+
+    def test_ppo_epoch_metrics_aggregate_diagnostics(self) -> None:
+        from pokezero.neural_policy import _TorchMetricTotals
+
+        totals = _TorchMetricTotals()
+        totals.add(
+            4,
+            {
+                "loss": 2.0,
+                "policy_loss": 1.0,
+                "policy_correct": 2,
+                "value_loss": 0.5,
+                "opponent_examples": 0,
+                "action_family_examples": 0,
+                "switch_target_examples": 0,
+                "ppo_objective_examples": 4,
+                "ppo_valid_examples": 2,
+                "ppo_advantage_sum": 1.0,
+                "ppo_advantage_square_sum": 5.0,
+                "ppo_ratio_sum": 2.2,
+                "ppo_clip_count": 1,
+                "ppo_entropy_sum": 3.0,
+            },
+        )
+        totals.add(
+            2,
+            {
+                "loss": 1.0,
+                "policy_loss": 0.5,
+                "policy_correct": 1,
+                "value_loss": 0.25,
+                "opponent_examples": 0,
+                "action_family_examples": 0,
+                "switch_target_examples": 0,
+                "ppo_objective_examples": 2,
+                "ppo_valid_examples": 1,
+                "ppo_advantage_sum": -1.0,
+                "ppo_advantage_square_sum": 1.0,
+                "ppo_ratio_sum": 0.8,
+                "ppo_clip_count": 0,
+                "ppo_entropy_sum": 1.5,
+            },
+        )
+
+        metrics = totals.to_epoch_metrics(epoch=1)
+
+        self.assertEqual(metrics.ppo_valid_examples, 3)
+        self.assertAlmostEqual(metrics.ppo_valid_fraction, 0.5)
+        self.assertAlmostEqual(metrics.ppo_advantage_mean, 0.0)
+        self.assertAlmostEqual(metrics.ppo_advantage_std, (6.0 / 3.0) ** 0.5)
+        self.assertAlmostEqual(metrics.ppo_ratio_mean, 1.0)
+        self.assertAlmostEqual(metrics.ppo_clip_fraction, 1.0 / 3.0)
+        self.assertAlmostEqual(metrics.ppo_entropy, 1.5)
+
+    def test_ppo_epoch_metrics_reports_zero_valid_coverage(self) -> None:
+        from pokezero.neural_policy import _TorchMetricTotals
+
+        totals = _TorchMetricTotals()
+        totals.add(
+            2,
+            {
+                "loss": 1.0,
+                "policy_loss": 0.0,
+                "policy_correct": 0,
+                "value_loss": 0.5,
+                "opponent_examples": 0,
+                "action_family_examples": 0,
+                "switch_target_examples": 0,
+                "ppo_objective_examples": 2,
+                "ppo_valid_examples": 0,
+                "ppo_advantage_sum": 0.0,
+                "ppo_advantage_square_sum": 0.0,
+                "ppo_ratio_sum": 0.0,
+                "ppo_clip_count": 0,
+                "ppo_entropy_sum": 0.0,
+            },
+        )
+
+        metrics = totals.to_epoch_metrics(epoch=1)
+
+        self.assertEqual(metrics.ppo_valid_examples, 0)
+        self.assertEqual(metrics.ppo_valid_fraction, 0.0)
+        self.assertIsNone(metrics.ppo_advantage_mean)
+        self.assertIsNone(metrics.ppo_ratio_mean)
+
+    def test_non_ppo_epoch_metrics_omit_ppo_diagnostics(self) -> None:
+        from pokezero.neural_policy import _TorchMetricTotals
+
+        totals = _TorchMetricTotals()
+        totals.add(
+            2,
+            {
+                "loss": 1.0,
+                "policy_loss": 0.5,
+                "policy_correct": 1,
+                "value_loss": 0.25,
+                "opponent_examples": 0,
+                "action_family_examples": 0,
+                "switch_target_examples": 0,
+                "ppo_objective_examples": 0,
+                "ppo_valid_examples": 0,
+                "ppo_advantage_sum": 0.0,
+                "ppo_advantage_square_sum": 0.0,
+                "ppo_ratio_sum": 0.0,
+                "ppo_clip_count": 0,
+                "ppo_entropy_sum": 0.0,
+            },
+        )
+
+        metrics = totals.to_epoch_metrics(epoch=1)
+
+        self.assertIsNone(metrics.ppo_valid_examples)
+        self.assertIsNone(metrics.ppo_valid_fraction)
+        self.assertIsNone(metrics.ppo_entropy)
 
     def test_behavior_probability_mixes_epsilon_for_sampling(self) -> None:
         from pokezero.neural_policy import _behavior_probability
@@ -2387,6 +2513,60 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(policy.policy_id, "neural-smoke")
         self.assertEqual(len(opponent_priors), 9)
         self.assertAlmostEqual(sum(opponent_priors), 1.0, places=6)
+
+    def test_checkpoint_round_trips_ppo_diagnostic_metrics(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="ppo-diagnostics-roundtrip",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+            model = EntityTokenTransformerPolicy(model_config)
+            result = TransformerTrainingResult(
+                model_config=model_config,
+                training_config=TransformerTrainingConfig(objective="ppo", window_size=2),
+                epochs=(
+                    TransformerEpochMetrics(
+                        epoch=1,
+                        examples=10,
+                        loss=0.5,
+                        policy_loss=-0.1,
+                        policy_accuracy=0.4,
+                        value_loss=0.25,
+                        ppo_valid_examples=8,
+                        ppo_valid_fraction=0.8,
+                        ppo_advantage_mean=0.2,
+                        ppo_advantage_std=0.5,
+                        ppo_ratio_mean=1.1,
+                        ppo_clip_fraction=0.125,
+                        ppo_entropy=1.7,
+                    ),
+                ),
+            )
+
+            save_transformer_checkpoint(checkpoint_path, model, result=result)
+            _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+
+        restored_metrics = restored.final_metrics
+        self.assertEqual(restored_metrics.ppo_valid_examples, 8)
+        self.assertEqual(restored_metrics.ppo_valid_fraction, 0.8)
+        self.assertEqual(restored_metrics.ppo_advantage_mean, 0.2)
+        self.assertEqual(restored_metrics.ppo_advantage_std, 0.5)
+        self.assertEqual(restored_metrics.ppo_ratio_mean, 1.1)
+        self.assertEqual(restored_metrics.ppo_clip_fraction, 0.125)
+        self.assertEqual(restored_metrics.ppo_entropy, 1.7)
 
     def test_value_only_freeze_updates_value_head_only(self) -> None:
         if not torch_available():

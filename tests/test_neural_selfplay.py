@@ -932,6 +932,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
             value_loss=0.1,
             opponent_loss=0.05,
             opponent_accuracy=0.5,
+            ppo_valid_examples=8,
+            ppo_valid_fraction=0.8,
+            ppo_advantage_mean=0.2,
+            ppo_advantage_std=0.4,
+            ppo_ratio_mean=1.1,
+            ppo_clip_fraction=0.25,
+            ppo_entropy=1.7,
         )
 
         def matchup(label, p1, p2, p1_wins, games=10):
@@ -971,6 +978,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(scalars["train/loss"], 0.5)
         self.assertEqual(scalars["train/policy_accuracy"], 0.6)
         self.assertEqual(scalars["train/value_loss"], 0.1)
+        self.assertEqual(scalars["ppo/valid_fraction"], 0.8)
+        self.assertEqual(scalars["ppo/advantage_mean"], 0.2)
+        self.assertEqual(scalars["ppo/advantage_std"], 0.4)
+        self.assertEqual(scalars["ppo/ratio_mean"], 1.1)
+        self.assertEqual(scalars["ppo/clip_fraction"], 0.25)
+        self.assertEqual(scalars["ppo/entropy"], 1.7)
         self.assertAlmostEqual(scalars["winrate/max-damage"], 0.25)
         self.assertEqual(scalars["train/advanced"], 1.0)
 
