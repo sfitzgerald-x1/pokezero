@@ -67,7 +67,53 @@ def greedy_opponent_action_planner(
                 opponent_actions[player] = max(range(ACTION_COUNT), key=lambda index: (priors[index], -index))
         return opponent_actions
 
+    planner.planner_id = "checkpoint"  # type: ignore[attr-defined]
     return planner
+
+
+@dataclass
+class PolicyOpponentActionPlanner:
+    policies: Mapping[PlayerId, Policy]
+    planner_id: str = "policy"
+
+    def __call__(self, context: PolicyContext, rng: random.Random) -> Mapping[PlayerId, int]:
+        requested_opponents = tuple(player for player in context.requested_players if player != context.player_id)
+        opponent_actions: dict[PlayerId, int] = {}
+        for player in requested_opponents:
+            policy = self.policies.get(player)
+            observation = context.requested_observations.get(player)
+            if policy is None or observation is None:
+                continue
+            opponent_context = PolicyContext(
+                player_id=player,
+                decision_round_index=context.decision_round_index,
+                battle_id=context.battle_id,
+                format_id=context.format_id,
+                seed=context.seed,
+                observation=observation,
+                requested_players=context.requested_players,
+                trajectory=context.trajectory,
+                requested_legal_action_masks=context.requested_legal_action_masks,
+                requested_observations=context.requested_observations,
+            )
+            selector = getattr(policy, "select_action_with_context", None)
+            if callable(selector):
+                decision = selector(opponent_context, rng=rng)
+            else:
+                decision = policy.select_action(observation, rng=rng)
+            opponent_actions[player] = decision.action_index
+        return opponent_actions
+
+    def reset(self) -> None:
+        _reset_unique_policies(self.policies)
+
+
+def policy_opponent_action_planner(
+    policies: Mapping[PlayerId, Policy],
+    *,
+    planner_id: str = "policy",
+) -> PolicyOpponentActionPlanner:
+    return PolicyOpponentActionPlanner(policies=dict(policies), planner_id=planner_id)
 
 
 @dataclass
@@ -111,6 +157,9 @@ class RootPUCTSearchPolicy:
         reset = getattr(self.fallback_policy, "reset", None)
         if callable(reset):
             reset()
+        planner_reset = getattr(self.opponent_action_planner, "reset", None)
+        if callable(planner_reset):
+            planner_reset()
 
     def select_action(
         self,
@@ -214,6 +263,12 @@ class RootPUCTSearchPolicy:
             search,
             configured_rounds=self.leaf_rollout_decision_rounds,
         )
+        planner_id = getattr(self.opponent_action_planner, "planner_id", None)
+        planner_metadata = (
+            {"root_puct_opponent_action_policy": str(planner_id)}
+            if planner_id is not None
+            else {}
+        )
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -229,6 +284,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_elapsed_seconds": elapsed_seconds,
                 "root_puct_opponent_actions": dict(opponent_actions),
                 "root_puct_opponent_actions_legality_checked": legality_report.checked,
+                **planner_metadata,
                 **gate_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
@@ -380,6 +436,18 @@ def _leaf_rollout_policies(
     for step in context.trajectory.steps:
         players.add(step.player_id)
     return {player: factory(player) for player in sorted(players)}
+
+
+def _reset_unique_policies(policies: Mapping[PlayerId, Policy]) -> None:
+    seen: set[int] = set()
+    for policy in policies.values():
+        policy_identity = id(policy)
+        if policy_identity in seen:
+            continue
+        seen.add(policy_identity)
+        reset = getattr(policy, "reset", None)
+        if callable(reset):
+            reset()
 
 
 def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> None:

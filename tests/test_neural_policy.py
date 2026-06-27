@@ -39,16 +39,21 @@ from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
 LEGAL_TWO_ACTION_MASK = (True, True, False, False, False, False, False, False, False)
+LEGAL_ACTION_ONE_MASK = (False, True, False, False, False, False, False, False, False)
 
 
-def observation(value: int) -> PokeZeroObservationV0:
+def observation(
+    value: int,
+    *,
+    legal_action_mask: tuple[bool, ...] = LEGAL_TWO_ACTION_MASK,
+) -> PokeZeroObservationV0:
     spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
     return PokeZeroObservationV0(
         categorical_ids=tuple((value,) for _ in range(spec.token_count)),
         numeric_features=tuple((float(value),) for _ in range(spec.token_count)),
         token_type_ids=tuple(0 for _ in range(spec.token_count)),
         attention_mask=tuple(True for _ in range(spec.token_count)),
-        legal_action_mask=LEGAL_TWO_ACTION_MASK,
+        legal_action_mask=legal_action_mask,
     )
 
 
@@ -763,6 +768,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 requested_players=("p1", "p2"),
                 trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
             )
+            self.assertEqual(getattr(search_policy.opponent_action_planner, "planner_id"), "checkpoint")
             self.assertEqual(search_policy.opponent_action_planner(context, __import__("random").Random(1)), {"p2": 2})
             return FakeReport()
 
@@ -836,6 +842,94 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_can_use_benchmark_policy_for_root_opponent_actions(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 4}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--opponent-policy",
+                    "simple-legal",
+                    "--root-opponent-action-policy",
+                    "benchmark",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        matchups = tuple(captured["matchups"])
+        p1_search = matchups[2].p1_policy
+        p2_search = matchups[3].p2_policy
+        self.assertEqual(getattr(p1_search.opponent_action_planner, "planner_id"), "benchmark")
+        self.assertEqual(getattr(p2_search.opponent_action_planner, "planner_id"), "benchmark")
+        p1_context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-play",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=observation(1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={
+                "p1": LEGAL_TWO_ACTION_MASK,
+                "p2": LEGAL_ACTION_ONE_MASK,
+            },
+            requested_observations={
+                "p1": observation(1),
+                "p2": observation(2, legal_action_mask=LEGAL_ACTION_ONE_MASK),
+            },
+        )
+        p2_context = PolicyContext(
+            player_id="p2",
+            decision_round_index=0,
+            battle_id="search-play",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=observation(2),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={
+                "p1": LEGAL_ACTION_ONE_MASK,
+                "p2": LEGAL_TWO_ACTION_MASK,
+            },
+            requested_observations={
+                "p1": observation(1, legal_action_mask=LEGAL_ACTION_ONE_MASK),
+                "p2": observation(2),
+            },
+        )
+        rng = __import__("random").Random(1)
+        self.assertEqual(p1_search.opponent_action_planner(p1_context, rng), {"p2": 1})
+        self.assertEqual(p2_search.opponent_action_planner(p2_context, rng), {"p1": 1})
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
 
     def test_neural_cli_root_puct_play_benchmark_can_use_benchmark_opponent_for_leaf_rollouts(self) -> None:

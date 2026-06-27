@@ -75,6 +75,7 @@ class PolicyContext:
     requested_players: tuple[str, ...]
     trajectory: BattleTrajectory
     requested_legal_action_masks: Mapping[str, tuple[bool, ...]] = field(default_factory=dict)
+    requested_observations: Mapping[str, PokeZeroObservationV0] = field(default_factory=dict)
 
 
 @runtime_checkable

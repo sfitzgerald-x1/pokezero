@@ -136,6 +136,7 @@ def continue_rollout_from_current_state(
                     requested_player: tuple(requested_observation.legal_action_mask)
                     for requested_player, requested_observation in observations.items()
                 },
+                requested_observations=dict(observations),
             )
             decision = _select_policy_decision(
                 policy,
