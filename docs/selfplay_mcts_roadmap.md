@@ -63,10 +63,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   branch-value selection (`--selection-mode puct|value`), which isolates whether the near-term M0
   issue is the branch value signal or the PUCT prior/score mixer.
   It can also run opt-in bounded leaf continuations (`--leaf-rollout-rounds`) before evaluating a
-  root candidate, using real simulator steps and raw checkpoint policies to test whether short
-  rollout leaves produce a better root value signal than immediate one-ply value-head evaluation.
-  `--leaf-rollout-rounds-sweep` can run multiple leaf depths in one same-seed benchmark artifact so
-  depth comparisons are less error-prone than separate one-off commands.
+  root candidate, using real simulator steps to test whether short rollout leaves produce a better
+  root value signal than immediate one-ply value-head evaluation. Leaf continuations default to raw
+  checkpoint-vs-checkpoint policies, but `--leaf-rollout-opponent-policy benchmark` can use the
+  fixed benchmark opponent for the non-search side during leaf rollouts. `--leaf-rollout-rounds-sweep`
+  can run multiple leaf depths in one same-seed benchmark artifact so depth comparisons are less
+  error-prone than separate one-off commands.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
@@ -127,6 +129,15 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   strengthens the case that deeper leaf evaluation is the right M0 lever, but the absolute score
   remains much too low; next work should either run a larger depth sweep for variance reduction or
   improve the leaf evaluator/opponent model before spending larger training compute.
+  A follow-up benchmark-opponent leaf rollout sweep did **not** improve that same M0 read. On the
+  same `14062001` seed band and checkpoint, raw again scored 3/16 and leaf0/leaf1 matched 4/16, but
+  leaf2 dropped from the default-opponent sweep's 5/16 to 4/16. A fresh `16062001` seed band showed
+  the same benchmark-opponent shape: raw 3/16, leaf0 4/16, leaf1 4/16, leaf2 4/16. Both runs had
+  zero capped games and zero root-PUCT fallbacks, and the JSON diagnostics confirmed
+  `root_puct_leaf_rollout_opponent_policies: {"benchmark": ...}` for leaf1/leaf2 rows. This means
+  simply matching the fixed benchmark opponent inside short leaf continuations is not enough to
+  clear M0; the next useful search work should focus on value-target quality, root opponent-action
+  modeling, determinization, or deeper search rather than only swapping the leaf opponent policy.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
