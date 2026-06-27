@@ -342,6 +342,11 @@ Steps:
    PPO updates now train on the current iteration's rollout shard only, while retaining cumulative
    rollout paths in the manifest for provenance. This preserves the roadmap's on-policy consistency
    requirement; supervised/RWR objectives may still use cumulative history.
+   A same-seed 3x256 rerun of the aggressive always-advance PPO shape with this corrected
+   iteration-local PPO input path scored 54/200, 49/200, and 57/200 versus `max-damage`
+   (160/600 total, 0.267), with zero benchmark capped games and one capped collection game.
+   The prior cumulative-stale PPO run on the same seed bands scored 159/600, so the fix improves
+   training validity but does not by itself lift the short-run base-net ceiling.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
