@@ -9,7 +9,7 @@ from typing import Mapping
 
 from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
-from .policy import Policy, PolicyDecision
+from .policy import Policy, PolicyContext, PolicyDecision
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -111,17 +111,35 @@ def continue_rollout_from_current_state(
                 )
             raise ValueError("environment requested no players before reaching terminal state.")
 
+        requested_policies = {
+            player_id: _policy_for_player(policies, player_id)
+            for player_id in requested_players
+        }
         decisions: dict[PlayerId, PolicyDecision] = {}
         observations = {}
         for player_id in requested_players:
-            policy = _policy_for_player(policies, player_id)
             observation = cached_observations.get(player_id) or env.observe(player_id)
-            decision = policy.select_action(
-                observation,
+            observations[player_id] = observation
+        for player_id in requested_players:
+            policy = requested_policies[player_id]
+            observation = observations[player_id]
+            context = PolicyContext(
+                player_id=player_id,
+                decision_round_index=decision_round_index,
+                battle_id=battle_id,
+                format_id=config.format_id,
+                seed=seed,
+                observation=observation,
+                requested_players=tuple(requested_players),
+                trajectory=_trajectory_snapshot(trajectory),
+            )
+            decision = _select_policy_decision(
+                policy,
+                observation=observation,
+                context=context,
                 rng=_rng_for_player(seed, player_id, player_rngs),
             )
             decisions[player_id] = decision
-            observations[player_id] = observation
 
         step_result = env.step(
             {player_id: decision.action_index for player_id, decision in decisions.items()}
@@ -171,6 +189,30 @@ def _policy_for_player(policies: Mapping[PlayerId, Policy], player_id: PlayerId)
         return policies[player_id]
     except KeyError as exc:
         raise ValueError(f"no policy configured for requested player {player_id!r}.") from exc
+
+
+def _select_policy_decision(
+    policy: Policy,
+    *,
+    observation: PokeZeroObservationV0,
+    context: PolicyContext,
+    rng: random.Random,
+) -> PolicyDecision:
+    contextual_selector = getattr(policy, "select_action_with_context", None)
+    if callable(contextual_selector):
+        return contextual_selector(context, rng=rng)
+    return policy.select_action(observation, rng=rng)
+
+
+def _trajectory_snapshot(trajectory: BattleTrajectory) -> BattleTrajectory:
+    return BattleTrajectory(
+        battle_id=trajectory.battle_id,
+        format_id=trajectory.format_id,
+        seed=trajectory.seed,
+        steps=list(trajectory.steps),
+        terminal=trajectory.terminal,
+        metadata=dict(trajectory.metadata),
+    )
 
 
 def _reset_unique_policies(policies: Mapping[PlayerId, Policy]) -> None:

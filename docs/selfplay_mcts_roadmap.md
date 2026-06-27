@@ -45,6 +45,11 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   rollout prefixes to measure action deltas and search latency, while
   `neural_cli root-puct-counterfactual` replays the recorded and selected branches forward for a
   first retrospective outcome signal before changing live rollout control.
+- **Context-aware root-PUCT policy adapter** (`PolicyContext`, `RootPUCTSearchPolicy`): the rollout
+  driver can now call policies with player-local decision context, and the root-PUCT adapter can
+  select actions through a separate branch env without mutating the live rollout. Simultaneous-turn
+  opponent actions are supplied by an explicit planner hook rather than by leaking opponent-private
+  observations.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

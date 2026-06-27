@@ -1,0 +1,149 @@
+import random
+import unittest
+
+from pokezero.actions import ACTION_COUNT
+from pokezero.env import StepResult, TerminalState
+from pokezero.observation import PokeZeroObservationV0
+from pokezero.policy import PolicyDecision, RandomLegalPolicy
+from pokezero.rollout import RolloutConfig, RolloutDriver
+from pokezero.search_policy import RootPUCTSearchPolicy
+
+
+def _mask(*legal_indices: int) -> tuple[bool, ...]:
+    return tuple(index in set(legal_indices) for index in range(ACTION_COUNT))
+
+
+def _observation(*legal_indices: int) -> PokeZeroObservationV0:
+    return PokeZeroObservationV0(
+        categorical_ids=(),
+        numeric_features=(),
+        token_type_ids=(),
+        attention_mask=(),
+        legal_action_mask=_mask(*legal_indices),
+    )
+
+
+class FixedPolicy:
+    def __init__(self, action_index: int, *, policy_id: str = "fixed") -> None:
+        self.action_index = action_index
+        self.policy_id = policy_id
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
+
+
+class ImmediateOutcomeEnv:
+    def __init__(self, *, label: str) -> None:
+        self.label = label
+        self.reset_calls: list[tuple[int, str]] = []
+        self.step_calls: list[dict[str, int]] = []
+        self.all_step_calls: list[dict[str, int]] = []
+        self._terminal: TerminalState | None = None
+        self.closed = False
+
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        self.reset_calls.append((seed, format_id))
+        self.step_calls.clear()
+        self._terminal = None
+
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        return _observation(0, 1) if player == "p1" else _observation(0)
+
+    def legal_actions(self, player: str) -> tuple[bool, ...]:
+        return self.observe(player).legal_action_mask
+
+    def requested_players(self) -> tuple[str, ...]:
+        return () if self._terminal is not None else ("p1", "p2")
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.step_calls.append(dict(actions))
+        self.all_step_calls.append(dict(actions))
+        winner = "p1" if int(actions["p1"]) == 1 else "p2"
+        self._terminal = TerminalState(winner=winner, turn_count=1)
+        return StepResult(
+            observations={},
+            rewards={"p1": 1.0 if winner == "p1" else -1.0, "p2": -1.0 if winner == "p1" else 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
+
+    def terminal(self) -> TerminalState | None:
+        return self._terminal
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class RootPUCTSearchPolicyTest(unittest.TestCase):
+    def test_root_puct_policy_selects_search_action_using_separate_branch_env(self) -> None:
+        branch_envs: list[ImmediateOutcomeEnv] = []
+
+        def branch_env_factory() -> ImmediateOutcomeEnv:
+            env = ImmediateOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+        )
+        live_env = ImmediateOutcomeEnv(label="live")
+
+        result = RolloutDriver(
+            env=live_env,
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=91, battle_id="search-policy")
+
+        self.assertEqual(result.terminal.winner, "p1")
+        self.assertEqual(result.trajectory.steps_for_player("p1")[0].action_index, 1)
+        metadata = result.trajectory.steps_for_player("p1")[0].metadata
+        self.assertEqual(metadata["policy_id"], "root-puct-search")
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(metadata["root_puct_candidate_count"], 2)
+        self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
+        self.assertEqual(live_env.step_calls, [{"p1": 1, "p2": 0}])
+        self.assertEqual(len(branch_envs), 1)
+        self.assertTrue(branch_envs[0].closed)
+        self.assertEqual(branch_envs[0].all_step_calls, [{"p1": 0, "p2": 0}, {"p1": 1, "p2": 0}])
+
+    def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            cpuct=0.0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "missing opponent actions"):
+            RolloutDriver(
+                env=ImmediateOutcomeEnv(label="live"),
+                policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+                config=RolloutConfig(max_decision_rounds=3),
+            ).run(seed=92, battle_id="search-policy")
+
+    def test_root_puct_policy_can_fallback_when_context_is_missing(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            fallback_policy=RandomLegalPolicy(policy_id="fallback-random"),
+            allow_fallback=True,
+        )
+
+        decision = policy.select_action(_observation(0), rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(decision.policy_id, "root-puct-search")
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["fallback_policy_id"], "fallback-random")
+
+
+if __name__ == "__main__":
+    unittest.main()
