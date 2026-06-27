@@ -181,6 +181,13 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   epoch in the run manifest. By default it selects on iteration/history training rollouts; for a
   cleaner value-calibration read, `--value-selection-heldout-games` collects separate current-policy
   self-play games that are used only for epoch selection and are not added to the training history.
+  A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
+  held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
+  games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
+  plumbing evidence, not strength evidence: both candidates failed the incumbent head-to-head
+  advancement check, both scored 2/8 versus `max-damage`, and the latest accepted checkpoint remained
+  the starting value-selected teacher-BC checkpoint. Held-out ECE selected epoch 2 in both iterations
+  (0.099 then 0.628), while iteration training-rollout calibration ECE was 0.091 then 0.180.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
