@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -74,6 +75,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL.")
     train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
+    train.add_argument(
+        "--initial-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional checkpoint to warm-start from. Uses that checkpoint's model config; --policy-id can relabel the output.",
+    )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     train.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
@@ -103,16 +110,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     train.add_argument(
         "--objective",
-        choices=("behavior-cloning", "reward-weighted", "ppo"),
+        choices=("behavior-cloning", "reward-weighted", "ppo", "value-only"),
         default="behavior-cloning",
         help=(
             "Training objective: supervised behavior cloning (default), reward-weighted "
-            "behavior cloning, or PPO self-play RL."
+            "behavior cloning, PPO self-play RL, or value-only return prediction."
         ),
     )
     train.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
     train.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
     train.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
+    train.add_argument(
+        "--freeze-non-value-parameters",
+        action="store_true",
+        help="Train only value-head parameters; intended for value-only calibration fine-tunes from --initial-checkpoint.",
+    )
     train.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     train.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     train.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
@@ -120,7 +132,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
     train.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     train.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
-    train.add_argument("--policy-id", default="entity-transformer", help="Policy id stored in the checkpoint config.")
+    train.add_argument("--policy-id", default=None, help="Policy id stored in the checkpoint config.")
     train.add_argument(
         "--category-oov-buckets",
         type=int,
@@ -560,6 +572,13 @@ def _train(args: argparse.Namespace) -> int:
     require_torch()
     if args.value_calibration_out is not None and not args.value_calibration_data:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
+    initial_model = None
+    initial_training_result = None
+    if args.initial_checkpoint is not None:
+        initial_model, initial_training_result = load_transformer_checkpoint(
+            args.initial_checkpoint,
+            map_location=resolve_torch_device(args.device),
+        )
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -579,35 +598,54 @@ def _train(args: argparse.Namespace) -> int:
         clip_epsilon=args.clip_epsilon,
         entropy_coef=args.entropy_coef,
         normalize_advantage=not args.no_normalize_advantage,
+        freeze_non_value_parameters=args.freeze_non_value_parameters,
     )
-    model_config_kwargs = dict(
-        policy_id=args.policy_id,
-        window_size=args.window_size,
-        embedding_dim=args.embedding_dim,
-        transformer_layers=args.layers,
-        attention_heads=args.attention_heads,
-        feedforward_dim=args.feedforward_dim,
-        dropout=args.dropout,
-    )
-    # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
-    # the env builds at encode time, so rows align deterministically. (The legacy training-data
-    # vocab source is retired: observations now store rows, not collectible hash ids.)
-    if args.showdown_root is None:
-        raise ValueError("neural training requires --showdown-root for the Gen 3 randbat category vocabulary.")
-    from .randbat_vocab import gen3_category_vocabulary
+    if initial_training_result is not None:
+        model_config = replace(
+            initial_training_result.model_config,
+            policy_id=args.policy_id or initial_training_result.model_config.policy_id,
+        )
+        print(
+            f"category vocab (from initial checkpoint): {len(model_config.category_vocab):,} tokens + "
+            f"{model_config.category_oov_buckets:,} oov -> embedding rows {model_config.categorical_vocab_size:,}",
+            file=sys.stderr,
+        )
+    else:
+        model_config_kwargs = dict(
+            policy_id=args.policy_id or "entity-transformer",
+            window_size=args.window_size,
+            embedding_dim=args.embedding_dim,
+            transformer_layers=args.layers,
+            attention_heads=args.attention_heads,
+            feedforward_dim=args.feedforward_dim,
+            dropout=args.dropout,
+        )
+        # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
+        # the env builds at encode time, so rows align deterministically. (The legacy training-data
+        # vocab source is retired: observations now store rows, not collectible hash ids.)
+        if args.showdown_root is None:
+            raise ValueError("neural training requires --showdown-root for the Gen 3 randbat category vocabulary.")
+        from .randbat_vocab import gen3_category_vocabulary
 
-    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
-    model_config = TransformerPolicyConfig.compact_category(
-        category_vocab=category_vocab.tokens,
-        category_oov_buckets=category_vocab.oov_buckets,
-        **model_config_kwargs,
+        category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
+        model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=category_vocab.tokens,
+            category_oov_buckets=category_vocab.oov_buckets,
+            **model_config_kwargs,
+        )
+        print(
+            f"category vocab (randbat-dex universe): {len(category_vocab.tokens):,} tokens + {args.category_oov_buckets:,} oov "
+            f"-> embedding rows {model_config.categorical_vocab_size:,}",
+            file=sys.stderr,
+        )
+    if training_config.window_size != model_config.window_size:
+        raise ValueError("--window-size must match the model config window_size.")
+    model, result = train_transformer_policy(
+        args.data,
+        model_config=model_config,
+        training_config=training_config,
+        initial_model=initial_model,
     )
-    print(
-        f"category vocab (randbat-dex universe): {len(category_vocab.tokens):,} tokens + {args.category_oov_buckets:,} oov "
-        f"-> embedding rows {model_config.categorical_vocab_size:,}",
-        file=sys.stderr,
-    )
-    model, result = train_transformer_policy(args.data, model_config=model_config, training_config=training_config)
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
         line = (

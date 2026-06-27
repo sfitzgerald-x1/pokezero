@@ -327,9 +327,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
             TransformerTrainingConfig(objective="ppo", clip_epsilon=0.0)
+        with self.assertRaisesRegex(ValueError, "freeze_non_value_parameters"):
+            TransformerTrainingConfig(freeze_non_value_parameters=True)
         # round-trips through to_dict/from_dict-equivalent (asdict) with RL knobs.
         self.assertEqual(TransformerTrainingConfig(objective="ppo").objective, "ppo")
         self.assertEqual(TransformerTrainingConfig(objective="reward-weighted").objective, "reward-weighted")
+        self.assertEqual(TransformerTrainingConfig(objective="value-only", freeze_non_value_parameters=True).objective, "value-only")
 
     def test_ppo_objective_uses_value_baselined_clipped_surrogate(self) -> None:
         if not torch_available():
@@ -402,6 +405,46 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertAlmostEqual(weighted_metrics["policy_loss"], torch.log(torch.tensor(9.0)).item(), places=5)
         self.assertGreater(bc_metrics["policy_loss"], weighted_metrics["policy_loss"])
+
+    def test_value_only_objective_skips_policy_and_auxiliary_losses(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(
+            policy_logits=torch.full((2, 9), 10.0),
+            value=torch.zeros(2),
+            opponent_action_logits=torch.full((2, 9), 10.0),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 4], dtype=torch.long),
+            "returns": torch.ones(2),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_indices": torch.tensor([1, 2], dtype=torch.long),
+        }
+
+        loss, metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="value-only",
+                opponent_action_loss_weight=10.0,
+                action_family_loss_weight=10.0,
+                switch_target_loss_weight=10.0,
+            ),
+        )
+
+        self.assertAlmostEqual(float(loss.detach().item()), 1.0, places=5)
+        self.assertEqual(metrics["policy_loss"], 0.0)
+        self.assertEqual(metrics["value_loss"], 1.0)
+        self.assertEqual(metrics["opponent_examples"], 0)
+        self.assertEqual(metrics["action_family_examples"], 0)
+        self.assertEqual(metrics["switch_target_examples"], 0)
 
     def test_behavior_cloning_can_upweight_switch_action_labels(self) -> None:
         if not torch_available():
@@ -1619,6 +1662,73 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["report"]["sign_accuracy"], 0.75)
         self.assertIn(f"value_calibration: {calibration_path}", stdout.getvalue())
 
+    def test_neural_cli_train_can_warm_start_value_only_finetune(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+        fake_model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=2,
+            policy_id="base-policy",
+        )
+        fake_loaded_result = TransformerTrainingResult(
+            model_config=fake_model_config,
+            training_config=TransformerTrainingConfig(),
+            epochs=(),
+        )
+
+        def fake_train(paths, *, model_config, training_config, initial_model=None):
+            return object(), TransformerTrainingResult(
+                model_config=model_config,
+                training_config=training_config,
+                epochs=(
+                    TransformerEpochMetrics(
+                        epoch=1,
+                        examples=4,
+                        loss=0.25,
+                        policy_loss=0.0,
+                        policy_accuracy=0.5,
+                        value_loss=0.25,
+                    ),
+                ),
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "checkpoint.pt"
+            with (
+                patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_loaded_result)) as load,
+                patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train) as train,
+                patch("pokezero.neural_cli.save_transformer_checkpoint") as save,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "train",
+                        "--data",
+                        "train-rollouts.jsonl",
+                        "--out",
+                        str(checkpoint_path),
+                        "--initial-checkpoint",
+                        "base.pt",
+                        "--policy-id",
+                        "value-finetuned",
+                        "--objective",
+                        "value-only",
+                        "--freeze-non-value-parameters",
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        load.assert_called_once_with(Path("base.pt"), map_location="cpu")
+        self.assertEqual(train.call_args.kwargs["initial_model"], fake_model)
+        self.assertEqual(train.call_args.kwargs["model_config"].policy_id, "value-finetuned")
+        self.assertEqual(train.call_args.kwargs["training_config"].objective, "value-only")
+        self.assertTrue(train.call_args.kwargs["training_config"].freeze_non_value_parameters)
+        self.assertEqual(save.call_args.args[0], checkpoint_path)
+
     def test_neural_cli_iterate_wires_arguments(self) -> None:
         fake_epoch = type(
             "FakeEpoch",
@@ -2100,6 +2210,55 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(policy.policy_id, "neural-smoke")
         self.assertEqual(len(opponent_priors), 9)
         self.assertAlmostEqual(sum(opponent_priors), 1.0, places=6)
+
+    def test_value_only_freeze_updates_value_head_only(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="value-finetune-smoke",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+            model = EntityTokenTransformerPolicy(model_config)
+            before = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
+
+            trained_model, result = train_transformer_policy(
+                data_path,
+                model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=1,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                    objective="value-only",
+                    freeze_non_value_parameters=True,
+                ),
+                initial_model=model,
+            )
+
+            changed = {
+                name
+                for name, parameter in trained_model.named_parameters()
+                if not require_torch().equal(before[name], parameter.detach())
+            }
+
+        self.assertEqual(result.final_metrics.policy_loss, 0.0)
+        self.assertTrue(changed)
+        self.assertTrue(all(name.startswith("value_head.") for name in changed))
 
 
 if __name__ == "__main__":

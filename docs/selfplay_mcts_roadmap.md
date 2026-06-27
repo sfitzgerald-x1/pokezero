@@ -172,6 +172,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   targets; reports stratified return/turn/terminal slices; and can be emitted from standalone
   calibration, `neural_cli train`, or `neural_cli iterate`. This is the first WS-E metric before using
   the value head for MCTS leaf evaluation.
+- **Value-head fine-tuning path** (`neural_cli train --initial-checkpoint --objective value-only
+  --freeze-non-value-parameters`): warm-starts from an existing checkpoint, trains only the value head,
+  and leaves the policy prior intact while calibration is improved.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
