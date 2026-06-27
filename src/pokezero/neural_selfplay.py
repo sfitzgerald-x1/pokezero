@@ -436,7 +436,7 @@ def run_neural_selfplay_iterations(
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
         next_evaluation_seed_start = _next_evaluation_seed_start(
-            last_iteration,
+            prior_iteration_manifests,
             default_seed_start=evaluation_seed_start,
         )
     else:
@@ -1430,19 +1430,25 @@ def _next_value_selection_seed_start(iteration: Mapping[str, Any], *, default_se
     return int(default_seed_start)
 
 
-def _next_evaluation_seed_start(iteration: Mapping[str, Any], *, default_seed_start: int) -> int:
-    benchmark = iteration.get("benchmark")
-    if not isinstance(benchmark, Mapping):
-        return int(default_seed_start)
+def _next_evaluation_seed_start(iterations: Iterable[Mapping[str, Any]], *, default_seed_start: int) -> int:
     next_seed: int | None = None
-    for matchup in _sequence(benchmark.get("matchups", ())):
-        matchup_payload = _mapping(matchup)
-        seed_start = matchup_payload.get("seed_start")
-        metrics = matchup_payload.get("metrics")
-        if seed_start is None or not isinstance(metrics, Mapping):
+    for iteration in iterations:
+        benchmark = iteration.get("benchmark")
+        if not isinstance(benchmark, Mapping):
             continue
-        matchup_next_seed = int(seed_start) + int(metrics.get("games", 0))
-        next_seed = matchup_next_seed if next_seed is None else max(next_seed, matchup_next_seed)
+        for matchup in _sequence(benchmark.get("matchups", ())):
+            matchup_payload = _mapping(matchup)
+            seed_start = matchup_payload.get("seed_start")
+            metrics = matchup_payload.get("metrics")
+            if seed_start is None or not isinstance(metrics, Mapping):
+                continue
+            if "games" not in metrics:
+                raise ValueError("benchmark matchup metrics missing games; cannot derive next evaluation seed.")
+            games = int(metrics["games"])
+            if games <= 0:
+                raise ValueError("benchmark matchup games must be positive to derive next evaluation seed.")
+            matchup_next_seed = int(seed_start) + games
+            next_seed = matchup_next_seed if next_seed is None else max(next_seed, matchup_next_seed)
     return next_seed if next_seed is not None else int(default_seed_start)
 
 
