@@ -976,6 +976,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         second_matchups = captured_benchmarks[1]["matchups"]
         self.assertEqual(captured_benchmarks[0]["games"], 2)
         self.assertEqual(captured_benchmarks[0]["seed_start"], 100)
+        self.assertEqual(captured_benchmarks[1]["seed_start"], 102)
         self.assertEqual([matchup.label for matchup in first_matchups], [
             "entity-test-iter-0001 vs random-legal",
             "random-legal vs entity-test-iter-0001",
@@ -1691,6 +1692,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         collected = []
         trained_paths = []
         trained_initial_models = []
+        captured_benchmarks = []
 
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -1699,6 +1701,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 collected=collected,
                 trained_paths=trained_paths,
                 trained_initial_models=trained_initial_models,
+                captured_benchmarks=captured_benchmarks,
             ):
                 run_neural_selfplay_iterations(
                     run_dir=run_dir,
@@ -1710,7 +1713,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
-                    evaluation_games=1,
+                    evaluation_games=2,
+                    evaluation_seed_start=100,
                 )
                 resumed = run_neural_selfplay_iterations(
                     run_dir=run_dir,
@@ -1721,7 +1725,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     model_config=_entity_test_model_config(),
                     training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
                     fixed_opponent_policy_specs=("random-legal",),
-                    evaluation_games=1,
+                    evaluation_games=2,
                     resume=True,
                 )
 
@@ -1731,6 +1735,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(resumed.iterations[0].iteration, 2)
         self.assertEqual(len(run_manifest["iterations"]), 2)
         self.assertEqual(collected[1]["seed_start"], 22)
+        self.assertEqual(captured_benchmarks[0]["seed_start"], 100)
+        self.assertEqual(captured_benchmarks[1]["seed_start"], 102)
         self.assertEqual(collected[1]["current_policy_spec"], f"neural:{run_dir / 'iteration-0001' / 'transformer-policy.pt'}")
         self.assertEqual(second_manifest["training_rollout_paths"], [
             str(run_dir / "iteration-0001" / "training-rollouts.jsonl"),
@@ -1741,10 +1747,58 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertFalse(run_manifest["invocation_configs"][0]["resume"])
         self.assertEqual(run_manifest["invocation_configs"][0]["seed_start_argument"], 20)
         self.assertEqual(run_manifest["invocation_configs"][0]["first_iteration_seed_start"], 20)
+        self.assertEqual(run_manifest["invocation_configs"][0]["first_iteration_evaluation_seed_start"], 100)
         self.assertTrue(run_manifest["invocation_configs"][1]["resume"])
         self.assertEqual(run_manifest["invocation_configs"][1]["seed_start_argument"], 1)
         self.assertEqual(run_manifest["invocation_configs"][1]["first_iteration_seed_start"], 22)
+        self.assertEqual(run_manifest["invocation_configs"][1]["first_iteration_evaluation_seed_start"], 102)
         self.assertEqual(second_manifest["invocation_config"], run_manifest["invocation_configs"][1])
+
+    def test_run_neural_selfplay_iterations_resume_eval_seed_uses_all_prior_benchmarks(self) -> None:
+        captured_benchmarks = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(captured_benchmarks=captured_benchmarks):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    evaluation_games=2,
+                    evaluation_seed_start=100,
+                )
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    evaluation_games=0,
+                    resume=True,
+                )
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    evaluation_games=2,
+                    resume=True,
+                )
+
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual([call["seed_start"] for call in captured_benchmarks], [100, 102])
+        self.assertEqual(run_manifest["invocation_configs"][2]["first_iteration_evaluation_seed_start"], 102)
 
     def test_load_neural_selfplay_run_manifest_reconstructs_source_from_iteration_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
