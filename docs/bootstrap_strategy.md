@@ -506,10 +506,11 @@ python -m pokezero.neural_cli foundation-compare \
 ```
 
 `foundation-compare` is read-only and does not require torch. It reports each wrapper's process
-status, profile, variant, foundation-readiness status, latest fixed-yardstick win rates, and
-value-head correlation/sign/ECE metrics. Stale or unreadable summary paths are shown as error rows
-so one bad arm does not hide the others, and the command exits nonzero when any row cannot be
-loaded. Use this for WS-A/WS-E experiment selection; it is not an MCTS verdict.
+status, profile, variant, foundation-readiness status, latest fixed-yardstick win rates, the best
+observed `max-damage` yardstick checkpoint, and value-head correlation/sign/ECE metrics. Stale or
+unreadable summary paths are shown as error rows so one bad arm does not hide the others, and the
+command exits nonzero when any row cannot be loaded. Use this for WS-A/WS-E experiment selection; it
+is not an MCTS verdict.
 
 When a script needs a concrete candidate-selection gate, pass explicit thresholds rather than relying
 on a built-in definition of "search ready":
@@ -526,11 +527,13 @@ python -m pokezero.neural_cli foundation-compare \
   --require-quality-pass
 ```
 
-The quality gate annotates each row with pass/fail and failed check names. `--require-quality-pass`
-returns exit `2` if every loaded row fails the configured gate; load errors still return exit `1`.
-Exit `0` means at least one loaded row passed, not that every compared arm passed; scripts that care
-about a specific arm should inspect that row's `quality_gate.status` in `--json` output. These
-thresholds are experiment-local guardrails, not roadmap-wide success criteria.
+The quality gate annotates each row with pass/fail and failed check names. It intentionally gates on
+the latest fixed-yardstick row, while the best observed `max-damage` row is checkpoint-selection
+visibility for diagnosing regressions. `--require-quality-pass` returns exit `2` if every loaded row
+fails the configured gate; load errors still return exit `1`. Exit `0` means at least one loaded row
+passed, not that every compared arm passed; scripts that care about a specific arm should inspect
+that row's `quality_gate.status` in `--json` output. These thresholds are experiment-local
+guardrails, not roadmap-wide success criteria.
 
 Use `--variant opponent-signal` as the H3 ablation arm when testing whether stronger
 opponent-action auxiliary supervision improves the foundation policy/value representation. The
