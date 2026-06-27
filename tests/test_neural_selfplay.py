@@ -2552,25 +2552,27 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("does not allow fixed --opponent-policy", stderr.getvalue())
 
-    def test_neural_cli_foundation_teacher_cut_rejects_live_scripted_initial_policy(self) -> None:
-        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
-            exit_code = neural_cli_main(
-                [
-                    "foundation-plan",
-                    "--run-dir",
-                    "runs/foundation-teacher-cut",
-                    "--showdown-root",
-                    "/tmp/showdown",
-                    "--variant",
-                    "teacher-cut",
-                    "--initial-policy",
-                    "scripted-teacher",
-                    "--json",
-                ]
-            )
+    def test_neural_cli_foundation_teacher_cut_rejects_live_heuristic_initial_policy(self) -> None:
+        for policy_spec in ("scripted-teacher", "aggressive-damage", "max-damage"):
+            with self.subTest(policy_spec=policy_spec):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = neural_cli_main(
+                        [
+                            "foundation-plan",
+                            "--run-dir",
+                            "runs/foundation-teacher-cut",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--variant",
+                            "teacher-cut",
+                            "--initial-policy",
+                            policy_spec,
+                            "--json",
+                        ]
+                    )
 
-        self.assertEqual(exit_code, 1)
-        self.assertIn("cannot use 'scripted-teacher' as the live initial policy", stderr.getvalue())
+                self.assertEqual(exit_code, 1)
+                self.assertIn(f"cannot use {policy_spec!r} as the live initial policy", stderr.getvalue())
 
     def test_neural_cli_foundation_opponent_signal_variant_sets_auxiliary_loss(self) -> None:
         with (

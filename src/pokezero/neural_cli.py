@@ -103,7 +103,9 @@ NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v
 NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_plan.v1"
 NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_summary.v1"
 FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
-FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES = frozenset({"scripted-teacher", "aggressive-damage"})
+FOUNDATION_TEACHER_CUT_FORBIDDEN_POLICY_NAMES = frozenset(
+    {"scripted-teacher", "aggressive-damage", "max-damage"}
+)
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
         "iterations": 2,
