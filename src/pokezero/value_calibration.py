@@ -183,9 +183,12 @@ def fit_value_calibration_transform(
     paths: PathInput | Iterable[PathInput],
     batch_size: int = 128,
     device: str | object | None = None,
+    method: str = "affine",
 ) -> ValueCalibrationTransform:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
+    if method not in {"affine", "isotonic"}:
+        raise ValueError("value calibration fit method must be 'affine' or 'isotonic'.")
     torch_module = require_torch()
     was_training = getattr(model, "training", None)
     if hasattr(model, "eval"):
@@ -194,7 +197,8 @@ def fit_value_calibration_transform(
         model.to(device)
     dataset_config = _trajectory_dataset_config_from_training_result(training_result)
     # Fit transforms against realized outcome returns, not bootstrapped PPO GAE targets.
-    totals = _AffineFitTotals()
+    affine_totals = _AffineFitTotals()
+    isotonic_totals = _IsotonicFitTotals()
     try:
         with torch_module.no_grad():
             for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
@@ -208,11 +212,16 @@ def fit_value_calibration_transform(
                 )
                 predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
                 returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
-                totals.add(predictions=predictions, returns=returns)
+                if method == "isotonic":
+                    isotonic_totals.add(predictions=predictions, returns=returns)
+                else:
+                    affine_totals.add(predictions=predictions, returns=returns)
     finally:
         if was_training is not None and hasattr(model, "train"):
             model.train(bool(was_training))
-    return totals.to_transform()
+    if method == "isotonic":
+        return isotonic_totals.to_transform()
+    return affine_totals.to_transform()
 
 
 def fit_affine_value_calibration_transform(
@@ -221,6 +230,16 @@ def fit_affine_value_calibration_transform(
     returns: tuple[float, ...],
 ) -> ValueCalibrationTransform:
     totals = _AffineFitTotals()
+    totals.add(predictions=predictions, returns=returns)
+    return totals.to_transform()
+
+
+def fit_isotonic_value_calibration_transform(
+    *,
+    predictions: tuple[float, ...],
+    returns: tuple[float, ...],
+) -> ValueCalibrationTransform:
+    totals = _IsotonicFitTotals()
     totals.add(predictions=predictions, returns=returns)
     return totals.to_transform()
 
@@ -307,6 +326,63 @@ class _AffineFitTotals:
         scale = ((self.examples * self.prediction_return_sum) - (self.prediction_sum * self.return_sum)) / denominator
         bias = (self.return_sum - (scale * self.prediction_sum)) / self.examples
         return ValueCalibrationTransform(scale=scale, bias=bias)
+
+
+@dataclass
+class _IsotonicBlock:
+    raw_min: float
+    raw_max: float
+    return_sum: float
+    weight: int
+
+    @property
+    def return_mean(self) -> float:
+        return self.return_sum / self.weight
+
+    def merge(self, other: "_IsotonicBlock") -> "_IsotonicBlock":
+        return _IsotonicBlock(
+            raw_min=min(self.raw_min, other.raw_min),
+            raw_max=max(self.raw_max, other.raw_max),
+            return_sum=self.return_sum + other.return_sum,
+            weight=self.weight + other.weight,
+        )
+
+
+@dataclass
+class _IsotonicFitTotals:
+    def __post_init__(self) -> None:
+        self._targets_by_prediction: dict[float, tuple[int, float]] = {}
+
+    def add(self, *, predictions: tuple[float, ...], returns: tuple[float, ...]) -> None:
+        if len(predictions) != len(returns):
+            raise ValueError("predictions and returns must have the same length.")
+        for prediction, target in zip(predictions, returns, strict=True):
+            key = float(prediction)
+            count, return_sum = self._targets_by_prediction.get(key, (0, 0.0))
+            self._targets_by_prediction[key] = (count + 1, return_sum + float(target))
+
+    def to_transform(self) -> ValueCalibrationTransform:
+        if not self._targets_by_prediction:
+            raise ValueError("calibration data produced no examples.")
+        blocks: list[_IsotonicBlock] = []
+        for prediction, (weight, return_sum) in sorted(self._targets_by_prediction.items()):
+            block = _IsotonicBlock(
+                raw_min=float(prediction),
+                raw_max=float(prediction),
+                return_sum=return_sum,
+                weight=weight,
+            )
+            blocks.append(block)
+            while len(blocks) >= 2 and blocks[-2].return_mean > blocks[-1].return_mean:
+                right = blocks.pop()
+                left = blocks.pop()
+                blocks.append(left.merge(right))
+        points: list[tuple[float, float]] = []
+        for block in blocks:
+            points.append((block.raw_min, block.return_mean))
+            if block.raw_max > block.raw_min:
+                points.append((block.raw_max, block.return_mean))
+        return ValueCalibrationTransform(method="isotonic", points=points)
 
 
 @dataclass

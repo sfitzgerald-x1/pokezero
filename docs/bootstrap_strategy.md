@@ -387,6 +387,24 @@ This is still supervised/value-head training over rollout records, not PPO.
 
 The standalone neural benchmark is intentionally small and serial. Increase `--games` for strength checks. In the neural iteration command, increase `--evaluation-games` for per-iteration benchmark evidence; set it to `0` only for one-iteration smoke runs.
 
+Fit and evaluate a post-hoc value calibration transform before using a checkpoint as a search leaf
+evaluator:
+
+```bash
+python -m pokezero.neural_cli value-calibration \
+  --checkpoint runs/neural-selfplay/iteration-0003/transformer-policy.pt \
+  --data runs/neural-selfplay/iteration-0003/training-rollouts.jsonl \
+  --eval-data runs/neural-selfplay/iteration-0003/value-selection-training-rollouts.jsonl \
+  --fit-out runs/neural-selfplay/iteration-0003/transformer-policy-isotonic.pt \
+  --fit-method isotonic
+```
+
+Use held-out `--eval-data` for the reported read. `--fit-method affine` preserves the legacy linear
+correction; `--fit-method isotonic` stores a monotone empirical mapping. Isotonic has more degrees
+of freedom than affine and should use substantially more fit data plus held-out quality gates before
+being trusted. Either transform is WS-E calibration plumbing, not policy-strength evidence until
+benchmarked against fixed yardsticks.
+
 Use the generated checkpoint as the first self-play policy:
 
 ```bash
