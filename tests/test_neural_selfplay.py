@@ -392,6 +392,79 @@ class NeuralSelfPlayTest(unittest.TestCase):
             NeuralValueSelectionConfig(metric="mae", heldout_games_per_iteration=4),
         )
 
+    def test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "neural:/tmp/bootstrap.pt",
+                        "--mirror-match",
+                        "--no-fixed-opponents",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_args.kwargs["fixed_opponent_policy_specs"], ())
+        self.assertTrue(run.call_args.kwargs["mirror_match"])
+
+    def test_neural_cli_iterate_no_fixed_opponents_requires_mirror_match(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "8",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--initial-policy",
+                    "neural:/tmp/bootstrap.pt",
+                    "--no-fixed-opponents",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--no-fixed-opponents requires --mirror-match", stderr.getvalue())
+
+    def test_neural_cli_iterate_no_fixed_opponents_rejects_fixed_opponent_policy(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "8",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--initial-policy",
+                    "neural:/tmp/bootstrap.pt",
+                    "--mirror-match",
+                    "--no-fixed-opponents",
+                    "--opponent-policy",
+                    "random-legal",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--no-fixed-opponents cannot be combined with --opponent-policy", stderr.getvalue())
+
     def test_neural_cli_iterate_wires_value_ranking_loss_config(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
@@ -1172,6 +1245,42 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # Iteration 1 collection includes the current policy as an opponent (mirror match),
         # so self-play happens from the start rather than only after a promotion.
         self.assertIn("neural:/tmp/bootstrap.pt", collected[0]["opponent_policy_specs"])
+
+    def test_mirror_match_allows_no_fixed_training_opponents(self) -> None:
+        collected: list = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies(collected=collected):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=(),
+                    mirror_match=True,
+                )
+
+        self.assertEqual(collected[0]["opponent_policy_specs"], ("neural:/tmp/bootstrap.pt",))
+        self.assertEqual(result.iterations[0].opponent_policy_specs, ("neural:/tmp/bootstrap.pt",))
+
+    def test_no_fixed_training_opponents_requires_mirror_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "unless mirror_match=True"):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=1,
+                        games_per_iteration=2,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        fixed_opponent_policy_specs=(),
+                    )
 
     def test_spread_historical_selection_uses_older_and_recent_checkpoints(self) -> None:
         collected: list = []
@@ -2411,6 +2520,86 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertNotIn("--opponent-action-loss-weight", argv)
         self.assertNotIn("--temporal-aggregator", argv)
         self.assertIn("--json", argv)
+
+    def test_neural_cli_foundation_teacher_cut_variant_records_contract(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-teacher-cut",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "neural:/tmp/teacher-bootstrap.pt",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["variant"], "teacher-cut")
+        self.assertTrue(recipe["resolved_options"]["teacher_cut"])
+        self.assertTrue(recipe["resolved_options"]["no_fixed_opponents"])
+        self.assertEqual(recipe["resolved_options"]["opponent_policies"], [])
+        self.assertIn("--no-fixed-opponents", argv)
+        self.assertIn("--mirror-match", argv)
+        self.assertNotIn("--opponent-policy", argv)
+        self.assertIn("--experiment-preset", argv)
+        contract = recipe["experiment_contract"]
+        self.assertTrue(contract["teacher_cut"])
+        self.assertIn("neural:/path/to/checkpoint", contract["allowed_live_initial_policy_forms"])
+        self.assertEqual(contract["fixed_training_opponents"], [])
+        self.assertEqual(contract["reward_signal"], "game_outcome_only")
+        self.assertEqual(contract["eval_yardstick"], "max-damage")
+
+    def test_neural_cli_foundation_teacher_cut_rejects_fixed_training_opponents(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-teacher-cut",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "teacher-cut",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("does not allow fixed --opponent-policy", stderr.getvalue())
+
+    def test_neural_cli_foundation_teacher_cut_rejects_live_heuristic_initial_policy(self) -> None:
+        for policy_spec in ("scripted-teacher?foo=bar", "aggressive-damage", "max-damage", "Simple-Legal"):
+            with self.subTest(policy_spec=policy_spec):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = neural_cli_main(
+                        [
+                            "foundation-plan",
+                            "--run-dir",
+                            "runs/foundation-teacher-cut",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            "--variant",
+                            "teacher-cut",
+                            "--initial-policy",
+                            policy_spec,
+                            "--json",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn("initial policy must be random-legal or a learned checkpoint spec", stderr.getvalue())
 
     def test_neural_cli_foundation_opponent_signal_variant_sets_auxiliary_loss(self) -> None:
         with (

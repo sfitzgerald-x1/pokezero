@@ -405,8 +405,8 @@ def run_neural_selfplay_iterations(
     if collector_advancement_mode != "incumbent-gate" and auto_promotion_config is not None:
         raise ValueError(f"collector_advancement_mode={collector_advancement_mode!r} cannot be combined with auto promotion.")
     fixed_opponents = tuple(fixed_opponent_policy_specs)
-    if not fixed_opponents:
-        raise ValueError("at least one fixed opponent policy spec is required.")
+    if not fixed_opponents and not mirror_match:
+        raise ValueError("at least one fixed opponent policy spec is required unless mirror_match=True.")
     # Eval-only references (e.g. max-damage) are benchmarked against the candidate each
     # iteration but never enter rollout collection or the training opponent pool.
     benchmark_references = tuple(dict.fromkeys(str(spec) for spec in benchmark_reference_policy_specs))

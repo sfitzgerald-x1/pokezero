@@ -425,6 +425,13 @@ Steps:
    convenience for WS-A/WS-E foundation runs, not promotion evidence.
    `neural foundation-plan/run/report` wraps this preset with smoke/pilot profile defaults and a
    compact summary artifact so CPU foundation attempts can be launched and audited consistently.
+   The highest-priority WS-A question is now explicit: can self-play break the scripted-teacher
+   ceiling at all? The `teacher-cut` foundation variant is the clean experiment contract for that
+   question. It permits a one-shot learned checkpoint as the initial collector, then removes fixed
+   teacher/heuristic training opponents, relies on mirror/history self-play, keeps the reward signal
+   to game outcome only, and uses `max-damage` as an eval-only yardstick. Do not read sub-300-game
+   rows as strength evidence; use them only as wiring checks. If no learned initial checkpoint is
+   supplied, the variant is a random-legal cold start rather than a teacher-bootstrap run.
    The wrapper also supports `--variant opponent-signal` for the H3 ablation path: it keeps the
    same foundation recipe but raises opponent-action auxiliary supervision, so the result can be
    compared against the baseline wrapper before spending more effort on search tuning.
