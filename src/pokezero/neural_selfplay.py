@@ -56,6 +56,8 @@ if TYPE_CHECKING:
 
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
+COLLECTOR_ADVANCEMENT_MODES = ("incumbent-gate", "always")
+ACCEPTED_ADVANCEMENT_REASONS = frozenset({"beat_incumbent", "promotion_recorded"})
 
 
 @dataclass(frozen=True)
@@ -263,14 +265,23 @@ class NeuralSelfPlayRunResult:
 
     @property
     def latest_accepted_checkpoint_path(self) -> Path | None:
-        current_policy_spec = self.current_policy_spec
-        if current_policy_spec is None:
-            return None
-        body = current_policy_spec.partition("?")[0].strip()
-        if not body.lower().startswith("neural:"):
-            return None
-        checkpoint = body[len("neural:") :].strip()
-        return Path(checkpoint) if checkpoint else None
+        iteration_manifests = [dict(iteration) for iteration in self.prior_iteration_manifests]
+        iteration_manifests.extend(iteration.to_manifest_dict() for iteration in self.iterations)
+        for iteration in reversed(iteration_manifests):
+            advancement = _optional_mapping(iteration.get("advancement"))
+            if not advancement.get("advance_collector"):
+                continue
+            if advancement.get("reason") not in ACCEPTED_ADVANCEMENT_REASONS:
+                continue
+            policy_spec = str(iteration.get("next_current_policy_spec") or iteration.get("checkpoint_policy_spec"))
+            checkpoint = _neural_checkpoint_path_from_policy_spec(policy_spec)
+            if checkpoint is not None:
+                return checkpoint
+        for config in (*self.prior_invocation_configs, self.invocation_config):
+            checkpoint = _neural_checkpoint_path_from_policy_spec(str(config.get("initial_policy_spec", "")))
+            if checkpoint is not None:
+                return checkpoint
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         iteration_manifests = [dict(iteration) for iteration in self.prior_iteration_manifests]
@@ -339,6 +350,7 @@ def run_neural_selfplay_iterations(
     post_iteration_audit_failure_mode: str = "strict",
     value_calibration_config: NeuralValueCalibrationConfig | None = None,
     value_selection_config: NeuralValueSelectionConfig | None = None,
+    collector_advancement_mode: str = "incumbent-gate",
     tensorboard_log_dir: Path | str | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
@@ -362,6 +374,11 @@ def run_neural_selfplay_iterations(
     if post_iteration_audit_failure_mode not in POST_ITERATION_AUDIT_FAILURE_MODES:
         choices = ", ".join(POST_ITERATION_AUDIT_FAILURE_MODES)
         raise ValueError(f"post_iteration_audit_failure_mode must be one of: {choices}.")
+    if collector_advancement_mode not in COLLECTOR_ADVANCEMENT_MODES:
+        choices = ", ".join(COLLECTOR_ADVANCEMENT_MODES)
+        raise ValueError(f"collector_advancement_mode must be one of: {choices}.")
+    if collector_advancement_mode != "incumbent-gate" and auto_promotion_config is not None:
+        raise ValueError("collector_advancement_mode='always' cannot be combined with auto promotion.")
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
@@ -455,6 +472,7 @@ def run_neural_selfplay_iterations(
         "benchmark_reference_policy_specs": list(benchmark_references),
         "mirror_match": mirror_match,
         "collection_temperature": collection_temperature,
+        "collector_advancement_mode": collector_advancement_mode,
         "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
         "value_selection": value_selection_config.to_dict() if value_selection_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,
@@ -604,6 +622,8 @@ def run_neural_selfplay_iterations(
                     candidate_policy_id=training.model_config.policy_id,
                     incumbent_policy_spec=current_policy_spec,
                 )
+                if collector_advancement_mode == "always":
+                    advancement = _always_advance_collector_decision(advancement)
             else:
                 advancement = NeuralAdvancementDecision(
                     advance_collector=False,
@@ -1126,6 +1146,10 @@ def _promotion_advancement_decision(
     )
 
 
+def _always_advance_collector_decision(decision: NeuralAdvancementDecision) -> NeuralAdvancementDecision:
+    return replace(decision, advance_collector=True, reason="collector_advancement_mode_always")
+
+
 def _advancement_decision(
     *,
     benchmark: BenchmarkReport | None,
@@ -1171,14 +1195,19 @@ def _advancement_decision(
 
 
 def _initial_neural_model_from_policy_spec(policy_spec: str, *, device: str | None):
-    policy_body = policy_spec.strip().partition("?")[0].strip()
-    if not policy_body.lower().startswith("neural:"):
+    checkpoint = _neural_checkpoint_path_from_policy_spec(policy_spec)
+    if checkpoint is None:
         return None
-    checkpoint = policy_body[len("neural:") :].strip()
-    if not checkpoint:
-        return None
-    model, _ = load_transformer_checkpoint(Path(checkpoint), map_location=device)
+    model, _ = load_transformer_checkpoint(checkpoint, map_location=device)
     return model
+
+
+def _neural_checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
+    body = policy_spec.strip().partition("?")[0].strip()
+    if not body.lower().startswith("neural:"):
+        return None
+    checkpoint = body[len("neural:") :].strip()
+    return Path(checkpoint) if checkpoint else None
 
 
 def _policy_from_spec_for_evaluation(policy_spec: str, *, device: str | None):
@@ -1351,6 +1380,10 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError("expected JSON object payload.")
     return value
+
+
+def _optional_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _sequence(value: Any) -> tuple[Any, ...]:
