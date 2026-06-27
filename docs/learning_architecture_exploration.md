@@ -145,8 +145,11 @@ privileged supervision, etc.).
   *Signal:* higher vs-`max-damage` win rate and better long-game switch timing. Early evidence:
   an opt-in GRU temporal aggregator is implemented, but a same-data teacher-BC/value-selection
   probe did **not** beat the mean-pooled current-schema checkpoint (142/600 vs `max-damage`
-  versus 150/600 for mean; worse held-out value ECE/MAE/sign). Treat that as a negative read on
-  "GRU fixes the small teacher split," not as a refutation of temporal memory under real self-play.
+  versus 150/600 for mean; worse held-out value ECE/MAE/sign). A follow-up same-shape
+  always-advance PPO run gave only a small/noisy lift over mean pooling (166/600 vs 159/600
+  against `max-damage` on the same seed bands), still nowhere near the required base-net strength.
+  Treat this as evidence that temporal capacity is available and may help slightly, but the next
+  bottleneck is the self-play training signal/opponent pool rather than GRU plumbing.
 - **H3 — Opponent-action prediction (privileged self-play supervision) sharpens switches.**
   Train the opponent head against self-play ground truth. Against deterministic `max-damage`
   the opponent's next move is near-perfectly predictable, so the agent can pre-switch to a

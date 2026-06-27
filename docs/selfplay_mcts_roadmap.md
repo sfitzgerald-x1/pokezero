@@ -237,6 +237,15 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   This validates the GRU path as runnable but is negative evidence for "GRU alone fixes the current
   teacher-data base net"; temporal memory should next be tested inside a genuine self-play setup,
   not by further polishing this same small BC split.
+  That follow-up self-play test then ran the same 3x256 aggressive always-advance PPO shape as the
+  mean-pooled run, warm-starting from the GRU value-selected checkpoint and using the same seed bands.
+  The result was a small/noisy uptick but still no useful base-net breakthrough: GRU scored
+  52/200, 57/200, and 57/200 versus `max-damage` across iterations (166/600 total, 0.277), compared
+  with the prior mean run's 54/200, 55/200, and 50/200 (159/600 total, 0.265), with zero capped games
+  in both runs. PPO health looked similar (`ppo_valid_fraction=1.0`, clip fraction 0.147-0.183,
+  entropy 0.99 -> 1.26), so temporal memory remains a plausible lever but is not enough by itself;
+  the next WS-A work should focus on stronger training signal/opponent-pool pressure rather than
+  treating GRU as the bottleneck fix.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has
