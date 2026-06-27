@@ -201,6 +201,15 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   selected foundation candidate (`latest-accepted` by default, or `best-max-damage`) so WS-E
   experiments can fine-tune the value head of the retained base-policy checkpoint without manually
   reconstructing rollout/checkpoint paths.
+  A first local value-only fine-tune on the anti-aggression foundation candidate then ran at
+  `runs/foundation-anti-aggression-local-20260627/value-tune-pearson-001`: selected candidate
+  iteration 3, `--epochs 3`, `--require-heldout-selection`, Pearson epoch selection, and the
+  held-out value-selection rollout paths from the foundation run. It completed in 225.5 seconds and
+  selected epoch 3. On that selection/calibration set, Pearson improved from the candidate's
+  foundation read `0.2542` to `0.3617`, ECE improved from `0.3233` to `0.1160`, and sign accuracy
+  improved from `0.6296` to `0.6532`; MAE worsened from `0.8133` to `0.8578`. Treat this as positive
+  WS-E signal for value-only fine-tuning, not a final unbiased value-readiness verdict, because the
+  reported calibration is on the same held-out paths used for epoch selection.
   A smoke-scale run at `runs/value-head-wse-local-20260627/heldout-selection-ppo-smoke` verified the
   held-out iterate path end-to-end with 2 PPO iterations, 8 training games + 4 held-out selection
   games per iteration, current-vs-current mirror collection, and eval-only `max-damage`. It is
