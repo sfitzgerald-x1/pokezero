@@ -225,7 +225,6 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "/tmp/showdown",
                         "--initial-policy",
                         "random-legal",
-                        "--value-selection",
                         "--value-selection-heldout-games",
                         "4",
                         "--value-selection-seed-start",
@@ -234,6 +233,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
+        self.assertIn("implies --value-selection", stderr.getvalue())
         self.assertNotIn("not held-out validation", stderr.getvalue())
         self.assertEqual(
             run.call_args.kwargs["value_selection_config"],
@@ -504,6 +504,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
         ])
         self.assertEqual(sidecar["data_role"], "heldout_selfplay_rollouts")
         self.assertEqual(iteration_manifest["value_selection_collection_metrics"]["games"], 3)
+        self.assertEqual(iteration_manifest["value_selection_seed_start"], 9000)
+        self.assertEqual(iteration_manifest["value_selection_next_seed_start"], 9003)
         self.assertEqual(
             iteration_manifest["value_selection_rollout_path"],
             str(run_dir / "iteration-0001" / "value-selection-rollouts.jsonl"),
@@ -513,6 +515,98 @@ class NeuralSelfPlayTest(unittest.TestCase):
             [str(run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl")],
         )
         self.assertEqual(run_manifest["iterations"][0]["value_selection"], selection)
+
+    def test_heldout_value_selection_history_scope_accumulates_and_resumes_seed_cursor(self) -> None:
+        class FakeReport:
+            examples = 4
+            mse = 0.04
+            mae = 0.2
+            bias = 0.0
+            sign_accuracy = 0.75
+            expected_calibration_error = 0.1
+
+            def to_dict(self) -> dict:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "bins": [],
+                    "slices": [],
+                }
+
+        collected = []
+        trained_paths = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with (
+                patched_neural_selfplay_dependencies(collected=collected, trained_paths=trained_paths),
+                patch(
+                    "pokezero.neural_selfplay.evaluate_value_calibration",
+                    side_effect=[FakeReport(), FakeReport(), FakeReport()],
+                ) as evaluate,
+            ):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    value_selection_config=NeuralValueSelectionConfig(
+                        scope="history",
+                        heldout_games_per_iteration=2,
+                        heldout_seed_start=5000,
+                    ),
+                )
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    value_selection_config=NeuralValueSelectionConfig(
+                        scope="history",
+                        heldout_games_per_iteration=1,
+                        heldout_seed_start=5000,
+                    ),
+                    resume=True,
+                )
+
+            third_manifest = json.loads((run_dir / "iteration-0003" / "manifest.json").read_text(encoding="utf-8"))
+
+        heldout_calls = [call for call in collected if call["output_path"].name == "value-selection-rollouts.jsonl"]
+        self.assertEqual([call["seed_start"] for call in heldout_calls], [5000, 5002, 5004])
+        self.assertEqual(evaluate.call_args_list[0].kwargs["paths"], (
+            run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl",
+        ))
+        self.assertEqual(evaluate.call_args_list[1].kwargs["paths"], (
+            run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl",
+            run_dir / "iteration-0002" / "value-selection-training-rollouts.jsonl",
+        ))
+        self.assertEqual(evaluate.call_args_list[2].kwargs["paths"], (
+            run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl",
+            run_dir / "iteration-0002" / "value-selection-training-rollouts.jsonl",
+            run_dir / "iteration-0003" / "value-selection-training-rollouts.jsonl",
+        ))
+        self.assertEqual(trained_paths[-1], (
+            run_dir / "iteration-0001" / "training-rollouts.jsonl",
+            run_dir / "iteration-0002" / "training-rollouts.jsonl",
+            run_dir / "iteration-0003" / "training-rollouts.jsonl",
+        ))
+        self.assertNotIn("value-selection-training-rollouts.jsonl", {path.name for path in trained_paths[-1]})
+        self.assertEqual(third_manifest["value_selection_seed_start"], 5004)
+        self.assertEqual(third_manifest["value_selection_next_seed_start"], 5005)
 
     def test_run_neural_selfplay_iterations_value_selection_history_scope_uses_accumulated_paths(self) -> None:
         class FakeReport:

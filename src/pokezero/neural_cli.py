@@ -1341,13 +1341,27 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, args.showdown_root)
         for spec in (args.benchmark_reference_policy or ())
     )
-    if args.value_selection and args.value_selection_heldout_games <= 0:
+    value_selection_requested = bool(args.value_selection or args.value_selection_heldout_games > 0)
+    if args.value_selection_heldout_games > 0 and not args.value_selection:
+        print(
+            "warning: --value-selection-heldout-games implies --value-selection.",
+            file=sys.stderr,
+        )
+    if value_selection_requested and args.value_selection_heldout_games <= 0:
         print(
             "warning: --value-selection in neural iterate scores self-play training rollouts, "
             "not held-out validation; use it as value-head calibration plumbing, not policy-strength evidence.",
             file=sys.stderr,
         )
-    if args.value_selection and args.value_selection_scope == "history":
+    if value_selection_requested and args.value_selection_heldout_games > 0:
+        main_seed_upper_bound = args.seed_start + (args.iterations * args.games_per_iteration)
+        if args.value_selection_seed_start < main_seed_upper_bound:
+            print(
+                "warning: --value-selection-seed-start overlaps the requested training seed range; "
+                "held-out value-selection games may not be independent.",
+                file=sys.stderr,
+            )
+    if value_selection_requested and args.value_selection_scope == "history":
         print(
             "warning: --value-selection-scope history re-evaluates the full accumulated selection "
             "history after every epoch and can become expensive.",
@@ -1422,7 +1436,7 @@ def _value_calibration_config_from_args(args: argparse.Namespace) -> NeuralValue
 
 
 def _value_selection_config_from_args(args: argparse.Namespace) -> NeuralValueSelectionConfig | None:
-    if not args.value_selection:
+    if not args.value_selection and args.value_selection_heldout_games <= 0:
         return None
     return NeuralValueSelectionConfig(
         scope=args.value_selection_scope,

@@ -156,6 +156,8 @@ class NeuralSelfPlayIterationResult:
     training_rollout_path: Path
     value_selection_rollout_path: Path | None
     value_selection_training_rollout_path: Path | None
+    value_selection_seed_start: int | None
+    value_selection_next_seed_start: int | None
     checkpoint_path: Path
     manifest_path: Path
     current_policy_spec: str
@@ -197,6 +199,8 @@ class NeuralSelfPlayIterationResult:
                 if self.value_selection_training_rollout_path is not None
                 else None
             ),
+            "value_selection_seed_start": self.value_selection_seed_start,
+            "value_selection_next_seed_start": self.value_selection_next_seed_start,
             "checkpoint_path": str(self.checkpoint_path),
             "checkpoint_policy_spec": self.checkpoint_policy_spec,
             "current_policy_spec": self.current_policy_spec,
@@ -393,6 +397,14 @@ def run_neural_selfplay_iterations(
             Path(str(path))
             for path in _sequence(last_iteration.get("value_selection_training_rollout_paths", ()))
         ]
+        next_value_selection_seed_start = _next_value_selection_seed_start(
+            last_iteration,
+            default_seed_start=(
+                value_selection_config.heldout_seed_start
+                if value_selection_config is not None
+                else 2_000_000
+            ),
+        )
         first_iteration = int(last_iteration["iteration"]) + 1
         next_seed_start = int(last_iteration["seed_start"]) + int(last_iteration["collection_metrics"]["games"])
     else:
@@ -401,6 +413,11 @@ def run_neural_selfplay_iterations(
         checkpoint_history = []
         training_rollout_history = []
         value_selection_rollout_history = []
+        next_value_selection_seed_start = (
+            value_selection_config.heldout_seed_start
+            if value_selection_config is not None
+            else 2_000_000
+        )
         first_iteration = 1
         next_seed_start = seed_start
     if current_model is not None:
@@ -464,6 +481,8 @@ def run_neural_selfplay_iterations(
             training_rollout_path = iteration_dir / "training-rollouts.jsonl"
             value_selection_rollout_path = None
             value_selection_training_rollout_path = None
+            value_selection_seed_start = None
+            value_selection_next_seed_start = None
             checkpoint_path = iteration_dir / "transformer-policy.pt"
             iteration_manifest_path = iteration_dir / "manifest.json"
             iteration_seed_start = next_seed_start + (offset * games_per_iteration)
@@ -497,18 +516,20 @@ def run_neural_selfplay_iterations(
             if value_selection_config is not None and value_selection_config.heldout_games_per_iteration:
                 value_selection_rollout_path = iteration_dir / "value-selection-rollouts.jsonl"
                 value_selection_training_rollout_path = iteration_dir / "value-selection-training-rollouts.jsonl"
+                value_selection_seed_start = next_value_selection_seed_start
                 value_selection_metrics = collect_selfplay_rollouts(
                     output_path=value_selection_rollout_path,
                     training_output_path=value_selection_training_rollout_path,
                     games=value_selection_config.heldout_games_per_iteration,
                     env_factory=env_factory,
                     rollout_config=rollout_config,
-                    seed_start=value_selection_config.heldout_seed_start
-                    + ((iteration - 1) * value_selection_config.heldout_games_per_iteration),
+                    seed_start=value_selection_seed_start,
                     current_policy_spec=collection_current_policy_spec,
                     opponent_policy_specs=opponent_policy_specs,
                     worker_count=worker_count,
                 )
+                next_value_selection_seed_start += value_selection_config.heldout_games_per_iteration
+                value_selection_next_seed_start = next_value_selection_seed_start
                 value_selection_rollout_history.append(value_selection_training_rollout_path)
             iteration_model_config = replace(
                 model_config,
@@ -600,6 +621,8 @@ def run_neural_selfplay_iterations(
                 training_rollout_path=training_rollout_path,
                 value_selection_rollout_path=value_selection_rollout_path,
                 value_selection_training_rollout_path=value_selection_training_rollout_path,
+                value_selection_seed_start=value_selection_seed_start,
+                value_selection_next_seed_start=value_selection_next_seed_start,
                 checkpoint_path=checkpoint_path,
                 manifest_path=iteration_manifest_path,
                 current_policy_spec=current_policy_spec,
@@ -1296,6 +1319,17 @@ def _advancement_from_manifest(iteration: Mapping[str, Any]) -> Mapping[str, Any
     if advancement is None:
         return {}
     return _mapping(advancement)
+
+
+def _next_value_selection_seed_start(iteration: Mapping[str, Any], *, default_seed_start: int) -> int:
+    explicit_next = iteration.get("value_selection_next_seed_start")
+    if explicit_next is not None:
+        return int(explicit_next)
+    seed_start = iteration.get("value_selection_seed_start")
+    metrics = iteration.get("value_selection_collection_metrics")
+    if seed_start is not None and isinstance(metrics, Mapping):
+        return int(seed_start) + int(metrics.get("games", 0))
+    return int(default_seed_start)
 
 
 def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any]:
