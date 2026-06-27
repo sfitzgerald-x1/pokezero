@@ -896,8 +896,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIsNotNone(p1_search.leaf_rollout_policy_factory)
         self.assertIsNotNone(p2_search.leaf_rollout_policy_factory)
         self.assertEqual(p1_search.leaf_rollout_policy_factory("p1").policy_id, "neural-smoke+root-puct-leaf-p1")
-        self.assertEqual(p1_search.leaf_rollout_policy_factory("p2").policy_id, "simple-legal")
-        self.assertEqual(p2_search.leaf_rollout_policy_factory("p1").policy_id, "simple-legal")
+        p1_search_opponent = p1_search.leaf_rollout_policy_factory("p2")
+        self.assertEqual(p1_search_opponent.policy_id, "simple-legal")
+        self.assertIs(p1_search.leaf_rollout_policy_factory("p2"), p1_search_opponent)
+        p2_search_opponent = p2_search.leaf_rollout_policy_factory("p1")
+        self.assertEqual(p2_search_opponent.policy_id, "simple-legal")
+        self.assertIs(p2_search.leaf_rollout_policy_factory("p1"), p2_search_opponent)
         self.assertEqual(p2_search.leaf_rollout_policy_factory("p2").policy_id, "neural-smoke+root-puct-leaf-p2")
         self.assertEqual(
             p1_search.leaf_rollout_metadata,

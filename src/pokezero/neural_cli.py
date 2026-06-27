@@ -658,11 +658,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         *,
         search_policy_id: str,
         search_player_id: str,
-        benchmark_opponent_spec: str,
+        benchmark_opponent_policy: Policy | None,
         player_id: str,
     ) -> Policy:
-        if args.leaf_rollout_opponent_policy == "benchmark" and player_id != search_player_id:
-            return policy_from_spec(benchmark_opponent_spec)
+        if benchmark_opponent_policy is not None and player_id != search_player_id:
+            return benchmark_opponent_policy
         return make_raw_policy(policy_id=f"{search_policy_id}-leaf-{player_id}")
 
     def value_fn(history):
@@ -701,10 +701,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         leaf_rollout_policy_factory = None
         leaf_rollout_metadata: Mapping[str, object] = {}
         if leaf_rollout_rounds:
+            benchmark_opponent_policy = (
+                policy_from_spec(benchmark_opponent_spec)
+                if args.leaf_rollout_opponent_policy == "benchmark"
+                else None
+            )
             leaf_rollout_policy_factory = lambda player_id: make_leaf_rollout_policy(
                 search_policy_id=search_policy_id,
                 search_player_id=search_player_id,
-                benchmark_opponent_spec=benchmark_opponent_spec,
+                benchmark_opponent_policy=benchmark_opponent_policy,
                 player_id=player_id,
             )
             leaf_rollout_metadata = {
