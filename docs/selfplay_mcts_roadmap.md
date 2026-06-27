@@ -51,6 +51,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   opponent actions are supplied by an explicit planner hook rather than by leaking opponent-private
   observations; `greedy_opponent_action_planner` can drive that hook from player-local
   opponent-action priors such as the transformer's auxiliary opponent-action head.
+  `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
+  play over full games on the same fixed-opponent matchups.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.

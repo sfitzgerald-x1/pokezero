@@ -32,6 +32,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
+from pokezero.policy import PolicyContext
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -648,6 +649,17 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_root_puct_play_benchmark_reports_missing_torch_extra(self) -> None:
+        if torch_available():
+            self.skipTest("PyTorch is installed in this environment.")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(["root-puct-play-benchmark", "--checkpoint", "checkpoint.pt", "--games", "1"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
+
     def test_neural_cli_iterate_reports_missing_torch_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -722,6 +734,93 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[2].p1_policy, fake_policy)
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
+
+    def test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 4}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            matchups = tuple(kwargs["matchups"])
+            search_policy = matchups[2].p1_policy
+            self.assertEqual(search_policy.value_fn((observation(1),)), 0.25)
+            self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
+            context = PolicyContext(
+                player_id="p1",
+                decision_round_index=0,
+                battle_id="search-play",
+                format_id="gen3randombattle",
+                seed=7,
+                observation=observation(1),
+                requested_players=("p1", "p2"),
+                trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
+            )
+            self.assertEqual(search_policy.opponent_action_planner(context, __import__("random").Random(1)), {"p2": 2})
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)) as load,
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25) as value_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6) as opponent_eval,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--seed-start",
+                    "99",
+                    "--max-decision-rounds",
+                    "12",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--cpuct",
+                    "0.75",
+                    "--device",
+                    "cpu",
+                    "--temperature",
+                    "1.5",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
+        self.assertEqual(captured["games"], 3)
+        self.assertEqual(captured["seed_start"], 99)
+        self.assertEqual(captured["rollout_config"].max_decision_rounds, 12)
+        matchups = tuple(captured["matchups"])
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke+root-puct vs random-legal",
+            "random-legal vs neural-smoke+root-puct",
+        ])
+        self.assertEqual(matchups[0].p1_policy.policy_id, "neural-smoke")
+        self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct")
+        self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct")
+        self.assertEqual(matchups[2].p1_policy.cpuct, 0.75)
+        self.assertTrue(matchups[2].p1_policy.allow_fallback)
+        self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
+        self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
+        self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
 
     def test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies(self) -> None:
         if not torch_available():

@@ -166,6 +166,30 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 config=RolloutConfig(max_decision_rounds=3),
             ).run(seed=92, battle_id="search-policy")
 
+    def test_root_puct_policy_falls_back_when_search_fails_if_enabled(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            opponent_action_planner=lambda context, rng: {"p2": 99},
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            allow_fallback=True,
+            cpuct=0.0,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=93, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 1)
+        self.assertTrue(step.metadata["root_puct_fallback"])
+        self.assertIn("search failed", step.metadata["root_puct_fallback_reason"])
+        self.assertEqual(step.metadata["fallback_policy_id"], "fallback-fixed")
+
     def test_root_puct_policy_can_fallback_when_context_is_missing(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
