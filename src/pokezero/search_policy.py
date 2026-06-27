@@ -77,6 +77,11 @@ class RootPUCTSearchPolicy:
     fallback_policy: Policy = field(default_factory=RandomLegalPolicy)
     allow_fallback: bool = False
 
+    def reset(self) -> None:
+        reset = getattr(self.fallback_policy, "reset", None)
+        if callable(reset):
+            reset()
+
     def select_action(
         self,
         observation: PokeZeroObservationV0,
@@ -124,17 +129,20 @@ class RootPUCTSearchPolicy:
         env = self.env_factory()
         try:
             start = perf_counter()
-            search = puct_branch_search(
-                env=env,
-                trajectory=search_trajectory,
-                player_id=context.player_id,
-                prefix_decision_round_count=context.decision_round_index,
-                legal_action_mask=context.observation.legal_action_mask,
-                opponent_actions=opponent_actions,
-                value_fn=self.value_fn,
-                action_priors=priors,
-                cpuct=self.cpuct,
-            )
+            try:
+                search = puct_branch_search(
+                    env=env,
+                    trajectory=search_trajectory,
+                    player_id=context.player_id,
+                    prefix_decision_round_count=context.decision_round_index,
+                    legal_action_mask=context.observation.legal_action_mask,
+                    opponent_actions=opponent_actions,
+                    value_fn=self.value_fn,
+                    action_priors=priors,
+                    cpuct=self.cpuct,
+                )
+            except Exception as exc:
+                return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
             elapsed_seconds = perf_counter() - start
         finally:
             close = getattr(env, "close", None)

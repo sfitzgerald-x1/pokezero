@@ -18,10 +18,12 @@ from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
     DEFAULT_CATEGORY_OOV_BUCKETS,
     TransformerPolicyConfig,
+    TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
     collect_categorical_ids,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
+    evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     load_transformer_policy,
     require_torch,
@@ -35,6 +37,7 @@ from .search_benchmark import (
     benchmark_root_puct_counterfactual_rollouts,
     benchmark_root_puct_search,
 )
+from .search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner
 from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
@@ -139,6 +142,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.set_defaults(func=_benchmark)
+
+    root_puct_play = subparsers.add_parser(
+        "root-puct-play-benchmark",
+        help="Benchmark raw checkpoint play against root-PUCT checkpoint play over full games.",
+    )
+    root_puct_play.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
+    root_puct_play.add_argument("--games", type=int, default=20, help="Number of games per matchup.")
+    root_puct_play.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    root_puct_play.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    root_puct_play.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed for every matchup.")
+    root_puct_play.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    root_puct_play.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    root_puct_play.add_argument(
+        "--opponent-policy",
+        action="append",
+        default=None,
+        help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
+    )
+    root_puct_play.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
+    root_puct_play.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
+    root_puct_play.add_argument("--temperature", type=float, default=1.0, help="Softmax temperature for policy and opponent-action priors.")
+    root_puct_play.add_argument(
+        "--no-search-fallback",
+        action="store_true",
+        help="Disable fallback to the raw checkpoint action when root-PUCT branch search fails.",
+    )
+    root_puct_play.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
+    root_puct_play.set_defaults(func=_root_puct_play_benchmark)
 
     root_puct = subparsers.add_parser(
         "root-puct-benchmark",
@@ -535,6 +566,113 @@ def _benchmark(args: argparse.Namespace) -> int:
                 checkpoint_policy,
             ),
         ),
+    )
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print_benchmark_report(report)
+    return 0
+
+
+def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
+    require_torch()
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    raw_policy_id = str(result.model_config.policy_id)
+    search_policy_id = f"{raw_policy_id}+root-puct"
+
+    def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
+        return TransformerSoftmaxPolicy(
+            model=model,
+            result=result,
+            deterministic=True,
+            sampling_temperature=args.temperature,
+            device=args.device,
+            policy_id=policy_id,
+        )
+
+    def value_fn(history):
+        return evaluate_transformer_observation_value(
+            model=model,
+            result=result,
+            observations=history,
+            device=args.device,
+        )
+
+    def prior_fn(history):
+        return evaluate_transformer_action_priors(
+            model=model,
+            result=result,
+            observations=history,
+            temperature=args.temperature,
+            device=args.device,
+        )
+
+    def opponent_prior_fn(history):
+        return evaluate_transformer_opponent_action_priors(
+            model=model,
+            result=result,
+            observations=history,
+            temperature=args.temperature,
+            device=args.device,
+        )
+
+    def make_search_policy() -> RootPUCTSearchPolicy:
+        return RootPUCTSearchPolicy(
+            env_factory=lambda: LocalShowdownEnv(env_config),
+            rollout_config=rollout_config,
+            value_fn=value_fn,
+            prior_fn=prior_fn,
+            opponent_action_planner=greedy_opponent_action_planner(opponent_prior_fn),
+            fallback_policy=make_raw_policy(policy_id=f"{search_policy_id}-fallback"),
+            allow_fallback=not args.no_search_fallback,
+            policy_id=search_policy_id,
+            cpuct=args.cpuct,
+        )
+
+    opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))
+    matchups: list[BenchmarkMatchup] = []
+    for opponent_spec in opponent_specs:
+        opponent_id = policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)).policy_id
+        matchups.extend(
+            (
+                BenchmarkMatchup(
+                    f"{raw_policy_id} vs {opponent_id}",
+                    make_raw_policy(),
+                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                ),
+                BenchmarkMatchup(
+                    f"{opponent_id} vs {raw_policy_id}",
+                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                    make_raw_policy(),
+                ),
+                BenchmarkMatchup(
+                    f"{search_policy_id} vs {opponent_id}",
+                    make_search_policy(),
+                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                ),
+                BenchmarkMatchup(
+                    f"{opponent_id} vs {search_policy_id}",
+                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                    make_search_policy(),
+                ),
+            )
+        )
+
+    report = benchmark_rollouts(
+        games=args.games,
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=rollout_config,
+        seed_start=args.seed_start,
+        matchups=tuple(matchups),
     )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
