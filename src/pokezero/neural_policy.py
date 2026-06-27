@@ -235,15 +235,21 @@ class TransformerTrainingConfig:
     # Training objective: "behavior-cloning" (supervised cross-entropy to the chosen action),
     # "reward-weighted" (same CE, but only positive-return examples contribute to the policy
     # term), or "ppo" (clipped policy-gradient using recorded behavior-policy probabilities
-    # and the value head as a baseline). PPO is the self-play RL operator.
+    # and the value head as a baseline). "value-only" optimizes only return prediction and is
+    # intended for value-head calibration/fine-tuning. PPO is the self-play RL operator.
     objective: str = "behavior-cloning"
     clip_epsilon: float = 0.2
     entropy_coef: float = 0.0
     normalize_advantage: bool = True
+    freeze_non_value_parameters: bool = False
 
     def __post_init__(self) -> None:
-        if self.objective not in ("behavior-cloning", "reward-weighted", "ppo"):
-            raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', or 'ppo'.")
+        if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
+            raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
+        if self.objective == "value-only" and not self.freeze_non_value_parameters:
+            raise ValueError("objective='value-only' requires freeze_non_value_parameters=True.")
+        if self.freeze_non_value_parameters and self.objective != "value-only":
+            raise ValueError("freeze_non_value_parameters requires objective='value-only'.")
         if self.clip_epsilon <= 0.0:
             raise ValueError("clip_epsilon must be positive.")
         if self.entropy_coef < 0.0:
@@ -690,16 +696,24 @@ def train_transformer_policy(
     if model_config is None:
         raise ValueError("model_config is required (build it with TransformerPolicyConfig.compact_category).")
     resolved_model_config = model_config
+    if resolved_training_config.window_size != resolved_model_config.window_size:
+        raise ValueError("training_config.window_size must match model_config.window_size.")
     device = resolve_torch_device(resolved_training_config.device)
     if initial_model is None:
         model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
     else:
         _validate_initial_model_config(initial_model, resolved_model_config)
         model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
-    if hasattr(model, "train"):
+    trainable_parameters = _configure_trainable_parameters(
+        model,
+        freeze_non_value_parameters=resolved_training_config.freeze_non_value_parameters,
+    )
+    if resolved_training_config.freeze_non_value_parameters and hasattr(model, "eval"):
+        model.eval()
+    elif hasattr(model, "train"):
         model.train()
     optimizer = torch_module.optim.AdamW(
-        model.parameters(),
+        trainable_parameters,
         lr=resolved_training_config.learning_rate,
         weight_decay=resolved_training_config.weight_decay,
     )
@@ -747,6 +761,20 @@ def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig
     comparable_expected = replace(expected, policy_id=getattr(initial_config, "policy_id", expected.policy_id))
     if initial_config != comparable_expected:
         raise ValueError("initial_model config must match model_config except for policy_id.")
+
+
+def _configure_trainable_parameters(model: Any, *, freeze_non_value_parameters: bool) -> list[Any]:
+    if not hasattr(model, "named_parameters"):
+        return list(model.parameters())
+    trainable_parameters = []
+    for name, parameter in model.named_parameters():
+        trainable = not freeze_non_value_parameters or name.startswith("value_head.")
+        parameter.requires_grad = trainable
+        if trainable:
+            trainable_parameters.append(parameter)
+    if not trainable_parameters:
+        raise ValueError("training configuration produced no trainable model parameters.")
+    return trainable_parameters
 
 
 def save_transformer_checkpoint(
@@ -882,7 +910,13 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_loss = functional.mse_loss(output.value, tensors["returns"])
 
-    if config.objective == "ppo":
+    if config.objective == "value-only":
+        policy_loss = value_loss * 0.0
+        loss = value_loss
+        opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = None, 0.0, 0, 0
+        family_loss, family_loss_value, family_correct, family_examples = None, 0.0, 0, 0
+        switch_loss, switch_loss_value, switch_correct, switch_examples = None, 0.0, 0, 0
+    elif config.objective == "ppo":
         # Clipped policy-gradient (PPO): importance-weight the chosen action's log-prob by a
         # value-baselined advantage, using the recorded behavior-policy probability. Only
         # examples with a recorded action probability contribute to the policy term.
@@ -926,15 +960,16 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         policy_loss = (per_example_policy_loss * weights).sum() / weights.sum().clamp(min=1.0)
         loss = policy_loss + (config.value_loss_weight * value_loss)
 
-    opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = _opponent_loss_terms(output, tensors, config)
-    if opponent_loss is not None:
-        loss = loss + (config.opponent_action_loss_weight * opponent_loss)
-    family_loss, family_loss_value, family_correct, family_examples = _action_family_loss_terms(masked_policy_logits, tensors, config)
-    if family_loss is not None:
-        loss = loss + (config.action_family_loss_weight * family_loss)
-    switch_loss, switch_loss_value, switch_correct, switch_examples = _switch_target_loss_terms(masked_policy_logits, tensors, config)
-    if switch_loss is not None:
-        loss = loss + (config.switch_target_loss_weight * switch_loss)
+    if config.objective != "value-only":
+        opponent_loss, opponent_loss_value, opponent_correct, opponent_examples = _opponent_loss_terms(output, tensors, config)
+        if opponent_loss is not None:
+            loss = loss + (config.opponent_action_loss_weight * opponent_loss)
+        family_loss, family_loss_value, family_correct, family_examples = _action_family_loss_terms(masked_policy_logits, tensors, config)
+        if family_loss is not None:
+            loss = loss + (config.action_family_loss_weight * family_loss)
+        switch_loss, switch_loss_value, switch_correct, switch_examples = _switch_target_loss_terms(masked_policy_logits, tensors, config)
+        if switch_loss is not None:
+            loss = loss + (config.switch_target_loss_weight * switch_loss)
     return loss, {
         "loss": float(loss.detach().item()),
         "policy_loss": float(policy_loss.detach().item()),
