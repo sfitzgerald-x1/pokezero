@@ -347,6 +347,10 @@ Steps:
    (160/600 total, 0.267), with zero benchmark capped games and one capped collection game.
    The prior cumulative-stale PPO run on the same seed bands scored 159/600, so the fix improves
    training validity but does not by itself lift the short-run base-net ceiling.
+   Rollout collection now records raw behavior-policy value estimates, and PPO training has an
+   opt-in `--ppo-target-mode gae` / `--gae-lambda` path that derives advantages and value targets
+   from those recorded baselines when present while falling back to legacy discounted returns for
+   fixed-opponent or old-rollout rows. This is target-quality plumbing, not yet strength evidence.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure

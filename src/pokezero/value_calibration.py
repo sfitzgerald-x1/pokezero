@@ -147,7 +147,8 @@ def evaluate_value_calibration(
                     _apply_value_calibration_transform(float(value), transform)
                     for value in output.value.detach().cpu().tolist()
                 )
-                returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
+                targets = _training_value_targets(tensors)
+                returns = tuple(float(value) for value in targets.detach().cpu().tolist())
                 totals.add(predictions=predictions, returns=returns)
                 slice_totals.add(
                     predictions=predictions,
@@ -191,7 +192,8 @@ def fit_value_calibration_transform(
                     history_mask=tensors["history_mask"],
                 )
                 predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
-                returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
+                targets = _training_value_targets(tensors)
+                returns = tuple(float(value) for value in targets.detach().cpu().tolist())
                 totals.add(predictions=predictions, returns=returns)
     finally:
         if was_training is not None and hasattr(model, "train"):
@@ -207,6 +209,17 @@ def fit_affine_value_calibration_transform(
     totals = _AffineFitTotals()
     totals.add(predictions=predictions, returns=returns)
     return totals.to_transform()
+
+
+def _training_value_targets(tensors):
+    torch_module = require_torch()
+    if "ppo_value_target_mask" not in tensors or "ppo_value_targets" not in tensors:
+        return tensors["returns"]
+    return torch_module.where(
+        tensors["ppo_value_target_mask"],
+        tensors["ppo_value_targets"],
+        tensors["returns"],
+    )
 
 
 def value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
@@ -251,6 +264,8 @@ def _trajectory_dataset_config_from_training_result(
         faint_delta_return_weight=training_config.faint_delta_return_weight,
         turn_penalty_after=training_config.turn_penalty_after,
         turn_penalty=training_config.turn_penalty,
+        ppo_target_mode=training_config.ppo_target_mode,
+        gae_lambda=training_config.gae_lambda,
     )
 
 
