@@ -833,6 +833,128 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
 
+    def test_neural_cli_root_puct_play_benchmark_can_sweep_leaf_depths(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 6}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--leaf-rollout-rounds-sweep",
+                    "0",
+                    "--leaf-rollout-rounds-sweep",
+                    "2",
+                    "--leaf-rollout-rounds-sweep",
+                    "2",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        matchups = tuple(captured["matchups"])
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke+root-puct-leaf0 vs random-legal",
+            "random-legal vs neural-smoke+root-puct-leaf0",
+            "neural-smoke+root-puct-leaf2 vs random-legal",
+            "random-legal vs neural-smoke+root-puct-leaf2",
+        ])
+        leaf0 = matchups[2].p1_policy
+        leaf2 = matchups[4].p1_policy
+        self.assertEqual(leaf0.policy_id, "neural-smoke+root-puct-leaf0")
+        self.assertEqual(leaf0.leaf_rollout_decision_rounds, 0)
+        self.assertIsNone(leaf0.leaf_rollout_policy_factory)
+        self.assertEqual(leaf2.policy_id, "neural-smoke+root-puct-leaf2")
+        self.assertEqual(leaf2.leaf_rollout_decision_rounds, 2)
+        self.assertIsNotNone(leaf2.leaf_rollout_policy_factory)
+        self.assertEqual(
+            leaf2.leaf_rollout_policy_factory("p2").policy_id,
+            "neural-smoke+root-puct-leaf2-leaf-p2",
+        )
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 6})
+
+    def test_neural_cli_root_puct_play_benchmark_tags_single_sweep_depth(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"matchups": 4}
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        stdout = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8),
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "3",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--leaf-rollout-rounds-sweep",
+                    "2",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        matchups = tuple(captured["matchups"])
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke+root-puct-leaf2 vs random-legal",
+            "random-legal vs neural-smoke+root-puct-leaf2",
+        ])
+        self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct-leaf2")
+        self.assertEqual(matchups[2].p1_policy.leaf_rollout_decision_rounds, 2)
+        self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
     def test_neural_cli_root_puct_benchmark_wires_checkpoint_callbacks_and_source_policies(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
