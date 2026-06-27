@@ -26,6 +26,7 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 OpponentActionPlanner = Callable[[PolicyContext, random.Random], Mapping[PlayerId, int]]
 ActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
 OpponentActionPriorFunction = Callable[[tuple[PokeZeroObservationV0, ...]], ActionPriorVector]
+LeafRolloutPolicyFactory = Callable[[PlayerId], Policy]
 
 
 def no_opponent_action_planner(context: PolicyContext, rng: random.Random) -> Mapping[PlayerId, int]:
@@ -90,14 +91,20 @@ class RootPUCTSearchPolicy:
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
     selection_mode: str = "puct"
+    leaf_rollout_decision_rounds: int = 0
+    leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value"}:
             raise ValueError("selection_mode must be 'puct' or 'value'.")
-        if self.minimum_value_improvement is None:
-            return
-        if self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement):
+        if self.minimum_value_improvement is not None and (
+            self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement)
+        ):
             raise ValueError("minimum_value_improvement must be a finite non-negative value when set.")
+        if self.leaf_rollout_decision_rounds < 0:
+            raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
+        if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
+            raise ValueError("leaf_rollout_policy_factory is required when leaf rollouts are enabled.")
 
     def reset(self) -> None:
         reset = getattr(self.fallback_policy, "reset", None)
@@ -151,6 +158,11 @@ class RootPUCTSearchPolicy:
             through_decision_round=context.decision_round_index,
         )
         priors = self.prior_fn(history)
+        leaf_rollout_policies = (
+            _leaf_rollout_policies(context, self.leaf_rollout_policy_factory)
+            if self.leaf_rollout_decision_rounds
+            else None
+        )
         start = perf_counter()
         env = self.env_factory()
         try:
@@ -165,6 +177,9 @@ class RootPUCTSearchPolicy:
                     value_fn=self.value_fn,
                     action_priors=priors,
                     cpuct=self.cpuct,
+                    leaf_rollout_policies=leaf_rollout_policies,
+                    leaf_rollout_config=self.rollout_config,
+                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
                 )
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
@@ -194,6 +209,10 @@ class RootPUCTSearchPolicy:
                 "root_puct_prior_value": prior_best.value,
                 "root_puct_prior_score": prior_best.score,
             }
+        leaf_metadata = _leaf_rollout_metadata(
+            search,
+            configured_rounds=self.leaf_rollout_decision_rounds,
+        )
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -210,6 +229,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions": dict(opponent_actions),
                 "root_puct_opponent_actions_legality_checked": legality_report.checked,
                 **gate_metadata,
+                **leaf_metadata,
             },
         )
 
@@ -281,6 +301,29 @@ def _selected_candidate(
     raise ValueError("selection mode must be 'puct' or 'value'.")
 
 
+def _leaf_rollout_metadata(
+    search: PUCTBranchSearchResult,
+    *,
+    configured_rounds: int,
+) -> Mapping[str, object]:
+    if configured_rounds <= 0:
+        return {}
+    leaf_evaluations: dict[str, int] = {}
+    actual_rounds: dict[str, int] = {}
+    for candidate in search.candidates:
+        value_candidate = candidate.value_candidate
+        leaf_evaluations[value_candidate.leaf_evaluation] = (
+            leaf_evaluations.get(value_candidate.leaf_evaluation, 0) + 1
+        )
+        round_key = str(value_candidate.leaf_rollout_decision_round_count)
+        actual_rounds[round_key] = actual_rounds.get(round_key, 0) + 1
+    return {
+        "root_puct_leaf_rollout_rounds": configured_rounds,
+        "root_puct_leaf_actual_rollout_rounds": dict(sorted(actual_rounds.items())),
+        "root_puct_leaf_evaluations": dict(sorted(leaf_evaluations.items())),
+    }
+
+
 @dataclass(frozen=True)
 class _OpponentActionLegalityReport:
     checked: bool
@@ -318,6 +361,23 @@ def _requested_legal_action_indices_for_player(
     if len(legal_action_mask) != ACTION_COUNT:
         return ()
     return tuple(index for index, legal in enumerate(legal_action_mask) if legal)
+
+
+def _leaf_rollout_policies(
+    context: PolicyContext,
+    factory: LeafRolloutPolicyFactory | None,
+) -> Mapping[PlayerId, Policy]:
+    if factory is None:
+        raise ValueError("leaf_rollout_policy_factory is required when leaf rollouts are enabled.")
+    players = {
+        "p1",
+        "p2",
+        context.player_id,
+        *context.requested_players,
+    }
+    for step in context.trajectory.steps:
+        players.add(step.player_id)
+    return {player: factory(player) for player in sorted(players)}
 
 
 def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> None:

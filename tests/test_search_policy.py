@@ -75,6 +75,59 @@ class ImmediateOutcomeEnv:
         self.closed = True
 
 
+class DelayedOutcomeEnv:
+    def __init__(self, winners_after_branch: dict[int, str | None]) -> None:
+        self.winners_after_branch = winners_after_branch
+        self.all_step_calls: list[dict[str, int]] = []
+        self.reset_calls: list[tuple[int, str]] = []
+        self._terminal: TerminalState | None = None
+        self._requested = ("p1", "p2")
+        self._branch_action: int | None = None
+        self.closed = False
+
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        self.reset_calls.append((seed, format_id))
+        self._terminal = None
+        self._requested = ("p1", "p2")
+        self._branch_action = None
+
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        return _observation(0, 1) if player == "p1" else _observation(0)
+
+    def legal_actions(self, player: str) -> tuple[bool, ...]:
+        return self.observe(player).legal_action_mask
+
+    def requested_players(self) -> tuple[str, ...]:
+        return self._requested
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        self.all_step_calls.append(dict(actions))
+        if self._branch_action is None:
+            self._branch_action = int(actions["p1"])
+            self._requested = ("p1", "p2")
+            return StepResult(
+                observations={"p1": _observation(0, 1), "p2": _observation(0)},
+                rewards={"p1": 0.0, "p2": 0.0},
+                terminal=None,
+                requested_players=self._requested,
+            )
+        winner = self.winners_after_branch[self._branch_action]
+        self._terminal = TerminalState(winner=winner, turn_count=len(self.all_step_calls))
+        self._requested = ()
+        return StepResult(
+            observations={},
+            rewards={"p1": 1.0 if winner == "p1" else -1.0, "p2": -1.0 if winner == "p1" else 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
+
+    def terminal(self) -> TerminalState | None:
+        return self._terminal
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class RootPUCTSearchPolicyTest(unittest.TestCase):
     def test_greedy_opponent_action_planner_uses_player_local_history(self) -> None:
         observed_history_lengths: list[int] = []
@@ -233,6 +286,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.action_index, 1)
         self.assertEqual(step.metadata["root_puct_selection_mode"], "value")
         self.assertEqual(step.metadata["root_puct_selected_value"], 1.0)
+        self.assertNotIn("root_puct_leaf_rollout_rounds", step.metadata)
 
     def test_root_puct_policy_value_selection_mode_can_be_gated_back_to_prior(self) -> None:
         policy = RootPUCTSearchPolicy(
@@ -258,6 +312,55 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertTrue(step.metadata["root_puct_value_gate_used"])
         self.assertEqual(step.metadata["root_puct_pre_gate_action"], 1)
         self.assertEqual(step.metadata["root_puct_prior_action"], 0)
+
+    def test_root_puct_policy_can_use_bounded_leaf_rollouts_for_branch_values(self) -> None:
+        branch_envs: list[DelayedOutcomeEnv] = []
+
+        def branch_env_factory() -> DelayedOutcomeEnv:
+            env = DelayedOutcomeEnv({0: "p2", 1: "p1"})
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            leaf_rollout_decision_rounds=1,
+            leaf_rollout_policy_factory=lambda player_id: FixedPolicy(0, policy_id=f"leaf-{player_id}"),
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=98,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=98),
+            requested_legal_action_masks={"p1": _mask(0, 1), "p2": _mask(0)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata["root_puct_leaf_rollout_rounds"], 1)
+        self.assertEqual(decision.metadata["root_puct_leaf_actual_rollout_rounds"], {"1": 2})
+        self.assertEqual(decision.metadata["root_puct_leaf_evaluations"], {"rollout_terminal": 2})
+        self.assertEqual(decision.metadata["root_puct_candidate_count"], 2)
+        self.assertEqual(len(branch_envs), 1)
+        self.assertTrue(branch_envs[0].closed)
+        self.assertEqual(
+            branch_envs[0].all_step_calls,
+            [
+                {"p1": 0, "p2": 0},
+                {"p1": 0, "p2": 0},
+                {"p1": 1, "p2": 0},
+                {"p1": 0, "p2": 0},
+            ],
+        )
 
     def test_root_puct_policy_value_gate_keeps_search_action_with_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(
@@ -300,6 +403,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 selection_mode="unknown",
+            )
+
+    def test_root_puct_policy_rejects_leaf_rollouts_without_policy_factory(self) -> None:
+        with self.assertRaisesRegex(ValueError, "leaf_rollout_policy_factory"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                leaf_rollout_decision_rounds=1,
             )
 
     def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:

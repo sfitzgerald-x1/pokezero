@@ -296,6 +296,9 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     print("-" * len(header))
     fallback_reasons = []
     selection_modes = []
+    leaf_rollouts = []
+    leaf_actual_rounds = []
+    leaf_evaluations = []
     for matchup, policy_id, metrics in rows:
         average_candidate_count = metrics.get("root_puct_average_candidate_count")
         average_elapsed_seconds = metrics.get("root_puct_average_elapsed_seconds")
@@ -323,10 +326,34 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         if isinstance(modes, dict) and modes:
             formatted = ", ".join(f"{mode}={count}" for mode, count in modes.items())
             selection_modes.append(f"{policy_id}: {formatted}")
+        leaf_rounds = metrics.get("root_puct_leaf_rollout_rounds")
+        if isinstance(leaf_rounds, dict) and leaf_rounds:
+            formatted = ", ".join(f"{rounds}={count}" for rounds, count in leaf_rounds.items())
+            leaf_rollouts.append(f"{policy_id}: {formatted}")
+        actual_rounds = metrics.get("root_puct_leaf_actual_rollout_rounds")
+        if isinstance(actual_rounds, dict) and actual_rounds:
+            formatted = ", ".join(f"{rounds}={count}" for rounds, count in actual_rounds.items())
+            leaf_actual_rounds.append(f"{policy_id}: {formatted}")
+        evaluations = metrics.get("root_puct_leaf_evaluations")
+        if isinstance(evaluations, dict) and evaluations:
+            formatted = ", ".join(f"{name}={count}" for name, count in evaluations.items())
+            leaf_evaluations.append(f"{policy_id}: {formatted}")
     if selection_modes:
         print("selection_modes:")
         for mode in selection_modes:
             print(f"  {mode}")
+    if leaf_rollouts:
+        print("leaf_rollouts_configured:")
+        for leaf_rollout in leaf_rollouts:
+            print(f"  {leaf_rollout}")
+    if leaf_actual_rounds:
+        print("leaf_rollouts_actual:")
+        for leaf_rounds in leaf_actual_rounds:
+            print(f"  {leaf_rounds}")
+    if leaf_evaluations:
+        print("leaf_evaluations:")
+        for leaf_evaluation in leaf_evaluations:
+            print(f"  {leaf_evaluation}")
     if fallback_reasons:
         print("fallback_reasons:")
         for reason in fallback_reasons:

@@ -162,6 +162,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     root_puct_play.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
     root_puct_play.add_argument(
+        "--leaf-rollout-rounds",
+        type=int,
+        default=0,
+        help=(
+            "Optional bounded simulator continuation per root candidate before leaf value "
+            "evaluation. Zero keeps the default one-ply value-head leaf."
+        ),
+    )
+    root_puct_play.add_argument(
         "--selection-mode",
         choices=("puct", "value"),
         default="puct",
@@ -617,6 +626,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             policy_id=policy_id,
         )
 
+    def make_leaf_rollout_policy(player_id: str) -> TransformerSoftmaxPolicy:
+        return make_raw_policy(policy_id=f"{search_policy_id}-leaf-{player_id}")
+
     def value_fn(history):
         return evaluate_transformer_observation_value(
             model=model,
@@ -656,6 +668,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
+            leaf_rollout_decision_rounds=args.leaf_rollout_rounds,
+            leaf_rollout_policy_factory=make_leaf_rollout_policy
+            if args.leaf_rollout_rounds
+            else None,
         )
 
     opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))

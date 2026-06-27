@@ -935,6 +935,9 @@ class _PolicyDecisionAccumulator:
     root_puct_value_gate_uses: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
+    root_puct_leaf_rollout_rounds: dict[str, int] = field(default_factory=dict)
+    root_puct_leaf_actual_rollout_rounds: dict[str, int] = field(default_factory=dict)
+    root_puct_leaf_evaluations: dict[str, int] = field(default_factory=dict)
 
     def add(self, metadata: Mapping[str, Any]) -> None:
         self.decisions += 1
@@ -972,6 +975,18 @@ class _PolicyDecisionAccumulator:
         if selection_mode is not None:
             key = str(selection_mode)
             self.root_puct_selection_modes[key] = self.root_puct_selection_modes.get(key, 0) + 1
+        leaf_rollout_rounds = metadata.get("root_puct_leaf_rollout_rounds")
+        if leaf_rollout_rounds is not None:
+            key = str(leaf_rollout_rounds)
+            self.root_puct_leaf_rollout_rounds[key] = self.root_puct_leaf_rollout_rounds.get(key, 0) + 1
+        _merge_count_mapping(
+            self.root_puct_leaf_actual_rollout_rounds,
+            metadata.get("root_puct_leaf_actual_rollout_rounds"),
+        )
+        _merge_count_mapping(
+            self.root_puct_leaf_evaluations,
+            metadata.get("root_puct_leaf_evaluations"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"decisions": self.decisions}
@@ -1003,6 +1018,18 @@ class _PolicyDecisionAccumulator:
                 result["root_puct_value_gate_uses"] = self.root_puct_value_gate_uses
             if self.root_puct_selection_modes:
                 result["root_puct_selection_modes"] = dict(sorted(self.root_puct_selection_modes.items()))
+            if self.root_puct_leaf_rollout_rounds:
+                result["root_puct_leaf_rollout_rounds"] = dict(
+                    sorted(self.root_puct_leaf_rollout_rounds.items())
+                )
+            if self.root_puct_leaf_actual_rollout_rounds:
+                result["root_puct_leaf_actual_rollout_rounds"] = dict(
+                    sorted(self.root_puct_leaf_actual_rollout_rounds.items())
+                )
+            if self.root_puct_leaf_evaluations:
+                result["root_puct_leaf_evaluations"] = dict(
+                    sorted(self.root_puct_leaf_evaluations.items())
+                )
             if self.root_puct_fallback_reasons:
                 result["root_puct_fallback_reasons"] = dict(
                     sorted(self.root_puct_fallback_reasons.items())
@@ -1026,6 +1053,17 @@ def _metadata_optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _merge_count_mapping(target: dict[str, int], value: object) -> None:
+    if not isinstance(value, Mapping):
+        return
+    for key, count in value.items():
+        parsed_count = _metadata_optional_int(count)
+        if parsed_count is None:
+            continue
+        parsed_key = str(key)
+        target[parsed_key] = target.get(parsed_key, 0) + parsed_count
 
 
 @dataclass

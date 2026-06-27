@@ -62,6 +62,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   The same benchmark can now switch root selection between current PUCT-score selection and pure
   branch-value selection (`--selection-mode puct|value`), which isolates whether the near-term M0
   issue is the branch value signal or the PUCT prior/score mixer.
+  It can also run opt-in bounded leaf continuations (`--leaf-rollout-rounds`) before evaluating a
+  root candidate, using real simulator steps and raw checkpoint policies to test whether short
+  rollout leaves produce a better root value signal than immediate one-ply value-head evaluation.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
