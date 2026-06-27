@@ -247,10 +247,10 @@ def _trajectory_dataset_config_from_training_result(
         window_size=training_config.window_size,
         discount=training_config.discount,
         capped_terminal_value=training_config.capped_terminal_value,
-        hp_delta_return_weight=getattr(training_config, "hp_delta_return_weight", 0.0),
-        faint_delta_return_weight=getattr(training_config, "faint_delta_return_weight", 0.0),
-        turn_penalty_after=getattr(training_config, "turn_penalty_after", None),
-        turn_penalty=getattr(training_config, "turn_penalty", 0.0),
+        hp_delta_return_weight=training_config.hp_delta_return_weight,
+        faint_delta_return_weight=training_config.faint_delta_return_weight,
+        turn_penalty_after=training_config.turn_penalty_after,
+        turn_penalty=training_config.turn_penalty,
     )
 
 

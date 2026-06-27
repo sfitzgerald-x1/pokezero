@@ -8,7 +8,13 @@ import unittest
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.neural_cli import print_value_calibration_report
-from pokezero.neural_policy import TransformerTrainingConfig, ValueCalibrationTransform, require_torch, torch_available
+from pokezero.neural_policy import (
+    TransformerTrainingConfig,
+    TransformerTrainingResult,
+    ValueCalibrationTransform,
+    require_torch,
+    torch_available,
+)
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 from pokezero.value_calibration import (
@@ -20,7 +26,7 @@ from pokezero.value_calibration import (
     value_selection_metric_value,
     value_selection_score,
 )
-from pokezero.value_calibration import _ValueCalibrationTotals
+from pokezero.value_calibration import _ValueCalibrationTotals, _trajectory_dataset_config_from_training_result
 
 
 def _observation() -> PokeZeroObservationV0:
@@ -99,6 +105,33 @@ class ValueCalibrationTest(unittest.TestCase):
 
         self.assertEqual(transform.scale, 0.0)
         self.assertAlmostEqual(transform.bias, 0.0)
+
+    def test_calibration_dataset_config_matches_training_target_config(self) -> None:
+        training_config = TransformerTrainingConfig(
+            window_size=3,
+            discount=0.75,
+            capped_terminal_value=-0.25,
+            hp_delta_return_weight=0.2,
+            faint_delta_return_weight=0.3,
+            turn_penalty_after=20,
+            turn_penalty=0.01,
+        )
+
+        dataset_config = _trajectory_dataset_config_from_training_result(
+            TransformerTrainingResult(
+                model_config=SimpleNamespace(),
+                training_config=training_config,
+                epochs=(),
+            )
+        )
+
+        self.assertEqual(dataset_config.window_size, 3)
+        self.assertEqual(dataset_config.discount, 0.75)
+        self.assertEqual(dataset_config.capped_terminal_value, -0.25)
+        self.assertEqual(dataset_config.hp_delta_return_weight, 0.2)
+        self.assertEqual(dataset_config.faint_delta_return_weight, 0.3)
+        self.assertEqual(dataset_config.turn_penalty_after, 20)
+        self.assertEqual(dataset_config.turn_penalty, 0.01)
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():
@@ -284,8 +317,10 @@ class ValueCalibrationTest(unittest.TestCase):
             terminal=trajectory.terminal,
             trajectory=trajectory,
         )
-        training_result = SimpleNamespace(
+        training_result = TransformerTrainingResult(
+            model_config=SimpleNamespace(),
             training_config=TransformerTrainingConfig(window_size=1, hp_delta_return_weight=3.0),
+            epochs=(),
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
