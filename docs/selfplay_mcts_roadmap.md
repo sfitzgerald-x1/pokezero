@@ -229,7 +229,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   still did not produce a stronger base net for M0.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
-  with `tanh`; legacy checkpoints remain loadable with linear value outputs.
+  with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has
+  an opt-in recurrent temporal aggregator (`--temporal-aggregator gru`) for base-net/value-head
+  experiments that need explicit turn-sequence state instead of masked-mean history pooling.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;
   a better basis for determinization than ad-hoc set sampling. It now exposes bounded
   player-relative opponent determinizations for search, preserving unknowns instead of inventing
@@ -408,7 +410,9 @@ Steps: audit and improve value-target construction (terminal return, discount, c
 and measure value-head **calibration** (predicted vs realized outcome); confirm multi-turn-effect
 duration encodings are complete; expose a clean belief-determinization (opponent-set sampling) API.
 The calibration metric/artifact path now exists; the open work is improving the value targets/model
-until held-out calibration is good enough to guide search.
+until held-out calibration is good enough to guide search. One current model-side lever is the
+optional recurrent temporal aggregator, which should be evaluated as a base-net/value-head upgrade
+before resuming larger root-PUCT reads.
 Deliverable: a calibration metric + improved value targets + a belief-sampling API.
 Acceptance: value-head calibration is good enough that net+MCTS > net-alone (verified jointly in M0);
 WS-D can request sampled opponent sets.

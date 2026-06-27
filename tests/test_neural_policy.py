@@ -112,17 +112,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(config.categorical_vocab_size, 8)
         self.assertEqual(config.token_type_vocab_size, DEFAULT_TOKEN_TYPE_VOCAB_SIZE)
         self.assertEqual(config.value_activation, "tanh")
+        self.assertEqual(config.temporal_aggregator, "mean")
         self.assertGreaterEqual(config.token_count, ACTION_CANDIDATE_TOKEN_OFFSET + 9)
         self.assertEqual(TransformerPolicyConfig.from_dict(config.to_dict()), config)
 
-    def test_transformer_policy_config_loads_legacy_value_activation_as_linear(self) -> None:
+    def test_transformer_policy_config_loads_legacy_fields_with_compatible_defaults(self) -> None:
         config = TransformerPolicyConfig.compact_category(category_vocab=(1, 2, 3), category_oov_buckets=4)
         payload = config.to_dict()
         payload.pop("value_activation")
+        payload.pop("temporal_aggregator")
 
         restored = TransformerPolicyConfig.from_dict(payload)
 
         self.assertEqual(restored.value_activation, "linear")
+        self.assertEqual(restored.temporal_aggregator, "mean")
 
     def test_transformer_policy_config_requires_category_vocab(self) -> None:
         with self.assertRaisesRegex(ValueError, "category_vocab is required"):
@@ -149,6 +152,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, token_count=ACTION_CANDIDATE_TOKEN_OFFSET + 8)
         with self.assertRaisesRegex(ValueError, "value_activation"):
             TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, value_activation="sigmoid")
+        with self.assertRaisesRegex(ValueError, "temporal_aggregator"):
+            TransformerPolicyConfig.compact_category(category_vocab=(1,), category_oov_buckets=1, temporal_aggregator="lstm")
 
     def test_evaluate_transformer_observation_value_uses_configured_history_window(self) -> None:
         if not torch_available():
@@ -305,6 +310,88 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         output = model(**inputs)
 
         self.assertGreater(float(output.value[0].detach()), 4.99)
+
+    def test_transformer_gru_temporal_aggregator_forward_shapes(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            window_size=3,
+            embedding_dim=8,
+            transformer_layers=1,
+            attention_heads=2,
+            feedforward_dim=16,
+            dropout=0.0,
+            temporal_aggregator="gru",
+        )
+        model = EntityTokenTransformerPolicy(config)
+        shape = (2, config.window_size, config.token_count)
+        inputs = {
+            "categorical_ids": torch.zeros((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.zeros((*shape, config.numeric_feature_count), dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.tensor(((False, True, True), (False, False, True)), dtype=torch.bool),
+        }
+
+        self.assertIsNotNone(model.temporal_gru)
+        output = model(**inputs)
+
+        self.assertEqual(tuple(output.policy_logits.shape), (2, 9))
+        self.assertEqual(tuple(output.value.shape), (2,))
+        self.assertEqual(tuple(output.opponent_action_logits.shape), (2, 9))
+
+    def test_transformer_gru_temporal_aggregator_is_padding_invariant_per_row(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",),
+            category_oov_buckets=1,
+            window_size=3,
+            embedding_dim=8,
+            transformer_layers=1,
+            attention_heads=2,
+            feedforward_dim=16,
+            dropout=0.0,
+            temporal_aggregator="gru",
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        shape = (1, config.window_size, config.token_count)
+        base_inputs = {
+            "categorical_ids": torch.zeros((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.zeros((*shape, config.numeric_feature_count), dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.tensor(((False, True, True),), dtype=torch.bool),
+        }
+        with torch.no_grad():
+            base_inputs["numeric_features"][:, 1, :, :] = 1.0
+            base_inputs["numeric_features"][:, 2, :, :] = 2.0
+        other_inputs = {
+            "categorical_ids": torch.ones((*shape, config.categorical_feature_count), dtype=torch.long),
+            "numeric_features": torch.full((*shape, config.numeric_feature_count), 7.0, dtype=torch.float32),
+            "token_type_ids": torch.zeros(shape, dtype=torch.long),
+            "attention_mask": torch.ones(shape, dtype=torch.bool),
+            "history_mask": torch.tensor(((False, False, True),), dtype=torch.bool),
+        }
+        batched_inputs = {
+            name: torch.cat((base_inputs[name], other_inputs[name]), dim=0)
+            for name in base_inputs
+        }
+
+        with torch.no_grad():
+            single_output = model(**base_inputs)
+            batched_output = model(**batched_inputs)
+
+        self.assertTrue(torch.allclose(single_output.policy_logits[0], batched_output.policy_logits[0], atol=1e-6))
+        self.assertTrue(torch.allclose(single_output.value[0], batched_output.value[0], atol=1e-6))
+        self.assertTrue(
+            torch.allclose(single_output.opponent_action_logits[0], batched_output.opponent_action_logits[0], atol=1e-6)
+        )
 
     def test_evaluate_transformer_action_priors_masks_illegal_actions(self) -> None:
         if not torch_available():
@@ -1896,6 +1983,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         str(checkpoint_path),
                         "--showdown-root",
                         "/tmp/showdown",
+                        "--temporal-aggregator",
+                        "gru",
                         "--value-calibration-data",
                         "calibration-rollouts.jsonl",
                         "--value-calibration-out",
@@ -1911,6 +2000,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(train.call_args.args[0], [Path("train-rollouts.jsonl")])
+        self.assertEqual(train.call_args.kwargs["model_config"].temporal_aggregator, "gru")
         self.assertEqual(save.call_args.args[0], checkpoint_path)
         self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("calibration-rollouts.jsonl")])
         self.assertEqual(evaluate.call_args.kwargs["batch_size"], 9)
@@ -2352,6 +2442,13 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(model_config.category_vocab, ("move:c", "species:a", "species:b"))
         self.assertEqual(model_config.categorical_vocab_size, 1 + 3 + 16)
 
+    def test_neural_cli_iterate_wires_temporal_aggregator(self) -> None:
+        model_config = self._run_iterate_capturing_model_config(
+            ["--showdown-root", "/tmp/showdown", "--temporal-aggregator", "gru"]
+        )
+
+        self.assertEqual(model_config.temporal_aggregator, "gru")
+
     def test_neural_cli_iterate_requires_showdown_root(self) -> None:
         with (
             patch("pokezero.neural_cli.run_neural_selfplay_iterations") as run,
@@ -2587,6 +2684,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     attention_heads=4,
                     feedforward_dim=32,
                     dropout=0.0,
+                    temporal_aggregator="gru",
                 ),
                 training_config=TransformerTrainingConfig(
                     batch_size=2,
@@ -2623,6 +2721,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     attention_heads=4,
                     feedforward_dim=32,
                     dropout=0.0,
+                    temporal_aggregator="gru",
                 ),
                 training_config=TransformerTrainingConfig(
                     batch_size=2,
