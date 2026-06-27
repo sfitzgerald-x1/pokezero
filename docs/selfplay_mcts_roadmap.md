@@ -227,6 +227,16 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   54/200, 55/200, then 50/200 versus `max-damage`, with zero capped games. This is useful negative
   evidence: current-schema PPO is able to move internally, but this short aggressive-curriculum run
   still did not produce a stronger base net for M0.
+  A first controlled temporal-aggregator probe then trained the new GRU pooling path on the same
+  current-schema teacher split and value-selected on the same held-out rollouts. It did **not**
+  improve the base-net/value bottleneck: held-out value-selected ECE was 0.0741 versus the mean
+  model's 0.0484, MAE was 0.9875 versus 0.9584, sign accuracy was 0.570 versus 0.592, and the
+  selected GRU checkpoint scored 142/600 (0.237) against `max-damage` versus the mean checkpoint's
+  150/600 (0.250), again with zero capped games
+  (`runs/max-damage-goal-local-20260627/current-schema-gru-value-selected-vs-max-damage-300.json`).
+  This validates the GRU path as runnable but is negative evidence for "GRU alone fixes the current
+  teacher-data base net"; temporal memory should next be tested inside a genuine self-play setup,
+  not by further polishing this same small BC split.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has

@@ -142,7 +142,11 @@ privileged supervision, etc.).
   state-space) over per-turn embeddings should beat the fixed 4-turn window because exploiting
   `max-damage` is a *sequential* read (it keeps clicking the same predictable move). Now cheap
   given the param headroom. *Experiment:* ablate recurrent vs windowed under the same RL setup.
-  *Signal:* higher vs-`max-damage` win rate and better long-game switch timing.
+  *Signal:* higher vs-`max-damage` win rate and better long-game switch timing. Early evidence:
+  an opt-in GRU temporal aggregator is implemented, but a same-data teacher-BC/value-selection
+  probe did **not** beat the mean-pooled current-schema checkpoint (142/600 vs `max-damage`
+  versus 150/600 for mean; worse held-out value ECE/MAE/sign). Treat that as a negative read on
+  "GRU fixes the small teacher split," not as a refutation of temporal memory under real self-play.
 - **H3 — Opponent-action prediction (privileged self-play supervision) sharpens switches.**
   Train the opponent head against self-play ground truth. Against deterministic `max-damage`
   the opponent's next move is near-perfectly predictable, so the agent can pre-switch to a
