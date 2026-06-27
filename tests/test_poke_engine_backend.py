@@ -8,12 +8,13 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from pokezero.engine_cli import main as engine_cli_main
+from pokezero.engine_cli import ENGINE_NOT_READY_EXIT_CODE, main as engine_cli_main
 from pokezero.poke_engine_backend import (
     POKE_ENGINE_GEN3_INSTALL_COMMAND,
     PokeEngineProbe,
     PokeEngineUnavailableError,
     inspect_poke_engine_api,
+    inspect_poke_engine_optional_api,
     probe_poke_engine,
     require_poke_engine,
 )
@@ -52,6 +53,18 @@ class PokeEngineBackendTest(unittest.TestCase):
     def test_inspect_api_accepts_expected_reversible_surface(self) -> None:
         self.assertEqual(inspect_poke_engine_api(fake_engine_module()), ())
 
+    def test_optional_helpers_are_reported_separately(self) -> None:
+        module = SimpleNamespace(
+            State=FakeState,
+            generate_instructions=lambda *args, **kwargs: [],
+        )
+
+        self.assertEqual(inspect_poke_engine_api(module), ())
+        self.assertEqual(
+            inspect_poke_engine_optional_api(module),
+            ("calculate_damage", "monte_carlo_tree_search"),
+        )
+
     def test_inspect_api_reports_missing_state_methods(self) -> None:
         module = SimpleNamespace(
             State=object,
@@ -80,6 +93,8 @@ class PokeEngineBackendTest(unittest.TestCase):
         self.assertTrue(probe.ready)
         self.assertEqual(probe.version, "0.0.47")
         self.assertEqual(probe.missing_api, ())
+        self.assertEqual(probe.missing_optional_api, ())
+        self.assertIn("not full Gen 3 mechanics equivalence", probe.message())
 
     def test_probe_reports_missing_import_with_install_command(self) -> None:
         def missing_import(name: str) -> ModuleType:
@@ -110,13 +125,14 @@ class PokeEngineBackendTest(unittest.TestCase):
             ready=False,
             version=None,
             missing_api=(),
+            missing_optional_api=(),
             import_error="No module named 'poke_engine'",
         )
         with patch("pokezero.poke_engine_backend.probe_poke_engine", return_value=probe):
             with self.assertRaises(PokeEngineUnavailableError) as context:
                 require_poke_engine()
 
-        self.assertIn("Install/rebuild for Gen 3", str(context.exception))
+        self.assertIn("Install/rebuild the recommended Gen 3 wheel", str(context.exception))
 
     def test_doctor_cli_reports_missing_engine_as_not_ready(self) -> None:
         probe = PokeEngineProbe(
@@ -124,6 +140,7 @@ class PokeEngineBackendTest(unittest.TestCase):
             ready=False,
             version=None,
             missing_api=(),
+            missing_optional_api=(),
             import_error="No module named 'poke_engine'",
         )
         with patch("pokezero.engine_cli.probe_poke_engine", return_value=probe):
@@ -131,10 +148,18 @@ class PokeEngineBackendTest(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 exit_code = engine_cli_main(["doctor", "--json"])
 
-        self.assertEqual(exit_code, 2)
+        self.assertEqual(exit_code, ENGINE_NOT_READY_EXIT_CODE)
         payload = json.loads(output.getvalue())
         self.assertFalse(payload["ready"])
         self.assertIn("poke-engine/gen3", payload["install_command"])
+        self.assertFalse(payload["gen3_feature_verified"])
+
+    def test_installed_poke_engine_contract_when_available(self) -> None:
+        probe = probe_poke_engine()
+        if not probe.available:
+            self.skipTest("poke-engine is not installed")
+
+        self.assertTrue(probe.ready, probe.message())
 
 
 if __name__ == "__main__":

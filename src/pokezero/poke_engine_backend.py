@@ -27,6 +27,8 @@ POKE_ENGINE_GEN3_INSTALL_COMMAND = (
 POKE_ENGINE_REQUIRED_MODULE_ATTRIBUTES = (
     "State",
     "generate_instructions",
+)
+POKE_ENGINE_OPTIONAL_MODULE_ATTRIBUTES = (
     "calculate_damage",
     "monte_carlo_tree_search",
 )
@@ -35,6 +37,10 @@ POKE_ENGINE_REQUIRED_STATE_METHODS = (
     "reverse_instructions",
     "from_string",
     "to_string",
+)
+POKE_ENGINE_GEN3_FEATURE_NOTE = (
+    "This probe verifies the Python reversible API seam, not full Gen 3 mechanics equivalence. "
+    "Use Showdown equivalence fixtures before adopting poke-engine for training/search."
 )
 
 
@@ -50,20 +56,29 @@ class PokeEngineProbe:
     ready: bool
     version: str | None
     missing_api: tuple[str, ...]
+    missing_optional_api: tuple[str, ...]
     import_error: str | None
     install_command: str = POKE_ENGINE_GEN3_INSTALL_COMMAND
 
     def message(self) -> str:
         if self.ready:
             version = self.version or "unknown"
-            return f"poke-engine is available and exposes the expected Gen 3 spike API (version: {version})."
+            parts = [
+                f"poke-engine is available and exposes the expected reversible API seam (version: {version}).",
+                POKE_ENGINE_GEN3_FEATURE_NOTE,
+            ]
+            if self.missing_optional_api:
+                parts.append("Optional API missing: " + ", ".join(self.missing_optional_api))
+            return "\n".join(parts)
 
-        parts = ["poke-engine is not ready for the Gen 3 spike."]
+        parts = ["poke-engine is not ready for the reversible API spike."]
         if self.import_error:
             parts.append(f"Import error: {self.import_error}")
         if self.missing_api:
             parts.append("Missing API: " + ", ".join(self.missing_api))
-        parts.append("Install/rebuild for Gen 3 with:")
+        if self.missing_optional_api:
+            parts.append("Optional API missing: " + ", ".join(self.missing_optional_api))
+        parts.append("Install/rebuild the recommended Gen 3 wheel with:")
         parts.append(f"  {self.install_command}")
         return "\n".join(parts)
 
@@ -73,8 +88,11 @@ class PokeEngineProbe:
             "ready": self.ready,
             "version": self.version,
             "missing_api": list(self.missing_api),
+            "missing_optional_api": list(self.missing_optional_api),
             "import_error": self.import_error,
             "install_command": self.install_command,
+            "gen3_feature_verified": False,
+            "gen3_feature_note": POKE_ENGINE_GEN3_FEATURE_NOTE,
         }
 
 
@@ -94,6 +112,7 @@ def probe_poke_engine(
                 ready=False,
                 version=None,
                 missing_api=(),
+                missing_optional_api=(),
                 import_error=str(exc),
             )
         return PokeEngineProbe(
@@ -101,6 +120,7 @@ def probe_poke_engine(
             ready=False,
             version=None,
             missing_api=(),
+            missing_optional_api=(),
             import_error=f"import failed while loading {POKE_ENGINE_IMPORT_NAME}: {exc}",
         )
     except Exception as exc:  # pragma: no cover - defensive around native extension import failures.
@@ -109,16 +129,19 @@ def probe_poke_engine(
             ready=False,
             version=None,
             missing_api=(),
+            missing_optional_api=(),
             import_error=f"{type(exc).__name__}: {exc}",
         )
 
     version = _lookup_version(version_lookup)
     missing_api = inspect_poke_engine_api(module)
+    missing_optional_api = inspect_poke_engine_optional_api(module)
     return PokeEngineProbe(
         available=True,
         ready=not missing_api,
         version=version,
         missing_api=missing_api,
+        missing_optional_api=missing_optional_api,
         import_error=None,
     )
 
@@ -133,7 +156,7 @@ def require_poke_engine() -> ModuleType:
 
 
 def inspect_poke_engine_api(module: Any) -> tuple[str, ...]:
-    """Return missing API names needed for the first Gen 3 spike."""
+    """Return missing required API names needed for reversible-state experiments."""
 
     missing: list[str] = []
     for attribute in POKE_ENGINE_REQUIRED_MODULE_ATTRIBUTES:
@@ -148,9 +171,18 @@ def inspect_poke_engine_api(module: Any) -> tuple[str, ...]:
     return tuple(missing)
 
 
+def inspect_poke_engine_optional_api(module: Any) -> tuple[str, ...]:
+    """Return missing optional helpers that are useful but not required for the first spike."""
+
+    missing: list[str] = []
+    for attribute in POKE_ENGINE_OPTIONAL_MODULE_ATTRIBUTES:
+        if not hasattr(module, attribute):
+            missing.append(attribute)
+    return tuple(missing)
+
+
 def _lookup_version(version_lookup: Callable[[str], str]) -> str | None:
     try:
         return version_lookup(POKE_ENGINE_PACKAGE_NAME)
     except metadata.PackageNotFoundError:
         return None
-
