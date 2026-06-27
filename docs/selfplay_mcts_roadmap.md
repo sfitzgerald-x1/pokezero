@@ -394,6 +394,15 @@ Steps:
    loop is runnable and auditable, but a cold random-legal start is not producing a useful base net;
    the next WS-A/WS-E experiment should improve the learning signal or initialization before any
    further search-tuning reads.
+   A follow-up `value-calibration-compare` pass on the same pilot's held-out
+   `value-selection-training-rollouts.jsonl` confirmed that post-hoc calibration is not a hidden fix
+   for this checkpoint. Iteration 1 selected isotonic, but its held-out Pearson remained negative
+   (`raw=-0.1534`, `affine=-0.1534`, `isotonic=-0.1277`) and the command emitted the weak-ranking
+   warning. Iteration 2 selected raw by Pearson (`raw=0.2668`, `affine=0.2668`,
+   `isotonic=0.2370`), even though affine improved MAE/ECE. Iteration 3 also selected raw
+   (`raw=0.2619`, `affine=0.2615`, `isotonic=0.2509`). The read is useful because it separates
+   calibration-error improvements from search-relevant ranking: for the latest pilot checkpoint,
+   affine/isotonic transforms should not be treated as making the value head more useful for MCTS.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
