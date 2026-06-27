@@ -1,9 +1,9 @@
 # Roadmap: self-play + test-time MCTS toward ladder-competitive play
 
-Status: planning. This is the multi-workstream plan for getting pokezero from "coherent but
-plateaued" to genuinely strong Gen 3 random-battle play, learned from first principles via
+Status: active execution. This is the multi-workstream plan for getting pokezero from "coherent
+but plateaued" to genuinely strong Gen 3 random-battle play, learned from first principles via
 self-play (see [`goals.md`](goals.md)). It is written so independent agents can each own a
-workstream in parallel.
+workstream in parallel and keep the critical path visible as evidence changes.
 
 ## The proven recipe we are following
 
@@ -106,7 +106,14 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   A value-calibration pass on the same checkpoint's own 64-game training rollouts reinforces the
   value-quality concern even before testing generalization: over 3,809 in-sample examples, the value
   head measured MSE 0.752, MAE 0.810, sign accuracy 0.722, and expected calibration error 0.187.
-  That is too noisy to trust as the only one-ply search leaf signal.
+  That is too noisy to trust as the only one-ply search leaf signal. The follow-up WS-E plumbing now
+  makes this auditable rather than implicit: new transformer configs bound value outputs with `tanh`,
+  calibration reports include return/turn/terminal slices, and `neural_cli train` / `neural_cli iterate`
+  can write opt-in calibration artifacts. A one-epoch current-schema tanh teacher-BC split run then
+  showed the remaining bottleneck clearly: held-out value calibration over 598 examples measured MSE
+  1.036, MAE 0.960, sign accuracy 0.527, ECE 0.299, with positive-return sign accuracy only 0.048.
+  This is not a search-ready value head; it is evidence that value/base-net quality must improve before
+  more low-sample search tuning can produce a meaningful M0 verdict.
   A first bounded-rollout-leaf probe (`--leaf-rollout-rounds 1`) on the same checkpoint and
   max-damage seed range gave a small positive but still far-from-gate result: raw scored 3/8 and
   root-PUCT with one rollout leaf round scored 4/8, with zero capped games and zero search
@@ -162,9 +169,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   step, not M0 evidence until measured and not a replacement for belief determinization.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
-  targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
+  targets; reports stratified return/turn/terminal slices; and can be emitted from standalone
+  calibration, `neural_cli train`, or `neural_cli iterate`. This is the first WS-E metric before using
+  the value head for MCTS leaf evaluation.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
-  3-layer MLP; already has policy, value, and opponent-action heads.
+  3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
+  with `tanh`; legacy checkpoints remain loadable with linear value outputs.
 - **Public belief engine** (`belief.py`) — narrows the opponent's hidden set from observable facts;
   a better basis for determinization than ad-hoc set sampling. It now exposes bounded
   player-relative opponent determinizations for search, preserving unknowns instead of inventing
@@ -191,10 +201,13 @@ enough scale, (b) a real opponent *league*, (c) exploration pressure, and — de
 **search improvement operator**. The recipe above asserts all four break the plateau; gen4→gen3
 transfer is also assumed. Treat this as a hypothesis to test, not a given.
 
-**Search is the load-bearing bet, so prove it first and cheaply** (see M0): the thesis's strength
-came from *net + MCTS*, and net-alone may well re-plateau at ~0.52. Do **not** over-invest in
-scaling PPO before demonstrating that search lifts a modest net past the plateau. WS-D does **not**
-require a strong net — search improves any decent one — so it should not be gated on a great M1.
+**Search is the load-bearing bet, but the test stand has prerequisites** (see M0): the thesis's
+strength came from *net + MCTS*, and net-alone may well re-plateau at ~0.52. Do **not** over-invest
+in fleet-scale PPO before demonstrating that search lifts a modest net past the plateau. At the same
+time, recent micro-probes showed that search tuning on a weak teacher-BC prior and poorly calibrated
+value head produces unreadable 8-16 game deltas. Near-term work should therefore build a decent
+current-schema base net, calibrate its value head, and only then resume root-PUCT reads at a sample
+size that can support a decision.
 
 **Go/no-go gates:**
 - **M0 gate:** on a cheap/early net, net+MCTS must clear ~0.60 vs max-damage (well past the 0.52
@@ -204,9 +217,10 @@ require a strong net — search improves any decent one — so it should not be 
   current-observation-schema checkpoint with meaningful strength. Older local checkpoints trained
   before the latest observation features can fail with numeric-feature shape mismatches and should
   be retrained or skipped for M0 evidence.
-  The first 64-game-BC probe did **not** show lift, so the next M0 step should improve the search
-  operator/value quality or run against a meaningfully stronger current-schema checkpoint before
-  spending larger benchmark samples.
+  The first 64-game-BC probe did **not** show lift, and the follow-up value-calibration split showed
+  that the current value head is not a reliable leaf evaluator. Treat further 8-16 game root-PUCT runs
+  as plumbing checks only; real M0 evidence should wait for a stronger base net and use larger
+  benchmark samples.
 - **M1 gate:** the per-iteration strength curve must *rise* over ≥10 league iterations; a multi-
   iteration flatline = stuck → lean on search and revisit league diversity + exploration.
 
@@ -334,6 +348,8 @@ head, so this gates M0/M3.
 Steps: audit and improve value-target construction (terminal return, discount, capped-game value)
 and measure value-head **calibration** (predicted vs realized outcome); confirm multi-turn-effect
 duration encodings are complete; expose a clean belief-determinization (opponent-set sampling) API.
+The calibration metric/artifact path now exists; the open work is improving the value targets/model
+until held-out calibration is good enough to guide search.
 Deliverable: a calibration metric + improved value targets + a belief-sampling API.
 Acceptance: value-head calibration is good enough that net+MCTS > net-alone (verified jointly in M0);
 WS-D can request sampled opponent sets.
@@ -356,11 +372,13 @@ Touches: `collection.py`, `evaluation.py`, `neural_cli.py`, `online_client.py`.
 ## Sequencing & milestones
 
 **Ordering principle: prove the load-bearing bet (search) cheaply *before* spending fleet compute on
-scale.** Search improves any decent net, so it must not wait for a fully-scaled M1.
+scale, but do not keep tuning search on an unreadable foundation.** Search improves a decent net; it
+does not rescue a value head that cannot rank leaves.
 
-- **Now (parallel):** WS-C (verify forking/rollout — the riskiest unknown), WS-E (value-head
-  calibration + belief-sampling API), WS-A (league self-play to produce a *modest* net), WS-F (fixed
-  yardstick). WS-B (full fleet scaling) can be scaffolded but is **not** on the critical path to M0.
+- **Now (parallel, ordered by current bottleneck):** WS-E (improve value calibration beyond the new
+  report/artifact plumbing), WS-A (produce a stronger current-schema base net), WS-F (fixed yardstick
+  with milestone-scale samples), and WS-C/WS-D harness hardening only where it removes known blockers.
+  WS-B (full fleet scaling) can be scaffolded but is **not** on the critical path to M0.
 - **M0 — Prove search lifts a modest net (the de-risking gate):** WS-C + minimal WS-D + WS-E on a
   cheap/early WS-A net → **net+MCTS clears ~0.60 vs max-damage** (past the 0.52 plateau). Pass →
   scale. Fail → fix the operator (search depth / value head / DUCT) before any fleet compute.
