@@ -466,7 +466,18 @@ Steps:
    make the next targeted opponent-pool experiment reproducible: they add `aggressive-damage` to the
    fixed self-play opponent pool while preserving `max-damage` as eval-only, with the `-gru` arm
    combining that pressure with temporal aggregation. This is curriculum plumbing for the targeted
-   anti-aggression/counterplay thread below, not evidence until a same-profile run is recorded.
+   anti-aggression/counterplay thread below.
+   A local `anti-aggression` pilot with yardstick-gated collector advancement then produced the
+   strongest fixed-yardstick foundation read so far:
+   `runs/foundation-anti-aggression-local-20260627/pilot-001` ran 3 iterations, 256 games per
+   iteration, `aggressive-damage` in the training opponent pool, `max-damage` eval-only, and
+   400-game fixed-yardstick rows. Iteration 1 initialized the collector baseline at
+   `max-damage=0.128`; iteration 2 regressed to `0.043` and did not advance; iteration 3 recovered
+   and advanced at `0.180`, with `simple-legal=0.570` and `random-legal=0.900`. This is positive
+   evidence for targeted anti-aggression pressure plus yardstick retention as the best current
+   base-policy direction. It is not a search-ready foundation: the latest value read still has weak
+   ranking/calibration (`sign=0.6296`, `ECE=0.3233`, `Pearson=0.2542`), so the next critical work
+   remains value/base-net quality rather than more low-sample search-operator tuning.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
@@ -618,6 +629,9 @@ does not rescue a value head that cannot rank leaves.
   opponent-signal ablations), WS-F (fixed yardstick with milestone-scale samples), and WS-C/WS-D
   harness hardening only where it removes known blockers.
   WS-B (full fleet scaling) can be scaffolded but is **not** on the critical path to M0.
+  Treat additional 8-16 game root-PUCT probes as plumbing checks only. The next strength-relevant
+  milestone should either improve the value/base net or run search at milestone scale on a foundation
+  checkpoint whose value head is demonstrably more reliable.
 - **M0 — Prove search lifts a modest net (the de-risking gate):** WS-C + minimal WS-D + WS-E on a
   cheap/early WS-A net → **net+MCTS clears ~0.60 vs max-damage** (past the 0.52 plateau). Pass →
   scale. Fail → fix the operator (search depth / value head / DUCT) before any fleet compute.
