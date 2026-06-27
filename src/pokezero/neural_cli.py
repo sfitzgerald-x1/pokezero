@@ -1959,6 +1959,7 @@ def _foundation_plan(args: argparse.Namespace) -> int:
     print("neural_foundation_plan:")
     print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
     print(f"profile: {recipe['profile']}")
+    print(f"variant: {recipe['variant']}")
     print(f"run_dir: {recipe['run_dir']}")
     print(f"manifest: {recipe['manifest_path']}")
     print("command:")

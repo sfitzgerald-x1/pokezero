@@ -477,9 +477,9 @@ when live child output is more useful than wrapper capture.
 
 Use `--variant opponent-signal` as the H3 ablation arm when testing whether stronger
 opponent-action auxiliary supervision improves the foundation policy/value representation. The
-baseline variant leaves the underlying neural iterate default intact; the opponent-signal variant
-explicitly passes a higher `--opponent-action-loss-weight`. Compare it against baseline on the same
-profile and seed bands before drawing any search conclusions.
+baseline variant leaves the underlying neural iterate default intact (currently `0.1`, not disabled);
+the opponent-signal variant explicitly passes a higher `--opponent-action-loss-weight`. Compare it
+against baseline on the same profile and seed bands before drawing any search conclusions.
 
 Audit a run for regression-health checks that are cheap to run on CPU:
 

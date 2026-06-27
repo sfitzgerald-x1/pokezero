@@ -2197,6 +2197,28 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("--opponent-action-loss-weight", argv)
         self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "1.0")
 
+    def test_neural_cli_foundation_plan_text_prints_variant(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-opponent-signal",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "opponent-signal",
+                ]
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("variant: opponent-signal", output)
+        self.assertIn("--opponent-action-loss-weight 1.0", output)
+
     def test_neural_cli_foundation_opponent_signal_variant_respects_explicit_loss_override(self) -> None:
         with (
             patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
