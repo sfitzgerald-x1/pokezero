@@ -2383,7 +2383,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 value_correlation=0.31,
                 value_sign=0.61,
                 value_ece=0.12,
-                max_damage_win_rate=0.25,
+                max_damage_win_rate=0.11,
             )
             opponent_signal_summary = _write_foundation_summary(
                 opponent_signal_dir,
@@ -2392,7 +2392,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 value_correlation=0.36,
                 value_sign=0.53,
                 value_ece=0.20,
-                max_damage_win_rate=0.40,
+                max_damage_win_rate=0.12,
             )
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
@@ -2403,9 +2403,20 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         str(opponent_signal_summary),
                     ]
                 )
+            with patch("sys.stdout", new_callable=io.StringIO) as json_stdout:
+                json_exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(baseline_summary),
+                        str(opponent_signal_summary),
+                        "--json",
+                    ]
+                )
 
         output = stdout.getvalue()
+        payload = json.loads(json_stdout.getvalue())
         self.assertEqual(exit_code, 0)
+        self.assertEqual(json_exit_code, 0)
         self.assertIn("neural_foundation_compare:", output)
         self.assertIn("not an MCTS verdict", output)
         self.assertIn("baseline/pilot-001", output)
@@ -2415,6 +2426,35 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("1.000", output)
         self.assertIn("0.700", output)
         self.assertIn("manifest=loaded", output)
+        self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["source"], "manifest")
+        self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["win_rate"], 0.25)
+        self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["source"], "manifest")
+        self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["win_rate"], 0.4)
+
+    def test_neural_cli_foundation_compare_keeps_good_rows_when_summary_load_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "baseline" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant=None,
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.25,
+            )
+            missing_path = temp_path / "missing-run"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["foundation-compare", str(summary_path), str(missing_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("baseline/pilot-001", output)
+        self.assertIn("load_error", output)
+        self.assertIn(str(missing_path), output)
 
     def test_neural_cli_foundation_compare_json_uses_summary_when_manifest_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

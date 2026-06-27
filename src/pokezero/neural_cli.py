@@ -854,7 +854,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     foundation_compare = subparsers.add_parser(
         "foundation-compare",
-        help="Compare neural foundation-run summaries without loading torch.",
+        help="Compare neural foundation-run summaries without requiring torch.",
     )
     foundation_compare.add_argument(
         "paths",
@@ -2301,16 +2301,45 @@ def _foundation_report(args: argparse.Namespace) -> int:
 
 
 def _foundation_compare(args: argparse.Namespace) -> int:
+    entries = [_foundation_compare_entry_or_error(path) for path in args.paths]
     payload = {
         "schema_version": NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION,
         "summary_count": len(args.paths),
-        "entries": [_foundation_compare_entry(path) for path in args.paths],
+        "entries": entries,
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
+        return 1 if any(entry.get("load_error") for entry in entries) else 0
     _print_foundation_compare(payload)
-    return 0
+    return 1 if any(entry.get("load_error") for entry in entries) else 0
+
+
+def _foundation_compare_entry_or_error(path: Path) -> dict[str, Any]:
+    try:
+        return _foundation_compare_entry(path)
+    except Exception as exc:
+        return {
+            "label": str(path),
+            "summary_path": str(path),
+            "status": "load_error",
+            "profile": "unknown",
+            "variant": "unknown",
+            "run_dir": None,
+            "duration_seconds": None,
+            "latest_iteration": None,
+            "latest_checkpoint_path": None,
+            "foundation_evidence_status": "unknown",
+            "reasons": [],
+            "load_error": str(exc),
+            "manifest_loaded": False,
+            "manifest_source": None,
+            "manifest_error": "summary_load_failed",
+            "value_calibration": {"available": False},
+            "yardsticks": {
+                policy_id: {"available": False, "opponent_policy_id": policy_id}
+                for policy_id in ("max-damage", "simple-legal", "random-legal")
+            },
+        }
 
 
 def _foundation_compare_entry(path: Path) -> dict[str, Any]:
@@ -2329,7 +2358,10 @@ def _foundation_compare_entry(path: Path) -> dict[str, Any]:
         "variant": str(recipe.get("variant", "baseline")),
         "run_dir": _string_or_none(recipe.get("run_dir")),
         "duration_seconds": _float_or_none(summary.get("duration_seconds")),
-        "latest_iteration": _int_or_none(foundation.get("latest_iteration")) or _int_or_none(readiness.get("latest_iteration")),
+        "latest_iteration": _coalesce_optional_int(
+            foundation.get("latest_iteration"),
+            readiness.get("latest_iteration"),
+        ),
         "latest_checkpoint_path": _string_or_none(foundation.get("latest_checkpoint_path")),
         "foundation_evidence_status": _string_or_none(readiness.get("foundation_evidence_status")) or "unknown",
         "reasons": [str(reason) for reason in _sequence(readiness.get("reasons", ()))],
@@ -2351,10 +2383,10 @@ def _foundation_manifest_from_summary(
     recipe = _optional_mapping(summary.get("recipe"))
     foundation = _optional_mapping(summary.get("foundation"))
     candidates: list[Path] = []
+    candidates.append(summary_path.parent / "manifest.json")
     for value in (foundation.get("manifest_source"), recipe.get("manifest_path")):
         if isinstance(value, str) and value:
             candidates.append(Path(value))
-    candidates.append(summary_path.parent / "manifest.json")
     seen: set[str] = set()
     missing: list[str] = []
     for candidate in candidates:
@@ -2438,7 +2470,7 @@ def _foundation_compare_label(summary_path: Path, recipe: Mapping[str, Any]) -> 
 
 def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     print("neural_foundation_compare:")
-    print("note: compares foundation readiness/value/base-net signals; this is not an MCTS verdict.")
+    print("note: rates are candidate wins / total games; this is not an MCTS verdict.")
     entries = tuple(_mapping(entry) for entry in _sequence(payload.get("entries", ())))
     if not entries:
         print("entries: 0")
@@ -2475,10 +2507,13 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     print("checkpoint_sources:")
     for entry in entries:
         manifest_state = "loaded" if entry.get("manifest_loaded") is True else f"missing({_format_manifest_value(entry.get('manifest_error'))})"
+        load_error = entry.get("load_error")
+        error_suffix = f" load_error={_format_manifest_value(load_error)}" if load_error is not None else ""
         print(
             f"- {_format_manifest_value(entry.get('label'))}: "
             f"checkpoint={_format_manifest_value(entry.get('latest_checkpoint_path'))} "
             f"manifest={manifest_state}"
+            f"{error_suffix}"
         )
 
 
@@ -3085,6 +3120,14 @@ def _int_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coalesce_optional_int(*values: object) -> int | None:
+    for value in values:
+        parsed = _int_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _float_or_none(value: object) -> float | None:
