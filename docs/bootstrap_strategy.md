@@ -457,6 +457,24 @@ python -m pokezero.neural_cli report --run-dir runs/neural-selfplay
 
 The neural report is read-only and summarizes the run manifest's current policy, latest checkpoint, source provenance, per-iteration blended benchmark win rate, incumbent win rate, advancement state, promotion state, and transformer training metrics. Use `--json` for the raw manifest.
 
+For the current CPU foundation experiment, prefer the preset-backed wrapper so smoke and pilot runs
+share one auditable recipe:
+
+```bash
+python -m pokezero.neural_cli foundation-plan \
+  --run-dir runs/neural-foundation-smoke \
+  --showdown-root /path/to/pokemon-showdown
+```
+
+`foundation-run` executes the same recipe and writes `neural-foundation-run-summary.json`, while
+`foundation-report` reads that wrapper summary without loading torch. The wrapper calls
+`neural iterate --experiment-preset foundation-arms-race`; the `smoke` profile is cheap plumbing,
+and `--profile pilot` expands to the current 3x256 CPU PPO arms-race recipe. This is run
+orchestration and readiness evidence, not a policy-strength claim by itself. Built-in profiles stay
+below the 300-game foundation milestone unless `--evaluation-games` is overridden. `foundation-run`
+captures child output into the summary; use `foundation-plan` and run the printed command manually
+when live child output is more useful than wrapper capture.
+
 Audit a run for regression-health checks that are cheap to run on CPU:
 
 ```bash

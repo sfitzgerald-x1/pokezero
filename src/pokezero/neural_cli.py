@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 import copy
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
+import shlex
+import subprocess
 import sys
+import time
 from typing import Any, Iterable, Mapping
 
 from .cli_audit import (
@@ -73,11 +77,48 @@ from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
+from .source_metadata import collect_source_metadata
 
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
 NEURAL_ITERATE_EXPERIMENT_PRESETS = ("none", "foundation-arms-race")
+FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
+    "objective": "ppo",
+    "mirror_match": True,
+    "collector_advancement_mode": "always",
+    "collection_temperature": 1.4,
+    "historical_opponent_selection": "spread",
+    "evaluation_games": 200,
+    "value_calibration": True,
+    "value_selection": True,
+    "value_selection_metric": "pearson_correlation",
+    "value_selection_heldout_games": 32,
+    "entropy_coef": 0.01,
+    "ppo_target_mode": "gae",
+}
+NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
+NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
+NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
+    "smoke": {
+        "iterations": 2,
+        "games_per_iteration": 8,
+        "workers": 2,
+        "evaluation_games": 8,
+        "epochs": 1,
+        "max_batches": 2,
+        "value_selection_heldout_games": 4,
+    },
+    "pilot": {
+        "iterations": 3,
+        "games_per_iteration": 256,
+        "workers": 16,
+        "evaluation_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"]),
+        "epochs": 1,
+        "max_batches": None,
+        "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
+    },
+}
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
@@ -739,12 +780,75 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--json", action="store_true", help="Print the run manifest as JSON.")
     iterate.set_defaults(func=_iterate)
 
+    foundation_plan = subparsers.add_parser(
+        "foundation-plan",
+        help="Print a CPU foundation arms-race neural iterate recipe without launching it.",
+    )
+    _add_foundation_arguments(foundation_plan, include_summary_path=False)
+    foundation_plan.add_argument("--json", action="store_true", help="Print the recipe as JSON.")
+    foundation_plan.set_defaults(func=_foundation_plan)
+
+    foundation_run = subparsers.add_parser(
+        "foundation-run",
+        help="Execute a CPU foundation arms-race neural iterate recipe and write a summary artifact.",
+    )
+    _add_foundation_arguments(foundation_run, include_summary_path=True)
+    foundation_run.set_defaults(func=_foundation_run)
+
+    foundation_report = subparsers.add_parser(
+        "foundation-report",
+        help="Inspect a neural foundation-run summary artifact.",
+    )
+    foundation_report.add_argument("path", type=Path, help="Foundation run directory or neural-foundation-run-summary.json path.")
+    foundation_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
+    foundation_report.set_defaults(func=_foundation_report)
+
     report = subparsers.add_parser("report", help="Print a summary of a neural self-play run manifest.")
     report.add_argument("--run-dir", type=Path, required=True, help="Neural self-play run directory containing manifest.json.")
     report.add_argument("--json", action="store_true", help="Print the raw run manifest as formatted JSON.")
     report.set_defaults(func=_report)
 
     return parser
+
+
+def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summary_path: bool) -> None:
+    profile_choices = tuple(NEURAL_FOUNDATION_PROFILES)
+    parser.add_argument("--run-dir", type=Path, required=True, help="Neural self-play run directory.")
+    parser.add_argument("--showdown-root", type=Path, required=True, help="Built Pokemon Showdown checkout root.")
+    parser.add_argument(
+        "--initial-policy",
+        default="random-legal",
+        help="Initial rollout collector policy spec. Defaults to random-legal for a cold CPU self-play start.",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=profile_choices,
+        default="smoke",
+        help="Foundation run size profile. smoke is cheap plumbing; pilot matches the current 3x256 CPU recipe.",
+    )
+    parser.add_argument("--iterations", type=int, default=None, help="Override profile iterations.")
+    parser.add_argument("--games-per-iteration", type=int, default=None, help="Override profile games per iteration.")
+    parser.add_argument("--workers", type=int, default=None, help="Override profile rollout workers.")
+    parser.add_argument("--evaluation-games", type=int, default=None, help="Override profile benchmark games per matchup.")
+    parser.add_argument("--epochs", type=int, default=None, help="Override profile training epochs per iteration.")
+    parser.add_argument("--max-batches", type=int, default=None, help="Override profile max batches per epoch. Use -1 for no cap.")
+    parser.add_argument(
+        "--value-selection-heldout-games",
+        type=int,
+        default=None,
+        help="Override profile held-out value-selection games per iteration.",
+    )
+    parser.add_argument("--seed-start", type=int, default=1, help="First rollout collection seed.")
+    parser.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First benchmark seed.")
+    parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
+    parser.add_argument("--resume", action="store_true", help="Resume an existing neural foundation run directory.")
+    if include_summary_path:
+        parser.add_argument(
+            "--summary-path",
+            type=Path,
+            default=None,
+            help="Where to write the wrapper summary. Defaults to RUN_DIR/neural-foundation-run-summary.json.",
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1773,20 +1877,36 @@ def _apply_iterate_experiment_preset(args: argparse.Namespace) -> None:
     if args.experiment_preset != "foundation-arms-race":
         raise ValueError(f"unsupported neural iterate experiment preset: {args.experiment_preset!r}.")
 
-    _set_preset_default(args, "objective", "ppo")
-    _set_preset_default(args, "mirror_match", True)
-    _set_preset_default(args, "collector_advancement_mode", "always")
-    _set_preset_default(args, "collection_temperature", 1.4)
-    _set_preset_default(args, "historical_opponent_selection", "spread")
-    _set_preset_default(args, "evaluation_games", 200)
-    _set_preset_default(args, "value_calibration", True)
-    _set_preset_default(args, "value_selection", True)
-    _set_preset_default(args, "value_selection_metric", "pearson_correlation")
-    _set_preset_default(args, "value_selection_heldout_games", 32)
+    _set_preset_default(args, "objective", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["objective"])
+    _set_preset_default(args, "mirror_match", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["mirror_match"])
+    _set_preset_default(
+        args,
+        "collector_advancement_mode",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collector_advancement_mode"],
+    )
+    _set_preset_default(args, "collection_temperature", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collection_temperature"])
+    _set_preset_default(
+        args,
+        "historical_opponent_selection",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["historical_opponent_selection"],
+    )
+    _set_preset_default(args, "evaluation_games", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"])
+    _set_preset_default(args, "value_calibration", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_calibration"])
+    _set_preset_default(args, "value_selection", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection"])
+    _set_preset_default(
+        args,
+        "value_selection_metric",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_metric"],
+    )
+    _set_preset_default(
+        args,
+        "value_selection_heldout_games",
+        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"],
+    )
 
     if args.objective == "ppo":
-        _set_preset_default(args, "entropy_coef", 0.01)
-        _set_preset_default(args, "ppo_target_mode", "gae")
+        _set_preset_default(args, "entropy_coef", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["entropy_coef"])
+        _set_preset_default(args, "ppo_target_mode", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["ppo_target_mode"])
 
     explicit_options = getattr(args, "_explicit_cli_options", frozenset())
     benchmark_references = list(args.benchmark_reference_policy or ())
@@ -1806,6 +1926,264 @@ def _print_run_audit_failure(exc: RunAuditFailure) -> None:
     failed = [check.name for check in exc.result.blocking_failed_checks]
     print(f"audit_failed: {exc.result.manifest_path}", file=sys.stderr)
     print(f"failed_checks: {', '.join(failed) if failed else 'unknown'}", file=sys.stderr)
+
+
+def _foundation_plan(args: argparse.Namespace) -> int:
+    recipe = _foundation_recipe(args)
+    if args.json:
+        print(json.dumps(recipe, indent=2, sort_keys=True))
+        return 0
+    print("neural_foundation_plan:")
+    print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
+    print(f"profile: {recipe['profile']}")
+    print(f"run_dir: {recipe['run_dir']}")
+    print(f"manifest: {recipe['manifest_path']}")
+    print("command:")
+    print(recipe["command"]["shell"])
+    return 0
+
+
+def _foundation_run(args: argparse.Namespace) -> int:
+    recipe = _foundation_recipe(args)
+    summary_path = args.summary_path if args.summary_path is not None else args.run_dir / "neural-foundation-run-summary.json"
+    _validate_foundation_run_paths(args.run_dir, summary_path=summary_path, resume=args.resume)
+    started = time.perf_counter()
+    summary: dict[str, Any] = {
+        "schema_version": NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION,
+        "status": "running",
+        "summary_path": str(summary_path),
+        "started_at": _utc_timestamp(),
+        "ended_at": None,
+        "duration_seconds": None,
+        "source": recipe["source"],
+        "recipe": recipe,
+        "returncode": None,
+        "stdout_tail": None,
+        "stderr_tail": None,
+        "foundation": None,
+        "error": None,
+    }
+    _write_json(summary_path, summary)
+    print("neural_foundation_run:")
+    print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
+    print(f"summary: {summary_path}")
+    print(recipe["command"]["shell"], flush=True)
+    try:
+        completed = subprocess.run(recipe["command"]["argv"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["ended_at"] = _utc_timestamp()
+        summary["duration_seconds"] = round(time.perf_counter() - started, 6)
+        summary["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        _write_json(summary_path, summary)
+        print(f"error: neural foundation run raised {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise
+
+    summary["returncode"] = int(completed.returncode)
+    summary["stdout_tail"] = _text_tail(completed.stdout)
+    summary["stderr_tail"] = _text_tail(completed.stderr)
+    summary["foundation"] = _foundation_run_derived_report(args.run_dir, completed.stdout)
+    summary["status"] = "passed" if completed.returncode == 0 else "failed"
+    summary["ended_at"] = _utc_timestamp()
+    summary["duration_seconds"] = round(time.perf_counter() - started, 6)
+    _write_json(summary_path, summary)
+    if completed.returncode == 0:
+        print("neural_foundation_run: PASS")
+        print("note: PASS means the wrapper command exited 0; inspect benchmarks and foundation readiness for strength.")
+    else:
+        print(f"error: neural foundation run failed with exit code {completed.returncode}", file=sys.stderr)
+        if completed.stderr:
+            print(_text_tail(completed.stderr), file=sys.stderr)
+    return int(completed.returncode)
+
+
+def _foundation_report(args: argparse.Namespace) -> int:
+    summary_path, summary = _load_foundation_summary(args.path)
+    status = str(summary.get("status", "unknown"))
+    if args.json:
+        payload = dict(summary)
+        payload["summary_source_path"] = str(summary_path)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if status == "passed" else 2
+    recipe = _optional_mapping(summary.get("recipe"))
+    foundation = _optional_mapping(summary.get("foundation"))
+    readiness = _optional_mapping(foundation.get("foundation_readiness"))
+    print("neural_foundation_report:")
+    print("note: wrapper status is process health only, not policy-strength evidence.")
+    print(f"summary: {summary_path}")
+    print(f"status: {status}")
+    print(f"started_at: {_format_manifest_value(summary.get('started_at'))}")
+    print(f"ended_at: {_format_manifest_value(summary.get('ended_at'))}")
+    print(f"duration_seconds: {_format_manifest_value(summary.get('duration_seconds'))}")
+    print(f"returncode: {_format_manifest_value(summary.get('returncode'))}")
+    if recipe:
+        print(f"profile: {_format_manifest_value(recipe.get('profile'))}")
+        print(f"run_dir: {_format_manifest_value(recipe.get('run_dir'))}")
+        print(f"manifest: {_format_manifest_value(recipe.get('manifest_path'))}")
+    print(f"foundation_manifest_available: {_format_bool(foundation.get('manifest_available'))}")
+    print(f"latest_checkpoint: {_format_manifest_value(foundation.get('latest_checkpoint_path'))}")
+    print(f"foundation_evidence_status: {_format_manifest_value(readiness.get('foundation_evidence_status'))}")
+    reasons = readiness.get("reasons")
+    if isinstance(reasons, list) and reasons:
+        print(f"reasons: {', '.join(str(reason) for reason in reasons)}")
+    return 0 if status == "passed" else 2
+
+
+def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
+    resolved = _foundation_resolved_options(args)
+    explicit_options = getattr(args, "_explicit_cli_options", frozenset())
+    argv = [
+        sys.executable,
+        "-m",
+        "pokezero.neural_cli",
+        "iterate",
+        "--run-dir",
+        str(args.run_dir),
+        "--iterations",
+        str(resolved["iterations"]),
+        "--games-per-iteration",
+        str(resolved["games_per_iteration"]),
+        "--workers",
+        str(resolved["workers"]),
+        "--showdown-root",
+        str(args.showdown_root),
+        "--initial-policy",
+        str(args.initial_policy),
+        "--experiment-preset",
+        "foundation-arms-race",
+        "--epochs",
+        str(resolved["epochs"]),
+        "--seed-start",
+        str(args.seed_start),
+        "--evaluation-seed-start",
+        str(args.evaluation_seed_start),
+        "--json",
+    ]
+    if args.profile == "smoke" or "evaluation_games" in explicit_options:
+        argv.extend(["--evaluation-games", str(resolved["evaluation_games"])])
+    if args.profile == "smoke" or "value_selection_heldout_games" in explicit_options:
+        argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
+    if resolved["max_batches"] is not None:
+        argv.extend(["--max-batches", str(resolved["max_batches"])])
+    if args.device is not None:
+        argv.extend(["--device", str(args.device)])
+    if args.resume:
+        argv.append("--resume")
+    return {
+        "schema_version": NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION,
+        "source": collect_source_metadata(),
+        "profile": args.profile,
+        "run_dir": str(args.run_dir),
+        "manifest_path": str(args.run_dir / "manifest.json"),
+        "showdown_root": str(args.showdown_root),
+        "initial_policy": str(args.initial_policy),
+        "experiment_preset": "foundation-arms-race",
+        "effective_config_source": "nested neural manifest invocation_config after neural iterate applies the preset",
+        "resolved_options": resolved,
+        "command": {
+            "argv": argv,
+            "shell": shlex.join(argv),
+        },
+    }
+
+
+def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | None]:
+    profile = NEURAL_FOUNDATION_PROFILES[args.profile]
+    resolved = {
+        "iterations": _foundation_option(args.iterations, profile["iterations"]),
+        "games_per_iteration": _foundation_option(args.games_per_iteration, profile["games_per_iteration"]),
+        "workers": _foundation_option(args.workers, profile["workers"]),
+        "evaluation_games": _foundation_option(args.evaluation_games, profile["evaluation_games"]),
+        "epochs": _foundation_option(args.epochs, profile["epochs"]),
+        "max_batches": _foundation_max_batches(args.max_batches, profile["max_batches"]),
+        "value_selection_heldout_games": _foundation_option(
+            args.value_selection_heldout_games,
+            profile["value_selection_heldout_games"],
+        ),
+    }
+    for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
+        if int(resolved[name] or 0) <= 0:
+            raise ValueError(f"{name.replace('_', '-')} must be positive.")
+    if int(resolved["value_selection_heldout_games"] or 0) < 0:
+        raise ValueError("value-selection-heldout-games must be non-negative.")
+    return resolved
+
+
+def _foundation_option(value: int | None, default: int | None) -> int | None:
+    return default if value is None else value
+
+
+def _foundation_max_batches(value: int | None, default: int | None) -> int | None:
+    resolved = default if value is None else value
+    if resolved == -1:
+        return None
+    if resolved is not None and resolved <= 0:
+        raise ValueError("max-batches must be positive, or -1 for no cap.")
+    return resolved
+
+
+def _validate_foundation_run_paths(run_dir: Path, *, summary_path: Path, resume: bool) -> None:
+    if summary_path.exists() and not resume:
+        raise ValueError(f"summary path already exists: {summary_path}")
+    if run_dir.exists() and not resume:
+        raise ValueError(f"run directory already exists: {run_dir}; use --resume or choose a fresh --run-dir.")
+
+
+def _foundation_run_derived_report(run_dir: Path, stdout: str) -> dict[str, Any]:
+    manifest, source, error = _foundation_manifest_from_run(run_dir, stdout)
+    if manifest is None:
+        return {
+            "manifest_available": False,
+            "manifest_source": source,
+            "manifest_error": error,
+            "latest_checkpoint_path": None,
+            "foundation_readiness": None,
+        }
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    return {
+        "manifest_available": True,
+        "manifest_source": source,
+        "manifest_error": None,
+        "latest_checkpoint_path": manifest.get("latest_checkpoint_path"),
+        "latest_iteration": int(iterations[-1].get("iteration", 0)) if iterations else None,
+        "foundation_readiness": _foundation_readiness_report(iterations),
+    }
+
+
+def _foundation_manifest_from_run(run_dir: Path, stdout: str) -> tuple[Mapping[str, Any] | None, str, str | None]:
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8")), str(manifest_path), None
+        except Exception as exc:
+            return None, str(manifest_path), str(exc)
+    try:
+        payload = json.loads(stdout)
+    except Exception as exc:
+        return None, "stdout", str(exc)
+    if not isinstance(payload, Mapping):
+        return None, "stdout", "stdout JSON was not an object"
+    return payload, "stdout", None
+
+
+def _load_foundation_summary(path: Path) -> tuple[Path, Mapping[str, Any]]:
+    summary_path = path / "neural-foundation-run-summary.json" if path.is_dir() else path
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"foundation summary must be a JSON object: {summary_path}")
+    if payload.get("schema_version") != NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION:
+        raise ValueError(f"unsupported foundation summary schema: {payload.get('schema_version')!r}")
+    return summary_path, payload
+
+
+def _text_tail(value: str | None, *, limit: int = 4000) -> str:
+    if not value:
+        return ""
+    return value if len(value) <= limit else value[-limit:]
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _auto_promotion_config_from_args(args: argparse.Namespace) -> NeuralSelfPlayPromotionConfig | None:

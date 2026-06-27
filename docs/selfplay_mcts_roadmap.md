@@ -371,6 +371,8 @@ Steps:
    spread historical opponents, higher collection temperature, held-out Pearson value selection,
    value calibration, and a fixed `max-damage` benchmark reference. The preset is a reproducibility
    convenience for WS-A/WS-E foundation runs, not promotion evidence.
+   `neural foundation-plan/run/report` wraps this preset with smoke/pilot profile defaults and a
+   compact summary artifact so CPU foundation attempts can be launched and audited consistently.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
