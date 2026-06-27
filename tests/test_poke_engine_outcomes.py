@@ -10,13 +10,22 @@ import unittest
 from pokezero.dex import showdown_dex_from_payload
 from pokezero.poke_engine_adapter import PokemonSpec, SideSpec
 from pokezero.poke_engine_outcomes import (
+    ActiveStateSummary,
+    DirectCalculateDamageDiagnostic,
     EngineBranchOutcome,
+    ObservedDamage,
+    OneTurnDamageDiagnostic,
     OutcomeComparison,
+    active_state_summary_from_side,
     build_battle_spec_from_result,
+    build_one_turn_damage_diagnostic,
     compare_outcomes,
+    direct_calculate_damage_diagnostic,
     engine_move_for_choice,
     enumerate_engine_outcomes,
+    observed_damage_from_result,
     observed_final_active_hp,
+    opening_active_hp,
     parse_condition,
     parse_details,
     pokemon_spec_from_request_member,
@@ -385,6 +394,262 @@ class CompareOutcomesTest(unittest.TestCase):
         self.assertIn("UNSUPPORTED", result.summary())
 
 
+# ---- damage diagnostic: observed deltas -----------------------------------
+
+
+class ObservedDamageTest(unittest.TestCase):
+    def test_observed_deltas_from_opening_request_hp(self) -> None:
+        observed = observed_damage_from_result(charmander_squirtle_result())
+        self.assertIsInstance(observed, ObservedDamage)
+        self.assertEqual(observed.opening_hp, (219, 229))
+        self.assertEqual(observed.final_hp, (127, 209))
+        # 219-127 = 92 on Charmander; 229-209 = 20 on Squirtle.
+        self.assertEqual(observed.deltas, (92, 20))
+
+    def test_opening_active_hp_reads_request_condition(self) -> None:
+        self.assertEqual(opening_active_hp(charmander_squirtle_result()), (219, 229))
+
+    def test_observed_damage_to_dict_is_serializable(self) -> None:
+        import json
+
+        payload = observed_damage_from_result(charmander_squirtle_result()).to_dict()
+        json.dumps(payload)
+        self.assertEqual(payload["deltas"], [92, 20])
+
+
+# ---- damage diagnostic: request-derived active state ----------------------
+
+
+class ActiveStateSummaryTest(unittest.TestCase):
+    def test_summary_is_request_derived_no_engine_required(self) -> None:
+        spec = build_battle_spec_from_result(charmander_squirtle_result(), minimal_dex())
+        summary = active_state_summary_from_side(spec.side_one)
+
+        self.assertIsInstance(summary, ActiveStateSummary)
+        self.assertEqual(summary.species, "charmander")
+        self.assertEqual(summary.level, 100)
+        self.assertEqual((summary.hp, summary.maxhp), (219, 219))
+        self.assertEqual(summary.types, ("fire",))
+        self.assertEqual(summary.ability, "blaze")
+        self.assertIsNone(summary.item)
+        self.assertEqual(summary.attack, 140)
+        self.assertEqual(summary.defense, 122)
+        self.assertEqual(summary.special_attack, 156)
+        self.assertEqual(summary.special_defense, 136)
+        self.assertEqual(summary.speed, 166)
+        self.assertEqual(summary.moves, (("ember", 40), ("tackle", 56)))
+
+    def test_summary_to_dict_is_serializable(self) -> None:
+        import json
+
+        spec = build_battle_spec_from_result(charmander_squirtle_result(), minimal_dex())
+        payload = active_state_summary_from_side(spec.side_two).to_dict()
+        json.dumps(payload)
+        self.assertEqual(payload["species"], "squirtle")
+        self.assertEqual(payload["moves"][0], {"id": "watergun", "pp": 40})
+
+
+# ---- damage diagnostic: direct calculate_damage ---------------------------
+
+
+def calc_module(impl):
+    module = ModuleType("poke_engine_fake_calc")
+    module.calculate_damage = impl
+    return module
+
+
+class DirectCalculateDamageDiagnosticTest(unittest.TestCase):
+    def test_simple_shape_is_captured_for_both_turn_orders(self) -> None:
+        calls = []
+
+        def impl(state, m1, m2, side_one_first):
+            calls.append((m1, m2, side_one_first))
+            return [10.0, 4.0] if side_one_first else [9.0, 5.0]
+
+        engine = calc_module(impl)
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+
+        self.assertTrue(diag.supported)
+        self.assertEqual(diag.output_side_one_first, [10.0, 4.0])
+        self.assertEqual(diag.output_side_two_first, [9.0, 5.0])
+        self.assertIsNone(diag.reason)
+        # Probed both orderings with the resolved move ids.
+        self.assertEqual(calls, [("ember", "watergun", True), ("ember", "watergun", False)])
+
+    def test_to_dict_is_serializable(self) -> None:
+        import json
+
+        engine = calc_module(lambda s, m1, m2, first: {"attacker": 10, "defender": 4})
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+        payload = diag.to_dict()
+        json.dumps(payload)
+        self.assertTrue(payload["supported"])
+        self.assertEqual(payload["side_one_moves_first"], {"attacker": 10, "defender": 4})
+
+    def test_missing_function_is_unsupported_not_raising(self) -> None:
+        engine = ModuleType("poke_engine_no_calc")
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+        self.assertFalse(diag.supported)
+        self.assertIsNotNone(diag.reason)
+        self.assertIn("calculate_damage", diag.reason)
+
+    def test_raising_function_is_unsupported_not_raising(self) -> None:
+        def boom(*args):
+            raise RuntimeError("native panic")
+
+        diag = direct_calculate_damage_diagnostic(calc_module(boom), object(), "ember", "watergun")
+        self.assertFalse(diag.supported)
+        self.assertIn("raised", diag.reason)
+        self.assertIn("native panic", diag.reason)
+
+    def test_unknown_shape_is_unsupported_not_raising(self) -> None:
+        engine = calc_module(lambda s, m1, m2, first: SimpleNamespace(opaque=True))
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+        self.assertFalse(diag.supported)
+        self.assertIn("unrecognized", diag.reason)
+
+    def test_non_finite_float_payload_is_unsupported(self) -> None:
+        # NaN/inf are not strict-JSON-safe, so a payload carrying them must be
+        # rejected rather than emitted (it would only survive allow_nan=True).
+        engine = calc_module(lambda s, m1, m2, first: [float("nan"), 4.0])
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+        self.assertFalse(diag.supported)
+        self.assertIn("unrecognized", diag.reason)
+
+    def test_supported_payload_is_strict_json_safe(self) -> None:
+        import json
+
+        engine = calc_module(lambda s, m1, m2, first: [10.0, 4.0])
+        diag = direct_calculate_damage_diagnostic(engine, object(), "ember", "watergun")
+        self.assertTrue(diag.supported)
+        # Strict JSON (no NaN/inf) round-trips the coerced payload.
+        json.dumps(diag.to_dict(), allow_nan=False)
+
+
+# ---- damage diagnostic assembler (fake engine, no wheel/Showdown) ---------
+
+
+def fake_damage_engine_module(branches, *, calc=None):
+    """A fake engine module sufficient to run build_one_turn_damage_diagnostic.
+
+    Provides the State/Side/Pokemon/Move construction API that
+    build_poke_engine_state needs, plus generate_instructions/apply_instructions,
+    so the assembler runs end-to-end without the native wheel or a built Showdown.
+    Each branch carries the final active HP tuple its apply_instructions sets.
+    """
+
+    module = ModuleType("poke_engine_fake_damage")
+
+    class _State:
+        def __init__(self, side_one, side_two, **kwargs):
+            self.side_one = side_one
+            self.side_two = side_two
+
+        def apply_instructions(self, branch):
+            p1_hp, p2_hp = branch._hp
+            return _State(
+                side_one=SimpleNamespace(active_index=0, pokemon=[SimpleNamespace(hp=p1_hp)]),
+                side_two=SimpleNamespace(active_index=0, pokemon=[SimpleNamespace(hp=p2_hp)]),
+            )
+
+    module.State = _State
+    module.Side = lambda **kwargs: SimpleNamespace(**kwargs)
+    module.Pokemon = lambda **kwargs: SimpleNamespace(**kwargs)
+    module.Move = lambda **kwargs: SimpleNamespace(**kwargs)
+    module.generate_instructions = lambda state, m1, m2: list(branches)
+    if calc is not None:
+        module.calculate_damage = calc
+    return module
+
+
+class BuildOneTurnDamageDiagnosticTest(unittest.TestCase):
+    def test_mismatch_branch_records_surface_notes_and_deltas(self) -> None:
+        import json
+
+        # No engine branch reproduces Showdown's (127, 209) final HP.
+        engine = fake_damage_engine_module(
+            [
+                fake_branch(122, 207, 79.1, "Damage A"),
+                fake_branch(25, 207, 5.27, "Crit A"),
+            ]
+        )
+        diag = build_one_turn_damage_diagnostic(charmander_squirtle_result(), minimal_dex(), module=engine)
+
+        self.assertIsInstance(diag, OneTurnDamageDiagnostic)
+        self.assertTrue(diag.supported)
+        self.assertFalse(diag.matched)
+        self.assertEqual((diag.p1_move, diag.p2_move), ("ember", "watergun"))
+
+        # Observed deltas come from the opening request HP (219/229) and final (127/209).
+        self.assertEqual(diag.observed.opening_hp, (219, 229))
+        self.assertEqual(diag.observed.final_hp, (127, 209))
+        self.assertEqual(diag.observed.deltas, (92, 20))
+
+        # Engine-branch deltas are computed against opening HP: 219-122=97, 229-207=22.
+        self.assertEqual(diag.engine_branches[0].deltas, (97, 22))
+        self.assertEqual(diag.engine_branches[1].deltas, (194, 22))
+        self.assertEqual(diag.engine_delta_tuples(), ((97, 22), (194, 22)))
+
+        # Conservative surface (no engine-state inspection) and honest notes.
+        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data or state-translation path")
+        self.assertTrue(any("dex-derived" in note for note in diag.notes))
+        self.assertTrue(any("UNRESOLVED" in note for note in diag.notes))
+
+        # Request-derived active-state summaries are present for both seats.
+        self.assertEqual(diag.side_one_state.species, "charmander")
+        self.assertEqual(diag.side_one_state.types, ("fire",))
+        self.assertEqual(diag.side_two_state.species, "squirtle")
+
+        # No calculate_damage on this fake module -> explicit unsupported, not a raise.
+        self.assertFalse(diag.direct_calculate_damage.supported)
+        self.assertIn("calculate_damage", diag.direct_calculate_damage.reason)
+
+        # Fully serializable (strict JSON, no NaN/inf).
+        json.dumps(diag.to_dict(), allow_nan=False)
+        self.assertIn("MISMATCH", diag.summary())
+
+    def test_match_branch_reports_no_surface(self) -> None:
+        # One engine branch reproduces Showdown's exact (127, 209) final HP.
+        engine = fake_damage_engine_module(
+            [
+                fake_branch(127, 209, 79.1, "Exact match"),
+                fake_branch(25, 207, 5.27, "Crit A"),
+            ]
+        )
+        diag = build_one_turn_damage_diagnostic(charmander_squirtle_result(), minimal_dex(), module=engine)
+
+        self.assertTrue(diag.matched)
+        self.assertEqual(diag.likely_mismatch_surface, "none")
+        self.assertEqual(diag.engine_branches[0].deltas, (92, 20))
+        self.assertIn("MATCH", diag.summary())
+
+    def test_direct_calculate_damage_payload_propagates(self) -> None:
+        def impl(state, m1, m2, side_one_first):
+            return [10.0, 4.0] if side_one_first else [9.0, 5.0]
+
+        engine = fake_damage_engine_module(
+            [fake_branch(122, 207, 100.0, "Damage A")],
+            calc=impl,
+        )
+        diag = build_one_turn_damage_diagnostic(charmander_squirtle_result(), minimal_dex(), module=engine)
+
+        direct = diag.direct_calculate_damage
+        self.assertTrue(direct.supported)
+        self.assertEqual(direct.output_side_one_first, [10.0, 4.0])
+        self.assertEqual(direct.output_side_two_first, [9.0, 5.0])
+
+    def test_assembler_does_not_import_real_engine(self) -> None:
+        had_real = "poke_engine" in sys.modules
+        engine = fake_damage_engine_module([fake_branch(122, 207, 100.0, "Damage A")])
+        build_one_turn_damage_diagnostic(charmander_squirtle_result(), minimal_dex(), module=engine)
+        if not had_real:
+            self.assertNotIn(
+                "poke_engine",
+                sys.modules,
+                "damage diagnostic imported real poke_engine despite a fake module",
+            )
+
+
 # ---- isolation ------------------------------------------------------------
 
 
@@ -443,6 +708,58 @@ class RealOutcomeComparisonIntegrationTest(unittest.TestCase):
         # poke-engine 0.0.47 does NOT reproduce it: honest mismatch, not a fake pass.
         self.assertFalse(result.matched)
         self.assertNotIn((127, 209), result.engine_final_hp_tuples())
+
+    def test_damage_diagnostic_runs_and_records_known_mismatch(self) -> None:
+        import json
+
+        probe = probe_poke_engine()
+        if not probe.ready:
+            self.skipTest("poke-engine is not installed/ready")
+        if probe.version != POKE_ENGINE_SUPPORTED_VERSION:
+            self.skipTest(
+                f"known mismatch assertion is pinned to poke-engine {POKE_ENGINE_SUPPORTED_VERSION}, "
+                f"found {probe.version or 'unknown'}"
+            )
+
+        from pokezero.poke_engine_outcomes import run_charmander_squirtle_damage_diagnostic
+
+        config = integration_config()
+        assert config is not None
+        diag = run_charmander_squirtle_damage_diagnostic(config=config)
+
+        # Diagnostic runs end-to-end and is fully serializable.
+        self.assertTrue(diag.supported)
+        json.dumps(diag.to_dict())
+
+        # It records the known mismatch honestly (not a faked pass).
+        self.assertFalse(diag.matched)
+        self.assertIsNotNone(diag.observed)
+        self.assertEqual(diag.observed.final_hp, (127, 209))
+        self.assertEqual(diag.observed.deltas, (92, 20))
+        self.assertTrue(diag.engine_branches)
+        self.assertEqual(diag.likely_mismatch_surface, "engine damage/data or state-translation path")
+
+        # Request-derived active state is present for both seats.
+        self.assertEqual(diag.side_one_state.species, "charmander")
+        self.assertEqual(diag.side_two_state.species, "squirtle")
+
+        # The local poke-engine 0.0.47 binding exposes a usable, serializable
+        # calculate_damage output in this environment, so demand it: an unsupported
+        # result here is a real regression, not an acceptable fallback.
+        direct = diag.direct_calculate_damage
+        self.assertIsNotNone(direct)
+        self.assertTrue(
+            direct.supported,
+            f"poke-engine {POKE_ENGINE_SUPPORTED_VERSION} direct calculate_damage is "
+            f"expected to be supported here, got unsupported: {direct.reason}",
+        )
+        self.assertIsNotNone(direct.output_side_one_first)
+        self.assertIsNotNone(direct.output_side_two_first)
+        # Strict JSON (no NaN/inf) round-trips the coerced output.
+        json.dumps([direct.output_side_one_first, direct.output_side_two_first], allow_nan=False)
+
+        print("\nREAL DAMAGE DIAGNOSTIC:", diag.summary())
+        print("direct calculate_damage:", direct.to_dict())
 
 
 if __name__ == "__main__":
