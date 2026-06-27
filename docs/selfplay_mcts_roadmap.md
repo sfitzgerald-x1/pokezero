@@ -360,6 +360,26 @@ Pure searchless self-play risks settling into a mediocre local equilibrium. The 
 pool, exploration pressure, and (above all) a search improvement operator — are exactly the recipe
 above, and are all knowledge-free / on-mission.
 
+The latest teacher-cut evidence sharpens the priority order. A clean loop that allows a learned
+checkpoint as one-shot initialization and then removes teacher relabeling, fixed teacher opponents,
+and imitation terms ran successfully, but only reached `0.2825` versus `max-damage` over the latest
+400-game yardstick row. A simple value-only tune of that checkpoint was also flat on an independent
+calibration split. This means the current wall is not "search operator micro-tuning"; it is whether
+the base self-play/value loop can generate a policy/value substrate that rises beyond the teacher
+ceiling at all.
+
+Near-term priority order:
+
+1. Prove or falsify clean teacher-cut self-play above the scripted-teacher bar, using outcome reward,
+   real exploration, no teacher relabeling, no teacher imitation term, and no teacher/heuristic
+   training opponent after the one-shot initialization.
+2. Improve value-head ranking/calibration to a concrete bar before trusting it as an MCTS leaf
+   evaluator.
+3. Treat 8-16 game search probes as wiring checks only. Strength or M0 claims require milestone-size
+   samples, with 300+ games as the default floor.
+4. Assess faster reversible simulation infrastructure, especially `poke-engine`, because CPU branch
+   cost may determine whether the clean from-scratch loop is affordable.
+
 ## Strategy hypothesis & go/no-go gates
 
 **Core hypothesis (unverified):** prior self-play stalled at ~0.52 because we never combined (a)
@@ -374,6 +394,10 @@ time, recent micro-probes showed that search tuning on a weak teacher-BC prior a
 value head produces unreadable 8-16 game deltas. Near-term work should therefore build a decent
 current-schema base net, calibrate its value head, and only then resume root-PUCT reads at a sample
 size that can support a decision.
+
+Search remains the intended improvement operator, but it should not become a variant treadmill. Keep
+the root-PUCT/determinization machinery, but pause operator polishing until the value/base-net
+substrate and evaluation sample size can support a real decision.
 
 **Go/no-go gates:**
 - **M0 gate:** on a cheap/early net, net+MCTS must clear ~0.60 vs max-damage (well past the 0.52
@@ -614,6 +638,11 @@ Steps:
    `fork {fromBattleId,newBattleId,state}`; expose `LocalShowdownEnv.snapshot()/fork()`.
 3. Validate either path: explore divergent lines from turn N and confirm each is byte-identical to a
    from-scratch battle that took the same actions (modulo timestamps).
+4. Assess `poke-engine` as an optional fast reversible backend. The initial assessment is captured
+   in [`poke_engine_assessment.md`](poke_engine_assessment.md): licensing is favorable for
+   `poke-engine` itself, the Python binding exposes apply/reverse instructions, and Gen 3 feature
+   support exists, but Showdown-equivalence for Gen 3 random battles is unproven and must be tested
+   before using it for training/search.
 
 Deliverable: a forking/rollout mechanism (replay-from-root preferred) + equivalence tests.
 Acceptance: divergent lines are deterministic and identical to ground-truth replays; per-move rollout
