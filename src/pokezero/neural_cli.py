@@ -630,7 +630,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "How a trained candidate becomes the next rollout collector. 'incumbent-gate' "
             "keeps the default head-to-head gate; 'always' advances every saved candidate for "
-            "exploratory arms-race runs and is not promotion evidence."
+            "exploratory arms-race runs and is not promotion evidence; 'yardstick-gate' advances "
+            "only candidates that improve over the best accepted max-damage yardstick score."
         ),
     )
     iterate.add_argument(
@@ -972,6 +973,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         choices=("mean", "gru"),
         default=None,
         help="Override the variant's temporal aggregator for value/opponent heads.",
+    )
+    parser.add_argument(
+        "--collector-advancement-mode",
+        choices=COLLECTOR_ADVANCEMENT_MODES,
+        default=None,
+        help="Override the foundation preset's rollout-collector advancement mode.",
     )
     parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
     parser.add_argument("--resume", action="store_true", help="Resume an existing neural foundation run directory.")
@@ -2050,7 +2057,9 @@ def _iterate(args: argparse.Namespace) -> int:
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
     if args.auto_promote and args.collector_advancement_mode != "incumbent-gate":
-        raise ValueError("--collector-advancement-mode always cannot be combined with --auto-promote.")
+        raise ValueError(
+            f"--collector-advancement-mode {args.collector_advancement_mode} cannot be combined with --auto-promote."
+        )
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
@@ -2925,6 +2934,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
     if resolved["temporal_aggregator"] is not None:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
+    if resolved["collector_advancement_mode"] is not None:
+        argv.extend(["--collector-advancement-mode", str(resolved["collector_advancement_mode"])])
     if args.device is not None:
         argv.extend(["--device", str(args.device)])
     if args.resume:
@@ -2975,6 +2986,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         ),
         "opponent_action_loss_weight": opponent_action_loss_weight,
         "temporal_aggregator": temporal_aggregator,
+        "collector_advancement_mode": args.collector_advancement_mode,
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
@@ -2985,6 +2997,11 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | fl
         raise ValueError("opponent-action-loss-weight must be non-negative.")
     if resolved["temporal_aggregator"] is not None and resolved["temporal_aggregator"] not in {"mean", "gru"}:
         raise ValueError("temporal-aggregator must be 'mean' or 'gru'.")
+    if (
+        resolved["collector_advancement_mode"] is not None
+        and resolved["collector_advancement_mode"] not in COLLECTOR_ADVANCEMENT_MODES
+    ):
+        raise ValueError("collector-advancement-mode is invalid.")
     return resolved
 
 

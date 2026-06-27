@@ -60,8 +60,16 @@ if TYPE_CHECKING:
 
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
-COLLECTOR_ADVANCEMENT_MODES = ("incumbent-gate", "always")
-ACCEPTED_ADVANCEMENT_REASONS = frozenset({"beat_incumbent", "promotion_recorded"})
+COLLECTOR_ADVANCEMENT_MODES = ("incumbent-gate", "always", "yardstick-gate")
+ACCEPTED_ADVANCEMENT_REASONS = frozenset(
+    {
+        "beat_incumbent",
+        "promotion_recorded",
+        "beat_yardstick_best",
+        "yardstick_baseline_initialized",
+    }
+)
+DEFAULT_COLLECTOR_YARDSTICK_POLICY_ID = "max-damage"
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,9 @@ class NeuralAdvancementDecision:
     candidate_win_rate: float | None = None
     incumbent_win_rate: float | None = None
     games: int = 0
+    yardstick_policy_id: str | None = None
+    yardstick_win_rate: float | None = None
+    previous_best_yardstick_win_rate: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -152,6 +163,9 @@ class NeuralAdvancementDecision:
             "candidate_win_rate": self.candidate_win_rate,
             "incumbent_win_rate": self.incumbent_win_rate,
             "games": self.games,
+            "yardstick_policy_id": self.yardstick_policy_id,
+            "yardstick_win_rate": self.yardstick_win_rate,
+            "previous_best_yardstick_win_rate": self.previous_best_yardstick_win_rate,
         }
 
 
@@ -389,7 +403,7 @@ def run_neural_selfplay_iterations(
         choices = ", ".join(COLLECTOR_ADVANCEMENT_MODES)
         raise ValueError(f"collector_advancement_mode must be one of: {choices}.")
     if collector_advancement_mode != "incumbent-gate" and auto_promotion_config is not None:
-        raise ValueError("collector_advancement_mode='always' cannot be combined with auto promotion.")
+        raise ValueError(f"collector_advancement_mode={collector_advancement_mode!r} cannot be combined with auto promotion.")
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents:
         raise ValueError("at least one fixed opponent policy spec is required.")
@@ -650,6 +664,16 @@ def run_neural_selfplay_iterations(
                 )
                 if collector_advancement_mode == "always":
                     advancement = _always_advance_collector_decision(advancement)
+                elif collector_advancement_mode == "yardstick-gate":
+                    advancement = _yardstick_advancement_decision(
+                        benchmark=benchmark,
+                        candidate_policy_id=training.model_config.policy_id,
+                        yardstick_policy_id=DEFAULT_COLLECTOR_YARDSTICK_POLICY_ID,
+                        prior_iteration_manifests=(
+                            *prior_iteration_manifests,
+                            *(prior.to_manifest_dict() for prior in results),
+                        ),
+                    )
             else:
                 advancement = NeuralAdvancementDecision(
                     advance_collector=False,
@@ -1215,6 +1239,144 @@ def _always_advance_collector_decision(decision: NeuralAdvancementDecision) -> N
     if decision.advance_collector:
         return decision
     return replace(decision, advance_collector=True, reason="collector_advancement_mode_always")
+
+
+def _yardstick_advancement_decision(
+    *,
+    benchmark: BenchmarkReport | None,
+    candidate_policy_id: str,
+    yardstick_policy_id: str,
+    prior_iteration_manifests: Iterable[Mapping[str, Any]],
+) -> NeuralAdvancementDecision:
+    result = _candidate_yardstick_result(
+        benchmark=benchmark,
+        candidate_policy_id=candidate_policy_id,
+        yardstick_policy_id=yardstick_policy_id,
+    )
+    if result is None:
+        return NeuralAdvancementDecision(
+            advance_collector=False,
+            reason="missing_yardstick_benchmark",
+            candidate_policy_id=candidate_policy_id,
+            incumbent_policy_id=yardstick_policy_id,
+            yardstick_policy_id=yardstick_policy_id,
+        )
+    candidate_win_rate, yardstick_win_rate, games = result
+    previous_best = _best_accepted_yardstick_win_rate(
+        prior_iteration_manifests,
+        yardstick_policy_id=yardstick_policy_id,
+    )
+    if previous_best is None:
+        return NeuralAdvancementDecision(
+            advance_collector=True,
+            reason="yardstick_baseline_initialized",
+            candidate_policy_id=candidate_policy_id,
+            incumbent_policy_id=yardstick_policy_id,
+            candidate_win_rate=candidate_win_rate,
+            incumbent_win_rate=yardstick_win_rate,
+            games=games,
+            yardstick_policy_id=yardstick_policy_id,
+            yardstick_win_rate=candidate_win_rate,
+            previous_best_yardstick_win_rate=None,
+        )
+    advance = candidate_win_rate > previous_best
+    return NeuralAdvancementDecision(
+        advance_collector=advance,
+        reason="beat_yardstick_best" if advance else "failed_to_beat_yardstick_best",
+        candidate_policy_id=candidate_policy_id,
+        incumbent_policy_id=yardstick_policy_id,
+        candidate_win_rate=candidate_win_rate,
+        incumbent_win_rate=previous_best,
+        games=games,
+        yardstick_policy_id=yardstick_policy_id,
+        yardstick_win_rate=candidate_win_rate,
+        previous_best_yardstick_win_rate=previous_best,
+    )
+
+
+def _candidate_yardstick_result(
+    *,
+    benchmark: BenchmarkReport | None,
+    candidate_policy_id: str,
+    yardstick_policy_id: str,
+) -> tuple[float, float, int] | None:
+    if benchmark is None:
+        return None
+    for result in benchmark.head_to_head_results:
+        parsed = _candidate_yardstick_rates(
+            result,
+            candidate_policy_id=candidate_policy_id,
+            yardstick_policy_id=yardstick_policy_id,
+        )
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _best_accepted_yardstick_win_rate(
+    iteration_manifests: Iterable[Mapping[str, Any]],
+    *,
+    yardstick_policy_id: str,
+) -> float | None:
+    best: float | None = None
+    for iteration in iteration_manifests:
+        advancement = _optional_mapping(iteration.get("advancement"))
+        if not advancement.get("advance_collector"):
+            continue
+        if advancement.get("reason") not in ACCEPTED_ADVANCEMENT_REASONS:
+            continue
+        candidate_policy_id = _accepted_candidate_policy_id(iteration, advancement)
+        if not candidate_policy_id:
+            continue
+        benchmark = _optional_mapping(iteration.get("benchmark"))
+        head_to_heads = benchmark.get("head_to_heads")
+        if not isinstance(head_to_heads, Iterable) or isinstance(head_to_heads, (str, bytes, Mapping)):
+            continue
+        for result in _sequence(head_to_heads):
+            parsed = _candidate_yardstick_rates(
+                _mapping(result),
+                candidate_policy_id=candidate_policy_id,
+                yardstick_policy_id=yardstick_policy_id,
+            )
+            if parsed is None:
+                continue
+            candidate_win_rate, _, _ = parsed
+            best = candidate_win_rate if best is None else max(best, candidate_win_rate)
+    return best
+
+
+def _accepted_candidate_policy_id(iteration: Mapping[str, Any], advancement: Mapping[str, Any]) -> str | None:
+    policy_id = advancement.get("candidate_policy_id")
+    if isinstance(policy_id, str) and policy_id:
+        return policy_id
+    training = _optional_mapping(iteration.get("training"))
+    model_config = _optional_mapping(training.get("model_config"))
+    policy_id = model_config.get("policy_id")
+    return policy_id if isinstance(policy_id, str) and policy_id else None
+
+
+def _candidate_yardstick_rates(
+    result: Any,
+    *,
+    candidate_policy_id: str,
+    yardstick_policy_id: str,
+) -> tuple[float, float, int] | None:
+    first_policy_id = str(_benchmark_result_value(result, "first_policy_id", ""))
+    second_policy_id = str(_benchmark_result_value(result, "second_policy_id", ""))
+    if {first_policy_id, second_policy_id} != {candidate_policy_id, yardstick_policy_id}:
+        return None
+    first_rate = float(_benchmark_result_value(result, "first_policy_win_rate", 0.0))
+    second_rate = float(_benchmark_result_value(result, "second_policy_win_rate", 0.0))
+    games = int(_benchmark_result_value(result, "games", 0))
+    if first_policy_id == candidate_policy_id:
+        return first_rate, second_rate, games
+    return second_rate, first_rate, games
+
+
+def _benchmark_result_value(result: Any, name: str, default: Any) -> Any:
+    if isinstance(result, Mapping):
+        return result.get(name, default)
+    return getattr(result, name, default)
 
 
 def _advancement_decision(

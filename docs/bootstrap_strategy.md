@@ -549,6 +549,23 @@ opponent-signal change and GRU temporal aggregation combine better than either l
 variants pass `--temporal-aggregator gru` to `neural_cli iterate`; they are foundation arms to compare
 with `foundation-compare`, not MCTS verdicts.
 
+When an arm finds a stronger early checkpoint but regresses under the preset's always-advance
+collector policy, rerun the same recipe with yardstick-gated collector retention:
+
+```bash
+python -m pokezero.neural_cli foundation-run \
+  --run-dir runs/foundation-gru-yardstick \
+  --showdown-root /path/to/pokemon-showdown \
+  --profile pilot \
+  --variant temporal-gru \
+  --collector-advancement-mode yardstick-gate
+```
+
+This keeps `max-damage` as an eval-only yardstick and only advances the next rollout collector when
+the candidate beats the best previously accepted `max-damage` win rate in that run. It is a retention
+guardrail for foundation experiments, not a replacement for promotion gates or sample-sized MCTS
+evaluation.
+
 Audit a run for regression-health checks that are cheap to run on CPU:
 
 ```bash
