@@ -2903,6 +2903,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 str(run_dir / "iteration-0001" / "heldout-a.jsonl"),
                 str(run_dir / "iteration-0001" / "heldout-b.jsonl"),
             ]
+            expected_calibration_paths = [str(run_dir / "iteration-0001" / "fresh-calibration.jsonl")]
             manifest["iterations"][0]["value_selection_training_rollout_paths"] = heldout_paths
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             summary_path = _write_foundation_summary(
@@ -2923,6 +2924,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "--out-dir",
                         str(out_dir),
                         "--require-heldout-selection",
+                        "--calibration-data",
+                        *expected_calibration_paths,
                         "--json",
                     ]
                 )
@@ -2931,15 +2934,17 @@ class NeuralSelfPlayTest(unittest.TestCase):
         argv = recipe["command"]["argv"]
         train_paths = argv[argv.index("--data") + 1 : argv.index("--out")]
         selection_paths = argv[argv.index("--value-selection-data") + 1 : argv.index("--value-selection-metric")]
-        calibration_paths = argv[argv.index("--value-calibration-data") + 1 : argv.index("--value-calibration-out")]
+        actual_calibration_paths = argv[argv.index("--value-calibration-data") + 1 : argv.index("--value-calibration-out")]
         self.assertEqual(exit_code, 0)
         self.assertFalse(recipe["selection_paths_fallback_to_train"])
+        self.assertFalse(recipe["calibration_reuses_selection_paths"])
         self.assertEqual(recipe["selection_paths"], heldout_paths)
+        self.assertEqual(recipe["calibration_paths"], expected_calibration_paths)
         self.assertEqual(train_paths, manifest["iterations"][0]["training_rollout_paths"])
         self.assertEqual(selection_paths, heldout_paths)
-        self.assertEqual(calibration_paths, heldout_paths)
+        self.assertEqual(actual_calibration_paths, expected_calibration_paths)
         self.assertNotIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
-        self.assertIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
+        self.assertNotIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
 
     def test_neural_cli_foundation_value_tune_run_writes_summary_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

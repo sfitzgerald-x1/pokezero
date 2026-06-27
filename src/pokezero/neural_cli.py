@@ -1079,6 +1079,13 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
     parser.add_argument("--value-calibration-batch-size", type=int, default=128, help="Calibration batch size.")
     parser.add_argument("--value-calibration-bins", type=int, default=10, help="Calibration bin count.")
     parser.add_argument(
+        "--calibration-data",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Optional independent rollout JSONL path(s) for final value calibration reporting.",
+    )
+    parser.add_argument(
         "--require-heldout-selection",
         action="store_true",
         help="Fail unless the selected candidate has value-selection held-out rollout paths.",
@@ -3262,21 +3269,24 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         if args.require_heldout_selection:
             raise ValueError("selected foundation candidate has no value-selection held-out rollout paths.")
         selection_paths = train_paths
+    calibration_paths = list(args.calibration_data or selection_paths)
     selection_paths_fallback_to_train = selection_paths == train_paths
+    calibration_reuses_selection_paths = calibration_paths == selection_paths
     warnings = []
     if selection_paths_fallback_to_train:
         warnings.append(
             {
                 "code": "selection_paths_fallback_to_train",
-                "message": "Value selection and calibration are using training rollout paths; calibration is in-sample.",
+                "message": "Value selection is using training rollout paths; provide held-out selection paths for cleaner epoch selection.",
             }
         )
-    warnings.append(
-        {
-            "code": "calibration_reuses_value_selection_data",
-            "message": "Value calibration is reported on the same paths used for epoch selection; treat it as selection-set calibration, not a final unbiased read.",
-        }
-    )
+    if calibration_reuses_selection_paths:
+        warnings.append(
+            {
+                "code": "calibration_reuses_value_selection_data",
+                "message": "Value calibration is reported on the same paths used for epoch selection; treat it as selection-set calibration, not a final unbiased read.",
+            }
+        )
     recipe = _optional_mapping(summary.get("recipe"))
     run_dir = Path(
         _string_or_none(recipe.get("run_dir"))
@@ -3316,7 +3326,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "--value-selection-out",
         artifacts["value_selection_path"],
         "--value-calibration-data",
-        *[str(path) for path in selection_paths],
+        *[str(path) for path in calibration_paths],
         "--value-calibration-out",
         artifacts["value_calibration_path"],
         "--value-calibration-batch-size",
@@ -3339,7 +3349,9 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "out_dir": str(out_dir),
         "train_paths": [str(path) for path in train_paths],
         "selection_paths": [str(path) for path in selection_paths],
+        "calibration_paths": [str(path) for path in calibration_paths],
         "selection_paths_fallback_to_train": selection_paths_fallback_to_train,
+        "calibration_reuses_selection_paths": calibration_reuses_selection_paths,
         "warnings": warnings,
         "config": {
             "epochs": args.epochs,
@@ -3348,6 +3360,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             "value_selection_metric": args.value_selection_metric,
             "value_calibration_batch_size": args.value_calibration_batch_size,
             "value_calibration_bins": args.value_calibration_bins,
+            "calibration_data": [str(path) for path in args.calibration_data] if args.calibration_data else None,
             "require_heldout_selection": args.require_heldout_selection,
             "max_batches": args.max_batches,
             "device": args.device,
