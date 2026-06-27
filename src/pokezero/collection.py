@@ -931,6 +931,8 @@ class _PolicyDecisionAccumulator:
     root_puct_selected_value_samples: int = 0
     root_puct_selected_score_total: float = 0.0
     root_puct_selected_score_samples: int = 0
+    root_puct_value_gate_checks: int = 0
+    root_puct_value_gate_uses: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
 
     def add(self, metadata: Mapping[str, Any]) -> None:
@@ -961,6 +963,10 @@ class _PolicyDecisionAccumulator:
         if selected_score is not None:
             self.root_puct_selected_score_total += selected_score
             self.root_puct_selected_score_samples += 1
+        if "root_puct_value_gate_used" in metadata:
+            self.root_puct_value_gate_checks += 1
+            if bool(metadata.get("root_puct_value_gate_used")):
+                self.root_puct_value_gate_uses += 1
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"decisions": self.decisions}
@@ -987,6 +993,9 @@ class _PolicyDecisionAccumulator:
                 result["root_puct_average_selected_score"] = (
                     self.root_puct_selected_score_total / self.root_puct_selected_score_samples
                 )
+            if self.root_puct_value_gate_checks:
+                result["root_puct_value_gate_checks"] = self.root_puct_value_gate_checks
+                result["root_puct_value_gate_uses"] = self.root_puct_value_gate_uses
             if self.root_puct_fallback_reasons:
                 result["root_puct_fallback_reasons"] = dict(
                     sorted(self.root_puct_fallback_reasons.items())

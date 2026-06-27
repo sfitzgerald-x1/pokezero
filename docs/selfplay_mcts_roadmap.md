@@ -55,6 +55,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   recorded as search metadata. Because the mask includes opponent legal-action availability, this is
   a privileged benchmark safety guard and is not a substitute for full hidden-information
   determinization.
+  The play benchmark also has an opt-in conservative value gate (`--min-value-improvement`) that
+  keeps the raw policy-prior action unless the search-selected action beats it by a configurable
+  value margin; aggregate diagnostics report gate uses/checks so M0 runs can tell whether the knob
+  is actually changing decisions.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
