@@ -93,6 +93,7 @@ class RootPUCTSearchPolicy:
     selection_mode: str = "puct"
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
+    leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.selection_mode not in {"puct", "value"}:
@@ -229,6 +230,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions": dict(opponent_actions),
                 "root_puct_opponent_actions_legality_checked": legality_report.checked,
                 **gate_metadata,
+                **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
             },
         )

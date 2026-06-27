@@ -144,6 +144,7 @@ class MetadataPolicy:
         include_elapsed: bool = True,
         value_gate_used: bool | None = None,
         leaf_rollout_rounds: int | None = None,
+        leaf_rollout_opponent_policy: str | None = None,
         leaf_actual_rounds: dict[str, int] | None = None,
         leaf_evaluations: dict[str, int] | None = None,
     ) -> None:
@@ -152,6 +153,7 @@ class MetadataPolicy:
         self.include_elapsed = include_elapsed
         self.value_gate_used = value_gate_used
         self.leaf_rollout_rounds = leaf_rollout_rounds
+        self.leaf_rollout_opponent_policy = leaf_rollout_opponent_policy
         self.leaf_actual_rounds = leaf_actual_rounds
         self.leaf_evaluations = leaf_evaluations
 
@@ -180,6 +182,8 @@ class MetadataPolicy:
             metadata["root_puct_value_gate_used"] = self.value_gate_used
         if self.leaf_rollout_rounds is not None:
             metadata["root_puct_leaf_rollout_rounds"] = self.leaf_rollout_rounds
+        if self.leaf_rollout_opponent_policy is not None:
+            metadata["root_puct_leaf_rollout_opponent_policy"] = self.leaf_rollout_opponent_policy
         if self.leaf_actual_rounds is not None:
             metadata["root_puct_leaf_actual_rollout_rounds"] = dict(self.leaf_actual_rounds)
         if self.leaf_evaluations is not None:
@@ -333,6 +337,7 @@ class CollectionTest(unittest.TestCase):
                     MetadataPolicy(
                         value_gate_used=True,
                         leaf_rollout_rounds=2,
+                        leaf_rollout_opponent_policy="benchmark",
                         leaf_actual_rounds={"0": 1, "2": 2},
                         leaf_evaluations={"rollout_terminal": 2, "rollout_value_fn": 1},
                     ),
@@ -353,6 +358,10 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_uses"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_selection_modes"], {"puct": 2})
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_leaf_rollout_rounds"], {"2": 2})
+        self.assertEqual(
+            summary["root-puct-diagnostic"]["root_puct_leaf_rollout_opponent_policies"],
+            {"benchmark": 2},
+        )
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_leaf_actual_rollout_rounds"], {"0": 2, "2": 4})
         self.assertEqual(
             summary["root-puct-diagnostic"]["root_puct_leaf_evaluations"],
@@ -434,6 +443,7 @@ class CollectionTest(unittest.TestCase):
                     "root-puct vs random",
                     MetadataPolicy(
                         leaf_rollout_rounds=2,
+                        leaf_rollout_opponent_policy="benchmark",
                         leaf_actual_rounds={"1": 3},
                         leaf_evaluations={"rollout_terminal": 2, "rollout_value_fn": 1},
                     ),
@@ -457,6 +467,8 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("root-puct-fallback", output)
         self.assertIn("selection_modes:", output)
         self.assertIn("leaf_rollouts_configured:", output)
+        self.assertIn("leaf_rollout_opponents:", output)
+        self.assertIn("benchmark=1", output)
         self.assertIn("leaf_rollouts_actual:", output)
         self.assertIn("leaf_evaluations:", output)
         self.assertIn("2=1", output)

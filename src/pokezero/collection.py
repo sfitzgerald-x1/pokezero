@@ -936,6 +936,7 @@ class _PolicyDecisionAccumulator:
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_rollout_rounds: dict[str, int] = field(default_factory=dict)
+    root_puct_leaf_rollout_opponent_policies: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_actual_rollout_rounds: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_evaluations: dict[str, int] = field(default_factory=dict)
 
@@ -979,6 +980,12 @@ class _PolicyDecisionAccumulator:
         if leaf_rollout_rounds is not None:
             key = str(leaf_rollout_rounds)
             self.root_puct_leaf_rollout_rounds[key] = self.root_puct_leaf_rollout_rounds.get(key, 0) + 1
+        leaf_opponent_policy = metadata.get("root_puct_leaf_rollout_opponent_policy")
+        if leaf_opponent_policy is not None:
+            key = str(leaf_opponent_policy)
+            self.root_puct_leaf_rollout_opponent_policies[key] = (
+                self.root_puct_leaf_rollout_opponent_policies.get(key, 0) + 1
+            )
         _merge_count_mapping(
             self.root_puct_leaf_actual_rollout_rounds,
             metadata.get("root_puct_leaf_actual_rollout_rounds"),
@@ -1021,6 +1028,10 @@ class _PolicyDecisionAccumulator:
             if self.root_puct_leaf_rollout_rounds:
                 result["root_puct_leaf_rollout_rounds"] = dict(
                     sorted(self.root_puct_leaf_rollout_rounds.items())
+                )
+            if self.root_puct_leaf_rollout_opponent_policies:
+                result["root_puct_leaf_rollout_opponent_policies"] = dict(
+                    sorted(self.root_puct_leaf_rollout_opponent_policies.items())
                 )
             if self.root_puct_leaf_actual_rollout_rounds:
                 result["root_puct_leaf_actual_rollout_rounds"] = dict(
