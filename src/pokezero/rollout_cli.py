@@ -252,6 +252,7 @@ def print_benchmark_report(report: BenchmarkReport) -> None:
             f"{metrics.games_per_second:8.3f} "
             f"{metrics.decisions_per_second:8.3f}"
         )
+    _print_policy_decision_diagnostics(report)
     if not report.head_to_head_results:
         return
     print("")
@@ -272,6 +273,70 @@ def print_benchmark_report(report: BenchmarkReport) -> None:
             f"{result.first_policy_win_rate:8.3f} "
             f"{result.second_policy_win_rate:9.3f}"
         )
+
+
+def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
+    rows = []
+    for result in report.matchups:
+        summary = result.metrics.policy_decision_summary or {}
+        for policy_id, metrics in summary.items():
+            if "root_puct_searches" not in metrics and "root_puct_fallbacks" not in metrics:
+                continue
+            rows.append((result.label, policy_id, metrics))
+    if not rows:
+        return
+
+    print("")
+    print("root-puct diagnostics:")
+    header = (
+        f"{'matchup':32} {'policy':32} {'dec':>5} {'search':>6} {'fallback':>8} "
+        f"{'cand':>7} {'ms/dec':>8} {'value':>8} {'score':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    fallback_reasons = []
+    for matchup, policy_id, metrics in rows:
+        average_candidate_count = metrics.get("root_puct_average_candidate_count")
+        average_elapsed_seconds = metrics.get("root_puct_average_elapsed_seconds")
+        average_selected_value = metrics.get("root_puct_average_selected_value")
+        average_selected_score = metrics.get("root_puct_average_selected_score")
+        print(
+            f"{matchup[:32]:32} "
+            f"{policy_id[:32]:32} "
+            f"{int(metrics.get('decisions', 0)):5d} "
+            f"{int(metrics.get('root_puct_searches', 0)):6d} "
+            f"{int(metrics.get('root_puct_fallbacks', 0)):8d} "
+            f"{_optional_report_float(average_candidate_count):>7} "
+            f"{_optional_report_millis(average_elapsed_seconds):>8} "
+            f"{_optional_report_float(average_selected_value):>8} "
+            f"{_optional_report_float(average_selected_score):>8}"
+        )
+        reasons = metrics.get("root_puct_fallback_reasons")
+        if isinstance(reasons, dict) and reasons:
+            formatted = ", ".join(f"{reason}={count}" for reason, count in reasons.items())
+            fallback_reasons.append(f"{policy_id}: {formatted}")
+    if fallback_reasons:
+        print("fallback_reasons:")
+        for reason in fallback_reasons:
+            print(f"  {reason}")
+
+
+def _optional_report_float(value: object) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _optional_report_millis(value: object) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value) * 1000.0:.2f}"
+    except (TypeError, ValueError):
+        return "-"
 
 
 def print_replay_benchmark_report(report: ReplayPrefixBenchmarkReport) -> None:

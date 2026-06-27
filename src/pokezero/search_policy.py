@@ -126,9 +126,9 @@ class RootPUCTSearchPolicy:
             through_decision_round=context.decision_round_index,
         )
         priors = self.prior_fn(history)
+        start = perf_counter()
         env = self.env_factory()
         try:
-            start = perf_counter()
             try:
                 search = puct_branch_search(
                     env=env,
