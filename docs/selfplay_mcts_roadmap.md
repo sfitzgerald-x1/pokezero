@@ -160,6 +160,17 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   private-observation root action, but it still keeps the benchmark legal-mask safety guard; that
   guard is privileged and shapes both scenario support and scenario weights. This remains a harness
   step, not M0 evidence until measured and not a replacement for belief determinization.
+  A same-seed measurement of that top-2 scenario mode on seed band `14062001` is now recorded at
+  `runs/root-puct-play-local-20260626/opponent-scenario-depth-sweep-games8-same-seed/root-puct-play-max-damage-games8-leaf0-1-2-opponent-scenarios2-seed14062001.json`.
+  Raw again scored 3/16; checkpoint-top2 leaf0 scored 4/16, leaf1 scored 5/16, and leaf2 scored
+  5/16, with zero capped games and zero root-PUCT fallbacks. Diagnostics showed
+  `root_puct_opponent_action_policies: {"checkpoint-top2": ...}` in every searched row, and the
+  scenario-count summary confirmed most searched decisions used two scenarios (`362/438`,
+  `363/439`, and `371/445` for leaf0/1/2). This is a modest improvement over the default leaf1
+  4/16 result and matches default leaf2 5/16, but it does **not** reproduce the privileged
+  benchmark-root leaf1 7/16 result. The remaining gap keeps pressure on stronger opponent modeling,
+  belief determinization, or value-target quality rather than treating checkpoint-prior top-k root
+  scenarios as sufficient.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
