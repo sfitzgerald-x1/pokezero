@@ -511,6 +511,27 @@ value-head correlation/sign/ECE metrics. Stale or unreadable summary paths are s
 so one bad arm does not hide the others, and the command exits nonzero when any row cannot be
 loaded. Use this for WS-A/WS-E experiment selection; it is not an MCTS verdict.
 
+When a script needs a concrete candidate-selection gate, pass explicit thresholds rather than relying
+on a built-in definition of "search ready":
+
+```bash
+python -m pokezero.neural_cli foundation-compare \
+  runs/foundation-baseline/neural-foundation-run-summary.json \
+  runs/foundation-opponent-signal/neural-foundation-run-summary.json \
+  --require-sample-sized \
+  --min-max-damage-games 300 \
+  --min-max-damage-win-rate 0.30 \
+  --min-value-pearson-correlation 0.30 \
+  --max-value-expected-calibration-error 0.25 \
+  --require-quality-pass
+```
+
+The quality gate annotates each row with pass/fail and failed check names. `--require-quality-pass`
+returns exit `2` if every loaded row fails the configured gate; load errors still return exit `1`.
+Exit `0` means at least one loaded row passed, not that every compared arm passed; scripts that care
+about a specific arm should inspect that row's `quality_gate.status` in `--json` output. These
+thresholds are experiment-local guardrails, not roadmap-wide success criteria.
+
 Use `--variant opponent-signal` as the H3 ablation arm when testing whether stronger
 opponent-action auxiliary supervision improves the foundation policy/value representation. The
 baseline variant leaves the underlying neural iterate default intact (currently `0.1`, not disabled);

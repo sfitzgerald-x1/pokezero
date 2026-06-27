@@ -863,6 +863,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Foundation run directory or neural-foundation-run-summary.json path. Pass two or more for a useful comparison.",
     )
     foundation_compare.add_argument("--json", action="store_true", help="Print the comparison payload as JSON.")
+    foundation_compare.add_argument(
+        "--require-sample-sized",
+        action="store_true",
+        help="Quality-gate row pass requires foundation_evidence_status=present_and_sample_sized.",
+    )
+    foundation_compare.add_argument(
+        "--min-max-damage-games",
+        type=int,
+        default=None,
+        help="Quality-gate row pass requires at least this many latest max-damage yardstick games.",
+    )
+    foundation_compare.add_argument(
+        "--min-max-damage-win-rate",
+        type=float,
+        default=None,
+        help="Quality-gate row pass requires at least this latest candidate win rate versus max-damage.",
+    )
+    foundation_compare.add_argument(
+        "--min-value-pearson-correlation",
+        type=float,
+        default=None,
+        help="Quality-gate row pass requires at least this value-head Pearson correlation.",
+    )
+    foundation_compare.add_argument(
+        "--min-value-sign-accuracy",
+        type=float,
+        default=None,
+        help="Quality-gate row pass requires at least this value-head sign accuracy.",
+    )
+    foundation_compare.add_argument(
+        "--max-value-expected-calibration-error",
+        type=float,
+        default=None,
+        help="Quality-gate row pass requires value-head ECE at or below this value.",
+    )
+    foundation_compare.add_argument(
+        "--require-quality-pass",
+        action="store_true",
+        help="Return exit 2 when quality thresholds are configured and no loaded row passes them.",
+    )
     foundation_compare.set_defaults(func=_foundation_compare)
 
     report = subparsers.add_parser("report", help="Print a summary of a neural self-play run manifest.")
@@ -2301,17 +2341,201 @@ def _foundation_report(args: argparse.Namespace) -> int:
 
 
 def _foundation_compare(args: argparse.Namespace) -> int:
+    quality_gate_config = _foundation_quality_gate_config_from_args(args)
     entries = [_foundation_compare_entry_or_error(path) for path in args.paths]
+    for entry in entries:
+        entry["quality_gate"] = _foundation_quality_gate(entry, quality_gate_config)
     payload = {
         "schema_version": NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION,
         "summary_count": len(args.paths),
+        "quality_gate": quality_gate_config,
         "entries": entries,
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
-        return 1 if any(entry.get("load_error") for entry in entries) else 0
+        return _foundation_compare_exit_code(entries, quality_gate_config)
     _print_foundation_compare(payload)
-    return 1 if any(entry.get("load_error") for entry in entries) else 0
+    return _foundation_compare_exit_code(entries, quality_gate_config)
+
+
+def _foundation_quality_gate_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    thresholds = {
+        "require_sample_sized": bool(args.require_sample_sized),
+        "min_max_damage_games": args.min_max_damage_games,
+        "min_max_damage_win_rate": args.min_max_damage_win_rate,
+        "min_value_pearson_correlation": args.min_value_pearson_correlation,
+        "min_value_sign_accuracy": args.min_value_sign_accuracy,
+        "max_value_expected_calibration_error": args.max_value_expected_calibration_error,
+    }
+    configured = any(value is not None and value is not False for value in thresholds.values())
+    if args.require_quality_pass and not configured:
+        raise ValueError("--require-quality-pass requires at least one quality threshold.")
+    if args.min_max_damage_games is not None and args.min_max_damage_games <= 0:
+        raise ValueError("--min-max-damage-games must be positive.")
+    _validate_foundation_quality_range(
+        thresholds["min_max_damage_win_rate"],
+        name="min_max_damage_win_rate",
+        lower=0.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["min_value_pearson_correlation"],
+        name="min_value_pearson_correlation",
+        lower=-1.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["min_value_sign_accuracy"],
+        name="min_value_sign_accuracy",
+        lower=0.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["max_value_expected_calibration_error"],
+        name="max_value_expected_calibration_error",
+        lower=0.0,
+        upper=None,
+    )
+    return {
+        "configured": configured,
+        "require_quality_pass": bool(args.require_quality_pass),
+        **thresholds,
+    }
+
+
+def _validate_foundation_quality_range(
+    value: object,
+    *,
+    name: str,
+    lower: float,
+    upper: float | None,
+) -> None:
+    if value is None:
+        return
+    parsed = float(value)
+    if parsed < lower or (upper is not None and parsed > upper):
+        range_text = f"[{lower}, {upper}]" if upper is not None else f">= {lower}"
+        raise ValueError(f"--{name.replace('_', '-')} must be in range {range_text}.")
+
+
+def _foundation_compare_exit_code(
+    entries: Sequence[Mapping[str, Any]],
+    quality_gate_config: Mapping[str, Any],
+) -> int:
+    if any(entry.get("load_error") for entry in entries):
+        return 1
+    if quality_gate_config.get("require_quality_pass") is True and quality_gate_config.get("configured") is True:
+        for entry in entries:
+            gate = _optional_mapping(entry.get("quality_gate"))
+            if gate.get("status") == "pass":
+                return 0
+        return 2
+    return 0
+
+
+def _foundation_quality_gate(entry: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+    if config.get("configured") is not True:
+        return {"configured": False, "status": "not_configured", "checks": []}
+    checks: list[dict[str, Any]] = []
+    if entry.get("load_error") is not None:
+        checks.append(
+            {
+                "name": "summary_load_error",
+                "passed": False,
+                "actual": entry.get("load_error"),
+                "threshold": "summary loads",
+            }
+        )
+    if config.get("require_sample_sized") is True:
+        actual = _string_or_none(entry.get("foundation_evidence_status"))
+        checks.append(
+            {
+                "name": "foundation_evidence_status",
+                "passed": actual == "present_and_sample_sized",
+                "actual": actual,
+                "threshold": "present_and_sample_sized",
+            }
+        )
+    yardsticks = _optional_mapping(entry.get("yardsticks"))
+    max_damage = _optional_mapping(yardsticks.get("max-damage"))
+    value = _optional_mapping(entry.get("value_calibration"))
+    _append_min_quality_check(
+        checks,
+        name="min_max_damage_games",
+        actual=_float_or_none(max_damage.get("games")) if max_damage.get("available") is True else None,
+        threshold=config.get("min_max_damage_games"),
+    )
+    _append_min_quality_check(
+        checks,
+        name="min_max_damage_win_rate",
+        actual=_float_or_none(max_damage.get("win_rate")) if max_damage.get("available") is True else None,
+        threshold=config.get("min_max_damage_win_rate"),
+    )
+    _append_min_quality_check(
+        checks,
+        name="min_value_pearson_correlation",
+        actual=_float_or_none(value.get("pearson_correlation")) if value.get("available") is True else None,
+        threshold=config.get("min_value_pearson_correlation"),
+    )
+    _append_min_quality_check(
+        checks,
+        name="min_value_sign_accuracy",
+        actual=_float_or_none(value.get("sign_accuracy")) if value.get("available") is True else None,
+        threshold=config.get("min_value_sign_accuracy"),
+    )
+    _append_max_quality_check(
+        checks,
+        name="max_value_expected_calibration_error",
+        actual=_float_or_none(value.get("expected_calibration_error")) if value.get("available") is True else None,
+        threshold=config.get("max_value_expected_calibration_error"),
+    )
+    failed = [check["name"] for check in checks if check.get("passed") is not True]
+    return {
+        "configured": True,
+        "status": "pass" if not failed else "fail",
+        "failed_checks": failed,
+        "checks": checks,
+    }
+
+
+def _append_min_quality_check(
+    checks: list[dict[str, Any]],
+    *,
+    name: str,
+    actual: float | None,
+    threshold: object,
+) -> None:
+    if threshold is None:
+        return
+    threshold_value = float(threshold)
+    checks.append(
+        {
+            "name": name,
+            "passed": actual is not None and actual >= threshold_value,
+            "actual": actual,
+            "threshold": threshold_value,
+        }
+    )
+
+
+def _append_max_quality_check(
+    checks: list[dict[str, Any]],
+    *,
+    name: str,
+    actual: float | None,
+    threshold: object,
+) -> None:
+    if threshold is None:
+        return
+    threshold_value = float(threshold)
+    checks.append(
+        {
+            "name": name,
+            "passed": actual is not None and actual <= threshold_value,
+            "actual": actual,
+            "threshold": threshold_value,
+        }
+    )
 
 
 def _foundation_compare_entry_or_error(path: Path) -> dict[str, Any]:
@@ -2471,13 +2695,14 @@ def _foundation_compare_label(summary_path: Path, recipe: Mapping[str, Any]) -> 
 def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     print("neural_foundation_compare:")
     print("note: rates are candidate wins / total games; this is not an MCTS verdict.")
+    quality_gate_config = _optional_mapping(payload.get("quality_gate"))
     entries = tuple(_mapping(entry) for entry in _sequence(payload.get("entries", ())))
     if not entries:
         print("entries: 0")
         return
     header = (
         f"{'label':<44} {'status':>7} {'profile':>7} {'variant':>15} {'iter':>4} "
-        f"{'evidence':>24} {'max_wr':>7} {'max_g':>5} {'simple':>7} {'random':>7} "
+        f"{'evidence':>24} {'gate':>5} {'max_wr':>7} {'max_g':>5} {'simple':>7} {'random':>7} "
         f"{'val_corr':>8} {'val_sign':>8} {'val_ece':>8}"
     )
     print(header)
@@ -2488,6 +2713,7 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
         simple = _optional_mapping(yardsticks.get("simple-legal"))
         random = _optional_mapping(yardsticks.get("random-legal"))
         value = _optional_mapping(entry.get("value_calibration"))
+        gate = _optional_mapping(entry.get("quality_gate"))
         print(
             f"{_clip_table_cell(entry.get('label'), 44):<44} "
             f"{_clip_table_cell(entry.get('status'), 7):>7} "
@@ -2495,6 +2721,7 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
             f"{_clip_table_cell(entry.get('variant'), 15):>15} "
             f"{_format_manifest_value(entry.get('latest_iteration')):>4} "
             f"{_clip_table_cell(entry.get('foundation_evidence_status'), 24):>24} "
+            f"{_foundation_gate_status(gate):>5} "
             f"{_foundation_rate(max_damage):>7} "
             f"{_foundation_games(max_damage):>5} "
             f"{_foundation_rate(simple):>7} "
@@ -2515,6 +2742,17 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
             f"manifest={manifest_state}"
             f"{error_suffix}"
         )
+    if quality_gate_config.get("configured") is True:
+        print("")
+        print("quality_gate:")
+        for entry in entries:
+            gate = _optional_mapping(entry.get("quality_gate"))
+            failed_checks = ", ".join(str(name) for name in _sequence(gate.get("failed_checks", ()))) or "-"
+            print(
+                f"- {_format_manifest_value(entry.get('label'))}: "
+                f"status={_format_manifest_value(gate.get('status'))} "
+                f"failed={failed_checks}"
+            )
 
 
 def _foundation_rate(entry: Mapping[str, Any]) -> str:
@@ -2527,6 +2765,17 @@ def _foundation_games(entry: Mapping[str, Any]) -> str:
     if entry.get("available") is not True:
         return "-"
     return _format_manifest_value(entry.get("games"))
+
+
+def _foundation_gate_status(entry: Mapping[str, Any]) -> str:
+    if entry.get("configured") is not True:
+        return "-"
+    status = _string_or_none(entry.get("status"))
+    if status == "pass":
+        return "pass"
+    if status == "fail":
+        return "fail"
+    return "-"
 
 
 def _clip_table_cell(value: object, width: int) -> str:

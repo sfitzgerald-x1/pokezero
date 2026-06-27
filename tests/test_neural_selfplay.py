@@ -2486,6 +2486,143 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertFalse(entry["yardsticks"]["simple-legal"]["available"])
         self.assertEqual(entry["value_calibration"]["pearson_correlation"], 0.22)
 
+    def test_neural_cli_foundation_compare_quality_gate_can_require_one_passing_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            weak_dir = temp_path / "weak" / "pilot-001"
+            stronger_dir = temp_path / "stronger" / "pilot-001"
+            write_neural_report_manifest(weak_dir)
+            write_neural_report_manifest(stronger_dir)
+            _rewrite_neural_manifest_yardstick(
+                stronger_dir / "manifest.json",
+                max_damage_wins=8,
+                simple_wins=14,
+                random_wins=16,
+            )
+            weak_summary = _write_foundation_summary(
+                weak_dir,
+                profile="pilot",
+                variant="baseline",
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                # The gate should prefer the manifest-derived max-damage row over this fallback.
+                max_damage_win_rate=0.11,
+            )
+            stronger_summary = _write_foundation_summary(
+                stronger_dir,
+                profile="pilot",
+                variant="opponent-signal",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                # The gate should prefer the manifest-derived max-damage row over this fallback.
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(weak_summary),
+                        str(stronger_summary),
+                        "--min-max-damage-games",
+                        "20",
+                        "--min-max-damage-win-rate",
+                        "0.3",
+                        "--min-value-pearson-correlation",
+                        "0.35",
+                        "--max-value-expected-calibration-error",
+                        "0.25",
+                        "--require-quality-pass",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        weak_gate = payload["entries"][0]["quality_gate"]
+        stronger_gate = payload["entries"][1]["quality_gate"]
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["quality_gate"]["configured"])
+        self.assertEqual(weak_gate["status"], "fail")
+        self.assertIn("min_max_damage_win_rate", weak_gate["failed_checks"])
+        self.assertIn("min_value_pearson_correlation", weak_gate["failed_checks"])
+        self.assertEqual(stronger_gate["status"], "pass")
+
+    def test_neural_cli_foundation_compare_quality_gate_exits_two_when_no_row_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "weak" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="baseline",
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.11,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(summary_path),
+                        "--min-max-damage-win-rate",
+                        "0.9",
+                        "--require-quality-pass",
+                    ]
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("quality_gate:", output)
+        self.assertIn("status=fail", output)
+        self.assertIn("min_max_damage_win_rate", output)
+
+    def test_neural_cli_foundation_compare_rejects_out_of_range_quality_thresholds(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-compare",
+                    "runs/missing",
+                    "--min-max-damage-win-rate",
+                    "30",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--min-max-damage-win-rate must be in range [0.0, 1.0]", stderr.getvalue())
+
+    def test_neural_cli_foundation_compare_allows_negative_pearson_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "weak" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="baseline",
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.25,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(summary_path),
+                        "--min-value-pearson-correlation",
+                        "-0.1",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["entries"][0]["quality_gate"]["status"], "pass")
+
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(
             run_dir=Path("/tmp/run"),
