@@ -344,31 +344,70 @@ class ValueCalibrationTransform:
     bias: float = 0.0
     clip_min: float = -1.0
     clip_max: float = 1.0
+    method: str = "affine"
+    points: tuple[tuple[float, float], ...] = ()
 
     def __post_init__(self) -> None:
+        if self.method not in {"affine", "isotonic"}:
+            raise ValueError("method must be 'affine' or 'isotonic'.")
         if self.clip_min >= self.clip_max:
             raise ValueError("clip_min must be less than clip_max.")
+        points = tuple((float(raw), float(calibrated)) for raw, calibrated in self.points)
+        object.__setattr__(self, "points", points)
+        if self.method == "isotonic":
+            if not points:
+                raise ValueError("isotonic value calibration requires at least one point.")
+            for (left_raw, left_value), (right_raw, right_value) in zip(points, points[1:], strict=False):
+                if right_raw <= left_raw:
+                    raise ValueError("isotonic calibration points must have strictly increasing raw values.")
+                if right_value < left_value:
+                    raise ValueError("isotonic calibration points must have non-decreasing calibrated values.")
 
     def apply(self, value: float) -> float:
-        calibrated = (self.scale * float(value)) + self.bias
+        if self.method == "isotonic":
+            calibrated = self._apply_isotonic(float(value))
+        else:
+            calibrated = (self.scale * float(value)) + self.bias
         return min(self.clip_max, max(self.clip_min, calibrated))
 
-    def to_dict(self) -> dict[str, float]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "method": self.method,
             "scale": float(self.scale),
             "bias": float(self.bias),
             "clip_min": float(self.clip_min),
             "clip_max": float(self.clip_max),
         }
+        if self.method == "isotonic":
+            payload["points"] = [[float(raw), float(calibrated)] for raw, calibrated in self.points]
+        return payload
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ValueCalibrationTransform":
+        method = str(payload.get("method", "affine"))
         return cls(
             scale=float(payload.get("scale", 1.0)),
             bias=float(payload.get("bias", 0.0)),
             clip_min=float(payload.get("clip_min", -1.0)),
             clip_max=float(payload.get("clip_max", 1.0)),
+            method=method,
+            points=tuple(tuple(point) for point in payload.get("points", ())),
         )
+
+    def _apply_isotonic(self, value: float) -> float:
+        if len(self.points) == 1:
+            return self.points[0][1]
+        first_raw, first_value = self.points[0]
+        if value <= first_raw:
+            return first_value
+        last_raw, last_value = self.points[-1]
+        if value >= last_raw:
+            return last_value
+        for (left_raw, left_value), (right_raw, right_value) in zip(self.points, self.points[1:], strict=True):
+            if value <= right_raw:
+                ratio = (value - left_raw) / (right_raw - left_raw)
+                return left_value + (ratio * (right_value - left_value))
+        return last_value
 
 
 @dataclass(frozen=True)

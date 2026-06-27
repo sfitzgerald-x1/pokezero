@@ -512,7 +512,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--fit-out",
         type=Path,
         default=None,
-        help="Optional output checkpoint path. Fits an affine value calibration transform on --data and saves a calibrated checkpoint copy.",
+        help="Optional output checkpoint path. Fits a value calibration transform on --data and saves a calibrated checkpoint copy.",
+    )
+    value_calibration.add_argument(
+        "--fit-method",
+        choices=("affine", "isotonic"),
+        default="affine",
+        help="Calibration transform fitted by --fit-out. affine preserves the legacy linear fit; isotonic fits a monotone empirical mapping.",
     )
     value_calibration.add_argument("--json", action="store_true", help="Print calibration results as JSON.")
     value_calibration.set_defaults(func=_value_calibration)
@@ -1563,6 +1569,8 @@ def _value_calibration(args: argparse.Namespace) -> int:
     require_torch()
     if args.eval_data is not None and args.fit_out is None:
         raise ValueError("--eval-data requires --fit-out.")
+    if args.fit_method != "affine" and args.fit_out is None:
+        raise ValueError("--fit-method requires --fit-out.")
     _validate_value_calibration_gate_args(args)
     device = resolve_torch_device(args.device)
     model, training_result = load_transformer_checkpoint(args.checkpoint, map_location=device)
@@ -1576,6 +1584,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
             paths=args.data,
             batch_size=args.batch_size,
             device=device,
+            method=args.fit_method,
         )
         training_result = replace(training_result, value_calibration_transform=transform)
         save_transformer_checkpoint(args.fit_out, model, result=training_result)
@@ -1585,7 +1594,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
                 "pass --eval-data for a held-out calibration read.",
                 file=sys.stderr,
             )
-        if abs(transform.scale) <= 1e-6:
+        if transform.method == "affine" and abs(transform.scale) <= 1e-6:
             print(
                 "warning: fitted value calibration scale is near zero; the calibrated checkpoint will make "
                 "value-head search nearly value-blind.",
@@ -1616,11 +1625,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         if args.fit_out is not None and transform is not None:
-            print(
-                "value_calibration_transform: "
-                f"scale={transform.scale:.6f} bias={transform.bias:.6f} "
-                f"clip=[{transform.clip_min:.1f},{transform.clip_max:.1f}]"
-            )
+            print(f"value_calibration_transform: {_format_value_calibration_transform(transform)}")
             print(f"calibrated_checkpoint: {args.fit_out}")
             print(f"evaluation_held_out: {_format_bool(evaluation_held_out)}")
             print("")
@@ -2766,6 +2771,20 @@ def _format_optional_float(value: object, *, digits: int = 3) -> str:
     if value is None:
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def _format_value_calibration_transform(transform: Any) -> str:
+    if getattr(transform, "method", "affine") == "isotonic":
+        point_count = len(getattr(transform, "points", ()))
+        return (
+            f"method=isotonic points={point_count} "
+            f"clip=[{transform.clip_min:.1f},{transform.clip_max:.1f}]"
+        )
+    return (
+        "method=affine "
+        f"scale={transform.scale:.6f} bias={transform.bias:.6f} "
+        f"clip=[{transform.clip_min:.1f},{transform.clip_max:.1f}]"
+    )
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

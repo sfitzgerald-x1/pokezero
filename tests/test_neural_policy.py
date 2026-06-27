@@ -2214,6 +2214,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(fit.call_args.kwargs["training_result"], fake_training_result)
         self.assertEqual(fit.call_args.kwargs["paths"], [Path("rollouts.jsonl")])
+        self.assertEqual(fit.call_args.kwargs["method"], "affine")
         saved_result = save.call_args.kwargs["result"]
         self.assertEqual(save.call_args.args[0], Path("calibrated.pt"))
         self.assertEqual(saved_result.value_calibration_transform, transform)
@@ -2226,6 +2227,58 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertTrue(payload["evaluation_held_out"])
         self.assertEqual(payload["value_calibration_transform"]["scale"], 1.5)
         self.assertEqual(payload["report"], {"examples": 3, "mae": 0.1})
+
+    def test_neural_cli_value_calibration_can_save_isotonic_calibrated_checkpoint(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"examples": 3, "mae": 0.1}
+
+        model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=(1, 2, 3),
+            category_oov_buckets=4,
+            policy_id="fixture",
+        )
+        fake_model = object()
+        fake_training_result = TransformerTrainingResult(
+            model_config=model_config,
+            training_config=TransformerTrainingConfig(),
+            epochs=(),
+        )
+        transform = ValueCalibrationTransform(
+            method="isotonic",
+            points=((-1.0, -0.8), (0.0, 0.1), (1.0, 0.9)),
+        )
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.fit_value_calibration_transform", return_value=transform) as fit,
+            patch("pokezero.neural_cli.save_transformer_checkpoint"),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=FakeReport()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--fit-out",
+                    "calibrated.pt",
+                    "--fit-method",
+                    "isotonic",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fit.call_args.kwargs["method"], "isotonic")
+        self.assertEqual(payload["value_calibration_transform"]["method"], "isotonic")
+        self.assertEqual(len(payload["value_calibration_transform"]["points"]), 3)
 
     def test_neural_cli_value_calibration_rejects_eval_data_without_fit_out(self) -> None:
         if not torch_available():
@@ -2246,6 +2299,30 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--eval-data requires --fit-out", stderr.getvalue())
+
+    def test_neural_cli_value_calibration_rejects_fit_method_without_fit_out(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint") as load,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--fit-method",
+                    "isotonic",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        load.assert_not_called()
+        self.assertIn("--fit-method requires --fit-out", stderr.getvalue())
 
     def test_neural_cli_value_calibration_resolves_default_device(self) -> None:
         if not torch_available():

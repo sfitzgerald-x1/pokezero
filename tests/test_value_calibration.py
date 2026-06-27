@@ -21,6 +21,7 @@ from pokezero.value_calibration import (
     ValueCalibrationReport,
     evaluate_value_calibration,
     fit_affine_value_calibration_transform,
+    fit_isotonic_value_calibration_transform,
     fit_value_calibration_transform,
     value_selection_metric_direction,
     value_selection_metric_value,
@@ -164,6 +165,40 @@ class ValueCalibrationTest(unittest.TestCase):
 
         self.assertEqual(transform.scale, 0.0)
         self.assertAlmostEqual(transform.bias, 0.0)
+
+    def test_value_calibration_transform_round_trips_isotonic_points(self) -> None:
+        transform = ValueCalibrationTransform(
+            method="isotonic",
+            points=((-1.0, -0.8), (0.0, 0.2), (1.0, 0.8)),
+        )
+
+        restored = ValueCalibrationTransform.from_dict(transform.to_dict())
+
+        self.assertEqual(restored.method, "isotonic")
+        self.assertEqual(restored.points, ((-1.0, -0.8), (0.0, 0.2), (1.0, 0.8)))
+        self.assertAlmostEqual(restored.apply(0.5), 0.5)
+        self.assertAlmostEqual(restored.apply(-2.0), -0.8)
+        self.assertAlmostEqual(restored.apply(2.0), 0.8)
+
+    def test_fit_isotonic_value_calibration_transform_pools_non_monotone_targets(self) -> None:
+        transform = fit_isotonic_value_calibration_transform(
+            predictions=(-0.8, -0.4, 0.0, 0.4, 0.8),
+            returns=(-1.0, 1.0, -1.0, 1.0, 1.0),
+        )
+
+        self.assertEqual(transform.method, "isotonic")
+        self.assertEqual(transform.points, ((-0.8, -1.0), (-0.4, 0.0), (0.0, 0.0), (0.4, 1.0), (0.8, 1.0)))
+        self.assertAlmostEqual(transform.apply(-0.4), 0.0)
+        self.assertAlmostEqual(transform.apply(-0.2), 0.0)
+        self.assertAlmostEqual(transform.apply(0.6), 1.0)
+
+    def test_fit_isotonic_value_calibration_transform_groups_duplicate_predictions(self) -> None:
+        transform = fit_isotonic_value_calibration_transform(
+            predictions=(0.2, 0.2, 0.8),
+            returns=(-1.0, 1.0, 1.0),
+        )
+
+        self.assertEqual(transform.points, ((0.2, 0.0), (0.8, 1.0)))
 
     def test_calibration_dataset_config_matches_training_return_target_config(self) -> None:
         training_config = TransformerTrainingConfig(

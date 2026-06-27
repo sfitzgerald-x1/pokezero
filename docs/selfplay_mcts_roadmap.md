@@ -172,8 +172,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   calibration bins against rollout return targets; reports stratified return/turn/terminal slices; and
   can be emitted from standalone calibration, `neural_cli train`, or `neural_cli iterate`. This is the
   first WS-E metric before using the value head for MCTS leaf evaluation. The standalone command can
-  also fit an affine calibration transform and save a calibrated checkpoint copy; pass a separate
-  `--eval-data` set for a held-out calibration read. It also supports opt-in quality gates such as
+  also fit a calibration transform and save a calibrated checkpoint copy; pass a separate
+  `--eval-data` set for a held-out calibration read. The default `--fit-method affine` preserves the
+  legacy linear correction, while `--fit-method isotonic` stores a monotone empirical mapping for
+  non-linear post-hoc calibration experiments. It also supports opt-in quality gates such as
   `--min-sign-accuracy`, `--max-expected-calibration-error`, and `--min-pearson-correlation` so
   experiment scripts can fail a weak value-head read without hardcoding project-wide readiness
   thresholds. Value-head consumers such as search leaf scoring read the stored transform when
@@ -500,7 +502,9 @@ Steps: audit and improve value-target construction (terminal return, discount, c
 and measure value-head **calibration** (predicted vs realized outcome); confirm multi-turn-effect
 duration encodings are complete; expose a clean belief-determinization (opponent-set sampling) API.
 The calibration metric/artifact path now exists; the open work is improving the value targets/model
-until held-out calibration is good enough to guide search. One current model-side lever is the
+until held-out calibration is good enough to guide search. The standalone value-calibration command
+can now fit affine or isotonic stored transforms; isotonic is a WS-E calibration lever, not a
+substitute for improving the underlying value ranking. One current model-side lever is the
 optional recurrent temporal aggregator, which should be evaluated as a base-net/value-head upgrade
 before resuming larger root-PUCT reads. The dataset path also exposes optional clipped shaped return
 targets for visible HP/faint deltas and late-turn pressure; these should be ablated before replacing
