@@ -1512,7 +1512,8 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
-        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} checkpoint"
+        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} "
+        f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_ent':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -1537,6 +1538,9 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(calibration_report.get('sign_accuracy') if calibration_report else None, digits=4):>8} "
             f"{_format_optional_float(calibration_report.get('expected_calibration_error') if calibration_report else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_valid_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_clip_fraction') if final_epoch else None):>8} "
+            f"{_format_optional_float(final_epoch.get('ppo_entropy') if final_epoch else None):>8} "
             f"{iteration.get('checkpoint_path')}"
         )
 

@@ -1683,6 +1683,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("inc_wr", output)
         self.assertIn("val_sign", output)
         self.assertIn("val_ece", output)
+        self.assertIn("ppo_cov", output)
+        self.assertIn("ppo_clip", output)
+        self.assertIn("ppo_ent", output)
         self.assertIn("0.800", output)
         self.assertIn("0.600", output)
         self.assertIn("0.250000", output)
@@ -1691,6 +1694,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("0.7200", output)
         self.assertIn("0.180000", output)
         self.assertIn("0.5000", output)
+        self.assertIn("0.875", output)
+        self.assertIn("0.125", output)
+        self.assertIn("1.750", output)
 
     def test_neural_cli_report_can_print_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1838,6 +1844,13 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
                     "value_loss": 0.1,
                     "opponent_loss": 0.05,
                     "opponent_accuracy": 0.5,
+                    "ppo_valid_examples": 7,
+                    "ppo_valid_fraction": 0.875,
+                    "ppo_advantage_mean": 0.2,
+                    "ppo_advantage_std": 0.4,
+                    "ppo_ratio_mean": 1.1,
+                    "ppo_clip_fraction": 0.125,
+                    "ppo_entropy": 1.75,
                 }
             ],
         },
