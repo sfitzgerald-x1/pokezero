@@ -246,6 +246,8 @@ class TransformerTrainingConfig:
     def __post_init__(self) -> None:
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
             raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
+        if self.objective == "value-only" and not self.freeze_non_value_parameters:
+            raise ValueError("objective='value-only' requires freeze_non_value_parameters=True.")
         if self.freeze_non_value_parameters and self.objective != "value-only":
             raise ValueError("freeze_non_value_parameters requires objective='value-only'.")
         if self.clip_epsilon <= 0.0:
@@ -694,18 +696,22 @@ def train_transformer_policy(
     if model_config is None:
         raise ValueError("model_config is required (build it with TransformerPolicyConfig.compact_category).")
     resolved_model_config = model_config
+    if resolved_training_config.window_size != resolved_model_config.window_size:
+        raise ValueError("training_config.window_size must match model_config.window_size.")
     device = resolve_torch_device(resolved_training_config.device)
     if initial_model is None:
         model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
     else:
         _validate_initial_model_config(initial_model, resolved_model_config)
         model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
-    if hasattr(model, "train"):
-        model.train()
     trainable_parameters = _configure_trainable_parameters(
         model,
         freeze_non_value_parameters=resolved_training_config.freeze_non_value_parameters,
     )
+    if resolved_training_config.freeze_non_value_parameters and hasattr(model, "eval"):
+        model.eval()
+    elif hasattr(model, "train"):
+        model.train()
     optimizer = torch_module.optim.AdamW(
         trainable_parameters,
         lr=resolved_training_config.learning_rate,

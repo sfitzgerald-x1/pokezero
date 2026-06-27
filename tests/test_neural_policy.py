@@ -327,6 +327,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
             TransformerTrainingConfig(objective="ppo", clip_epsilon=0.0)
+        with self.assertRaisesRegex(ValueError, "objective='value-only'"):
+            TransformerTrainingConfig(objective="value-only")
         with self.assertRaisesRegex(ValueError, "freeze_non_value_parameters"):
             TransformerTrainingConfig(freeze_non_value_parameters=True)
         # round-trips through to_dict/from_dict-equivalent (asdict) with RL knobs.
@@ -433,6 +435,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             tensors,
             TransformerTrainingConfig(
                 objective="value-only",
+                freeze_non_value_parameters=True,
                 opponent_action_loss_weight=10.0,
                 action_family_loss_weight=10.0,
                 switch_target_loss_weight=10.0,
@@ -2234,6 +2237,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             )
             model = EntityTokenTransformerPolicy(model_config)
             before = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
+            before_priors = evaluate_transformer_action_priors(
+                model=model,
+                result=TransformerTrainingResult(
+                    model_config=model_config,
+                    training_config=TransformerTrainingConfig(window_size=2),
+                    epochs=(),
+                ),
+                observations=(observation(1),),
+                device="cpu",
+            )
 
             trained_model, result = train_transformer_policy(
                 data_path,
@@ -2255,10 +2268,47 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 for name, parameter in trained_model.named_parameters()
                 if not require_torch().equal(before[name], parameter.detach())
             }
+            after_priors = evaluate_transformer_action_priors(
+                model=trained_model,
+                result=TransformerTrainingResult(
+                    model_config=model_config,
+                    training_config=TransformerTrainingConfig(window_size=2),
+                    epochs=(),
+                ),
+                observations=(observation(1),),
+                device="cpu",
+            )
 
         self.assertEqual(result.final_metrics.policy_loss, 0.0)
+        self.assertFalse(trained_model.training)
         self.assertTrue(changed)
         self.assertTrue(all(name.startswith("value_head.") for name in changed))
+        for before_value, after_value in zip(before_priors, after_priors):
+            self.assertAlmostEqual(before_value, after_value, places=7)
+
+    def test_train_transformer_policy_rejects_window_size_mismatch(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        with self.assertRaisesRegex(ValueError, "window_size"):
+            train_transformer_policy(
+                "missing.jsonl",
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="window-mismatch",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(batch_size=2, epochs=1, window_size=4, device="cpu"),
+            )
 
 
 if __name__ == "__main__":
