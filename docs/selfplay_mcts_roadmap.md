@@ -205,6 +205,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   Held-out value-selection ECE remained noisy (0.922 then 0.700), and iteration calibration stayed
   weak enough that the value/base-net bottleneck remains the near-term focus before larger MCTS
   reads.
+  A post-hoc affine calibration smoke then fit `transformer-teacher-bc-split-value-selected.pt` on
+  its split training rollouts and evaluated on the held-out split. The calibrated copy used
+  `scale=1.814966`, `bias=0.004515`, and moved held-out MAE from 0.9584 to 0.9246 and MSE from
+  0.9446 to 0.9403, but sign accuracy barely moved (0.5920 to 0.5936) and ECE worsened from
+  0.0484 to 0.0879. This validates the applied-transform plumbing and may help value magnitude, but
+  it is not enough to make the current value head search-ready; the WS-E/WS-A bottleneck remains.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
