@@ -366,6 +366,11 @@ Steps:
    opt-in `--ppo-target-mode gae` / `--gae-lambda` path that derives advantages and value targets
    from those recorded baselines when present while falling back to legacy discounted returns for
    fixed-opponent or old-rollout rows. This is target-quality plumbing, not yet strength evidence.
+   The current CPU proof-of-concept recipe is captured as `neural iterate --experiment-preset
+   foundation-arms-race`: PPO + GAE, mirror collection, always-advance collector progression,
+   spread historical opponents, higher collection temperature, held-out Pearson value selection,
+   value calibration, and a fixed `max-damage` benchmark reference. The preset is a reproducibility
+   convenience for WS-A/WS-E foundation runs, not promotion evidence.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure

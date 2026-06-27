@@ -28,7 +28,7 @@ from pokezero.neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from pokezero.neural_cli import _print_iterate_summary, main as neural_cli_main
+from pokezero.neural_cli import _explicit_cli_options, _print_iterate_summary, main as neural_cli_main
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure
@@ -293,6 +293,132 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 heldout_seed_start=3000,
             ),
         )
+
+    def test_neural_cli_iterate_foundation_arms_race_preset_fills_current_recipe(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "2",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--experiment-preset",
+                        "foundation-arms-race",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(kwargs["mirror_match"])
+        self.assertEqual(kwargs["collector_advancement_mode"], "always")
+        self.assertEqual(kwargs["collection_temperature"], 1.4)
+        self.assertEqual(kwargs["historical_opponent_selection"], "spread")
+        self.assertEqual(kwargs["evaluation_games"], 200)
+        self.assertEqual(kwargs["benchmark_reference_policy_specs"], ("max-damage?showdown_root=%2Ftmp%2Fshowdown",))
+        self.assertEqual(kwargs["experiment_preset"], "foundation-arms-race")
+        self.assertEqual(kwargs["training_config"].objective, "ppo")
+        self.assertEqual(kwargs["training_config"].entropy_coef, 0.01)
+        self.assertEqual(kwargs["training_config"].ppo_target_mode, "gae")
+        self.assertEqual(
+            kwargs["value_selection_config"],
+            NeuralValueSelectionConfig(
+                metric="pearson_correlation",
+                heldout_games_per_iteration=32,
+            ),
+        )
+        self.assertEqual(kwargs["value_calibration_config"], NeuralValueCalibrationConfig())
+
+    def test_neural_cli_iterate_foundation_arms_race_preset_respects_explicit_overrides(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--experiment-preset",
+                        "foundation-arms-race",
+                        "--obj",
+                        "behavior-cloning",
+                        "--collection-temp=1.1",
+                        "--collector-advancement-mode",
+                        "incumbent-gate",
+                        "--historical-opponent-selection",
+                        "recent",
+                        "--evaluation-games",
+                        "12",
+                        "--value-selection-metric",
+                        "mae",
+                        "--value-selection-heldout-games",
+                        "4",
+                        "--benchmark-reference-policy",
+                        "simple-legal",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(kwargs["collector_advancement_mode"], "incumbent-gate")
+        self.assertEqual(kwargs["collection_temperature"], 1.1)
+        self.assertEqual(kwargs["historical_opponent_selection"], "recent")
+        self.assertEqual(kwargs["evaluation_games"], 12)
+        self.assertEqual(
+            kwargs["benchmark_reference_policy_specs"],
+            ("simple-legal", "max-damage?showdown_root=%2Ftmp%2Fshowdown"),
+        )
+        self.assertEqual(kwargs["training_config"].objective, "behavior-cloning")
+        self.assertEqual(kwargs["training_config"].entropy_coef, 0.0)
+        self.assertEqual(kwargs["training_config"].ppo_target_mode, "returns")
+        self.assertEqual(
+            kwargs["value_selection_config"],
+            NeuralValueSelectionConfig(metric="mae", heldout_games_per_iteration=4),
+        )
+
+    def test_neural_cli_explicit_options_follow_argparse_abbreviations_and_values(self) -> None:
+        options = _explicit_cli_options(
+            [
+                "iterate",
+                "--run-dir",
+                "run",
+                "--iterations",
+                "1",
+                "--games-per-iteration",
+                "8",
+                "--showdown-root",
+                "/tmp/showdown",
+                "--initial-policy",
+                "random-legal",
+                "--experiment-preset",
+                "foundation-arms-race",
+                "--obj",
+                "behavior-cloning",
+                "--collection-temp=1.1",
+                "--promotion-notes=--value-calibration",
+            ]
+        )
+
+        self.assertIn("objective", options)
+        self.assertIn("collection_temperature", options)
+        self.assertIn("promotion_notes", options)
+        self.assertNotIn("value_calibration", options)
 
     def test_run_neural_selfplay_iterations_writes_manifests_and_accumulates_supervised_training_data(self) -> None:
         collected = []
