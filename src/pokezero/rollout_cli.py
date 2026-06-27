@@ -295,6 +295,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     print(header)
     print("-" * len(header))
     fallback_reasons = []
+    selection_modes = []
     for matchup, policy_id, metrics in rows:
         average_candidate_count = metrics.get("root_puct_average_candidate_count")
         average_elapsed_seconds = metrics.get("root_puct_average_elapsed_seconds")
@@ -318,6 +319,14 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         if isinstance(reasons, dict) and reasons:
             formatted = ", ".join(f"{reason}={count}" for reason, count in reasons.items())
             fallback_reasons.append(f"{policy_id}: {formatted}")
+        modes = metrics.get("root_puct_selection_modes")
+        if isinstance(modes, dict) and modes:
+            formatted = ", ".join(f"{mode}={count}" for mode, count in modes.items())
+            selection_modes.append(f"{policy_id}: {formatted}")
+    if selection_modes:
+        print("selection_modes:")
+        for mode in selection_modes:
+            print(f"  {mode}")
     if fallback_reasons:
         print("fallback_reasons:")
         for reason in fallback_reasons:

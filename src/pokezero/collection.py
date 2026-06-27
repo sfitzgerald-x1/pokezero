@@ -934,6 +934,7 @@ class _PolicyDecisionAccumulator:
     root_puct_value_gate_checks: int = 0
     root_puct_value_gate_uses: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
+    root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
 
     def add(self, metadata: Mapping[str, Any]) -> None:
         self.decisions += 1
@@ -967,6 +968,10 @@ class _PolicyDecisionAccumulator:
             self.root_puct_value_gate_checks += 1
             if bool(metadata.get("root_puct_value_gate_used")):
                 self.root_puct_value_gate_uses += 1
+        selection_mode = metadata.get("root_puct_selection_mode")
+        if selection_mode is not None:
+            key = str(selection_mode)
+            self.root_puct_selection_modes[key] = self.root_puct_selection_modes.get(key, 0) + 1
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"decisions": self.decisions}
@@ -996,6 +1001,8 @@ class _PolicyDecisionAccumulator:
             if self.root_puct_value_gate_checks:
                 result["root_puct_value_gate_checks"] = self.root_puct_value_gate_checks
                 result["root_puct_value_gate_uses"] = self.root_puct_value_gate_uses
+            if self.root_puct_selection_modes:
+                result["root_puct_selection_modes"] = dict(sorted(self.root_puct_selection_modes.items()))
             if self.root_puct_fallback_reasons:
                 result["root_puct_fallback_reasons"] = dict(
                     sorted(self.root_puct_fallback_reasons.items())
