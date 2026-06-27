@@ -119,6 +119,16 @@ NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
         "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
     },
 }
+NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
+    "baseline": {
+        "description": "Use the foundation-arms-race preset without wrapper-level auxiliary-loss changes.",
+        "opponent_action_loss_weight": None,
+    },
+    "opponent-signal": {
+        "description": "Increase opponent-action auxiliary supervision for an H3 foundation ablation.",
+        "opponent_action_loss_weight": 1.0,
+    },
+}
 _DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
@@ -813,6 +823,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summary_path: bool) -> None:
     profile_choices = tuple(NEURAL_FOUNDATION_PROFILES)
+    variant_choices = tuple(NEURAL_FOUNDATION_VARIANTS)
     parser.add_argument("--run-dir", type=Path, required=True, help="Neural self-play run directory.")
     parser.add_argument("--showdown-root", type=Path, required=True, help="Built Pokemon Showdown checkout root.")
     parser.add_argument(
@@ -825,6 +836,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         choices=profile_choices,
         default="smoke",
         help="Foundation run size profile. smoke is cheap plumbing; pilot matches the current 3x256 CPU recipe.",
+    )
+    parser.add_argument(
+        "--variant",
+        choices=variant_choices,
+        default="baseline",
+        help="Foundation experiment arm. opponent-signal increases opponent-action auxiliary supervision.",
     )
     parser.add_argument("--iterations", type=int, default=None, help="Override profile iterations.")
     parser.add_argument("--games-per-iteration", type=int, default=None, help="Override profile games per iteration.")
@@ -840,6 +857,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
     )
     parser.add_argument("--seed-start", type=int, default=1, help="First rollout collection seed.")
     parser.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First benchmark seed.")
+    parser.add_argument(
+        "--opponent-action-loss-weight",
+        type=float,
+        default=None,
+        help="Override the variant's opponent-action auxiliary loss weight.",
+    )
     parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
     parser.add_argument("--resume", action="store_true", help="Resume an existing neural foundation run directory.")
     if include_summary_path:
@@ -1936,6 +1959,7 @@ def _foundation_plan(args: argparse.Namespace) -> int:
     print("neural_foundation_plan:")
     print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
     print(f"profile: {recipe['profile']}")
+    print(f"variant: {recipe['variant']}")
     print(f"run_dir: {recipe['run_dir']}")
     print(f"manifest: {recipe['manifest_path']}")
     print("command:")
@@ -2065,6 +2089,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
     if resolved["max_batches"] is not None:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
+    if resolved["opponent_action_loss_weight"] is not None:
+        argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
     if args.device is not None:
         argv.extend(["--device", str(args.device)])
     if args.resume:
@@ -2073,6 +2099,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION,
         "source": collect_source_metadata(),
         "profile": args.profile,
+        "variant": args.variant,
+        "variant_description": str(NEURAL_FOUNDATION_VARIANTS[args.variant]["description"]),
         "run_dir": str(args.run_dir),
         "manifest_path": str(args.run_dir / "manifest.json"),
         "showdown_root": str(args.showdown_root),
@@ -2087,8 +2115,14 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | None]:
+def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | float | None]:
     profile = NEURAL_FOUNDATION_PROFILES[args.profile]
+    variant = NEURAL_FOUNDATION_VARIANTS[args.variant]
+    opponent_action_loss_weight = (
+        args.opponent_action_loss_weight
+        if args.opponent_action_loss_weight is not None
+        else variant["opponent_action_loss_weight"]
+    )
     resolved = {
         "iterations": _foundation_option(args.iterations, profile["iterations"]),
         "games_per_iteration": _foundation_option(args.games_per_iteration, profile["games_per_iteration"]),
@@ -2100,12 +2134,15 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, int | No
             args.value_selection_heldout_games,
             profile["value_selection_heldout_games"],
         ),
+        "opponent_action_loss_weight": opponent_action_loss_weight,
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
             raise ValueError(f"{name.replace('_', '-')} must be positive.")
     if int(resolved["value_selection_heldout_games"] or 0) < 0:
         raise ValueError("value-selection-heldout-games must be non-negative.")
+    if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
+        raise ValueError("opponent-action-loss-weight must be non-negative.")
     return resolved
 
 

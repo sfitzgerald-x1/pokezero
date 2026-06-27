@@ -2156,16 +2156,94 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["schema_version"], "pokezero.neural_foundation_plan.v1")
         self.assertEqual(recipe["source"], source)
         self.assertEqual(recipe["profile"], "smoke")
+        self.assertEqual(recipe["variant"], "baseline")
         self.assertEqual(recipe["experiment_preset"], "foundation-arms-race")
         self.assertEqual(recipe["resolved_options"]["iterations"], 2)
         self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 8)
         self.assertEqual(recipe["resolved_options"]["evaluation_games"], 8)
         self.assertEqual(recipe["resolved_options"]["value_selection_heldout_games"], 4)
+        self.assertIsNone(recipe["resolved_options"]["opponent_action_loss_weight"])
         self.assertIn("iterate", argv)
         self.assertIn("--experiment-preset", argv)
         self.assertIn("foundation-arms-race", argv)
         self.assertIn("--value-selection-heldout-games", argv)
+        self.assertNotIn("--opponent-action-loss-weight", argv)
         self.assertIn("--json", argv)
+
+    def test_neural_cli_foundation_opponent_signal_variant_sets_auxiliary_loss(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-opponent-signal",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "opponent-signal",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["variant"], "opponent-signal")
+        self.assertIn("opponent-action", recipe["variant_description"])
+        self.assertEqual(recipe["resolved_options"]["opponent_action_loss_weight"], 1.0)
+        self.assertIn("--opponent-action-loss-weight", argv)
+        self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "1.0")
+
+    def test_neural_cli_foundation_plan_text_prints_variant(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-opponent-signal",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "opponent-signal",
+                ]
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("variant: opponent-signal", output)
+        self.assertIn("--opponent-action-loss-weight 1.0", output)
+
+    def test_neural_cli_foundation_opponent_signal_variant_respects_explicit_loss_override(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-opponent-signal",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "opponent-signal",
+                    "--opponent-action-loss-weight",
+                    "0.5",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["opponent_action_loss_weight"], 0.5)
+        self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "0.5")
 
     def test_neural_cli_foundation_pilot_plan_leaves_preset_owned_defaults_to_preset(self) -> None:
         with (
