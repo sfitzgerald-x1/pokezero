@@ -23,6 +23,15 @@ compute** (one GPU + ~80 CPU workers, ~3M self-play battles, ~4 days):
 This de-risks the direction: it is an engineering+scale problem with a known-good shape, not a
 research gamble. Our job is to reproduce it for Gen 3 on our stack and push past it.
 
+The exact reference numbers — training budget (~3M battles / ~4 days), the full PPO hyperparameter
+table, architecture, the inference-time MCTS details, and a line-by-line gap against our current
+config — live in [`mit_thesis_reference_config.md`](mit_thesis_reference_config.md). Two facts from
+it gate everything below: (1) the thesis's **net-alone** was already strong (~80% vs a heuristic
+baseline) — the PPO **training** half is the load-bearing phase, and MCTS is a topper on top of it;
+(2) that net needed **~3,000,000 self-play battles** with specific tuned hyperparameters (annealed
+LR, `entropy_coef` 0.0588, 7 epochs, `gamma` 0.9999). Recipe **fidelity and scale** are therefore
+the first-order levers, and no strength conclusion is meaningful until we are running near them.
+
 ## Current assets (what already exists)
 
 - **Warm-pooled sim** (`local_showdown.py`, `scripts/battle_bridge.mjs`): battle-id-keyed bridge,
@@ -360,59 +369,77 @@ Pure searchless self-play risks settling into a mediocre local equilibrium. The 
 pool, exploration pressure, and (above all) a search improvement operator — are exactly the recipe
 above, and are all knowledge-free / on-mission.
 
-The latest teacher-cut evidence sharpens the priority order. A clean loop that allows a learned
-checkpoint as one-shot initialization and then removes teacher relabeling, fixed teacher opponents,
-and imitation terms ran successfully, but only reached `0.2825` versus `max-damage` over the latest
-400-game yardstick row. A simple value-only tune of that checkpoint was also flat on an independent
-calibration split. This means the current wall is not "search operator micro-tuning"; it is whether
-the base self-play/value loop can generate a policy/value substrate that rises beyond the teacher
-ceiling at all.
+The latest teacher-cut evidence is a wiring milestone, **not** a strength signal. A clean loop that
+allows a learned checkpoint as one-shot initialization and then removes teacher relabeling, fixed
+teacher opponents, and imitation terms ran successfully and reached `0.2825` versus `max-damage` over
+a 400-game yardstick row. It is tempting to read that as "self-play cannot rise beyond the teacher
+ceiling," but that conclusion is unsupported: the run was **3 iterations × 256 games = 768 battles
+(~0.026% of the recipe's ~3M-battle budget) with materially off-recipe hyperparameters** — zero
+exploration entropy, a single epoch, no learning-rate annealing (see
+[`mit_thesis_reference_config.md`](mit_thesis_reference_config.md)). The thesis net needed ~1 day /
+40M steps just to reach 80% vs a heuristic baseline. So this run validates the teacher-cut *plumbing*
+and gives an early-training datapoint; it says nothing about whether the loop can clear the ceiling.
+The real wall is upstream of search and upstream of "does self-play work": **we have not yet run the
+training half at recipe fidelity or anywhere near recipe scale.**
 
 Near-term priority order:
 
-1. Prove or falsify clean teacher-cut self-play above the scripted-teacher bar, using outcome reward,
-   real exploration, no teacher relabeling, no teacher imitation term, and no teacher/heuristic
-   training opponent after the one-shot initialization.
-2. Improve value-head ranking/calibration to a concrete bar before trusting it as an MCTS leaf
-   evaluator.
-3. Treat 8-16 game search probes as wiring checks only. Strength or M0 claims require milestone-size
-   samples, with 300+ games as the default floor.
-4. Assess faster reversible simulation infrastructure, especially `poke-engine`, because CPU branch
-   cost may determine whether the clean from-scratch loop is affordable.
+1. **Recipe-fidelity pass on the PPO config.** Align the teacher-cut/foundation training knobs to the
+   thesis reference (`entropy_coef`≈0.0588, `n_epochs`≈7, annealed LR, `gamma`≈0.9999, `gae_lambda`,
+   clip ranges, value coef, batch size) — see the gap table in the reference doc. Several of these
+   (exploration entropy, epochs, LR annealing) are first-order and currently set to no-op values.
+2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
+   a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
+   the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
+   on-recipe and justified — the thesis used 80 CPU workers; our fleet is the equivalent, not premature
+   optimization.
+3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
+   pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
+4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete
+   bar, then add test-time MCTS (determinization via Showdown's randbats generator) as a topper on an
+   already-strong net. `poke-engine` assessment feeds both phases: it could cut CPU battle/branch cost
+   enough to make recipe-scale training and MCTS rollouts affordable — gated on proving Gen 3
+   randbats equivalence first.
 
 ## Strategy hypothesis & go/no-go gates
 
-**Core hypothesis (unverified):** prior self-play stalled at ~0.52 because we never combined (a)
-enough scale, (b) a real opponent *league*, (c) exploration pressure, and — decisively — (d) a
-**search improvement operator**. The recipe above asserts all four break the plateau; gen4→gen3
+**Core hypothesis (unverified):** prior self-play stalled at ~0.52 because every variant was
+teacher-anchored *and* none ran at recipe fidelity or scale. The recipe asserts the training-half
+levers — (a) enough **scale** (~3M battles), (b) **exploration pressure** (non-zero entropy), (c)
+**recipe-faithful PPO** (annealed LR, 7 epochs, tuned clip/discount), and optionally (d) a real
+opponent *league* — produce a strong **net on their own**, with test-time MCTS as a topper. Gen4→gen3
 transfer is also assumed. Treat this as a hypothesis to test, not a given.
 
-**Search is the load-bearing bet, but the test stand has prerequisites** (see M0): the thesis's
-strength came from *net + MCTS*, and net-alone may well re-plateau at ~0.52. Do **not** over-invest
-in fleet-scale PPO before demonstrating that search lifts a modest net past the plateau. At the same
-time, recent micro-probes showed that search tuning on a weak teacher-BC prior and poorly calibrated
-value head produces unreadable 8-16 game deltas. Near-term work should therefore build a decent
-current-schema base net, calibrate its value head, and only then resume root-PUCT reads at a sample
-size that can support a decision.
+**The training half is the load-bearing bet; search is a topper** (this corrects an earlier framing
+that treated test-time search as the primary plateau-breaker). The thesis's *net-alone* already
+reached ~80% vs a heuristic baseline and beat that heuristic head-to-head; MCTS then added a
+meaningful-but-modest lift on top. So the dominant risk is **not** "search won't lift a weak net" —
+it is "we have not run recipe-faithful PPO self-play at anywhere near recipe scale." Do not gate the
+scale/fidelity work behind a local search-lift demo, and do not let test-time search become a variant
+treadmill: recent micro-probes confirmed that tuning search on a weak teacher-BC prior with a poorly
+calibrated value head produces unreadable 8-16 game deltas.
 
-Search remains the intended improvement operator, but it should not become a variant treadmill. Keep
-the root-PUCT/determinization machinery, but pause operator polishing until the value/base-net
-substrate and evaluation sample size can support a real decision.
+Keep the root-PUCT/determinization machinery for phase 2, but the near-term substrate work is the
+recipe-fidelity + scale pass on training, tracked by a net-alone strength curve. Resume search reads
+only once there is a meaningfully strong base net and a sample size that can support a decision.
 
 **Go/no-go gates:**
-- **M0 gate:** on a cheap/early net, net+MCTS must clear ~0.60 vs max-damage (well past the 0.52
-  plateau). If search does *not* move the needle here, scaling PPO will not save us — stop and
-  rethink the operator (deeper search, better value head, DUCT) before spending fleet compute.
-  The first smoke measurement only validates the plumbing; the real M0 read still requires a
-  current-observation-schema checkpoint with meaningful strength. Older local checkpoints trained
-  before the latest observation features can fail with numeric-feature shape mismatches and should
-  be retrained or skipped for M0 evidence.
-  The first 64-game-BC probe did **not** show lift, and the follow-up value-calibration split showed
-  that the current value head is not a reliable leaf evaluator. Treat further 8-16 game root-PUCT runs
-  as plumbing checks only; real M0 evidence should wait for a stronger base net and use larger
-  benchmark samples.
+- **M0 — training-half gate (primary).** Recipe-faithful PPO self-play (config aligned to the
+  reference table) must show a *net-alone* strength curve that **rises** as battles scale, tracked
+  against a stable smooth baseline (SimpleHeuristics-style), the way the thesis validated every 20k
+  steps. This is the load-bearing gate and what justifies fleet compute — **not** a local search
+  demo. Falsification requires a recipe-faithful run at meaningful scale (≥ tens of thousands of
+  battles) that stays flat, not a 768-battle off-recipe pilot. Use a current-observation-schema
+  checkpoint; older checkpoints can fail on numeric-feature shape mismatches and should be retrained
+  or skipped.
+- **M0b — search-lift gate (phase 2, after M0).** On a meaningfully strong net, net+MCTS must add
+  lift (target ~0.60+ vs max-damage, well past the 0.52 plateau) at a 300+ game sample. This does
+  **not** gate the scale/fidelity work above. The first 64-game-BC probe showed no lift and the
+  value-calibration split showed the current value head is not yet a reliable leaf evaluator — so
+  treat 8-16 game root-PUCT runs as plumbing checks only, and defer the real read until the value
+  head clears its bar and the base net is strong.
 - **M1 gate:** the per-iteration strength curve must *rise* over ≥10 league iterations; a multi-
-  iteration flatline = stuck → lean on search and revisit league diversity + exploration.
+  iteration flatline = stuck → revisit scale, exploration, league diversity, and (phase 2) search.
 
 ---
 
