@@ -392,6 +392,35 @@ class NeuralSelfPlayTest(unittest.TestCase):
             NeuralValueSelectionConfig(metric="mae", heldout_games_per_iteration=4),
         )
 
+    def test_neural_cli_iterate_wires_value_ranking_loss_config(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--value-ranking-loss-weight",
+                        "0.4",
+                        "--value-ranking-margin",
+                        "0.2",
+                    ]
+                )
+
+        training_config = run.call_args.kwargs["training_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(training_config.value_ranking_loss_weight, 0.4)
+        self.assertEqual(training_config.value_ranking_margin, 0.2)
+
     def test_neural_cli_explicit_options_follow_argparse_abbreviations_and_values(self) -> None:
         options = _explicit_cli_options(
             [
@@ -2580,6 +2609,34 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "mean")
         self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "mean")
 
+    def test_neural_cli_foundation_value_ranking_override_is_forwarded(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-value-ranking",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--value-ranking-loss-weight",
+                    "0.3",
+                    "--value-ranking-margin",
+                    "0.1",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["value_ranking_loss_weight"], 0.3)
+        self.assertEqual(recipe["resolved_options"]["value_ranking_margin"], 0.1)
+        self.assertEqual(argv[argv.index("--value-ranking-loss-weight") + 1], "0.3")
+        self.assertEqual(argv[argv.index("--value-ranking-margin") + 1], "0.1")
+
     def test_neural_cli_foundation_collector_advancement_override_respects_explicit_value(self) -> None:
         with (
             patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
@@ -2928,6 +2985,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "--require-heldout-selection",
                         "--calibration-data",
                         *expected_calibration_paths,
+                        "--value-ranking-loss-weight",
+                        "0.25",
+                        "--value-ranking-margin",
+                        "0.15",
                         "--json",
                     ]
                 )
@@ -2942,9 +3003,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertFalse(recipe["calibration_reuses_selection_paths"])
         self.assertEqual(recipe["selection_paths"], heldout_paths)
         self.assertEqual(recipe["calibration_paths"], expected_calibration_paths)
+        self.assertEqual(recipe["config"]["value_ranking_loss_weight"], 0.25)
+        self.assertEqual(recipe["config"]["value_ranking_margin"], 0.15)
         self.assertEqual(train_paths, manifest["iterations"][0]["training_rollout_paths"])
         self.assertEqual(selection_paths, heldout_paths)
         self.assertEqual(actual_calibration_paths, expected_calibration_paths)
+        self.assertEqual(argv[argv.index("--value-ranking-loss-weight") + 1], "0.25")
+        self.assertEqual(argv[argv.index("--value-ranking-margin") + 1], "0.15")
         self.assertNotIn("selection_paths_fallback_to_train", {warning["code"] for warning in recipe["warnings"]})
         self.assertNotIn("calibration_reuses_value_selection_data", {warning["code"] for warning in recipe["warnings"]})
         self.assertNotIn("calibration_overlaps_training_data", {warning["code"] for warning in recipe["warnings"]})
@@ -3084,6 +3149,20 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("--epochs must be positive", stderr.getvalue())
+
+    def test_neural_cli_foundation_value_tune_rejects_invalid_value_ranking_options(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-value-tune-plan",
+                    "runs/missing",
+                    "--value-ranking-loss-weight",
+                    "-0.1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--value-ranking-loss-weight must be non-negative", stderr.getvalue())
 
     def test_neural_cli_foundation_value_tune_can_require_heldout_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3726,6 +3805,44 @@ class NeuralSelfPlayTest(unittest.TestCase):
             # it, so checking .exists() after the `with` exits would always fail (the dir is gone).
             self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
             self.assertIsNotNone(result.iterations[0].benchmark)
+
+    def test_value_ranking_loss_uses_pairwise_return_ordering(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros((3, 9), dtype=torch.float32, requires_grad=True),
+            value=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, requires_grad=True),
+            opponent_action_logits=torch.zeros((3, 9), dtype=torch.float32, requires_grad=True),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones((3, 9), dtype=torch.bool),
+            "action_indices": torch.zeros(3, dtype=torch.long),
+            "returns": torch.tensor([1.0, 0.0, -1.0], dtype=torch.float32),
+            "ppo_advantages": torch.zeros(3, dtype=torch.float32),
+            "ppo_advantage_mask": torch.zeros(3, dtype=torch.bool),
+            "ppo_value_targets": torch.zeros(3, dtype=torch.float32),
+            "ppo_value_target_mask": torch.zeros(3, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(3, dtype=torch.long),
+            "opponent_action_mask": torch.zeros(3, dtype=torch.bool),
+            "action_probabilities": torch.ones(3, dtype=torch.float32),
+            "action_probability_mask": torch.zeros(3, dtype=torch.bool),
+        }
+        config = TransformerTrainingConfig(
+            objective="value-only",
+            freeze_non_value_parameters=True,
+            value_ranking_loss_weight=0.5,
+            value_ranking_margin=0.1,
+        )
+
+        loss, pieces = _transformer_loss(output, tensors, config)
+
+        self.assertEqual(pieces["value_ranking_pairs"], 3)
+        self.assertGreater(pieces["value_ranking_loss"], 0.0)
+        self.assertGreater(float(loss.detach().item()), pieces["value_loss"])
 
 
 def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict | None = None) -> None:

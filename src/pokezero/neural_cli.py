@@ -222,6 +222,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
     )
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
+    train.add_argument(
+        "--value-ranking-loss-weight",
+        type=float,
+        default=0.0,
+        help="Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive.",
+    )
+    train.add_argument(
+        "--value-ranking-margin",
+        type=float,
+        default=0.0,
+        help="Non-negative margin for --value-ranking-loss-weight pairwise value ordering.",
+    )
     train.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
     train.add_argument(
         "--switch-action-loss-weight",
@@ -748,6 +760,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
     )
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
+    iterate.add_argument(
+        "--value-ranking-loss-weight",
+        type=float,
+        default=0.0,
+        help="Optional pairwise value-ranking loss weight. Optimizes leaf ordering for search when positive.",
+    )
+    iterate.add_argument(
+        "--value-ranking-margin",
+        type=float,
+        default=0.0,
+        help="Non-negative margin for --value-ranking-loss-weight pairwise value ordering.",
+    )
     iterate.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
     iterate.add_argument(
         "--switch-action-loss-weight",
@@ -1022,6 +1046,18 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help="Override the variant's opponent-action auxiliary loss weight.",
     )
     parser.add_argument(
+        "--value-ranking-loss-weight",
+        type=float,
+        default=None,
+        help="Opt into pairwise value-ranking loss for the nested neural iterate command.",
+    )
+    parser.add_argument(
+        "--value-ranking-margin",
+        type=float,
+        default=None,
+        help="Override the pairwise value-ranking margin for the nested neural iterate command.",
+    )
+    parser.add_argument(
         "--opponent-policy",
         action="append",
         default=None,
@@ -1070,6 +1106,18 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
     parser.add_argument("--epochs", type=int, default=3, help="Value-only fine-tune epochs.")
     parser.add_argument("--batch-size", type=int, default=64, help="Value-only fine-tune batch size.")
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Value-only fine-tune AdamW learning rate.")
+    parser.add_argument(
+        "--value-ranking-loss-weight",
+        type=float,
+        default=0.0,
+        help="Optional pairwise value-ranking loss weight for value-only fine-tuning.",
+    )
+    parser.add_argument(
+        "--value-ranking-margin",
+        type=float,
+        default=0.0,
+        help="Non-negative margin for --value-ranking-loss-weight pairwise value ordering.",
+    )
     parser.add_argument(
         "--value-selection-metric",
         choices=VALUE_SELECTION_METRICS,
@@ -1187,6 +1235,8 @@ def _train(args: argparse.Namespace) -> int:
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
+        value_ranking_loss_weight=args.value_ranking_loss_weight,
+        value_ranking_margin=args.value_ranking_margin,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         switch_action_loss_weight=args.switch_action_loss_weight,
         action_family_loss_weight=args.action_family_loss_weight,
@@ -1276,6 +1326,11 @@ def _train(args: argparse.Namespace) -> int:
         )
         if metrics.value_loss is not None:
             line += f" value_loss={metrics.value_loss:.6f}"
+        if metrics.value_ranking_loss is not None:
+            line += (
+                f" value_ranking_loss={metrics.value_ranking_loss:.6f} "
+                f"value_ranking_pairs={metrics.value_ranking_pairs}"
+            )
         if metrics.opponent_loss is not None:
             line += (
                 f" opponent_loss={metrics.opponent_loss:.6f} "
@@ -2208,6 +2263,8 @@ def _iterate(args: argparse.Namespace) -> int:
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
+        value_ranking_loss_weight=args.value_ranking_loss_weight,
+        value_ranking_margin=args.value_ranking_margin,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         switch_action_loss_weight=args.switch_action_loss_weight,
         action_family_loss_weight=args.action_family_loss_weight,
@@ -3327,6 +3384,10 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         str(args.batch_size),
         "--learning-rate",
         str(args.learning_rate),
+        "--value-ranking-loss-weight",
+        str(args.value_ranking_loss_weight),
+        "--value-ranking-margin",
+        str(args.value_ranking_margin),
         "--value-selection-data",
         *[str(path) for path in selection_paths],
         "--value-selection-metric",
@@ -3366,6 +3427,8 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
+            "value_ranking_loss_weight": args.value_ranking_loss_weight,
+            "value_ranking_margin": args.value_ranking_margin,
             "value_selection_metric": args.value_selection_metric,
             "value_calibration_batch_size": args.value_calibration_batch_size,
             "value_calibration_bins": args.value_calibration_bins,
@@ -3427,6 +3490,10 @@ def _validate_foundation_value_tune_args(args: argparse.Namespace) -> None:
         raise ValueError("--batch-size must be positive.")
     if args.learning_rate <= 0.0 or not math.isfinite(args.learning_rate):
         raise ValueError("--learning-rate must be a positive finite value.")
+    if args.value_ranking_loss_weight < 0.0:
+        raise ValueError("--value-ranking-loss-weight must be non-negative.")
+    if args.value_ranking_margin < 0.0:
+        raise ValueError("--value-ranking-margin must be non-negative.")
     if args.value_calibration_batch_size <= 0:
         raise ValueError("--value-calibration-batch-size must be positive.")
     if args.value_calibration_bins <= 0:
@@ -3509,6 +3576,10 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
+    if resolved["value_ranking_loss_weight"] is not None:
+        argv.extend(["--value-ranking-loss-weight", str(resolved["value_ranking_loss_weight"])])
+    if resolved["value_ranking_margin"] is not None:
+        argv.extend(["--value-ranking-margin", str(resolved["value_ranking_margin"])])
     for opponent_policy in _sequence_or_empty(resolved["opponent_policies"]):
         argv.extend(["--opponent-policy", str(opponent_policy)])
     if resolved["temporal_aggregator"] is not None:
@@ -3569,6 +3640,8 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
             profile["value_selection_heldout_games"],
         ),
         "opponent_action_loss_weight": opponent_action_loss_weight,
+        "value_ranking_loss_weight": args.value_ranking_loss_weight,
+        "value_ranking_margin": args.value_ranking_margin,
         "temporal_aggregator": temporal_aggregator,
         "opponent_policies": list(opponent_policies) if opponent_policies is not None else None,
         "collector_advancement_mode": args.collector_advancement_mode,
@@ -3580,6 +3653,10 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("value-selection-heldout-games must be non-negative.")
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
+    if resolved["value_ranking_loss_weight"] is not None and float(resolved["value_ranking_loss_weight"]) < 0.0:
+        raise ValueError("value-ranking-loss-weight must be non-negative.")
+    if resolved["value_ranking_margin"] is not None and float(resolved["value_ranking_margin"]) < 0.0:
+        raise ValueError("value-ranking-margin must be non-negative.")
     if resolved["temporal_aggregator"] is not None and resolved["temporal_aggregator"] not in {"mean", "gru"}:
         raise ValueError("temporal-aggregator must be 'mean' or 'gru'.")
     if (
