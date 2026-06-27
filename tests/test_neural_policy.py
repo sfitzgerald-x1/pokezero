@@ -449,6 +449,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(action_family_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "switch_target_loss_weight"):
             TransformerTrainingConfig(switch_target_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "hp_delta_return_weight"):
+            TransformerTrainingConfig(hp_delta_return_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "faint_delta_return_weight"):
+            TransformerTrainingConfig(faint_delta_return_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "turn_penalty_after"):
+            TransformerTrainingConfig(turn_penalty_after=-1)
+        with self.assertRaisesRegex(ValueError, "turn_penalty"):
+            TransformerTrainingConfig(turn_penalty=-0.1)
+        with self.assertRaisesRegex(ValueError, "turn_penalty_after"):
+            TransformerTrainingConfig(turn_penalty=0.1)
         with self.assertRaisesRegex(ValueError, "objective"):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
@@ -1985,6 +1995,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "/tmp/showdown",
                         "--temporal-aggregator",
                         "gru",
+                        "--hp-delta-return-weight",
+                        "0.2",
+                        "--faint-delta-return-weight",
+                        "0.4",
+                        "--turn-penalty-after",
+                        "180",
+                        "--turn-penalty",
+                        "0.01",
                         "--value-calibration-data",
                         "calibration-rollouts.jsonl",
                         "--value-calibration-out",
@@ -2001,6 +2019,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(train.call_args.args[0], [Path("train-rollouts.jsonl")])
         self.assertEqual(train.call_args.kwargs["model_config"].temporal_aggregator, "gru")
+        self.assertEqual(train.call_args.kwargs["training_config"].hp_delta_return_weight, 0.2)
+        self.assertEqual(train.call_args.kwargs["training_config"].faint_delta_return_weight, 0.4)
+        self.assertEqual(train.call_args.kwargs["training_config"].turn_penalty_after, 180)
+        self.assertEqual(train.call_args.kwargs["training_config"].turn_penalty, 0.01)
         self.assertEqual(save.call_args.args[0], checkpoint_path)
         self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("calibration-rollouts.jsonl")])
         self.assertEqual(evaluate.call_args.kwargs["batch_size"], 9)
@@ -2313,6 +2335,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "0.75",
                     "--switch-target-loss-weight",
                     "0.5",
+                    "--hp-delta-return-weight",
+                    "0.2",
+                    "--faint-delta-return-weight",
+                    "0.4",
+                    "--turn-penalty-after",
+                    "180",
+                    "--turn-penalty",
+                    "0.01",
                     "--policy-id",
                     "entity-cli",
                     "--promotion-registry",
@@ -2369,6 +2399,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].switch_action_loss_weight, 1.5)
         self.assertEqual(kwargs["training_config"].action_family_loss_weight, 0.75)
         self.assertEqual(kwargs["training_config"].switch_target_loss_weight, 0.5)
+        self.assertEqual(kwargs["training_config"].hp_delta_return_weight, 0.2)
+        self.assertEqual(kwargs["training_config"].faint_delta_return_weight, 0.4)
+        self.assertEqual(kwargs["training_config"].turn_penalty_after, 180)
+        self.assertEqual(kwargs["training_config"].turn_penalty, 0.01)
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)

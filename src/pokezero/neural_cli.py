@@ -100,6 +100,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     train.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
+    train.add_argument(
+        "--hp-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative HP differential changes.",
+    )
+    train.add_argument(
+        "--faint-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative faint differential changes.",
+    )
+    train.add_argument(
+        "--turn-penalty-after",
+        type=int,
+        default=None,
+        help="Optional turn index at which to start applying a per-decision shaped return penalty.",
+    )
+    train.add_argument(
+        "--turn-penalty",
+        type=float,
+        default=0.0,
+        help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
+    )
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     train.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
     train.add_argument(
@@ -516,6 +540,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     iterate.add_argument("--capped-terminal-value", type=float, default=-0.25, help="Return assigned to each player in capped games.")
+    iterate.add_argument(
+        "--hp-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative HP differential changes.",
+    )
+    iterate.add_argument(
+        "--faint-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative faint differential changes.",
+    )
+    iterate.add_argument(
+        "--turn-penalty-after",
+        type=int,
+        default=None,
+        help="Optional turn index at which to start applying a per-decision shaped return penalty.",
+    )
+    iterate.add_argument(
+        "--turn-penalty",
+        type=float,
+        default=0.0,
+        help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
+    )
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     iterate.add_argument("--opponent-action-loss-weight", type=float, default=0.1, help="Opponent-action auxiliary loss weight.")
     iterate.add_argument(
@@ -690,6 +738,10 @@ def _train(args: argparse.Namespace) -> int:
         window_size=args.window_size,
         discount=args.discount,
         capped_terminal_value=args.capped_terminal_value,
+        hp_delta_return_weight=args.hp_delta_return_weight,
+        faint_delta_return_weight=args.faint_delta_return_weight,
+        turn_penalty_after=args.turn_penalty_after,
+        turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         switch_action_loss_weight=args.switch_action_loss_weight,
@@ -1385,6 +1437,10 @@ def _iterate(args: argparse.Namespace) -> int:
         window_size=args.window_size,
         discount=args.discount,
         capped_terminal_value=args.capped_terminal_value,
+        hp_delta_return_weight=args.hp_delta_return_weight,
+        faint_delta_return_weight=args.faint_delta_return_weight,
+        turn_penalty_after=args.turn_penalty_after,
+        turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
         switch_action_loss_weight=args.switch_action_loss_weight,
