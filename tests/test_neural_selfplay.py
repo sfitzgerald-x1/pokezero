@@ -2288,11 +2288,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["resolved_options"]["evaluation_games"], 8)
         self.assertEqual(recipe["resolved_options"]["value_selection_heldout_games"], 4)
         self.assertIsNone(recipe["resolved_options"]["opponent_action_loss_weight"])
+        self.assertIsNone(recipe["resolved_options"]["temporal_aggregator"])
         self.assertIn("iterate", argv)
         self.assertIn("--experiment-preset", argv)
         self.assertIn("foundation-arms-race", argv)
         self.assertIn("--value-selection-heldout-games", argv)
         self.assertNotIn("--opponent-action-loss-weight", argv)
+        self.assertNotIn("--temporal-aggregator", argv)
         self.assertIn("--json", argv)
 
     def test_neural_cli_foundation_opponent_signal_variant_sets_auxiliary_loss(self) -> None:
@@ -2319,8 +2321,66 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["variant"], "opponent-signal")
         self.assertIn("opponent-action", recipe["variant_description"])
         self.assertEqual(recipe["resolved_options"]["opponent_action_loss_weight"], 1.0)
+        self.assertIsNone(recipe["resolved_options"]["temporal_aggregator"])
         self.assertIn("--opponent-action-loss-weight", argv)
         self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "1.0")
+        self.assertNotIn("--temporal-aggregator", argv)
+
+    def test_neural_cli_foundation_temporal_gru_variant_sets_aggregator(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-gru",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "temporal-gru",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["variant"], "temporal-gru")
+        self.assertIn("GRU temporal aggregator", recipe["variant_description"])
+        self.assertIsNone(recipe["resolved_options"]["opponent_action_loss_weight"])
+        self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "gru")
+        self.assertNotIn("--opponent-action-loss-weight", argv)
+        self.assertIn("--temporal-aggregator", argv)
+        self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "gru")
+
+    def test_neural_cli_foundation_opponent_signal_gru_variant_combines_levers(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-opponent-signal-gru",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "opponent-signal-gru",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["variant"], "opponent-signal-gru")
+        self.assertEqual(recipe["resolved_options"]["opponent_action_loss_weight"], 1.0)
+        self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "gru")
+        self.assertEqual(argv[argv.index("--opponent-action-loss-weight") + 1], "1.0")
+        self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "gru")
 
     def test_neural_cli_foundation_plan_text_prints_variant(self) -> None:
         with (
@@ -2343,6 +2403,32 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("variant: opponent-signal", output)
         self.assertIn("--opponent-action-loss-weight 1.0", output)
+
+    def test_neural_cli_foundation_temporal_aggregator_override_respects_explicit_value(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-gru-override",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "temporal-gru",
+                    "--temporal-aggregator",
+                    "mean",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["temporal_aggregator"], "mean")
+        self.assertEqual(argv[argv.index("--temporal-aggregator") + 1], "mean")
 
     def test_neural_cli_foundation_opponent_signal_variant_respects_explicit_loss_override(self) -> None:
         with (
