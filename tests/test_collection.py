@@ -163,6 +163,7 @@ class MetadataPolicy:
         metadata = {
             "policy_family": "root-puct-search",
             "root_puct_fallback": False,
+            "root_puct_selection_mode": "puct",
             "root_puct_candidate_count": 3,
             "root_puct_selected_value": 0.5,
             "root_puct_selected_score": 0.75,
@@ -333,6 +334,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_score"], 0.75)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_checks"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_uses"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_selection_modes"], {"puct": 2})
         self.assertEqual(summary["random-legal"]["decisions"], 2)
         self.assertNotIn("root_puct_searches", summary["random-legal"])
 
@@ -405,6 +407,7 @@ class CollectionTest(unittest.TestCase):
             rollout_config=RolloutConfig(max_decision_rounds=5),
             seed_start=20,
             matchups=(
+                BenchmarkMatchup("root-puct vs random", MetadataPolicy(), RandomLegalPolicy()),
                 BenchmarkMatchup(
                     "fallback-root-puct vs random",
                     MetadataPolicy(policy_id="root-puct-fallback", fallback=True),
@@ -421,6 +424,7 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("root-puct diagnostics:", output)
         self.assertIn("gate", output)
         self.assertIn("root-puct-fallback", output)
+        self.assertIn("selection_modes:", output)
         self.assertIn("fallback_reasons:", output)
         self.assertIn("search failed: boom=1", output)
 

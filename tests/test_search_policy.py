@@ -191,6 +191,49 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.metadata["root_puct_prior_action"], 0)
         self.assertEqual(step.metadata["root_puct_minimum_value_improvement"], 3.0)
 
+    def test_root_puct_policy_default_selection_mode_uses_puct_score(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=4.0,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=96, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 0)
+        self.assertEqual(step.metadata["root_puct_selection_mode"], "puct")
+        self.assertGreater(step.metadata["root_puct_selected_score"], 1.0)
+
+    def test_root_puct_policy_value_selection_mode_uses_highest_value_branch(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=4.0,
+            selection_mode="value",
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=96, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 1)
+        self.assertEqual(step.metadata["root_puct_selection_mode"], "value")
+        self.assertEqual(step.metadata["root_puct_selected_value"], 1.0)
+
     def test_root_puct_policy_value_gate_keeps_search_action_with_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
@@ -222,6 +265,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 minimum_value_improvement=-0.1,
+            )
+
+    def test_root_puct_policy_rejects_invalid_selection_mode(self) -> None:
+        with self.assertRaisesRegex(ValueError, "selection_mode"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                selection_mode="unknown",
             )
 
     def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:

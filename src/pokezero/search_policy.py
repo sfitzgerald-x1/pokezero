@@ -88,8 +88,11 @@ class RootPUCTSearchPolicy:
     fallback_policy: Policy = field(default_factory=RandomLegalPolicy)
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
+    selection_mode: str = "puct"
 
     def __post_init__(self) -> None:
+        if self.selection_mode not in {"puct", "value"}:
+            raise ValueError("selection_mode must be 'puct' or 'value'.")
         if self.minimum_value_improvement is None:
             return
         if self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement):
@@ -170,7 +173,7 @@ class RootPUCTSearchPolicy:
             if callable(close):
                 close()
 
-        search_best = search.best_candidate
+        search_best = _selected_candidate(search.candidates, mode=self.selection_mode)
         best = search_best
         gate_metadata = {}
         if self.minimum_value_improvement is not None:
@@ -198,6 +201,7 @@ class RootPUCTSearchPolicy:
                 "policy_family": "root-puct-search",
                 "root_puct_fallback": False,
                 "root_puct_cpuct": self.cpuct,
+                "root_puct_selection_mode": self.selection_mode,
                 "root_puct_selected_value": best.value,
                 "root_puct_selected_score": best.score,
                 "root_puct_candidate_count": len(search.candidates),
@@ -254,6 +258,28 @@ def _best_prior_candidate(
     if not candidates:
         raise ValueError("root PUCT search produced no candidates.")
     return max(candidates, key=lambda candidate: (candidate.prior, -candidate.action_index))
+
+
+def _best_value_candidate(
+    candidates: tuple[PUCTBranchSearchCandidate, ...],
+) -> PUCTBranchSearchCandidate:
+    if not candidates:
+        raise ValueError("root PUCT search produced no candidates.")
+    return max(candidates, key=lambda candidate: (candidate.value, -candidate.action_index))
+
+
+def _selected_candidate(
+    candidates: tuple[PUCTBranchSearchCandidate, ...],
+    *,
+    mode: str,
+) -> PUCTBranchSearchCandidate:
+    if mode == "puct":
+        if not candidates:
+            raise ValueError("root PUCT search produced no candidates.")
+        return max(candidates, key=lambda candidate: (candidate.score, candidate.value, -candidate.action_index))
+    if mode == "value":
+        return _best_value_candidate(candidates)
+    raise ValueError("selection mode must be 'puct' or 'value'.")
 
 
 @dataclass(frozen=True)

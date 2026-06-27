@@ -162,6 +162,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     root_puct_play.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
     root_puct_play.add_argument(
+        "--selection-mode",
+        choices=("puct", "value"),
+        default="puct",
+        help=(
+            "Root candidate selector for the search policy. 'puct' preserves current PUCT-score "
+            "selection; 'value' selects the highest value-evaluated branch from the same candidates."
+        ),
+    )
+    root_puct_play.add_argument(
         "--min-value-improvement",
         type=float,
         default=None,
@@ -646,6 +655,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             policy_id=search_policy_id,
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
+            selection_mode=args.selection_mode,
         )
 
     opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))
