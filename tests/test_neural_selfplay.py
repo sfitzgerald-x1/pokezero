@@ -2506,6 +2506,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 value_correlation=0.31,
                 value_sign=0.61,
                 value_ece=0.12,
+                # The gate should prefer the manifest-derived max-damage row over this fallback.
                 max_damage_win_rate=0.11,
             )
             stronger_summary = _write_foundation_summary(
@@ -2515,6 +2516,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 value_correlation=0.36,
                 value_sign=0.53,
                 value_ece=0.20,
+                # The gate should prefer the manifest-derived max-damage row over this fallback.
                 max_damage_win_rate=0.12,
             )
 
@@ -2577,6 +2579,49 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("quality_gate:", output)
         self.assertIn("status=fail", output)
         self.assertIn("min_max_damage_win_rate", output)
+
+    def test_neural_cli_foundation_compare_rejects_out_of_range_quality_thresholds(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-compare",
+                    "runs/missing",
+                    "--min-max-damage-win-rate",
+                    "30",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--min-max-damage-win-rate must be in range [0.0, 1.0]", stderr.getvalue())
+
+    def test_neural_cli_foundation_compare_allows_negative_pearson_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "weak" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant="baseline",
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.25,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(summary_path),
+                        "--min-value-pearson-correlation",
+                        "-0.1",
+                        "--json",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["entries"][0]["quality_gate"]["status"], "pass")
 
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(

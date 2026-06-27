@@ -528,7 +528,9 @@ python -m pokezero.neural_cli foundation-compare \
 
 The quality gate annotates each row with pass/fail and failed check names. `--require-quality-pass`
 returns exit `2` if every loaded row fails the configured gate; load errors still return exit `1`.
-These thresholds are experiment-local guardrails, not roadmap-wide success criteria.
+Exit `0` means at least one loaded row passed, not that every compared arm passed; scripts that care
+about a specific arm should inspect that row's `quality_gate.status` in `--json` output. These
+thresholds are experiment-local guardrails, not roadmap-wide success criteria.
 
 Use `--variant opponent-signal` as the H3 ablation arm when testing whether stronger
 opponent-action auxiliary supervision improves the foundation policy/value representation. The

@@ -2372,20 +2372,50 @@ def _foundation_quality_gate_config_from_args(args: argparse.Namespace) -> dict[
         raise ValueError("--require-quality-pass requires at least one quality threshold.")
     if args.min_max_damage_games is not None and args.min_max_damage_games <= 0:
         raise ValueError("--min-max-damage-games must be positive.")
-    for name in (
-        "min_max_damage_win_rate",
-        "min_value_pearson_correlation",
-        "min_value_sign_accuracy",
-        "max_value_expected_calibration_error",
-    ):
-        value = thresholds[name]
-        if value is not None and float(value) < 0.0:
-            raise ValueError(f"--{name.replace('_', '-')} must be non-negative.")
+    _validate_foundation_quality_range(
+        thresholds["min_max_damage_win_rate"],
+        name="min_max_damage_win_rate",
+        lower=0.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["min_value_pearson_correlation"],
+        name="min_value_pearson_correlation",
+        lower=-1.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["min_value_sign_accuracy"],
+        name="min_value_sign_accuracy",
+        lower=0.0,
+        upper=1.0,
+    )
+    _validate_foundation_quality_range(
+        thresholds["max_value_expected_calibration_error"],
+        name="max_value_expected_calibration_error",
+        lower=0.0,
+        upper=None,
+    )
     return {
         "configured": configured,
         "require_quality_pass": bool(args.require_quality_pass),
         **thresholds,
     }
+
+
+def _validate_foundation_quality_range(
+    value: object,
+    *,
+    name: str,
+    lower: float,
+    upper: float | None,
+) -> None:
+    if value is None:
+        return
+    parsed = float(value)
+    if parsed < lower or (upper is not None and parsed > upper):
+        range_text = f"[{lower}, {upper}]" if upper is not None else f">= {lower}"
+        raise ValueError(f"--{name.replace('_', '-')} must be in range {range_text}.")
 
 
 def _foundation_compare_exit_code(
