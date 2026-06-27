@@ -53,6 +53,11 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   opponent-action priors such as the transformer's auxiliary opponent-action head.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
+  A first local smoke run against `max-damage` proved the full-game path executes end to end with a
+  current-schema checkpoint: 4 total games at `--games 1`, active-search decisions around
+  3-4 decisions/s, and no runtime crash. This is harness evidence only, not strength evidence: the
+  tiny 4-game-trained smoke checkpoint lost to `max-damage`, and one root-PUCT orientation capped at
+  the 50-decision smoke limit.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
@@ -93,6 +98,10 @@ require a strong net — search improves any decent one — so it should not be 
 - **M0 gate:** on a cheap/early net, net+MCTS must clear ~0.60 vs max-damage (well past the 0.52
   plateau). If search does *not* move the needle here, scaling PPO will not save us — stop and
   rethink the operator (deeper search, better value head, DUCT) before spending fleet compute.
+  The first smoke measurement only validates the plumbing; the real M0 read still requires a
+  current-observation-schema checkpoint with meaningful strength. Older local checkpoints trained
+  before the latest observation features can fail with numeric-feature shape mismatches and should
+  be retrained or skipped for M0 evidence.
 - **M1 gate:** the per-iteration strength curve must *rise* over ≥10 league iterations; a multi-
   iteration flatline = stuck → lean on search and revisit league diversity + exploration.
 
