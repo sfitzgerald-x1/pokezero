@@ -117,6 +117,16 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   throughput stayed around 2.1-2.3 decisions/s. The sample is still too small for a strength claim,
   but the one-step and two-step probes now both point toward leaf depth/value-target quality as a
   better next M0 lever than more PUCT-score mixing.
+  A larger same-seed sweep using the new `--leaf-rollout-rounds-sweep 0/1/2` harness then ran
+  `--games 8` per mirrored matchup against `max-damage` on a fresh seed range. It preserved the
+  same direction but still did not clear M0: raw scored 3/16, leaf0 scored 4/16, leaf1 scored 4/16,
+  and leaf2 scored 5/16, with zero capped games and zero search fallbacks in every searched row.
+  Leaf2 ran 436 root-PUCT searches at roughly 2.3-2.4 active-search decisions/s; candidate leaf
+  diagnostics recorded 23 immediate terminal branches, 51 one-round continuations, 2,473 two-round
+  continuations, 101 rollout-terminal candidate leaves, and 2,423 truncated value-head leaves. This
+  strengthens the case that deeper leaf evaluation is the right M0 lever, but the absolute score
+  remains much too low; next work should either run a larger depth sweep for variance reduction or
+  improve the leaf evaluator/opponent model before spending larger training compute.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
