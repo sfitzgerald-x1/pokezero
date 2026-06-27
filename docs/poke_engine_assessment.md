@@ -116,9 +116,37 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
    against a `poke_engine` state. The runner submits one pair of choices and returns at the next
    boundary, so matrix rows that create a faint followed by a forced-switch request will need a
    follow-up replacement driver before they can be fully resolved.
-   **Remaining:** drive the curated fixtures through the poke-engine adapter (step 2) and assert
-   instruction outcome equivalence across the full matrix above; engine outcome equivalence is still
-   unproven.
+
+   **First damage comparator exists and currently FAILS to match on poke-engine 0.0.47.**
+   `src/pokezero/poke_engine_outcomes.py` adds the first engine-vs-Showdown one-turn outcome
+   comparator. It builds a poke-engine `BattleSpec` from the **real opening request** of a
+   `OneTurnFixtureResult` (species/level from `details`, hp/maxhp from `condition`, the five battle
+   stats from `side.pokemon[].stats`, moves from the request, ability/item when present, and types
+   from the existing Showdown dex loader, normalized with the shared id helper), parses the seeded
+   Showdown turn into an observed final active HP tuple, enumerates poke-engine instruction branches
+   for the same two move choices via `generate_instructions`, applies each branch with
+   `apply_instructions` to read its final active HP, and returns a structured `OutcomeComparison`
+   (`supported`, `matched`, `showdown_final_hp`, `engine_final_hp_outcomes`, per-branch
+   percentages/descriptions, `reason`/`notes`, and a serializable `to_dict()`).
+   `run_charmander_squirtle_outcome_comparison(...)` wires the Showdown one-turn runner and the engine
+   comparison together for the curated Charmander/Ember vs. Squirtle/Water Gun damage smoke when both
+   a built local Showdown checkout and poke-engine are available.
+
+   On poke-engine 0.0.47 this comparator **reports a mismatch**: Showdown's seeded turn ends at
+   Charmander 127/219 and Squirtle 209/229, while the engine's branches from the same request-derived
+   stat state produce tuples like `(122, 207)` (most likely), `(25, 207)`, `(122, 179)`, etc. — the
+   observed `(127, 209)` appears in no engine branch (`matched=False`). The damage numbers are close
+   but not exact, so **one-turn outcome equivalence remains unproven/failed for now** on this fixture.
+   This is honest feasibility evidence, not an adoption gate; it is fixture-only and is not wired into
+   rollout/training/search/benchmarks/self-play. Unit tests cover request->`BattleSpec`/stat extraction
+   (no wheel required) and the matching logic with a fake engine/branches; the optional real
+   integration test runs only with a built Showdown checkout + node + poke-engine and asserts the
+   comparator executes and reports the known mismatch (it does not fake a pass).
+
+   **Remaining:** extend the comparator across the full matrix above (status, switch, forced switch,
+   faint, Spikes, Toxic, Substitute, Hidden Power, Intimidate, Flash Fire), and reconcile the Gen 3
+   damage/data/mechanics difference (or pin an engine build/config that matches) before engine outcome
+   equivalence can be considered proven; today it is unproven.
 5. Benchmark apply/reverse branch throughput against the current replay-from-root branch harness.
 6. If equivalence and speed are good, add an optional search backend that keeps Showdown as final
    benchmark/evaluation truth.
