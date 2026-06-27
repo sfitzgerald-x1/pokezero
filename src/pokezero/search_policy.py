@@ -248,6 +248,7 @@ class RootPUCTSearchPolicy:
             action_index=decision.action_index,
             policy_id=self.policy_id,
             action_probability=decision.action_probability,
+            value_estimate=decision.value_estimate,
             metadata={
                 **dict(decision.metadata),
                 "policy_family": "root-puct-search",
@@ -395,6 +396,7 @@ class RootPUCTSearchPolicy:
             action_index=decision.action_index,
             policy_id=self.policy_id,
             action_probability=decision.action_probability,
+            value_estimate=decision.value_estimate,
             metadata={
                 **dict(decision.metadata),
                 "policy_family": "root-puct-search",

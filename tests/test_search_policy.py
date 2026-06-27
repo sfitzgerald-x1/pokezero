@@ -30,12 +30,24 @@ def _observation(*legal_indices: int) -> PokeZeroObservationV0:
 
 
 class FixedPolicy:
-    def __init__(self, action_index: int, *, policy_id: str = "fixed") -> None:
+    def __init__(
+        self,
+        action_index: int,
+        *,
+        policy_id: str = "fixed",
+        value_estimate: float | None = None,
+    ) -> None:
         self.action_index = action_index
         self.policy_id = policy_id
+        self.value_estimate = value_estimate
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
-        return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
+        return PolicyDecision(
+            action_index=self.action_index,
+            policy_id=self.policy_id,
+            action_probability=1.0,
+            value_estimate=self.value_estimate,
+        )
 
 
 class ResettableFixedPolicy(FixedPolicy):
@@ -625,7 +637,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             value_fn=lambda history: 0.0,
             prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
             opponent_action_planner=lambda context, rng: {"p2": 99},
-            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed", value_estimate=0.25),
             allow_fallback=True,
             cpuct=0.0,
         )
@@ -641,6 +653,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertTrue(step.metadata["root_puct_fallback"])
         self.assertIn("illegal action for p2", step.metadata["root_puct_fallback_reason"])
         self.assertEqual(step.metadata["fallback_policy_id"], "fallback-fixed")
+        self.assertEqual(step.value_estimate, 0.25)
 
     def test_root_puct_policy_can_fallback_when_context_is_missing(self) -> None:
         policy = RootPUCTSearchPolicy(

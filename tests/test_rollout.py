@@ -160,6 +160,23 @@ class RolloutDriverTest(unittest.TestCase):
         else:
             self.assertEqual(step.action_probability, 0.25)
 
+    def test_rollout_preserves_policy_value_estimate(self) -> None:
+        class ValueEstimatePolicy:
+            policy_id = "value-estimate"
+
+            def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+                return PolicyDecision(action_index=0, policy_id=self.policy_id, value_estimate=0.42)
+
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": ValueEstimatePolicy()},
+        )
+
+        result = driver.run(seed=1)
+
+        self.assertEqual(result.trajectory.steps[0].value_estimate, 0.42)
+
     def test_rollout_dispatches_context_aware_policy_without_opponent_private_observations(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1",), ("p1",)], terminal_after_steps=2)
         policy = ContextRecordingPolicy(action_index=0)

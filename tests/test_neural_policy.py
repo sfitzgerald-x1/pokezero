@@ -435,6 +435,92 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertGreater(priors[1], priors[0])
         self.assertEqual(priors[2], 0.0)
 
+    def test_transformer_policy_records_value_estimate_on_decision(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=2,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class FakePolicyModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                logits = torch.zeros(1, 9)
+                logits[0, 1] = 2.0
+                return SimpleNamespace(policy_logits=logits, value=torch.tensor([0.37]))
+
+        policy = TransformerSoftmaxPolicy(
+            model=FakePolicyModel(),
+            result=TransformerTrainingResult(
+                model_config=config,
+                training_config=TransformerTrainingConfig(window_size=2),
+                epochs=(),
+                value_calibration_transform=ValueCalibrationTransform(scale=2.0, bias=0.0),
+            ),
+        )
+
+        decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertAlmostEqual(decision.value_estimate, 0.37, places=6)
+
+    def test_transformer_policy_drops_non_finite_value_estimate(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="fixture",
+            category_vocab=("fixture",),
+            category_oov_buckets=1,
+            window_size=2,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            token_count=spec.token_count,
+            embedding_dim=4,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=8,
+        )
+
+        class NaNValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                logits = torch.zeros(1, 9)
+                logits[0, 1] = 2.0
+                return SimpleNamespace(policy_logits=logits, value=torch.tensor([float("nan")]))
+
+        policy = TransformerSoftmaxPolicy(
+            model=NaNValueModel(),
+            result=TransformerTrainingResult(
+                model_config=config,
+                training_config=TransformerTrainingConfig(window_size=2),
+                epochs=(),
+            ),
+        )
+
+        decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertIsNone(decision.value_estimate)
+        self.assertEqual(decision.metadata["value_estimate_dropped"], "non_finite")
+
     def test_transformer_training_config_validates_training_knobs(self) -> None:
         self.assertEqual(TransformerTrainingConfig().window_size, 4)
         with self.assertRaisesRegex(ValueError, "batch_size"):

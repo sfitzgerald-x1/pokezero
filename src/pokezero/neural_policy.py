@@ -747,6 +747,8 @@ class TransformerSoftmaxPolicy:
             action_index = greedy_action
         else:
             action_index = _sample_action(tuple(float(probabilities[index].item()) for index in range(ACTION_COUNT)), legal, rng)
+        raw_value_estimate = float(output.value[0].detach().cpu().item())
+        value_estimate = raw_value_estimate if math.isfinite(raw_value_estimate) else None
         return PolicyDecision(
             action_index=action_index,
             policy_id=str(self.policy_id),
@@ -758,12 +760,18 @@ class TransformerSoftmaxPolicy:
                 greedy_action=greedy_action,
                 exploration_epsilon=self.exploration_epsilon,
             ),
+            value_estimate=value_estimate,
             metadata={
                 "policy_family": "transformer-softmax",
                 "deterministic": self.deterministic,
                 "exploration_epsilon": self.exploration_epsilon,
                 "sampling_temperature": self.sampling_temperature,
                 "family_gated_selection": self.family_gated_selection,
+                **(
+                    {"value_estimate_dropped": "non_finite"}
+                    if value_estimate is None
+                    else {}
+                ),
             },
         )
 
