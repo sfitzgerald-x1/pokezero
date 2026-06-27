@@ -2329,13 +2329,20 @@ def _foundation_report(args: argparse.Namespace) -> int:
     if recipe:
         print(f"profile: {_format_manifest_value(recipe.get('profile'))}")
         print(f"run_dir: {_format_manifest_value(recipe.get('run_dir'))}")
-        print(f"manifest: {_format_manifest_value(recipe.get('manifest_path'))}")
+    print(f"manifest: {_format_manifest_value(recipe.get('manifest_path'))}")
     print(f"foundation_manifest_available: {_format_bool(foundation.get('manifest_available'))}")
     print(f"latest_checkpoint: {_format_manifest_value(foundation.get('latest_checkpoint_path'))}")
     print(f"foundation_evidence_status: {_format_manifest_value(readiness.get('foundation_evidence_status'))}")
+    max_damage = _optional_mapping(readiness.get("max_damage_yardstick"))
+    if max_damage.get("available") is True:
+        print(f"max_damage_yardstick: {_format_foundation_yardstick_compact(max_damage)}")
+    else:
+        print("max_damage_yardstick: missing")
     best_max_damage = _optional_mapping(readiness.get("best_max_damage_yardstick"))
     if best_max_damage.get("available") is True:
         print(f"best_max_damage_yardstick: {_format_foundation_yardstick_compact(best_max_damage)}")
+    else:
+        print("best_max_damage_yardstick: missing")
     reasons = readiness.get("reasons")
     if isinstance(reasons, list) and reasons:
         print(f"reasons: {', '.join(str(reason) for reason in reasons)}")
@@ -2603,6 +2610,8 @@ def _foundation_compare_entry(path: Path) -> dict[str, Any]:
     manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
     iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ()))) if manifest else ()
     curves = _benchmark_opponent_curves(iterations) if iterations else {}
+    if iterations:
+        readiness = _foundation_readiness_report(iterations)
     return {
         "label": _foundation_compare_label(summary_path, recipe),
         "summary_path": str(summary_path),
@@ -2720,15 +2729,17 @@ def _foundation_compare_yardstick_payload(
     *,
     source: str,
 ) -> dict[str, Any]:
+    games = _int_or_none(entry.get("games"))
     return {
         "available": True,
         "opponent_policy_id": policy_id,
         "iteration": _int_or_none(entry.get("iteration")),
         "win_rate": _float_or_none(entry.get("win_rate")),
-        "games": _int_or_none(entry.get("games")),
+        "games": games,
         "capped_games": _int_or_none(entry.get("capped_games")) or 0,
         "checkpoint_path": _string_or_none(entry.get("checkpoint_path")),
         "checkpoint_policy_spec": _string_or_none(entry.get("checkpoint_policy_spec")),
+        "sample_games_ready": games is not None and games >= FOUNDATION_MILESTONE_BENCHMARK_GAMES,
         "source": source,
     }
 
@@ -3296,6 +3307,12 @@ def _best_curve_entry(
     entries = curves.get(opponent_policy_id)
     if not entries:
         return None
+    sample_sized_entries = [
+        entry
+        for entry in entries
+        if (_int_or_none(entry.get("games")) or 0) >= FOUNDATION_MILESTONE_BENCHMARK_GAMES
+    ]
+    considered_entries = sample_sized_entries or entries
 
     def sort_key(entry: Mapping[str, Any]) -> tuple[float, int, int]:
         win_rate = _float_or_none(entry.get("win_rate"))
@@ -3306,17 +3323,27 @@ def _best_curve_entry(
         )
 
     return max(
-        entries,
+        considered_entries,
         key=sort_key,
     )
 
 
 def _format_foundation_yardstick_compact(entry: Mapping[str, Any]) -> str:
+    games = _int_or_none(entry.get("games"))
+    sample_ready = entry.get("sample_games_ready")
+    if sample_ready is not True and sample_ready is not False:
+        sample_ready = games is not None and games >= FOUNDATION_MILESTONE_BENCHMARK_GAMES
+    sample_state = (
+        "milestone"
+        if sample_ready is True
+        else f"below_milestone({_format_manifest_value(games)}/{FOUNDATION_MILESTONE_BENCHMARK_GAMES})"
+    )
     parts = [
         f"iter={_format_manifest_value(entry.get('iteration'))}",
         f"win_rate={_format_optional_float(entry.get('win_rate'), digits=3)}",
-        f"games={_format_manifest_value(entry.get('games'))}",
+        f"games={_format_manifest_value(games)}",
         f"cap={_format_manifest_value(entry.get('capped_games'))}",
+        f"sample={sample_state}",
     ]
     checkpoint_path = _string_or_none(entry.get("checkpoint_path"))
     if checkpoint_path is not None:

@@ -311,6 +311,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   spending more time on search tuning. It also supports caller-supplied quality thresholds for
   experiment-local gating. Gates intentionally use latest rows; the best row is checkpoint-selection
   visibility for diagnosing regressions, not a way to relabel a regressed latest run as healthy.
+  Best-row selection prefers sample-sized `max-damage` rows when any exist and labels below-milestone
+  rows explicitly when only smoke-sized evidence is available.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).
