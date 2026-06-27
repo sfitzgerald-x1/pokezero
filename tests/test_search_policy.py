@@ -6,7 +6,12 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
-from pokezero.search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner, policy_opponent_action_planner
+from pokezero.search_policy import (
+    RootPUCTSearchPolicy,
+    greedy_opponent_action_planner,
+    policy_opponent_action_planner,
+    prior_top_k_opponent_action_scenario_planner,
+)
 from pokezero.trajectory import BattleTrajectory
 
 
@@ -102,6 +107,11 @@ class ImmediateOutcomeEnv:
 
     def close(self) -> None:
         self.closed = True
+
+
+class TwoOpponentActionEnv(ImmediateOutcomeEnv):
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        return _observation(0, 1)
 
 
 class DelayedOutcomeEnv:
@@ -212,6 +222,31 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "opponent action priors"):
             planner(context, random.Random(1))
 
+    def test_prior_top_k_opponent_action_scenario_planner_uses_player_local_priors(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.1, 0.7, 0.2) + (0.0,) * (ACTION_COUNT - 3),
+            scenario_count=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0, 1), "p2": _mask(1, 2)},
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual(getattr(planner, "planner_id"), "checkpoint-top2")
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 1}, {"p2": 2}])
+        self.assertAlmostEqual(scenarios[0].weight, 0.7 / 0.9)
+        self.assertAlmostEqual(scenarios[1].weight, 0.2 / 0.9)
+        self.assertEqual([scenario.label for scenario in scenarios], ["p2:1", "p2:2"])
+
     def test_policy_opponent_action_planner_uses_requested_opponent_observation(self) -> None:
         opponent_policy = ResettableFixedPolicy(1, policy_id="benchmark-opponent")
         planner = policy_opponent_action_planner({"p2": opponent_policy}, planner_id="benchmark")
@@ -320,6 +355,57 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
         self.assertEqual(metadata["root_puct_opponent_action_policy"], "benchmark")
         self.assertEqual(len(planner_policy.observations), 1)
+
+    def test_root_puct_policy_can_average_checkpoint_prior_opponent_action_scenarios(self) -> None:
+        branch_envs: list[TwoOpponentActionEnv] = []
+
+        def branch_env_factory() -> TwoOpponentActionEnv:
+            env = TwoOpponentActionEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            opponent_action_planner=greedy_opponent_action_planner(
+                lambda history: (0.6, 0.4, 0.0) + (0.0,) * (ACTION_COUNT - 3)
+            ),
+            opponent_action_scenario_planner=prior_top_k_opponent_action_scenario_planner(
+                lambda history: (0.6, 0.4, 0.0) + (0.0,) * (ACTION_COUNT - 3),
+                scenario_count=2,
+            ),
+            cpuct=0.0,
+        )
+        live_env = TwoOpponentActionEnv(label="live")
+
+        result = RolloutDriver(
+            env=live_env,
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=91, battle_id="search-policy")
+
+        self.assertEqual(result.terminal.winner, "p1")
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 1)
+        metadata = step.metadata
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(metadata["root_puct_opponent_action_policy"], "checkpoint-top2")
+        self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 2)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_scenarios"],
+            [
+                {"label": "p2:0", "weight": 0.6, "actions": {"p2": 0}},
+                {"label": "p2:1", "weight": 0.4, "actions": {"p2": 1}},
+            ],
+        )
+        self.assertEqual(branch_envs[0].all_step_calls, [
+            {"p1": 0, "p2": 0},
+            {"p1": 1, "p2": 0},
+            {"p1": 0, "p2": 1},
+            {"p1": 1, "p2": 1},
+        ])
 
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(

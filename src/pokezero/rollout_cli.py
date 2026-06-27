@@ -297,6 +297,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     fallback_reasons = []
     selection_modes = []
     opponent_action_policies = []
+    opponent_action_scenario_counts = []
     leaf_rollouts = []
     leaf_rollout_opponents = []
     leaf_actual_rounds = []
@@ -332,6 +333,10 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         if isinstance(root_opponent_policies, dict) and root_opponent_policies:
             formatted = ", ".join(f"{name}={count}" for name, count in root_opponent_policies.items())
             opponent_action_policies.append(f"{policy_id}: {formatted}")
+        root_opponent_scenarios = metrics.get("root_puct_opponent_action_scenario_counts")
+        if isinstance(root_opponent_scenarios, dict) and root_opponent_scenarios:
+            formatted = ", ".join(f"{count}={decisions}" for count, decisions in root_opponent_scenarios.items())
+            opponent_action_scenario_counts.append(f"{policy_id}: {formatted}")
         leaf_rounds = metrics.get("root_puct_leaf_rollout_rounds")
         if isinstance(leaf_rounds, dict) and leaf_rounds:
             formatted = ", ".join(f"{rounds}={count}" for rounds, count in leaf_rounds.items())
@@ -356,6 +361,10 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         print("opponent_action_policies:")
         for policy in opponent_action_policies:
             print(f"  {policy}")
+    if opponent_action_scenario_counts:
+        print("opponent_action_scenario_counts:")
+        for scenario_count in opponent_action_scenario_counts:
+            print(f"  {scenario_count}")
     if leaf_rollouts:
         print("leaf_rollouts_configured:")
         for leaf_rollout in leaf_rollouts:
