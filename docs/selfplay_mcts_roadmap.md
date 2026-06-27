@@ -373,6 +373,16 @@ Steps:
    convenience for WS-A/WS-E foundation runs, not promotion evidence.
    `neural foundation-plan/run/report` wraps this preset with smoke/pilot profile defaults and a
    compact summary artifact so CPU foundation attempts can be launched and audited consistently.
+   A real local `foundation-run --profile pilot` then validated the wrapper and cold-start recipe
+   end-to-end at `runs/foundation-pilot-local-20260627/pilot-001`: 3 iterations, 256 games per
+   iteration, mirror collection, always-advance PPO, held-out Pearson value selection, and 400-game
+   fixed-yardstick rows. The run produced sample-sized foundation evidence but no base-net lift:
+   `max-damage` win rates were 0.045, 0.052, then 0.025; `simple-legal` fell from 0.330 to 0.205;
+   and `random-legal` ended at 0.527. Latest value calibration was present over 19,269 examples
+   with sign accuracy 0.6168, ECE 0.1252, and Pearson 0.3170. This proves the current CPU foundation
+   loop is runnable and auditable, but a cold random-legal start is not producing a useful base net;
+   the next WS-A/WS-E experiment should improve the learning signal or initialization before any
+   further search-tuning reads.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
