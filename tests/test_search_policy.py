@@ -6,7 +6,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
-from pokezero.search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner
+from pokezero.search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner, policy_opponent_action_planner
 from pokezero.trajectory import BattleTrajectory
 
 
@@ -30,6 +30,35 @@ class FixedPolicy:
         self.policy_id = policy_id
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
+
+
+class ResettableFixedPolicy(FixedPolicy):
+    def __init__(self, action_index: int, *, policy_id: str = "fixed") -> None:
+        super().__init__(action_index, policy_id=policy_id)
+        self.observations: list[PokeZeroObservationV0] = []
+        self.reset_calls = 0
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        self.observations.append(observation)
+        return super().select_action(observation, rng=rng)
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+
+class ContextRecordingPolicy:
+    policy_id = "context-recorder"
+
+    def __init__(self, action_index: int) -> None:
+        self.action_index = action_index
+        self.contexts: list[PolicyContext] = []
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        raise AssertionError("context-aware planner should call select_action_with_context")
+
+    def select_action_with_context(self, context: PolicyContext, *, rng) -> PolicyDecision:
+        self.contexts.append(context)
         return PolicyDecision(action_index=self.action_index, policy_id=self.policy_id, action_probability=1.0)
 
 
@@ -183,6 +212,55 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "opponent action priors"):
             planner(context, random.Random(1))
 
+    def test_policy_opponent_action_planner_uses_requested_opponent_observation(self) -> None:
+        opponent_policy = ResettableFixedPolicy(1, policy_id="benchmark-opponent")
+        planner = policy_opponent_action_planner({"p2": opponent_policy}, planner_id="benchmark")
+        opponent_observation = _observation(1)
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0), "p2": _mask(1)},
+            requested_observations={"p1": _observation(0), "p2": opponent_observation},
+        )
+
+        self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+        self.assertEqual(opponent_policy.observations, [opponent_observation])
+        planner.reset()
+        self.assertEqual(opponent_policy.reset_calls, 1)
+
+    def test_policy_opponent_action_planner_supports_context_aware_policy(self) -> None:
+        opponent_policy = ContextRecordingPolicy(1)
+        planner = policy_opponent_action_planner({"p2": opponent_policy}, planner_id="benchmark")
+        trajectory = BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7)
+        opponent_observation = _observation(1)
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=3,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0),
+            requested_players=("p1", "p2"),
+            trajectory=trajectory,
+            requested_legal_action_masks={"p1": _mask(0), "p2": _mask(1)},
+            requested_observations={"p1": _observation(0), "p2": opponent_observation},
+        )
+
+        self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+        self.assertEqual(len(opponent_policy.contexts), 1)
+        opponent_context = opponent_policy.contexts[0]
+        self.assertEqual(opponent_context.player_id, "p2")
+        self.assertEqual(opponent_context.decision_round_index, 3)
+        self.assertIs(opponent_context.observation, opponent_observation)
+        self.assertIs(opponent_context.trajectory, trajectory)
+        self.assertEqual(opponent_context.requested_players, ("p1", "p2"))
+
     def test_root_puct_policy_selects_search_action_using_separate_branch_env(self) -> None:
         branch_envs: list[ImmediateOutcomeEnv] = []
 
@@ -219,6 +297,29 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(len(branch_envs), 1)
         self.assertTrue(branch_envs[0].closed)
         self.assertEqual(branch_envs[0].all_step_calls, [{"p1": 0, "p2": 0}, {"p1": 1, "p2": 0}])
+
+    def test_root_puct_policy_can_plan_root_opponent_action_from_policy(self) -> None:
+        planner_policy = ResettableFixedPolicy(0, policy_id="benchmark-opponent")
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            opponent_action_planner=policy_opponent_action_planner({"p2": planner_policy}, planner_id="benchmark"),
+            cpuct=0.0,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=91, battle_id="search-policy")
+
+        self.assertEqual(result.terminal.winner, "p1")
+        metadata = result.trajectory.steps_for_player("p1")[0].metadata
+        self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
+        self.assertEqual(metadata["root_puct_opponent_action_policy"], "benchmark")
+        self.assertEqual(len(planner_policy.observations), 1)
 
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(

@@ -935,6 +935,7 @@ class _PolicyDecisionAccumulator:
     root_puct_value_gate_uses: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
+    root_puct_opponent_action_policies: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_rollout_rounds: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_rollout_opponent_policies: dict[str, int] = field(default_factory=dict)
     root_puct_leaf_actual_rollout_rounds: dict[str, int] = field(default_factory=dict)
@@ -976,6 +977,12 @@ class _PolicyDecisionAccumulator:
         if selection_mode is not None:
             key = str(selection_mode)
             self.root_puct_selection_modes[key] = self.root_puct_selection_modes.get(key, 0) + 1
+        opponent_action_policy = metadata.get("root_puct_opponent_action_policy")
+        if opponent_action_policy is not None:
+            key = str(opponent_action_policy)
+            self.root_puct_opponent_action_policies[key] = (
+                self.root_puct_opponent_action_policies.get(key, 0) + 1
+            )
         leaf_rollout_rounds = metadata.get("root_puct_leaf_rollout_rounds")
         if leaf_rollout_rounds is not None:
             key = str(leaf_rollout_rounds)
@@ -1025,6 +1032,10 @@ class _PolicyDecisionAccumulator:
                 result["root_puct_value_gate_uses"] = self.root_puct_value_gate_uses
             if self.root_puct_selection_modes:
                 result["root_puct_selection_modes"] = dict(sorted(self.root_puct_selection_modes.items()))
+            if self.root_puct_opponent_action_policies:
+                result["root_puct_opponent_action_policies"] = dict(
+                    sorted(self.root_puct_opponent_action_policies.items())
+                )
             if self.root_puct_leaf_rollout_rounds:
                 result["root_puct_leaf_rollout_rounds"] = dict(
                     sorted(self.root_puct_leaf_rollout_rounds.items())

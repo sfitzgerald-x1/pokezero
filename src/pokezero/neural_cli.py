@@ -37,7 +37,7 @@ from .search_benchmark import (
     benchmark_root_puct_counterfactual_rollouts,
     benchmark_root_puct_search,
 )
-from .search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner
+from .search_policy import RootPUCTSearchPolicy, greedy_opponent_action_planner, policy_opponent_action_planner
 from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
@@ -190,6 +190,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "current checkpoint-vs-checkpoint continuation; 'benchmark' uses the fixed "
             "benchmark opponent for the non-search side. Root simultaneous opponent-action "
             "planning still uses checkpoint opponent-action priors."
+        ),
+    )
+    root_puct_play.add_argument(
+        "--root-opponent-action-policy",
+        choices=("checkpoint", "benchmark"),
+        default="checkpoint",
+        help=(
+            "Opponent action source used for the simultaneous root branch. 'checkpoint' uses "
+            "the checkpoint opponent-action prior head; 'benchmark' asks a separate copy of "
+            "the fixed benchmark opponent policy to choose the non-search side's root action "
+            "from its private observation. Benchmark mode is privileged evaluation plumbing; "
+            "stochastic opponents produce one sampled action, not a modal expectation."
         ),
     )
     root_puct_play.add_argument(
@@ -698,6 +710,14 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         search_player_id: str,
         benchmark_opponent_spec: str,
     ) -> RootPUCTSearchPolicy:
+        root_opponent_player_id = "p2" if search_player_id == "p1" else "p1"
+        if args.root_opponent_action_policy == "benchmark":
+            opponent_action_planner = policy_opponent_action_planner(
+                {root_opponent_player_id: policy_from_spec(benchmark_opponent_spec)},
+                planner_id="benchmark",
+            )
+        else:
+            opponent_action_planner = greedy_opponent_action_planner(opponent_prior_fn)
         leaf_rollout_policy_factory = None
         leaf_rollout_metadata: Mapping[str, object] = {}
         if leaf_rollout_rounds:
@@ -720,7 +740,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             rollout_config=rollout_config,
             value_fn=value_fn,
             prior_fn=prior_fn,
-            opponent_action_planner=greedy_opponent_action_planner(opponent_prior_fn),
+            opponent_action_planner=opponent_action_planner,
             fallback_policy=make_raw_policy(policy_id=f"{search_policy_id}-fallback"),
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
