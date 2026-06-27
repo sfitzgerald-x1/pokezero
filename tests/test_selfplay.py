@@ -791,6 +791,7 @@ class SelfPlayTest(unittest.TestCase):
         expected_pool_config = {
             "fixed_opponent_policy_specs": ["random-legal"],
             "max_historical_opponents": 1,
+            "historical_opponent_selection": "recent",
             "promotion_registry_path": str(registry_path),
             "promotion_pool_registry_path": str(registry_path),
             "required_promoted_opponent_pool_size": 1,
@@ -2597,6 +2598,7 @@ def write_report_manifest(run_dir: Path, *, top_level: bool = True, source: dict
         "opponent_pool": {
             "fixed_opponent_policy_specs": ["random-legal"],
             "max_historical_opponents": 3,
+            "historical_opponent_selection": "recent",
             "promotion_registry_path": "promotions.json",
             "promotion_pool_registry_path": "promotions.json",
             "required_promoted_opponent_pool_size": 1,

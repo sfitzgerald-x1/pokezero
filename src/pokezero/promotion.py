@@ -111,11 +111,13 @@ class PromotionRegistry:
         *,
         max_historical_opponents: int,
         current_policy_spec: str | None = None,
+        selection_mode: str = "recent",
     ) -> tuple[str, ...]:
         return historical_opponent_policy_specs(
             self.selection_checkpoint_policy_specs(),
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
+            selection_mode=selection_mode,
         )
 
 

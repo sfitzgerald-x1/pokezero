@@ -2500,6 +2500,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "promotions.json",
                     "--require-promoted-opponent-pool-size",
                     "2",
+                    "--historical-opponent-selection",
+                    "spread",
                     "--auto-promote",
                     "--promotion-artifact-dir",
                     "promoted-checkpoints",
@@ -2560,6 +2562,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)
+        self.assertEqual(kwargs["historical_opponent_selection"], "spread")
         self.assertEqual(kwargs["auto_promotion_config"].registry_path, Path("promotions.json"))
         self.assertEqual(kwargs["auto_promotion_config"].artifact_dir, Path("promoted-checkpoints"))
         self.assertEqual(kwargs["auto_promotion_config"].label_prefix, "candidate")

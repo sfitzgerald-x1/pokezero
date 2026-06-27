@@ -1,6 +1,6 @@
 import unittest
 
-from pokezero.opponents import opponent_pool_policy_specs
+from pokezero.opponents import historical_opponent_policy_specs, opponent_pool_policy_specs
 
 
 class OpponentPoolTest(unittest.TestCase):
@@ -39,6 +39,67 @@ class OpponentPoolTest(unittest.TestCase):
         )
         self.assertEqual(pool.count("neural:/runs/iter-0002.pt"), 1)
         self.assertEqual(pool, ("simple-legal", "neural:/runs/iter-0002.pt"))
+
+    def test_spread_historical_selection_samples_across_history(self) -> None:
+        selected = historical_opponent_policy_specs(
+            (
+                "neural:/runs/iter-0001.pt",
+                "neural:/runs/iter-0002.pt",
+                "neural:/runs/iter-0003.pt",
+                "neural:/runs/iter-0004.pt",
+                "neural:/runs/iter-0005.pt",
+            ),
+            current_policy_spec=None,
+            max_historical_opponents=3,
+            selection_mode="spread",
+        )
+
+        self.assertEqual(
+            selected,
+            (
+                "neural:/runs/iter-0001.pt",
+                "neural:/runs/iter-0003.pt",
+                "neural:/runs/iter-0005.pt",
+            ),
+        )
+
+    def test_spread_historical_selection_excludes_current_before_sampling(self) -> None:
+        selected = historical_opponent_policy_specs(
+            (
+                "neural:/runs/iter-0001.pt",
+                "neural:/runs/iter-0002.pt",
+                "neural:/runs/iter-0003.pt",
+                "neural:/runs/iter-0004.pt",
+            ),
+            current_policy_spec="neural:/runs/iter-0004.pt",
+            max_historical_opponents=2,
+            selection_mode="spread",
+        )
+
+        self.assertEqual(selected, ("neural:/runs/iter-0001.pt", "neural:/runs/iter-0003.pt"))
+
+    def test_spread_historical_selection_single_slot_keeps_latest(self) -> None:
+        selected = historical_opponent_policy_specs(
+            (
+                "neural:/runs/iter-0001.pt",
+                "neural:/runs/iter-0002.pt",
+                "neural:/runs/iter-0003.pt",
+            ),
+            current_policy_spec=None,
+            max_historical_opponents=1,
+            selection_mode="spread",
+        )
+
+        self.assertEqual(selected, ("neural:/runs/iter-0003.pt",))
+
+    def test_rejects_unknown_historical_selection_mode(self) -> None:
+        with self.assertRaisesRegex(ValueError, "selection mode"):
+            historical_opponent_policy_specs(
+                ("neural:/runs/iter-0001.pt",),
+                current_policy_spec=None,
+                max_historical_opponents=1,
+                selection_mode="unknown",
+            )
 
 
 if __name__ == "__main__":

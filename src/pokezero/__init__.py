@@ -145,6 +145,7 @@ from .neural_selfplay import (
 from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
 from .opponents import (
     DEFAULT_MAX_HISTORICAL_OPPONENTS,
+    HISTORICAL_OPPONENT_SELECTION_MODES,
     historical_opponent_policy_specs,
     opponent_pool_policy_specs,
 )
@@ -442,6 +443,7 @@ __all__ = [
     "features_from_example",
     "flat_branch_search",
     "greedy_opponent_action_planner",
+    "HISTORICAL_OPPONENT_SELECTION_MODES",
     "historical_opponent_policy_specs",
     "is_move_action",
     "is_switch_action",
