@@ -253,6 +253,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   the WS-A opponent-pool diagnosis: generic fixed-opponent diversity is not enough. The next pool
   lever should be a targeted anti-aggression/counterplay curriculum or richer self-play signal that
   directly rewards exploiting predictable nukes, not simply adding the scripted teacher to the pool.
+  The return-target path now has opt-in, clipped shaping knobs for visible HP-differential
+  deltas, faint-differential deltas, and late-turn penalties. Defaults remain terminal-only for
+  comparability; shaped targets are a WS-A/WS-E experiment lever, not yet evidence of strength.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has
@@ -438,7 +441,9 @@ duration encodings are complete; expose a clean belief-determinization (opponent
 The calibration metric/artifact path now exists; the open work is improving the value targets/model
 until held-out calibration is good enough to guide search. One current model-side lever is the
 optional recurrent temporal aggregator, which should be evaluated as a base-net/value-head upgrade
-before resuming larger root-PUCT reads.
+before resuming larger root-PUCT reads. The dataset path also exposes optional clipped shaped return
+targets for visible HP/faint deltas and late-turn pressure; these should be ablated before replacing
+terminal-only targets as the default.
 Deliverable: a calibration metric + improved value targets + a belief-sampling API.
 Acceptance: value-head calibration is good enough that net+MCTS > net-alone (verified jointly in M0);
 WS-D can request sampled opponent sets.

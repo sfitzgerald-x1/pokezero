@@ -230,6 +230,10 @@ class TransformerTrainingConfig:
     window_size: int = 4
     discount: float = 1.0
     capped_terminal_value: float = 0.0
+    hp_delta_return_weight: float = 0.0
+    faint_delta_return_weight: float = 0.0
+    turn_penalty_after: int | None = None
+    turn_penalty: float = 0.0
     value_loss_weight: float = 0.25
     opponent_action_loss_weight: float = 0.1
     switch_action_loss_weight: float = 1.0
@@ -273,6 +277,16 @@ class TransformerTrainingConfig:
             raise ValueError("discount must be between 0 and 1.")
         if not -1.0 <= self.capped_terminal_value <= 0.0:
             raise ValueError("capped_terminal_value must be between -1 and 0.")
+        if self.hp_delta_return_weight < 0.0:
+            raise ValueError("hp_delta_return_weight must be non-negative.")
+        if self.faint_delta_return_weight < 0.0:
+            raise ValueError("faint_delta_return_weight must be non-negative.")
+        if self.turn_penalty_after is not None and self.turn_penalty_after < 0:
+            raise ValueError("turn_penalty_after must be non-negative when set.")
+        if self.turn_penalty < 0.0:
+            raise ValueError("turn_penalty must be non-negative.")
+        if self.turn_penalty > 0.0 and self.turn_penalty_after is None:
+            raise ValueError("turn_penalty_after must be set when turn_penalty is positive.")
         if self.value_loss_weight < 0.0:
             raise ValueError("value_loss_weight must be non-negative.")
         if self.opponent_action_loss_weight < 0.0:
@@ -813,6 +827,10 @@ def train_transformer_policy(
         window_size=resolved_training_config.window_size,
         discount=resolved_training_config.discount,
         capped_terminal_value=resolved_training_config.capped_terminal_value,
+        hp_delta_return_weight=resolved_training_config.hp_delta_return_weight,
+        faint_delta_return_weight=resolved_training_config.faint_delta_return_weight,
+        turn_penalty_after=resolved_training_config.turn_penalty_after,
+        turn_penalty=resolved_training_config.turn_penalty,
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):

@@ -23,11 +23,18 @@ class TrajectoryDatasetConfig:
     Discounting is applied per recorded decision for each player. Terminal
     returns are derived from the battle result rather than sparse per-step
     rewards, so asymmetric final rounds still label both players' histories.
+    Optional shaping terms are player-relative and use only metadata already
+    present in that player's observation. Final return targets are clipped to
+    [-1, 1] to stay compatible with bounded value heads.
     """
 
     window_size: int = 1
     discount: float = 1.0
     capped_terminal_value: float = 0.0
+    hp_delta_return_weight: float = 0.0
+    faint_delta_return_weight: float = 0.0
+    turn_penalty_after: int | None = None
+    turn_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         if self.window_size <= 0:
@@ -36,6 +43,16 @@ class TrajectoryDatasetConfig:
             raise ValueError("discount must be between 0 and 1.")
         if not -1.0 <= self.capped_terminal_value <= 0.0:
             raise ValueError("capped_terminal_value must be between -1 and 0.")
+        if self.hp_delta_return_weight < 0.0:
+            raise ValueError("hp_delta_return_weight must be non-negative.")
+        if self.faint_delta_return_weight < 0.0:
+            raise ValueError("faint_delta_return_weight must be non-negative.")
+        if self.turn_penalty_after is not None and self.turn_penalty_after < 0:
+            raise ValueError("turn_penalty_after must be non-negative when set.")
+        if self.turn_penalty < 0.0:
+            raise ValueError("turn_penalty must be non-negative.")
+        if self.turn_penalty > 0.0 and self.turn_penalty_after is None:
+            raise ValueError("turn_penalty_after must be set when turn_penalty is positive.")
 
 
 @dataclass(frozen=True)
@@ -143,8 +160,7 @@ def examples_from_record(
     dataset_config = config or TrajectoryDatasetConfig()
     returns_by_step_index = _discounted_returns_by_step_index(
         record,
-        discount=dataset_config.discount,
-        capped_terminal_value=dataset_config.capped_terminal_value,
+        config=dataset_config,
     )
     history_by_player: dict[str, list[TrajectoryStep]] = {}
 
@@ -269,8 +285,7 @@ def _example_from_window(
 def _discounted_returns_by_step_index(
     record: RolloutRecord,
     *,
-    discount: float,
-    capped_terminal_value: float,
+    config: TrajectoryDatasetConfig,
 ) -> dict[int, float]:
     step_indices_by_player: dict[str, list[int]] = {}
     for step_index, step in enumerate(record.trajectory.steps):
@@ -278,11 +293,142 @@ def _discounted_returns_by_step_index(
 
     returns_by_step_index: dict[int, float] = {}
     for player_id, step_indices in step_indices_by_player.items():
-        running_return = _terminal_value_for_player(record, player_id, capped_terminal_value=capped_terminal_value)
+        shaping_rewards = _shaping_rewards_by_step_index(record, step_indices=step_indices, config=config)
+        running_return = _terminal_value_for_player(
+            record,
+            player_id,
+            capped_terminal_value=config.capped_terminal_value,
+        )
         for step_index in reversed(step_indices):
-            returns_by_step_index[step_index] = running_return
-            running_return *= discount
+            shaped_return = _clip_return_value(running_return + shaping_rewards.get(step_index, 0.0))
+            returns_by_step_index[step_index] = shaped_return
+            running_return = shaped_return * config.discount
     return returns_by_step_index
+
+
+def _clip_return_value(value: float) -> float:
+    return min(1.0, max(-1.0, value))
+
+
+def _shaping_rewards_by_step_index(
+    record: RolloutRecord,
+    *,
+    step_indices: Sequence[int],
+    config: TrajectoryDatasetConfig,
+) -> dict[int, float]:
+    if (
+        config.hp_delta_return_weight == 0.0
+        and config.faint_delta_return_weight == 0.0
+        and (config.turn_penalty_after is None or config.turn_penalty == 0.0)
+    ):
+        return {}
+
+    rewards: dict[int, float] = {}
+    previous_snapshot: _VisibleTeamSnapshot | None = None
+    for step_index in step_indices:
+        step = record.trajectory.steps[step_index]
+        snapshot = _visible_team_snapshot(step.observation.metadata)
+        reward = 0.0
+        if previous_snapshot is not None:
+            hp_delta, faint_delta = _visible_differential_delta(previous_snapshot, snapshot)
+            reward += config.hp_delta_return_weight * hp_delta
+            reward += config.faint_delta_return_weight * faint_delta
+        if (
+            config.turn_penalty_after is not None
+            and config.turn_penalty > 0.0
+            and step.turn_index >= config.turn_penalty_after
+        ):
+            reward -= config.turn_penalty
+        rewards[step_index] = reward
+        previous_snapshot = snapshot
+    return rewards
+
+
+@dataclass(frozen=True)
+class _VisiblePokemonSnapshot:
+    hp_fraction: float
+    fainted: bool
+
+
+@dataclass(frozen=True)
+class _VisibleTeamSnapshot:
+    self_team: Mapping[str, _VisiblePokemonSnapshot]
+    opponent_team: Mapping[str, _VisiblePokemonSnapshot]
+
+
+def _visible_team_snapshot(metadata: Mapping[str, Any] | None) -> _VisibleTeamSnapshot:
+    payload = metadata if isinstance(metadata, Mapping) else {}
+    return _VisibleTeamSnapshot(
+        self_team=_pokemon_snapshots_by_visible_key(payload.get("self_team")),
+        opponent_team=_pokemon_snapshots_by_visible_key(payload.get("opponent_team")),
+    )
+
+
+def _pokemon_snapshots_by_visible_key(value: Any) -> dict[str, _VisiblePokemonSnapshot]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return {}
+    snapshots: dict[str, _VisiblePokemonSnapshot] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            continue
+        key = _visible_pokemon_key(item, fallback=f"slot-{index}")
+        if key is None:
+            continue
+        snapshots[key] = _VisiblePokemonSnapshot(
+            hp_fraction=_visible_hp_fraction(item),
+            fainted=bool(item.get("fainted", False)),
+        )
+    return snapshots
+
+
+def _visible_pokemon_key(item: Mapping[str, Any], *, fallback: str) -> str | None:
+    species = item.get("species")
+    if isinstance(species, str) and species:
+        return species
+    ident = item.get("ident")
+    if isinstance(ident, str) and ident:
+        return ident
+    return fallback
+
+
+def _visible_hp_fraction(item: Mapping[str, Any]) -> float:
+    raw = item.get("hp_fraction")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.0 if bool(item.get("fainted", False)) else 1.0
+    return min(1.0, max(0.0, value))
+
+
+def _visible_differential_delta(
+    previous: _VisibleTeamSnapshot,
+    current: _VisibleTeamSnapshot,
+) -> tuple[float, float]:
+    self_hp_delta, self_faint_delta = _team_delta(previous.self_team, current.self_team)
+    opponent_hp_delta, opponent_faint_delta = _team_delta(previous.opponent_team, current.opponent_team)
+    # Positive values should mean the player-relative position improved.
+    hp_delta = opponent_hp_delta * -1.0 + self_hp_delta
+    faint_delta = opponent_faint_delta - self_faint_delta
+    return hp_delta, faint_delta
+
+
+def _team_delta(
+    previous: Mapping[str, _VisiblePokemonSnapshot],
+    current: Mapping[str, _VisiblePokemonSnapshot],
+) -> tuple[float, float]:
+    shared_keys = set(previous) & set(current)
+    if not shared_keys:
+        return 0.0, 0.0
+    hp_delta = 0.0
+    faint_delta = 0.0
+    for key in shared_keys:
+        before = previous[key]
+        after = current[key]
+        hp_delta += after.hp_fraction - before.hp_fraction
+        faint_delta += float(after.fainted) - float(before.fainted)
+    # Normalize against a full singles team. This keeps scale stable even when
+    # only a subset of the opponent team has been publicly revealed.
+    return hp_delta / 6.0, faint_delta / 6.0
 
 
 def _terminal_value_for_player(record: RolloutRecord, player_id: str, *, capped_terminal_value: float) -> float:
