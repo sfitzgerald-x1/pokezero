@@ -123,6 +123,7 @@ from .neural_policy import (
     TransformerTrainingResult,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
+    evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     load_transformer_policy,
     observation_window_to_torch,
@@ -237,8 +238,10 @@ from .search_benchmark import (
     benchmark_root_puct_search,
 )
 from .search_policy import (
+    OpponentActionPriorFunction,
     OpponentActionPlanner,
     RootPUCTSearchPolicy,
+    greedy_opponent_action_planner,
     no_opponent_action_planner,
 )
 from .value_calibration import (
@@ -322,6 +325,7 @@ __all__ = [
     "NeuralSelfPlayRunResult",
     "ObservationSpec",
     "ObservationValueFunction",
+    "OpponentActionPriorFunction",
     "OpponentActionPlanner",
     "OpponentBeliefDeterminization",
     "OBSERVATION_SCHEMA_VERSION",
@@ -431,11 +435,13 @@ __all__ = [
     "evaluate_linear_policy",
     "evaluate_transformer_action_priors",
     "evaluate_transformer_observation_value",
+    "evaluate_transformer_opponent_action_priors",
     "evaluation_profile",
     "evaluate_promotion_gate",
     "evaluate_value_calibration",
     "features_from_example",
     "flat_branch_search",
+    "greedy_opponent_action_planner",
     "historical_opponent_policy_specs",
     "is_move_action",
     "is_switch_action",

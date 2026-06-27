@@ -21,6 +21,7 @@ from pokezero.neural_policy import (
     TransformerTrainingConfig,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
+    evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
     require_torch,
     save_transformer_checkpoint,
@@ -1350,6 +1351,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             restored_model, restored_result = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
             policy = TransformerSoftmaxPolicy(model=restored_model, result=restored_result, device="cpu")
             decision = policy.select_action(observation(1), rng=__import__("random").Random(1))
+            opponent_priors = evaluate_transformer_opponent_action_priors(
+                model=restored_model,
+                result=restored_result,
+                observations=(observation(1),),
+                device="cpu",
+            )
             _, continued_result = train_transformer_policy(
                 data_path,
                 model_config=TransformerPolicyConfig.compact_category(
@@ -1380,6 +1387,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(continued_result.model_config.policy_id, "neural-smoke-continued")
         self.assertIn(decision.action_index, {0, 1})
         self.assertEqual(policy.policy_id, "neural-smoke")
+        self.assertEqual(len(opponent_priors), 9)
+        self.assertAlmostEqual(sum(opponent_priors), 1.0, places=6)
 
 
 if __name__ == "__main__":
