@@ -57,6 +57,8 @@ class PolicyDecision:
     policy_id: str
     action_probability: Optional[float] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Optional state-value estimate emitted by the behavior policy at decision time.
+    # Transformer policies record the raw value-head output before any calibration transform.
     value_estimate: Optional[float] = None
 
     def __post_init__(self) -> None:

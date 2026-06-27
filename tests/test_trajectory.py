@@ -105,6 +105,19 @@ class TrajectoryTest(unittest.TestCase):
                 action_index=1,
             )
 
+    def test_trajectory_step_requires_finite_value_estimate(self) -> None:
+        mask = (True, False, False, False, False, False, False, False, False)
+
+        with self.assertRaisesRegex(ValueError, "value_estimate"):
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation(mask),
+                legal_action_mask=mask,
+                action_index=0,
+                value_estimate=float("inf"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

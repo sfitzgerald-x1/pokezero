@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Mapping, Optional
 
 from .actions import ACTION_COUNT
@@ -38,6 +39,8 @@ class TrajectoryStep:
             raise ValueError(f"opponent_action_index must be between 0 and {ACTION_COUNT - 1}.")
         if self.action_probability is not None and not 0.0 <= self.action_probability <= 1.0:
             raise ValueError("action_probability must be between 0 and 1 when set.")
+        if self.value_estimate is not None and not math.isfinite(float(self.value_estimate)):
+            raise ValueError("value_estimate must be finite when set.")
 
 
 @dataclass
