@@ -208,6 +208,41 @@ class NeuralSelfPlayTest(unittest.TestCase):
             ),
         )
 
+    def test_neural_cli_iterate_wires_heldout_value_selection_config(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--value-selection",
+                        "--value-selection-heldout-games",
+                        "4",
+                        "--value-selection-seed-start",
+                        "3000",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("not held-out validation", stderr.getvalue())
+        self.assertEqual(
+            run.call_args.kwargs["value_selection_config"],
+            NeuralValueSelectionConfig(
+                heldout_games_per_iteration=4,
+                heldout_seed_start=3000,
+            ),
+        )
+
     def test_run_neural_selfplay_iterations_writes_manifests_and_accumulates_training_data(self) -> None:
         collected = []
         trained_paths = []
@@ -396,6 +431,88 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["iterations"][0]["value_selection"], selection)
         self.assertEqual(iteration_manifest["training"]["config"]["epochs"], 2)
         self.assertEqual(iteration_manifest["invocation_config"]["value_selection"]["scope"], "iteration")
+
+    def test_run_neural_selfplay_iterations_uses_heldout_value_selection_rollouts(self) -> None:
+        class FakeReport:
+            examples = 4
+            mse = 0.04
+            mae = 0.2
+            bias = 0.0
+            sign_accuracy = 0.75
+            expected_calibration_error = 0.1
+
+            def to_dict(self) -> dict:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "bins": [],
+                    "slices": [],
+                }
+
+        collected = []
+        trained_paths = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with (
+                patched_neural_selfplay_dependencies(collected=collected, trained_paths=trained_paths),
+                patch("pokezero.neural_selfplay.evaluate_value_calibration", return_value=FakeReport()) as evaluate,
+            ):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=1,
+                    value_selection_config=NeuralValueSelectionConfig(
+                        heldout_games_per_iteration=3,
+                        heldout_seed_start=9000,
+                    ),
+                )
+
+            iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+            sidecar = json.loads((run_dir / "iteration-0001" / "value-selection.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([call["output_path"].name for call in collected], [
+            "rollouts.jsonl",
+            "value-selection-rollouts.jsonl",
+        ])
+        self.assertEqual(collected[1]["training_output_path"].name, "value-selection-training-rollouts.jsonl")
+        self.assertEqual(collected[1]["games"], 3)
+        self.assertEqual(collected[1]["seed_start"], 9000)
+        self.assertEqual(trained_paths, [(run_dir / "iteration-0001" / "training-rollouts.jsonl",)])
+        self.assertEqual(evaluate.call_args.kwargs["paths"], (
+            run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl",
+        ))
+        selection = result.iterations[0].value_selection
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection["data_role"], "heldout_selfplay_rollouts")
+        self.assertIn("held-out self-play rollouts", selection["data_note"])
+        self.assertEqual(selection["paths"], [
+            str(run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl")
+        ])
+        self.assertEqual(sidecar["data_role"], "heldout_selfplay_rollouts")
+        self.assertEqual(iteration_manifest["value_selection_collection_metrics"]["games"], 3)
+        self.assertEqual(
+            iteration_manifest["value_selection_rollout_path"],
+            str(run_dir / "iteration-0001" / "value-selection-rollouts.jsonl"),
+        )
+        self.assertEqual(
+            iteration_manifest["value_selection_training_rollout_paths"],
+            [str(run_dir / "iteration-0001" / "value-selection-training-rollouts.jsonl")],
+        )
+        self.assertEqual(run_manifest["iterations"][0]["value_selection"], selection)
 
     def test_run_neural_selfplay_iterations_value_selection_history_scope_uses_accumulated_paths(self) -> None:
         class FakeReport:

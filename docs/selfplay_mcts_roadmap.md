@@ -178,8 +178,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   each standalone-train epoch on held-out calibration and restore the best epoch by
   MAE/MSE/ECE/sign/bias metric. `neural_cli iterate --value-selection` applies value-based epoch
   selection inside self-play iterations, writes a per-iteration sidecar, and stores the selected
-  epoch in the run manifest; its selection data is the iteration/history training rollouts, not a
-  held-out validation split.
+  epoch in the run manifest. By default it selects on iteration/history training rollouts; for a
+  cleaner value-calibration read, `--value-selection-heldout-games` collects separate current-policy
+  self-play games that are used only for epoch selection and are not added to the training history.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
