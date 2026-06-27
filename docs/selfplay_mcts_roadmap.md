@@ -437,6 +437,16 @@ Steps:
    The foundation wrapper now exposes `temporal-gru` and `opponent-signal-gru` variants so the
    optional GRU temporal aggregator can be evaluated as the next CPU WS-E/WS-A foundation lever
    before returning to larger root-PUCT reads.
+   A local `temporal-gru` smoke passed end-to-end, then a `--profile pilot` run at
+   `runs/foundation-gru-local-20260627/pilot-001` produced sample-sized evidence for the isolated
+   GRU temporal-aggregation lever. It showed a stronger early fixed-yardstick spike than the prior
+   H3 run (`max-damage=0.142` at iteration 1 versus H3's best `0.110`) but did not sustain it:
+   iterations 2 and 3 fell to `0.105` and `0.030`, while `simple-legal` fell from `0.540` to
+   `0.170` and `random-legal` from `0.767` to `0.417`. Latest value calibration was present over
+   19,344 examples with sign accuracy 0.6271, ECE 0.0691, and Pearson 0.1075. Treat this as useful
+   evidence that the GRU arm can find a stronger early checkpoint, but the always-advance foundation
+   loop still forgets/regresses; the next WS-A lever should focus on retention/advancement or
+   training-signal changes rather than simply continuing the same GRU run.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
