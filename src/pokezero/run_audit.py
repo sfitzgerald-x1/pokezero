@@ -21,7 +21,7 @@ from .evaluation import (
     _mapping,
     _sequence,
 )
-from .opponents import historical_opponent_policy_specs
+from .opponents import HISTORICAL_OPPONENT_SELECTION_MODES, historical_opponent_policy_specs
 from .selfplay import SELFPLAY_RUN_SCHEMA_VERSION
 
 
@@ -1140,6 +1140,10 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
             failures.append(
                 f"invocation_{invocation_index}:required={required_size},max_historical={max_historical_opponents}"
             )
+        selection_mode = str(opponent_pool.get("historical_opponent_selection") or "recent")
+        if selection_mode not in HISTORICAL_OPPONENT_SELECTION_MODES:
+            failures.append(f"invocation_{invocation_index}:invalid_historical_opponent_selection")
+            selection_mode = "recent"
         promoted_specs = _string_sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
         fixed_specs = set(_string_sequence(opponent_pool.get("fixed_opponent_policy_specs", ())))
         first_iteration = _optional_int(invocation_config.get("first_iteration"))
@@ -1154,6 +1158,7 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
                 promoted_specs,
                 current_policy_spec=current_policy_spec,
                 max_historical_opponents=max_historical_opponents,
+                selection_mode=selection_mode,
             )
             requirements.append((len(launch_selectable_specs), required_size))
             if len(launch_selectable_specs) < required_size:
@@ -1644,11 +1649,13 @@ def _historical_specs(
     *,
     current_policy_spec: str | None,
     max_historical_opponents: int,
+    selection_mode: str = "recent",
 ) -> tuple[str, ...]:
     return historical_opponent_policy_specs(
         specs,
         current_policy_spec=current_policy_spec,
         max_historical_opponents=max(0, max_historical_opponents),
+        selection_mode=selection_mode,
     )
 
 

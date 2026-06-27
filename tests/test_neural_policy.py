@@ -1098,6 +1098,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             max_historical_opponents=2,
             required_size=1,
         )
+        require_neural_promoted_opponent_pool(
+            ("neural:a.pt", "neural:b.pt", "neural:c.pt", "neural:d.pt"),
+            promotion_pool_registry_path=Path("promotions.json"),
+            current_policy_spec="neural:d.pt",
+            max_historical_opponents=2,
+            required_size=2,
+            historical_opponent_selection="spread",
+        )
         with self.assertRaisesRegex(ValueError, "promoted opponent pool has 1 selectable opponents.*required 2"):
             require_neural_promoted_opponent_pool(
                 ("neural:a.pt", "neural:b.pt"),

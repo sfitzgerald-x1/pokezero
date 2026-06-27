@@ -502,7 +502,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "How to choose historical/promoted checkpoint opponents when more exist than "
             "--max-historical-opponents. 'recent' keeps the latest checkpoints; 'spread' "
-            "samples across the available history for more diverse league pressure."
+            "deterministically spreads across the available history for more diverse league pressure."
         ),
     )
     iterate.add_argument(
