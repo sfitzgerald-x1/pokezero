@@ -176,7 +176,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `--eval-data` set for a held-out calibration read. The default `--fit-method affine` preserves the
   legacy linear correction, while `--fit-method isotonic` stores a monotone empirical mapping for
   non-linear post-hoc calibration experiments. Isotonic can overfit small fit sets, so treat held-out
-  evaluation and gates as required for any useful read. It also supports opt-in quality gates such as
+  evaluation and gates as required for any useful read. `value-calibration-compare` now fits affine
+  and isotonic transforms on fit data, evaluates raw/affine/isotonic on held-out data, and records the
+  selected method under an explicit metric so WS-E experiments do not rely on ad-hoc manual
+  comparisons. Its default selection metric is Pearson correlation because search needs value
+  ranking; calibration-error metrics remain available but are reported with warnings because they can
+  prefer collapsed transforms. It also supports opt-in quality gates such as
   `--min-sign-accuracy`, `--max-expected-calibration-error`, and `--min-pearson-correlation` so
   experiment scripts can fail a weak value-head read without hardcoding project-wide readiness
   thresholds. Value-head consumers such as search leaf scoring read the stored transform when
@@ -503,13 +508,13 @@ Steps: audit and improve value-target construction (terminal return, discount, c
 and measure value-head **calibration** (predicted vs realized outcome); confirm multi-turn-effect
 duration encodings are complete; expose a clean belief-determinization (opponent-set sampling) API.
 The calibration metric/artifact path now exists; the open work is improving the value targets/model
-until held-out calibration is good enough to guide search. The standalone value-calibration command
-can now fit affine or isotonic stored transforms; isotonic is a WS-E calibration lever, not a
-substitute for improving the underlying value ranking. One current model-side lever is the
-optional recurrent temporal aggregator, which should be evaluated as a base-net/value-head upgrade
-before resuming larger root-PUCT reads. The dataset path also exposes optional clipped shaped return
-targets for visible HP/faint deltas and late-turn pressure; these should be ablated before replacing
-terminal-only targets as the default.
+until held-out calibration is good enough to guide search. The standalone value-calibration commands
+can now compare raw/affine/isotonic on held-out data and fit affine or isotonic stored transforms;
+isotonic is a WS-E calibration lever, not a substitute for improving the underlying value ranking.
+One current model-side lever is the optional recurrent temporal aggregator, which should be evaluated
+as a base-net/value-head upgrade before resuming larger root-PUCT reads. The dataset path also
+exposes optional clipped shaped return targets for visible HP/faint deltas and late-turn pressure;
+these should be ablated before replacing terminal-only targets as the default.
 Deliverable: a calibration metric + improved value targets + a belief-sampling API.
 Acceptance: value-head calibration is good enough that net+MCTS > net-alone (verified jointly in M0);
 WS-D can request sampled opponent sets.

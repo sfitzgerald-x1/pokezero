@@ -2329,6 +2329,332 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIn("near-constant", stderr.getvalue())
         self.assertIn("value-head search nearly value-blind", stderr.getvalue())
 
+    def test_neural_cli_value_calibration_compare_reports_heldout_methods(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        def report(*, mae: float, ece: float, sign_accuracy: float = 0.5) -> ValueCalibrationReport:
+            return ValueCalibrationReport(
+                examples=20,
+                mse=mae * mae,
+                mae=mae,
+                bias=0.0,
+                sign_accuracy=sign_accuracy,
+                expected_calibration_error=ece,
+                pearson_correlation=0.25,
+                bins=(),
+                slices=(),
+            )
+
+        fake_training_result = TransformerTrainingResult(
+            model_config=TransformerPolicyConfig.compact_category(
+                category_vocab=(1, 2, 3),
+                category_oov_buckets=4,
+                policy_id="fixture",
+            ),
+            training_config=TransformerTrainingConfig(),
+            value_calibration_transform=ValueCalibrationTransform(scale=0.5, bias=0.1),
+            epochs=(),
+        )
+        affine = ValueCalibrationTransform(scale=1.5, bias=-0.2)
+        isotonic = ValueCalibrationTransform(method="isotonic", points=((-1.0, -0.8), (1.0, 0.8)))
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
+            patch("pokezero.neural_cli.fit_value_calibration_transform", side_effect=(affine, isotonic)) as fit,
+            patch(
+                "pokezero.neural_cli.evaluate_value_calibration",
+                side_effect=(report(mae=0.7, ece=0.4), report(mae=0.5, ece=0.2), report(mae=0.4, ece=0.1)),
+            ) as evaluate,
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration-compare",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "fit-rollouts.jsonl",
+                    "--eval-data",
+                    "heldout-rollouts.jsonl",
+                    "--selection-metric",
+                    "expected_calibration_error",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["evaluation_paths"], ["heldout-rollouts.jsonl"])
+        self.assertTrue(payload["evaluation_held_out"])
+        self.assertEqual(payload["selection_metric"], "expected_calibration_error")
+        self.assertEqual(payload["best_method"], "isotonic")
+        self.assertEqual([entry["method"] for entry in payload["methods"]], ["raw", "affine", "isotonic"])
+        self.assertIn("calibration_only_selection_metric", {warning["code"] for warning in payload["warnings"]})
+        self.assertIsNone(evaluate.call_args_list[0].kwargs["training_result"].value_calibration_transform)
+        self.assertEqual(evaluate.call_args_list[1].kwargs["training_result"].value_calibration_transform, affine)
+        self.assertEqual(evaluate.call_args_list[2].kwargs["training_result"].value_calibration_transform, isotonic)
+        self.assertEqual([call.kwargs["method"] for call in fit.call_args_list], ["affine", "isotonic"])
+
+    def test_neural_cli_value_calibration_compare_defaults_to_pearson_selection(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        def report(*, pearson: float) -> ValueCalibrationReport:
+            return ValueCalibrationReport(
+                examples=20,
+                mse=0.25,
+                mae=0.5,
+                bias=0.0,
+                sign_accuracy=0.6,
+                expected_calibration_error=0.2,
+                pearson_correlation=pearson,
+                bins=(),
+                slices=(),
+            )
+
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                return_value=(
+                    object(),
+                    TransformerTrainingResult(
+                        model_config=TransformerPolicyConfig.compact_category(
+                            category_vocab=(1, 2, 3),
+                            category_oov_buckets=4,
+                            policy_id="fixture",
+                        ),
+                        training_config=TransformerTrainingConfig(),
+                        epochs=(),
+                    ),
+                ),
+            ),
+            patch(
+                "pokezero.neural_cli.fit_value_calibration_transform",
+                side_effect=(
+                    ValueCalibrationTransform(scale=1.0, bias=0.0),
+                    ValueCalibrationTransform(method="isotonic", points=((-1.0, 0.0), (1.0, 0.0))),
+                ),
+            ),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=(report(pearson=0.1), report(pearson=0.4), report(pearson=0.2))),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration-compare",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "fit-rollouts.jsonl",
+                    "--eval-data",
+                    "heldout-rollouts.jsonl",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["selection_metric"], "pearson_correlation")
+        self.assertEqual(payload["selection_direction"], "max")
+        self.assertEqual(payload["best_method"], "affine")
+
+    def test_neural_cli_value_calibration_compare_text_can_write_json_report(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_training_result = TransformerTrainingResult(
+            model_config=TransformerPolicyConfig.compact_category(
+                category_vocab=(1, 2, 3),
+                category_oov_buckets=4,
+                policy_id="fixture",
+            ),
+            training_config=TransformerTrainingConfig(),
+            epochs=(),
+        )
+        fake_report = ValueCalibrationReport(
+            examples=20,
+            mse=0.25,
+            mae=0.5,
+            bias=0.0,
+            sign_accuracy=0.5,
+            expected_calibration_error=0.2,
+            pearson_correlation=None,
+            bins=(),
+            slices=(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "compare.json"
+            with (
+                patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(object(), fake_training_result)),
+                patch(
+                    "pokezero.neural_cli.fit_value_calibration_transform",
+                    side_effect=(
+                        ValueCalibrationTransform(scale=1.0, bias=0.0),
+                        ValueCalibrationTransform(method="isotonic", points=((-1.0, 0.0), (1.0, 0.0))),
+                    ),
+                ),
+                patch("pokezero.neural_cli.evaluate_value_calibration", return_value=fake_report),
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "value-calibration-compare",
+                        "--checkpoint",
+                        "checkpoint.pt",
+                        "--data",
+                        "fit-rollouts.jsonl",
+                        "--eval-data",
+                        "fit-rollouts.jsonl",
+                        "--selection-metric",
+                        "expected_calibration_error",
+                        "--out",
+                        str(out_path),
+                    ]
+                )
+
+            payload = json.loads(out_path.read_text(encoding="utf-8"))
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["best_method"], "raw")
+        self.assertIn("fit_eval_path_overlap", {warning["code"] for warning in payload["warnings"]})
+        self.assertIn("value_calibration_compare:", output)
+        self.assertIn("comparison_json:", output)
+
+    def test_neural_cli_value_calibration_compare_skips_unavailable_selection_metric_rows(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        unavailable = ValueCalibrationReport(
+            examples=20,
+            mse=0.25,
+            mae=0.5,
+            bias=0.0,
+            sign_accuracy=0.5,
+            expected_calibration_error=0.2,
+            pearson_correlation=None,
+            bins=(),
+            slices=(),
+        )
+        available = ValueCalibrationReport(
+            examples=20,
+            mse=0.16,
+            mae=0.4,
+            bias=0.0,
+            sign_accuracy=0.6,
+            expected_calibration_error=0.1,
+            pearson_correlation=0.4,
+            bins=(),
+            slices=(),
+        )
+
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                return_value=(
+                    object(),
+                    TransformerTrainingResult(
+                        model_config=TransformerPolicyConfig.compact_category(
+                            category_vocab=(1, 2, 3),
+                            category_oov_buckets=4,
+                            policy_id="fixture",
+                        ),
+                        training_config=TransformerTrainingConfig(),
+                        epochs=(),
+                    ),
+                ),
+            ),
+            patch(
+                "pokezero.neural_cli.fit_value_calibration_transform",
+                side_effect=(
+                    ValueCalibrationTransform(scale=1.0, bias=0.0),
+                    ValueCalibrationTransform(method="isotonic", points=((-1.0, 0.0), (1.0, 0.0))),
+                ),
+            ),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=(unavailable, available, unavailable)),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration-compare",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "fit-rollouts.jsonl",
+                    "--eval-data",
+                    "heldout-rollouts.jsonl",
+                    "--selection-metric",
+                    "pearson_correlation",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["best_method"], "affine")
+        self.assertIsNone(payload["methods"][0]["selection_metric_value"])
+        self.assertIn("selection_error", payload["methods"][0])
+
+    def test_neural_cli_value_calibration_compare_rejects_all_unavailable_selection_metric(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        unavailable = ValueCalibrationReport(
+            examples=20,
+            mse=0.25,
+            mae=0.5,
+            bias=0.0,
+            sign_accuracy=0.5,
+            expected_calibration_error=0.2,
+            pearson_correlation=None,
+            bins=(),
+            slices=(),
+        )
+
+        with (
+            patch(
+                "pokezero.neural_cli.load_transformer_checkpoint",
+                return_value=(
+                    object(),
+                    TransformerTrainingResult(
+                        model_config=TransformerPolicyConfig.compact_category(
+                            category_vocab=(1, 2, 3),
+                            category_oov_buckets=4,
+                            policy_id="fixture",
+                        ),
+                        training_config=TransformerTrainingConfig(),
+                        epochs=(),
+                    ),
+                ),
+            ),
+            patch(
+                "pokezero.neural_cli.fit_value_calibration_transform",
+                side_effect=(
+                    ValueCalibrationTransform(scale=1.0, bias=0.0),
+                    ValueCalibrationTransform(method="isotonic", points=((-1.0, 0.0), (1.0, 0.0))),
+                ),
+            ),
+            patch("pokezero.neural_cli.evaluate_value_calibration", return_value=unavailable),
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration-compare",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "fit-rollouts.jsonl",
+                    "--eval-data",
+                    "heldout-rollouts.jsonl",
+                    "--selection-metric",
+                    "pearson_correlation",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("pearson_correlation is unavailable for all calibration methods", stderr.getvalue())
+
     def test_neural_cli_value_calibration_rejects_eval_data_without_fit_out(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
