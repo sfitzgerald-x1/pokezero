@@ -287,7 +287,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   per-iteration win rate, games, and capped-game counts. This makes WS-F strength reads visible
   without relying on blended benchmark win rate or TensorBoard-only inspection. Rolling incumbent
   head-to-heads stay out of this yardstick block because they are advancement evidence, not
-  fixed-strength references.
+  fixed-strength references. The same report now prints a conservative `foundation_readiness` block:
+  value calibration present/missing, latest `max-damage` yardstick sample size, and whether MCTS/search
+  deltas should still be treated as plumbing-only because the value/base-net/eval foundation is not yet
+  readable.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).
