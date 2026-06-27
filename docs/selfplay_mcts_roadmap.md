@@ -188,6 +188,11 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   advancement check, both scored 2/8 versus `max-damage`, and the latest accepted checkpoint remained
   the starting value-selected teacher-BC checkpoint. Held-out ECE selected epoch 2 in both iterations
   (0.099 then 0.628), while iteration training-rollout calibration ECE was 0.091 then 0.180.
+  `neural_cli iterate --collector-advancement-mode always` now provides an explicit exploratory
+  mode for PPO proof-of-life runs where every saved candidate becomes the next rollout collector
+  even if it fails the incumbent benchmark. This is useful for testing whether the loop can produce
+  an actual arms-race progression, but it is not promotion evidence and should stay separate from
+  accepted-checkpoint gating.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.

@@ -56,6 +56,7 @@ from .value_calibration import (
     value_selection_score,
 )
 from .neural_selfplay import (
+    COLLECTOR_ADVANCEMENT_MODES,
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
     NeuralValueSelectionConfig,
@@ -423,6 +424,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Softmax sampling temperature for the self-play collector (>1 explores more). Applies "
             "only to rollout collection; benchmark/advancement use the deterministic policy. "
             "Default 1.0 (unchanged)."
+        ),
+    )
+    iterate.add_argument(
+        "--collector-advancement-mode",
+        choices=COLLECTOR_ADVANCEMENT_MODES,
+        default="incumbent-gate",
+        help=(
+            "How a trained candidate becomes the next rollout collector. 'incumbent-gate' "
+            "keeps the default head-to-head gate; 'always' advances every saved candidate for "
+            "exploratory arms-race runs and is not promotion evidence."
         ),
     )
     iterate.add_argument(
@@ -1265,6 +1276,8 @@ def _iterate(args: argparse.Namespace) -> int:
     reject_eval_only_specs(args.opponent_policy or (), role="self-play training opponent")
     if args.auto_promote and args.promotion_registry is None:
         raise ValueError("--auto-promote requires --promotion-registry.")
+    if args.auto_promote and args.collector_advancement_mode != "incumbent-gate":
+        raise ValueError("--collector-advancement-mode always cannot be combined with --auto-promote.")
     if args.auto_promote and args.evaluation_games <= 0 and args.require_benchmark is not False:
         raise ValueError("--auto-promote requires --evaluation-games > 0 unless --allow-missing-benchmark is set.")
     post_iteration_audit_config = post_iteration_audit_config_from_args(args)
@@ -1394,6 +1407,7 @@ def _iterate(args: argparse.Namespace) -> int:
         post_iteration_audit_failure_mode=args.audit_failure_mode,
         value_calibration_config=_value_calibration_config_from_args(args),
         value_selection_config=_value_selection_config_from_args(args),
+        collector_advancement_mode=args.collector_advancement_mode,
         resume=args.resume,
     )
     if args.json:

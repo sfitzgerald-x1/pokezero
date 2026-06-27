@@ -166,6 +166,57 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_args.kwargs["post_iteration_audit_failure_mode"], "runtime-health")
 
+    def test_neural_cli_iterate_wires_collector_advancement_mode(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--collector-advancement-mode",
+                        "always",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_args.kwargs["collector_advancement_mode"], "always")
+
+    def test_neural_cli_iterate_rejects_always_advance_with_auto_promote(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "iterate",
+                    "--run-dir",
+                    "run",
+                    "--iterations",
+                    "1",
+                    "--games-per-iteration",
+                    "2",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--initial-policy",
+                    "random-legal",
+                    "--auto-promote",
+                    "--promotion-registry",
+                    "promotions.json",
+                    "--collector-advancement-mode",
+                    "always",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("cannot be combined with --auto-promote", stderr.getvalue())
+
     def test_neural_cli_iterate_wires_value_selection_config(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
@@ -990,6 +1041,142 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(second_manifest["current_policy_spec"], "random-legal")
         self.assertEqual(run_manifest["current_policy_spec"], "random-legal")
         self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
+
+    def test_run_neural_selfplay_iterations_always_mode_advances_failed_candidate(self) -> None:
+        collected = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(collected=collected, candidate_beats_incumbent=False):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual(
+            [call["current_policy_spec"] for call in collected],
+            ["random-legal", first_manifest["checkpoint_policy_spec"]],
+        )
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "collector_advancement_mode_always")
+        self.assertEqual(first_manifest["advancement"]["candidate_win_rate"], 0.0)
+        self.assertEqual(first_manifest["advancement"]["incumbent_win_rate"], 1.0)
+        self.assertEqual(first_manifest["next_current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertEqual(second_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertEqual(run_manifest["current_policy_spec"], second_manifest["checkpoint_policy_spec"])
+        self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
+
+    def test_run_neural_selfplay_iterations_always_mode_preserves_gate_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(candidate_beats_incumbent=True):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "beat_incumbent")
+        self.assertEqual(run_manifest["latest_accepted_checkpoint_path"], str(run_dir / "iteration-0001" / "transformer-policy.pt"))
+
+    def test_run_neural_selfplay_iterations_always_mode_preserves_initial_neural_accepted_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            initial_checkpoint = Path(temp_dir) / "initial-policy.pt"
+
+            with patched_neural_selfplay_dependencies(candidate_beats_incumbent=False):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    initial_policy_spec=f"neural:{initial_checkpoint}",
+                    evaluation_games=1,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual(first_manifest["next_current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertEqual(run_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertEqual(run_manifest["latest_accepted_checkpoint_path"], str(initial_checkpoint))
+
+    def test_run_neural_selfplay_iterations_always_mode_advances_without_benchmark_for_single_iteration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies():
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=0,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "collector_advancement_mode_always")
+        self.assertIsNone(first_manifest["advancement"]["candidate_win_rate"])
+        self.assertEqual(first_manifest["next_current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertEqual(run_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])
+        self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
+
+    def test_run_neural_selfplay_iterations_rejects_always_mode_with_auto_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "cannot be combined with auto promotion"):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=1,
+                        games_per_iteration=1,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        auto_promotion_config=NeuralSelfPlayPromotionConfig(
+                            registry_path=Path(temp_dir) / "promotions.json",
+                            gate_config=PromotionGateConfig(require_benchmark=False),
+                        ),
+                        collector_advancement_mode="always",
+                    )
 
     def test_run_neural_selfplay_iterations_post_iteration_audit_stops_before_next_iteration(self) -> None:
         collected = []
