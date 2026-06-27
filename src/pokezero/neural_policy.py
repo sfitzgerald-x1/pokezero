@@ -102,6 +102,7 @@ class TransformerPolicyConfig:
     observation_schema_version: str = OBSERVATION_SCHEMA_VERSION
     category_vocab: tuple[str, ...] = ()
     category_oov_buckets: int = 0
+    value_activation: str = "tanh"
 
     @classmethod
     def compact_category(
@@ -160,6 +161,8 @@ class TransformerPolicyConfig:
             raise ValueError("feedforward_dim must be positive.")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1).")
+        if self.value_activation not in {"linear", "tanh"}:
+            raise ValueError("value_activation must be 'linear' or 'tanh'.")
         # The legacy hash-bucket embedding is retired: a compact category vocabulary is
         # required. Build configs via TransformerPolicyConfig.compact_category(...).
         if not self.category_vocab:
@@ -207,6 +210,9 @@ class TransformerPolicyConfig:
             observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
             category_vocab=tuple(str(value) for value in (payload.get("category_vocab") or ())),
             category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
+            # Historical checkpoints were trained with an unbounded linear value head. Keep that
+            # behavior when loading configs that predate the explicit value activation field.
+            value_activation=_str_field(payload, "value_activation", "linear"),
         )
 
 
@@ -375,9 +381,11 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             pooled = _masked_mean(encoded, valid_tokens)
             latest_action_start = ((window_size - 1) * token_count) + ACTION_CANDIDATE_TOKEN_OFFSET
             action_tokens = encoded[:, latest_action_start : latest_action_start + ACTION_COUNT, :]
+            raw_value = self.value_head(pooled).squeeze(-1)
+            value = torch.tanh(raw_value) if self.config.value_activation == "tanh" else raw_value
             return TransformerPolicyOutput(
                 policy_logits=self.policy_head(action_tokens).squeeze(-1),
-                value=self.value_head(pooled).squeeze(-1),
+                value=value,
                 opponent_action_logits=self.opponent_action_head(pooled),
             )
 

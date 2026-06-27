@@ -18,6 +18,11 @@ likely reason PUCT helps inconsistently (e.g. leaf2 nudged 0.19→0.31 but selec
 probes showed no lift). Improve value calibration (roadmap WS-E) and re-measure before concluding
 anything about whether search helps.
 
+New transformer configs now use a `tanh`-bounded value output so future checkpoints emit values in
+the same `[-1, 1]` range as terminal returns and search backups. Historical checkpoints that predate
+the explicit `value_activation` field load with their original linear value output so prior evidence
+remains comparable; retrain before expecting the bounded head to affect M0.
+
 ## 3. Use a base net worth searching from
 `teacher-bc-64` is a tiny imitation net sitting near the imitation ceiling. M0 should run on a
 *decent* net (a real self-play/PPO checkpoint), so we're testing search on something worth
