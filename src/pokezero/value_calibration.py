@@ -11,6 +11,7 @@ from .dataset import TrajectoryDatasetConfig, iter_training_batches
 from .neural_policy import TransformerTrainingResult, require_torch, training_batch_to_torch
 
 PathInput = str | PathLike[str] | Path
+VALUE_SELECTION_METRICS = ("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias")
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,30 @@ def evaluate_value_calibration(
         if was_training is not None and hasattr(model, "train"):
             model.train(bool(was_training))
     return totals.to_report(slices=slice_totals.to_slices())
+
+
+def value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
+    if metric == "mae":
+        return float(report.mae)
+    if metric == "mse":
+        return float(report.mse)
+    if metric == "expected_calibration_error":
+        return float(report.expected_calibration_error)
+    if metric == "sign_accuracy":
+        return float(report.sign_accuracy)
+    if metric == "abs_bias":
+        return abs(float(report.bias))
+    raise ValueError(f"unsupported value selection metric: {metric!r}.")
+
+
+def value_selection_metric_direction(metric: str) -> str:
+    if metric not in VALUE_SELECTION_METRICS:
+        raise ValueError(f"unsupported value selection metric: {metric!r}.")
+    return "max" if metric == "sign_accuracy" else "min"
+
+
+def value_selection_score(metric_value: float, metric: str) -> float:
+    return metric_value if value_selection_metric_direction(metric) == "max" else -metric_value
 
 
 @dataclass

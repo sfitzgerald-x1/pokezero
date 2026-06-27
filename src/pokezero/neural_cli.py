@@ -47,10 +47,18 @@ from .search_policy import (
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
 )
-from .value_calibration import ValueCalibrationReport, evaluate_value_calibration
+from .value_calibration import (
+    VALUE_SELECTION_METRICS,
+    ValueCalibrationReport,
+    evaluate_value_calibration,
+    value_selection_metric_direction,
+    value_selection_metric_value,
+    value_selection_score,
+)
 from .neural_selfplay import (
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
+    NeuralValueSelectionConfig,
     _mapping,
     _sequence,
     load_neural_selfplay_run_manifest,
@@ -171,7 +179,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     train.add_argument(
         "--value-selection-metric",
-        choices=("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias"),
+        choices=VALUE_SELECTION_METRICS,
         default="mae",
         help="Held-out value metric used by --value-selection-data; sign_accuracy is maximized, others are minimized.",
     )
@@ -524,6 +532,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     iterate.add_argument("--value-calibration-batch-size", type=int, default=128, help="Per-iteration calibration batch size.")
     iterate.add_argument("--value-calibration-bins", type=int, default=10, help="Per-iteration calibration bin count.")
+    iterate.add_argument(
+        "--value-selection",
+        action="store_true",
+        help="Evaluate value calibration after each training epoch and save the best value-calibrated epoch.",
+    )
+    iterate.add_argument(
+        "--value-selection-scope",
+        choices=("iteration", "history"),
+        default="iteration",
+        help="Selection data scope: latest iteration training rollouts or full accumulated training history.",
+    )
+    iterate.add_argument(
+        "--value-selection-metric",
+        choices=VALUE_SELECTION_METRICS,
+        default="mae",
+        help="Value metric used by --value-selection; sign_accuracy is maximized, others are minimized.",
+    )
+    iterate.add_argument("--value-selection-batch-size", type=int, default=128, help="Per-epoch value-selection batch size.")
+    iterate.add_argument("--value-selection-bins", type=int, default=10, help="Per-epoch value-selection bin count.")
     iterate.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
     iterate.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count.")
     iterate.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
@@ -754,8 +781,7 @@ def _train_with_value_selection(
         raise ValueError("value selection batch_size must be positive.")
     if bins <= 0:
         raise ValueError("value selection bins must be positive.")
-    if selection_metric not in {"mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias"}:
-        raise ValueError(f"unsupported value selection metric: {selection_metric!r}.")
+    value_selection_metric_direction(selection_metric)
 
     selection_reports = []
     best_state = None
@@ -775,8 +801,8 @@ def _train_with_value_selection(
             bins=bins,
             device=device,
         )
-        metric_value = _value_selection_metric_value(report, selection_metric)
-        score = _value_selection_score(metric_value, selection_metric)
+        metric_value = value_selection_metric_value(report, selection_metric)
+        score = value_selection_score(metric_value, selection_metric)
         epoch = epoch_metric.epoch
         selection_reports.append(
             {
@@ -812,31 +838,12 @@ def _train_with_value_selection(
         "batch_size": batch_size,
         "bins": bins,
         "metric": selection_metric,
-        "metric_direction": "max" if selection_metric == "sign_accuracy" else "min",
+        "metric_direction": value_selection_metric_direction(selection_metric),
         "selected_epoch": best_epoch,
         "selected_metric_value": best_metric_value,
         "epochs": selection_reports,
     }
     return model, selected_result, payload
-
-
-def _value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
-    if metric == "mae":
-        return float(report.mae)
-    if metric == "mse":
-        return float(report.mse)
-    if metric == "expected_calibration_error":
-        return float(report.expected_calibration_error)
-    if metric == "sign_accuracy":
-        return float(report.sign_accuracy)
-    if metric == "abs_bias":
-        return abs(float(report.bias))
-    raise ValueError(f"unsupported value selection metric: {metric!r}.")
-
-
-def _value_selection_score(metric_value: float, metric: str) -> float:
-    return metric_value if metric == "sign_accuracy" else -metric_value
-
 
 def _benchmark(args: argparse.Namespace) -> int:
     # Benchmark loads arbitrary checkpoints; the env builds the vocabulary from showdown_root
@@ -1319,6 +1326,18 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, args.showdown_root)
         for spec in (args.benchmark_reference_policy or ())
     )
+    if args.value_selection:
+        print(
+            "warning: --value-selection in neural iterate scores self-play training rollouts, "
+            "not held-out validation; use it as value-head calibration plumbing, not policy-strength evidence.",
+            file=sys.stderr,
+        )
+        if args.value_selection_scope == "history":
+            print(
+                "warning: --value-selection-scope history re-evaluates the full accumulated training "
+                "history after every epoch and can become expensive.",
+                file=sys.stderr,
+            )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,
@@ -1345,6 +1364,7 @@ def _iterate(args: argparse.Namespace) -> int:
         post_iteration_audit_config=post_iteration_audit_config,
         post_iteration_audit_failure_mode=args.audit_failure_mode,
         value_calibration_config=_value_calibration_config_from_args(args),
+        value_selection_config=_value_selection_config_from_args(args),
         resume=args.resume,
     )
     if args.json:
@@ -1386,6 +1406,17 @@ def _value_calibration_config_from_args(args: argparse.Namespace) -> NeuralValue
     )
 
 
+def _value_selection_config_from_args(args: argparse.Namespace) -> NeuralValueSelectionConfig | None:
+    if not args.value_selection:
+        return None
+    return NeuralValueSelectionConfig(
+        scope=args.value_selection_scope,
+        metric=args.value_selection_metric,
+        batch_size=args.value_selection_batch_size,
+        bins=args.value_selection_bins,
+    )
+
+
 def _print_iterate_summary(result) -> None:
     print(f"run_dir: {result.run_dir}")
     for iteration in result.iterations:
@@ -1397,6 +1428,15 @@ def _print_iterate_summary(result) -> None:
             f"policy_accuracy={final_epoch.policy_accuracy:.4f} "
             f"promotion={_promotion_status(getattr(iteration, 'promotion', None))}"
         )
+        value_selection = getattr(iteration, "value_selection", None)
+        if value_selection is not None:
+            print(
+                "value_selection="
+                f"epoch={value_selection.get('selected_epoch')} "
+                f"metric={value_selection.get('metric')} "
+                f"value={float(value_selection.get('selected_metric_value')):.6f} "
+                f"artifact={value_selection.get('artifact_path')}"
+            )
         if iteration.benchmark is not None:
             print(f"benchmark_total_games={iteration.benchmark.total_games}")
     if result.latest_checkpoint_path is not None:
@@ -1427,7 +1467,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print("")
     header = (
         f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
-        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} checkpoint"
+        f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} checkpoint"
     )
     print(header)
     print("-" * len(header))
@@ -1436,6 +1476,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
         final_epoch = _final_epoch_metrics(iteration)
         advancement = _optional_mapping(iteration.get("advancement"))
         calibration_report = _iteration_value_calibration_report(iteration)
+        value_selection = _optional_mapping(iteration.get("value_selection"))
         print(
             f"{int(iteration.get('iteration', 0)):4d} "
             f"{int(metrics.get('games', 0)):5d} "
@@ -1447,6 +1488,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{_format_optional_float(final_epoch.get('loss') if final_epoch else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('policy_accuracy') if final_epoch else None, digits=4):>8} "
             f"{_format_optional_float(final_epoch.get('value_loss') if final_epoch else None, digits=6):>10} "
+            f"{_format_manifest_value(value_selection.get('selected_epoch') if value_selection else None):>6} "
             f"{_format_optional_float(calibration_report.get('sign_accuracy') if calibration_report else None, digits=4):>8} "
             f"{_format_optional_float(calibration_report.get('expected_calibration_error') if calibration_report else None, digits=6):>10} "
             f"{_format_optional_float(final_epoch.get('opponent_accuracy') if final_epoch else None, digits=4):>8} "

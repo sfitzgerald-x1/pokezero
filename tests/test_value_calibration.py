@@ -11,7 +11,13 @@ from pokezero.neural_cli import print_value_calibration_report
 from pokezero.neural_policy import TransformerTrainingConfig, require_torch, torch_available
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
-from pokezero.value_calibration import evaluate_value_calibration
+from pokezero.value_calibration import (
+    ValueCalibrationReport,
+    evaluate_value_calibration,
+    value_selection_metric_direction,
+    value_selection_metric_value,
+    value_selection_score,
+)
 from pokezero.value_calibration import _ValueCalibrationTotals
 
 
@@ -51,6 +57,26 @@ class ValueCalibrationTest(unittest.TestCase):
     def test_value_calibration_totals_rejects_mismatched_lengths(self) -> None:
         with self.assertRaisesRegex(ValueError, "same length"):
             _ValueCalibrationTotals(bin_count=2).add(predictions=(0.0,), returns=(0.0, 1.0))
+
+    def test_value_selection_metric_helpers_cover_min_and_max_metrics(self) -> None:
+        report = ValueCalibrationReport(
+            examples=4,
+            mse=0.36,
+            mae=0.4,
+            bias=-0.25,
+            sign_accuracy=0.75,
+            expected_calibration_error=0.12,
+            bins=(),
+            slices=(),
+        )
+
+        self.assertEqual(value_selection_metric_direction("mae"), "min")
+        self.assertEqual(value_selection_metric_direction("sign_accuracy"), "max")
+        self.assertEqual(value_selection_metric_value(report, "abs_bias"), 0.25)
+        self.assertEqual(value_selection_score(0.4, "mae"), -0.4)
+        self.assertEqual(value_selection_score(0.75, "sign_accuracy"), 0.75)
+        with self.assertRaisesRegex(ValueError, "unsupported value selection metric"):
+            value_selection_metric_direction("not-a-metric")
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():

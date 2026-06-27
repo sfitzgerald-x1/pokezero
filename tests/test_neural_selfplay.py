@@ -2,6 +2,7 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Mapping
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from pokezero.neural_selfplay import (
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
+    NeuralValueSelectionConfig,
     _promoted_checkpoint_specs,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
@@ -164,6 +166,48 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_args.kwargs["post_iteration_audit_failure_mode"], "runtime-health")
 
+    def test_neural_cli_iterate_wires_value_selection_config(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "2",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--value-selection",
+                        "--value-selection-scope",
+                        "history",
+                        "--value-selection-metric",
+                        "expected_calibration_error",
+                        "--value-selection-batch-size",
+                        "9",
+                        "--value-selection-bins",
+                        "6",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("not held-out validation", stderr.getvalue())
+        self.assertIn("can become expensive", stderr.getvalue())
+        self.assertEqual(
+            run.call_args.kwargs["value_selection_config"],
+            NeuralValueSelectionConfig(
+                scope="history",
+                metric="expected_calibration_error",
+                batch_size=9,
+                bins=6,
+            ),
+        )
+
     def test_run_neural_selfplay_iterations_writes_manifests_and_accumulates_training_data(self) -> None:
         collected = []
         trained_paths = []
@@ -268,6 +312,158 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(iteration_manifest["value_calibration"], calibration)
         self.assertEqual(run_manifest["iterations"][0]["value_calibration"], calibration)
         self.assertEqual(iteration_manifest["invocation_config"]["value_calibration"]["scope"], "iteration")
+
+    def test_run_neural_selfplay_iterations_selects_best_value_epoch(self) -> None:
+        class FakeReport:
+            def __init__(self, *, mae: float) -> None:
+                self.examples = 4
+                self.mse = mae * mae
+                self.mae = mae
+                self.bias = 0.0
+                self.sign_accuracy = 0.5
+                self.expected_calibration_error = mae / 2.0
+
+            def to_dict(self) -> dict:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "bins": [],
+                    "slices": [],
+                }
+
+        reports = [FakeReport(mae=0.4), FakeReport(mae=0.2), FakeReport(mae=0.3)]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with (
+                patched_neural_selfplay_dependencies(),
+                patch("pokezero.neural_selfplay.evaluate_value_calibration", side_effect=reports) as evaluate,
+            ):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=3, batch_size=2, device="cpu"),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=1,
+                    value_selection_config=NeuralValueSelectionConfig(
+                        scope="iteration",
+                        metric="mae",
+                        batch_size=7,
+                        bins=5,
+                    ),
+                )
+
+            iteration_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+            sidecar_path = run_dir / "iteration-0001" / "value-selection.json"
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(evaluate.call_count, 3)
+        for call in evaluate.call_args_list:
+            self.assertEqual(call.kwargs["paths"], (run_dir / "iteration-0001" / "training-rollouts.jsonl",))
+            self.assertEqual(call.kwargs["batch_size"], 7)
+            self.assertEqual(call.kwargs["bins"], 5)
+            self.assertEqual(call.kwargs["device"], "cpu")
+        training = result.iterations[0].training
+        self.assertEqual(training.training_config.epochs, 2)
+        self.assertEqual(training.final_metrics.epoch, 2)
+        selection = result.iterations[0].value_selection
+        self.assertIsNotNone(selection)
+        self.assertEqual(selection["scope"], "iteration")
+        self.assertEqual(selection["paths"], [str(run_dir / "iteration-0001" / "training-rollouts.jsonl")])
+        self.assertEqual(selection["data_role"], "training_rollouts")
+        self.assertIn("not held-out validation", selection["data_note"])
+        self.assertEqual(selection["metric"], "mae")
+        self.assertEqual(selection["metric_direction"], "min")
+        self.assertEqual(selection["selected_epoch"], 2)
+        self.assertEqual(selection["selected_metric_value"], 0.2)
+        self.assertEqual(selection["artifact_path"], str(sidecar_path))
+        self.assertEqual(sidecar["selected_epoch"], 2)
+        self.assertEqual(sidecar["data_role"], "training_rollouts")
+        self.assertEqual(len(sidecar["epochs"]), 3)
+        self.assertEqual(sidecar["epochs"][1]["metric_value"], 0.2)
+        self.assertEqual(iteration_manifest["value_selection"], selection)
+        self.assertEqual(run_manifest["iterations"][0]["value_selection"], selection)
+        self.assertEqual(iteration_manifest["training"]["config"]["epochs"], 2)
+        self.assertEqual(iteration_manifest["invocation_config"]["value_selection"]["scope"], "iteration")
+
+    def test_run_neural_selfplay_iterations_value_selection_history_scope_uses_accumulated_paths(self) -> None:
+        class FakeReport:
+            def __init__(self, *, sign_accuracy: float) -> None:
+                self.examples = 4
+                self.mse = 0.25
+                self.mae = 0.5
+                self.bias = 0.0
+                self.sign_accuracy = sign_accuracy
+                self.expected_calibration_error = 0.2
+
+            def to_dict(self) -> dict:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                    "bins": [],
+                    "slices": [],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with (
+                patched_neural_selfplay_dependencies(),
+                patch(
+                    "pokezero.neural_selfplay.evaluate_value_calibration",
+                    side_effect=[FakeReport(sign_accuracy=0.4), FakeReport(sign_accuracy=0.8)],
+                ) as evaluate,
+            ):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=2,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2, device="cpu"),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=1,
+                    value_selection_config=NeuralValueSelectionConfig(
+                        scope="history",
+                        metric="sign_accuracy",
+                        batch_size=3,
+                        bins=4,
+                    ),
+                )
+
+            second_sidecar = json.loads((run_dir / "iteration-0002" / "value-selection.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(evaluate.call_args_list[0].kwargs["paths"], (run_dir / "iteration-0001" / "training-rollouts.jsonl",))
+        self.assertEqual(evaluate.call_args_list[1].kwargs["paths"], (
+            run_dir / "iteration-0001" / "training-rollouts.jsonl",
+            run_dir / "iteration-0002" / "training-rollouts.jsonl",
+        ))
+        second_selection = result.iterations[1].value_selection
+        self.assertIsNotNone(second_selection)
+        self.assertEqual(second_selection["scope"], "history")
+        self.assertEqual(second_selection["metric"], "sign_accuracy")
+        self.assertEqual(second_selection["metric_direction"], "max")
+        self.assertEqual(second_selection["selected_metric_value"], 0.8)
+        self.assertEqual(second_sidecar["paths"], [
+            str(run_dir / "iteration-0001" / "training-rollouts.jsonl"),
+            str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
+        ])
 
     def test_run_neural_selfplay_iterations_benchmarks_checkpoint(self) -> None:
         captured_benchmarks = []
@@ -1359,26 +1555,40 @@ def patched_neural_selfplay_dependencies(
             capped_games=0,
         )
 
-    def fake_train_transformer_policy(paths, *, model_config, training_config, initial_model=None):
+    def fake_train_transformer_policy(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
         trained_paths.append(tuple(Path(path) for path in paths))
         trained_initial_models.append(getattr(initial_model, "policy_id", None))
-        result = TransformerTrainingResult(
-            model_config=model_config,
-            training_config=training_config,
-            epochs=(
+        model = FakeModel(model_config.policy_id)
+        metrics = []
+        for epoch in range(1, training_config.epochs + 1):
+            model.weight = epoch
+            metrics.append(
                 TransformerEpochMetrics(
-                    epoch=1,
+                    epoch=epoch,
                     examples=4,
-                    loss=0.25,
+                    loss=float(epoch) * 0.25,
                     policy_loss=0.2,
                     policy_accuracy=0.75,
                     value_loss=0.1,
                     opponent_loss=0.05,
                     opponent_accuracy=0.5,
-                ),
-            ),
+                )
+            )
+            if epoch_callback is not None:
+                epoch_callback(
+                    model,
+                    TransformerTrainingResult(
+                        model_config=model_config,
+                        training_config=training_config,
+                        epochs=tuple(metrics),
+                    ),
+                )
+        result = TransformerTrainingResult(
+            model_config=model_config,
+            training_config=training_config,
+            epochs=tuple(metrics),
         )
-        return FakeModel(model_config.policy_id), result
+        return model, result
 
     def fake_save_transformer_checkpoint(path, model, *, result):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -1387,6 +1597,15 @@ def patched_neural_selfplay_dependencies(
     class FakeModel:
         def __init__(self, policy_id: str) -> None:
             self.policy_id = policy_id
+            self.weight = 0
+            self.loaded_state = None
+
+        def state_dict(self) -> dict[str, object]:
+            return {"policy_id": self.policy_id, "weight": self.weight}
+
+        def load_state_dict(self, state: Mapping[str, object]) -> None:
+            self.loaded_state = dict(state)
+            self.weight = int(state["weight"])
 
     class FakePolicy:
         def __init__(self, policy_id: str) -> None:
