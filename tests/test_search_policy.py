@@ -109,7 +109,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             observation=_observation(0, 1),
             requested_players=("p1", "p2"),
             trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
-            requested_observations={"p1": _observation(0, 1), "p2": _observation(1)},
+            requested_legal_action_masks={"p1": _mask(0, 1), "p2": _mask(1)},
         )
 
         self.assertEqual(planner(context, random.Random(1)), {"p2": 1})

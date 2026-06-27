@@ -52,7 +52,7 @@ def greedy_opponent_action_planner(
         _validate_action_prior_vector(priors, name="opponent action priors")
         opponent_actions = {}
         for player in requested_opponents:
-            legal = _legal_action_indices_for_requested_player(context, player)
+            legal = _requested_legal_action_indices_for_player(context, player)
             if legal:
                 opponent_actions[player] = max(legal, key=lambda index: (priors[index], -index))
             else:
@@ -227,7 +227,7 @@ def _opponent_action_legality_report(
 ) -> _OpponentActionLegalityReport:
     checked = False
     for player, action_index in opponent_actions.items():
-        legal = _legal_action_indices_for_requested_player(context, player)
+        legal = _requested_legal_action_indices_for_player(context, player)
         if not legal:
             continue
         checked = True
@@ -242,16 +242,16 @@ def _opponent_action_legality_report(
     return _OpponentActionLegalityReport(checked=checked)
 
 
-def _legal_action_indices_for_requested_player(
+def _requested_legal_action_indices_for_player(
     context: PolicyContext,
     player: PlayerId,
 ) -> tuple[int, ...]:
-    observation = context.requested_observations.get(player)
-    if observation is None:
+    legal_action_mask = context.requested_legal_action_masks.get(player)
+    if legal_action_mask is None:
         return ()
-    if len(observation.legal_action_mask) != ACTION_COUNT:
+    if len(legal_action_mask) != ACTION_COUNT:
         return ()
-    return tuple(index for index, legal in enumerate(observation.legal_action_mask) if legal)
+    return tuple(index for index, legal in enumerate(legal_action_mask) if legal)
 
 
 def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> None:

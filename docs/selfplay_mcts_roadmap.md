@@ -52,7 +52,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   drive that hook from player-local opponent-action priors such as the transformer's auxiliary
   opponent-action head. In self-play/search benchmarks, the harness can additionally mask planned
   opponent actions against requested-player legal masks to avoid invalid branch submissions; this is
-  recorded as search metadata and is not a substitute for full hidden-information determinization.
+  recorded as search metadata. Because the mask includes opponent legal-action availability, this is
+  a privileged benchmark safety guard and is not a substitute for full hidden-information
+  determinization.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
