@@ -3182,10 +3182,10 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
     print(f"iterations: {len(iterations)}")
     if not iterations:
         return
-    print("note: incumbent win rate drives advancement; blended benchmark win rate is broad health.")
+    print("note: gate win rate is the advancement-comparison win rate; blended benchmark win rate is broad health.")
     print("")
     header = (
-        f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'inc_wr':>8} {'advance':>7} {'promo':>8} "
+        f"{'iter':>4} {'games':>5} {'cap':>4} {'bench_wr':>8} {'gate_wr':>8} {'advance':>7} {'promo':>8} "
         f"{'loss':>10} {'pol_acc':>8} {'value':>10} {'sel_ep':>6} {'val_sign':>8} {'val_ece':>10} {'opp_acc':>8} "
         f"{'ppo_cov':>8} {'ppo_clip':>8} {'ppo_ent':>8} checkpoint"
     )

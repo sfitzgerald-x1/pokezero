@@ -2079,7 +2079,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("repo_root: /repo", output)
         self.assertIn("iterations: 1", output)
         self.assertIn("bench_wr", output)
-        self.assertIn("inc_wr", output)
+        self.assertIn("gate_wr", output)
         self.assertIn("val_sign", output)
         self.assertIn("val_ece", output)
         self.assertIn("ppo_cov", output)
