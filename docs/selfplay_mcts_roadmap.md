@@ -403,6 +403,16 @@ Steps:
    (`raw=0.2619`, `affine=0.2615`, `isotonic=0.2509`). The read is useful because it separates
    calibration-error improvements from search-relevant ranking: for the latest pilot checkpoint,
    affine/isotonic transforms should not be treated as making the value head more useful for MCTS.
+   The H3 `opponent-signal` variant then ran the same local 3x256 pilot shape at
+   `runs/foundation-opponent-signal-local-20260627/pilot-001`, with
+   `--opponent-action-loss-weight 1.0`. This produced a better but still weak fixed-yardstick read:
+   `max-damage` win rates were 0.022, 0.110, then 0.062; `simple-legal` rose to 0.403 by iteration
+   3, and `random-legal` ended at 0.603. Latest foundation-readiness value calibration was present
+   over 19,670 examples with sign accuracy 0.5264, ECE 0.1975, and Pearson 0.2318. A held-out
+   `value-calibration-compare` on iteration 3 selected isotonic and improved Pearson from raw
+   0.3270 to 0.3581, with MAE improving from 0.9484 to 0.9186. This is real positive evidence for
+   the H3/base-net direction versus the cold baseline, but it is not yet a search-ready value head:
+   max-damage remains far below the M0 target and value ranking is still modest.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
