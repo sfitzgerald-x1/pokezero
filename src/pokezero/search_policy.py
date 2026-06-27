@@ -19,6 +19,7 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    _puct_candidate,
     player_observation_history,
     puct_branch_search,
 )
@@ -94,9 +95,10 @@ def prior_top_k_opponent_action_scenario_planner(
 ) -> OpponentActionScenarioPlanner:
     """Enumerate likely opponent root-action scenarios from player-local opponent priors.
 
-    This is hidden-info-safe in the same sense as ``greedy_opponent_action_planner``: the prior
-    function only sees the acting player's observation history. Requested-opponent legal masks are
-    used as a benchmark safety guard so replay branches stay submit-valid.
+    The prior function only sees the acting player's observation history. Requested-opponent legal
+    masks are still a privileged benchmark safety guard, and they affect scenario support and
+    weights so replay branches stay submit-valid. For multi-opponent turns, the final joint scenario
+    set is capped to ``scenario_count`` after combining per-opponent choices.
     """
 
     if scenario_count <= 0:
@@ -543,21 +545,13 @@ def _aggregate_scenario_searches(
         if first_candidate is None:
             raise ValueError("root PUCT search produced no candidates.")
         value_candidate = replace(first_candidate.value_candidate, value=weighted_value)
-        visits = 1
         prior = first_candidate.prior
-        total_value = weighted_value
-        exploration_score = cpuct * prior * sqrt_total / (1 + visits)
-        score = (total_value / visits) + exploration_score
         aggregated_candidates.append(
-            PUCTBranchSearchCandidate(
-                action_index=action_index,
-                prior=prior,
-                value=weighted_value,
-                visits=visits,
-                total_value=total_value,
-                exploration_score=exploration_score,
-                score=score,
+            _puct_candidate(
                 value_candidate=value_candidate,
+                prior=prior,
+                cpuct=cpuct,
+                sqrt_total_visits=sqrt_total,
             )
         )
 
