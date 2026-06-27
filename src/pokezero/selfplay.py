@@ -286,6 +286,7 @@ def run_selfplay_iterations(
     opponent_pool_manifest_config = opponent_pool_config_dict(
         fixed_opponent_policy_specs=fixed_opponents,
         max_historical_opponents=max_historical_opponents,
+        historical_opponent_selection="recent",
         promotion_registry_path=promotion_registry_path,
         promotion_pool_registry_path=promotion_pool_registry_path,
         required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,

@@ -66,6 +66,7 @@ from .neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
+from .opponents import HISTORICAL_OPPONENT_SELECTION_MODES
 from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
 from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
@@ -494,6 +495,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Write per-iteration TensorBoard scalars (loss, accuracy, win rate vs each benchmarked opponent, advancement) to this directory. Requires the tensorboard package (in the neural extra).",
     )
     iterate.add_argument("--max-historical-opponents", type=int, default=3, help="Number of older checkpoints kept in the opponent pool.")
+    iterate.add_argument(
+        "--historical-opponent-selection",
+        choices=HISTORICAL_OPPONENT_SELECTION_MODES,
+        default="recent",
+        help=(
+            "How to choose historical/promoted checkpoint opponents when more exist than "
+            "--max-historical-opponents. 'recent' keeps the latest checkpoints; 'spread' "
+            "deterministically spreads across the available history for more diverse league pressure."
+        ),
+    )
     iterate.add_argument(
         "--promotion-registry",
         type=Path,
@@ -1546,6 +1557,7 @@ def _iterate(args: argparse.Namespace) -> int:
         collection_temperature=args.collection_temperature,
         tensorboard_log_dir=args.tensorboard_logdir,
         max_historical_opponents=args.max_historical_opponents,
+        historical_opponent_selection=args.historical_opponent_selection,
         evaluation_games=args.evaluation_games,
         evaluation_seed_start=args.evaluation_seed_start,
         worker_count=args.workers,

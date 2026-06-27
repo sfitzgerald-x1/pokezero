@@ -20,10 +20,12 @@ def opponent_pool_config_dict(
     promotion_pool_registry_path: Path | None,
     required_promoted_opponent_pool_size: int | None,
     promoted_checkpoint_policy_specs: Iterable[str] = (),
+    historical_opponent_selection: str = "recent",
 ) -> dict[str, Any]:
     return {
         "fixed_opponent_policy_specs": [str(spec) for spec in fixed_opponent_policy_specs],
         "max_historical_opponents": max_historical_opponents,
+        "historical_opponent_selection": historical_opponent_selection,
         "promotion_registry_path": path_value(promotion_registry_path),
         "promotion_pool_registry_path": path_value(promotion_pool_registry_path),
         "required_promoted_opponent_pool_size": required_promoted_opponent_pool_size,

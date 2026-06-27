@@ -5861,6 +5861,8 @@ if __name__ == "__main__":
                         str(long_run_root),
                         "--promotion-registry",
                         str(registry_path),
+                        "--historical-opponent-selection",
+                        "spread",
                         "--require-ready",
                         "--json",
                     ]
@@ -5874,6 +5876,10 @@ if __name__ == "__main__":
         self.assertTrue(items["pilot_suite_ready"]["passed"])
         self.assertTrue(items["long_run_derived_audit_ready"]["passed"])
         self.assertTrue(items["promoted_opponent_pool_ready"]["passed"])
+        self.assertEqual(
+            items["promoted_opponent_pool_ready"]["evidence"]["historical_opponent_selection"],
+            "spread",
+        )
         self.assertEqual(
             items["promoted_opponent_pool_ready"]["evidence"]["selected_policy_specs"],
             [f"linear:{first_checkpoint.resolve(strict=False)}"],

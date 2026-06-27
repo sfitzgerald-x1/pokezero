@@ -35,7 +35,11 @@ from .neural_policy import (
     _validate_initial_model_config,
     train_transformer_policy,
 )
-from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
+from .opponents import (
+    HISTORICAL_OPPONENT_SELECTION_MODES,
+    opponent_pool_policy_specs,
+    require_historical_opponent_pool_size,
+)
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
@@ -342,6 +346,7 @@ def run_neural_selfplay_iterations(
     mirror_match: bool = False,
     collection_temperature: float = 1.0,
     max_historical_opponents: int = 3,
+    historical_opponent_selection: str = "recent",
     evaluation_games: int = 0,
     evaluation_seed_start: int = 1_000_000,
     worker_count: int = 1,
@@ -363,6 +368,9 @@ def run_neural_selfplay_iterations(
         raise ValueError("games_per_iteration must be positive.")
     if max_historical_opponents < 0:
         raise ValueError("max_historical_opponents must be non-negative.")
+    if historical_opponent_selection not in HISTORICAL_OPPONENT_SELECTION_MODES:
+        choices = ", ".join(HISTORICAL_OPPONENT_SELECTION_MODES)
+        raise ValueError(f"historical_opponent_selection must be one of: {choices}.")
     if evaluation_games < 0:
         raise ValueError("evaluation_games must be non-negative.")
     if required_promoted_opponent_pool_size is not None and required_promoted_opponent_pool_size < 0:
@@ -448,11 +456,13 @@ def run_neural_selfplay_iterations(
         promotion_pool_registry_path=promotion_pool_registry_path,
         current_policy_spec=current_policy_spec,
         max_historical_opponents=max_historical_opponents,
+        historical_opponent_selection=historical_opponent_selection,
         required_size=required_promoted_opponent_pool_size,
     )
     opponent_pool_manifest_config = opponent_pool_config_dict(
         fixed_opponent_policy_specs=fixed_opponents,
         max_historical_opponents=max_historical_opponents,
+        historical_opponent_selection=historical_opponent_selection,
         promotion_registry_path=promotion_registry_path,
         promotion_pool_registry_path=promotion_pool_registry_path,
         required_promoted_opponent_pool_size=required_promoted_opponent_pool_size,
@@ -517,6 +527,7 @@ def run_neural_selfplay_iterations(
                 checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
                 current_policy_spec=collection_current_policy_spec,
                 max_historical_opponents=max_historical_opponents,
+                historical_opponent_selection=historical_opponent_selection,
                 include_current_policy=mirror_match,
             )
 
@@ -1079,6 +1090,7 @@ def _require_promoted_opponent_pool(
     current_policy_spec: str,
     max_historical_opponents: int,
     required_size: int | None,
+    historical_opponent_selection: str = "recent",
 ) -> None:
     if required_size is None:
         return
@@ -1090,6 +1102,7 @@ def _require_promoted_opponent_pool(
         max_historical_opponents=max_historical_opponents,
         required_size=required_size,
         pool_label="promoted opponent pool",
+        selection_mode=historical_opponent_selection,
     )
 
 
@@ -1304,6 +1317,7 @@ def _opponent_pool(
     checkpoint_history: Iterable[str],
     current_policy_spec: str,
     max_historical_opponents: int,
+    historical_opponent_selection: str,
     include_current_policy: bool = False,
 ) -> tuple[str, ...]:
     return opponent_pool_policy_specs(
@@ -1312,6 +1326,7 @@ def _opponent_pool(
         current_policy_spec=current_policy_spec,
         max_historical_opponents=max_historical_opponents,
         include_current_policy=include_current_policy,
+        historical_selection_mode=historical_opponent_selection,
     )
 
 

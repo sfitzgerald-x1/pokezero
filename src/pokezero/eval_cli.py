@@ -25,7 +25,7 @@ from .evaluation import (
     evaluate_promotion_gate,
 )
 from .evaluation_profiles import EVALUATION_PROFILES, evaluation_profile
-from .opponents import policy_spec_identity
+from .opponents import HISTORICAL_OPPONENT_SELECTION_MODES, policy_spec_identity
 from .promotion import load_promotion_registry, record_promotion, verify_promotion_registry
 from .run_audit import (
     DEFAULT_AUDIT_CALIBRATION_MARGIN,
@@ -112,6 +112,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Preview the latest N promoted policy specs that self-play would use as historical opponents. "
             "By default, excludes the latest promoted policy as the assumed current collector."
+        ),
+    )
+    promotions.add_argument(
+        "--historical-opponent-selection",
+        choices=HISTORICAL_OPPONENT_SELECTION_MODES,
+        default="recent",
+        help=(
+            "How to choose promoted checkpoint opponents for --opponent-pool-size. "
+            "'recent' keeps the latest checkpoints; 'spread' deterministically spreads across history."
         ),
     )
     promotions.add_argument(
@@ -574,6 +583,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Maximum promoted historical opponents to consider for readiness.",
+    )
+    readiness_report.add_argument(
+        "--historical-opponent-selection",
+        choices=HISTORICAL_OPPONENT_SELECTION_MODES,
+        default="recent",
+        help=(
+            "How to choose promoted checkpoint opponents for readiness. 'recent' keeps the latest "
+            "checkpoints; 'spread' deterministically spreads across history."
+        ),
     )
     readiness_report.add_argument(
         "--require-promoted-opponent-pool-size",
@@ -1157,6 +1175,7 @@ def _promotions(args: argparse.Namespace) -> int:
         registry.opponent_pool_policy_specs(
             max_historical_opponents=len(registry.entries),
             current_policy_spec=preview_current_policy_spec,
+            selection_mode=args.historical_opponent_selection,
         )
         if args.opponent_pool_size is not None
         else None
@@ -1165,6 +1184,7 @@ def _promotions(args: argparse.Namespace) -> int:
         registry.opponent_pool_policy_specs(
             max_historical_opponents=args.opponent_pool_size,
             current_policy_spec=preview_current_policy_spec,
+            selection_mode=args.historical_opponent_selection,
         )
         if args.opponent_pool_size is not None
         else None
@@ -1226,6 +1246,7 @@ def _promotions(args: argparse.Namespace) -> int:
             available_opponent_pool=available_opponent_pool,
             current_policy_spec=preview_current_policy_spec,
             requested_size=args.opponent_pool_size,
+            selection_mode=args.historical_opponent_selection,
             required_size=args.require_opponent_pool_size,
             verification=verification,
             verify_opponent_pool_only=args.verify_opponent_pool_only,
@@ -1246,6 +1267,7 @@ def _promotions(args: argparse.Namespace) -> int:
             available_opponent_pool=available_opponent_pool,
             current_policy_spec=preview_current_policy_spec,
             requested_size=args.opponent_pool_size,
+            selection_mode=args.historical_opponent_selection,
             verification=verification,
             registry_level_verification_passed=opponent_pool_registry_level_verified,
         )
@@ -1306,6 +1328,7 @@ def _promotions(args: argparse.Namespace) -> int:
                 else "opponent_pool_plus_current" if args.verify_opponent_pool_only else "registry"
             )
             payload["opponent_pool_requested_size"] = args.opponent_pool_size
+            payload["historical_opponent_selection"] = args.historical_opponent_selection
             payload["opponent_pool_selected_size"] = len(opponent_pool)
             payload["opponent_pool_available_size"] = (
                 len(available_opponent_pool) if available_opponent_pool is not None else None
@@ -1359,6 +1382,7 @@ def _promotions(args: argparse.Namespace) -> int:
         _print_promotion_archive_integrity(archive_integrity)
     if opponent_pool is not None:
         print(f"opponent_pool_excluded_current_policy_spec: {preview_current_policy_spec or '-'}")
+        print(f"historical_opponent_selection: {args.historical_opponent_selection}")
         print(f"opponent_pool_requested_size: {args.opponent_pool_size}")
         print(f"opponent_pool_selected_size: {len(opponent_pool)}")
         if available_opponent_pool is not None:
@@ -1443,6 +1467,7 @@ def _opponent_pool_snapshot_payload(
     available_opponent_pool,
     current_policy_spec: str | None,
     requested_size: int | None,
+    selection_mode: str,
     required_size: int | None,
     verification,
     verify_opponent_pool_only: bool,
@@ -1460,6 +1485,7 @@ def _opponent_pool_snapshot_payload(
         "registry_latest_checkpoint_path": registry.latest.checkpoint_path if registry.latest is not None else None,
         "excluded_current_policy_spec": current_policy_spec,
         "requested_size": requested_size,
+        "historical_opponent_selection": selection_mode,
         "required_size": required_size,
         "selected_size": len(opponent_pool),
         "available_size": len(available_opponent_pool) if available_opponent_pool is not None else None,
@@ -1514,6 +1540,7 @@ def _promotion_retention_plan_payload(
     available_opponent_pool,
     current_policy_spec: str | None,
     requested_size: int | None,
+    selection_mode: str,
     verification,
     registry_level_verification_passed: bool | None,
 ) -> dict[str, object]:
@@ -1534,6 +1561,7 @@ def _promotion_retention_plan_payload(
         "registry_latest_checkpoint_path": registry.latest.checkpoint_path if registry.latest is not None else None,
         "excluded_current_policy_spec": current_policy_spec,
         "requested_opponent_pool_size": requested_size,
+        "historical_opponent_selection": selection_mode,
         "selected_opponent_pool_size": len(opponent_pool),
         "available_opponent_pool_size": len(available_opponent_pool) if available_opponent_pool is not None else None,
         "verification_enabled": verification is not None,
@@ -3737,6 +3765,7 @@ def _cpu_readiness_report_payload(args: argparse.Namespace) -> dict[str, object]
             args.promotion_registry,
             current_policy_spec=args.current_policy_spec,
             opponent_pool_size=args.opponent_pool_size,
+            historical_opponent_selection=args.historical_opponent_selection,
             require_promoted_opponent_pool_size=args.require_promoted_opponent_pool_size,
             verify_loadable=args.verify_loadable_promotions,
             errors=errors,
@@ -3875,6 +3904,7 @@ def _cpu_readiness_promotion_pool_item(
     *,
     current_policy_spec: str | None,
     opponent_pool_size: int,
+    historical_opponent_selection: str,
     require_promoted_opponent_pool_size: int,
     verify_loadable: bool,
     errors: list[dict[str, object]],
@@ -3886,6 +3916,7 @@ def _cpu_readiness_promotion_pool_item(
             reasons=("promotion_registry_not_provided",),
             evidence={
                 "opponent_pool_size": opponent_pool_size,
+                "historical_opponent_selection": historical_opponent_selection,
                 "required_pool_size": require_promoted_opponent_pool_size,
             },
         )
@@ -3897,6 +3928,7 @@ def _cpu_readiness_promotion_pool_item(
         selected = registry.opponent_pool_policy_specs(
             max_historical_opponents=opponent_pool_size,
             current_policy_spec=resolved_current_policy,
+            selection_mode=historical_opponent_selection,
         )
         verification = verify_promotion_registry(registry.path, verify_loadable=verify_loadable)
     except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
@@ -3922,6 +3954,7 @@ def _cpu_readiness_promotion_pool_item(
             "entry_count": len(registry.entries),
             "current_policy_spec": resolved_current_policy,
             "opponent_pool_size": opponent_pool_size,
+            "historical_opponent_selection": historical_opponent_selection,
             "required_pool_size": require_promoted_opponent_pool_size,
             "selected_pool_size": len(selected),
             "selected_policy_specs": list(selected),

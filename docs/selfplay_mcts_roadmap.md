@@ -357,6 +357,11 @@ Steps:
    mode we already hit) induces no learning pressure. Add a behavioral-diversity check and/or a
    dedicated exploiter agent folded back into the pool. Wire through the existing promotion registry
    / historical-opponent plumbing.
+   Neural self-play now has an opt-in `--historical-opponent-selection spread` mode that chooses
+   promoted/history opponents across the available checkpoint range instead of only taking the
+   most recent entries. The current spread policy keeps both the oldest and newest selectable
+   checkpoints when capacity allows. This is a first pool-pressure lever; behavioral diversity
+   scoring and learned/exploiter pool management remain open.
 3. **Exploration pressure:** expose and tune entropy coefficient + collection temperature; ensure
    collection samples (not greedy) so the policy keeps exploring.
 4. **Fixed-yardstick eval every iteration** (see WS-F) and persist the strength curve.

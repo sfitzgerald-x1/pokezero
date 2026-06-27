@@ -179,6 +179,23 @@ class PromotionRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             registry.opponent_pool_policy_specs(max_historical_opponents=-1)
 
+    def test_registry_opponent_pool_preview_supports_spread_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=5)
+
+            registry = load_promotion_registry(registry_path)
+            latest_spec = registry.entries[-1].checkpoint_policy_spec
+            specs = registry.checkpoint_policy_specs()
+
+        self.assertEqual(
+            registry.opponent_pool_policy_specs(
+                max_historical_opponents=2,
+                current_policy_spec=latest_spec,
+                selection_mode="spread",
+            ),
+            (specs[0], specs[3]),
+        )
+
     def test_historical_opponent_policy_specs_excludes_current_checkpoint_by_resolved_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -534,6 +551,42 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(payload["opponent_pool_available_size"], 2)
         self.assertIsNone(payload["opponent_pool_required_size"])
         self.assertTrue(payload["opponent_pool_requirement_passed"])
+
+    def test_eval_cli_promotions_json_uses_spread_opponent_pool_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry_path = write_registry_with_entries(Path(temp_dir), count=5)
+            registry = load_promotion_registry(registry_path)
+            latest_spec = registry.latest_selection_checkpoint_policy_spec()
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = eval_cli_main(
+                    [
+                        "promotions",
+                        "--registry",
+                        str(registry_path),
+                        "--opponent-pool-size",
+                        "2",
+                        "--historical-opponent-selection",
+                        "spread",
+                        "--json",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["opponent_pool_policy_specs"],
+            list(
+                historical_opponent_policy_specs(
+                    registry.selection_checkpoint_policy_specs(),
+                    current_policy_spec=latest_spec,
+                    max_historical_opponents=2,
+                    selection_mode="spread",
+                )
+            ),
+        )
+        self.assertEqual(payload["historical_opponent_selection"], "spread")
+        self.assertEqual(payload["opponent_pool_snapshot"]["historical_opponent_selection"], "spread")
 
     def test_eval_cli_promotions_json_can_require_opponent_pool_size(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2040,6 +2093,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("opponent_pool_policy_specs:", output)
+        self.assertIn("historical_opponent_selection: recent", output)
         self.assertIn("opponent_pool_selected_size: 1", output)
         self.assertIn("opponent_pool_available_size: 1", output)
         self.assertIn(f"opponent_pool_snapshot: {snapshot_path}", output)
@@ -2051,6 +2105,7 @@ class PromotionRegistryTest(unittest.TestCase):
         self.assertIn("pool=selected", output)
         self.assertIn("pool=excluded_current_policy", output)
         self.assertIn("pass --verify", output)
+        self.assertEqual(snapshot["historical_opponent_selection"], "recent")
         self.assertEqual(snapshot["policy_specs"], [registry.selection_checkpoint_policy_spec_for_entry(registry.entries[0])])
 
     def test_eval_cli_promotions_text_prints_retention_plan(self) -> None:

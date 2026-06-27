@@ -1002,6 +1002,38 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # so self-play happens from the start rather than only after a promotion.
         self.assertIn("neural:/tmp/bootstrap.pt", collected[0]["opponent_policy_specs"])
 
+    def test_spread_historical_selection_uses_older_and_recent_checkpoints(self) -> None:
+        collected: list = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies(collected=collected):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=6,
+                    games_per_iteration=1,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                    max_historical_opponents=2,
+                    historical_opponent_selection="spread",
+                    evaluation_games=1,
+                    collector_advancement_mode="always",
+                )
+            iteration_manifest = json.loads((run_dir / "iteration-0006" / "manifest.json").read_text(encoding="utf-8"))
+
+            first_checkpoint = f"neural:{run_dir / 'iteration-0001' / 'transformer-policy.pt'}"
+            fourth_checkpoint = f"neural:{run_dir / 'iteration-0004' / 'transformer-policy.pt'}"
+            fifth_checkpoint = f"neural:{run_dir / 'iteration-0005' / 'transformer-policy.pt'}"
+            self.assertEqual(
+                collected[5]["opponent_policy_specs"],
+                ("simple-legal", first_checkpoint, fourth_checkpoint),
+            )
+            self.assertNotIn(fifth_checkpoint, collected[5]["opponent_policy_specs"])
+            self.assertEqual(iteration_manifest["opponent_pool_config"]["historical_opponent_selection"], "spread")
+
     def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
         from types import SimpleNamespace
 
@@ -1639,6 +1671,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         expected_pool_config = {
             "fixed_opponent_policy_specs": ["random-legal"],
             "max_historical_opponents": 2,
+            "historical_opponent_selection": "recent",
             "promotion_registry_path": str(registry_path),
             "promotion_pool_registry_path": str(registry_path),
             "required_promoted_opponent_pool_size": None,
