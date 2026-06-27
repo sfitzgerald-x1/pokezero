@@ -1775,6 +1775,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "checkpoint.pt",
                     "--data",
                     "rollouts.jsonl",
+                    "--eval-data",
+                    "eval-rollouts.jsonl",
                     "--fit-out",
                     "calibrated.pt",
                     "--device",
@@ -1790,10 +1792,34 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(save.call_args.args[0], Path("calibrated.pt"))
         self.assertEqual(saved_result.value_calibration_transform, transform)
         self.assertEqual(evaluate.call_args.kwargs["training_result"].value_calibration_transform, transform)
+        self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("eval-rollouts.jsonl")])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["checkpoint"], "calibrated.pt")
+        self.assertEqual(payload["fit_paths"], ["rollouts.jsonl"])
+        self.assertEqual(payload["evaluation_paths"], ["eval-rollouts.jsonl"])
+        self.assertTrue(payload["evaluation_held_out"])
         self.assertEqual(payload["value_calibration_transform"]["scale"], 1.5)
         self.assertEqual(payload["report"], {"examples": 3, "mae": 0.1})
+
+    def test_neural_cli_value_calibration_rejects_eval_data_without_fit_out(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "value-calibration",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--data",
+                    "rollouts.jsonl",
+                    "--eval-data",
+                    "eval-rollouts.jsonl",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--eval-data requires --fit-out", stderr.getvalue())
 
     def test_neural_cli_value_calibration_resolves_default_device(self) -> None:
         if not torch_available():
