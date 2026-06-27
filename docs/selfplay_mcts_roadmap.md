@@ -305,6 +305,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   `foundation_evidence_status` that says whether these prerequisites are present/sample-sized. This
   is not a value-quality or strength verdict; it is a guardrail against over-reading search deltas when
   the value/base-net/eval evidence is incomplete.
+  `neural_cli foundation-compare` compares multiple foundation-run wrapper summaries side by side,
+  including latest fixed-yardstick rates and value calibration signals, so WS-A/WS-E arms can be
+  selected from comparable artifacts before spending more time on search tuning.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).

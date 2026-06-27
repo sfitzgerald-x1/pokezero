@@ -2363,6 +2363,129 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(summary["schema_version"], "pokezero.neural_foundation_run_summary.v1")
         self.assertEqual(summary["status"], "passed")
 
+    def test_neural_cli_foundation_compare_summarizes_manifest_yardsticks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            baseline_dir = temp_path / "baseline" / "pilot-001"
+            opponent_signal_dir = temp_path / "opponent-signal" / "pilot-001"
+            write_neural_report_manifest(baseline_dir)
+            write_neural_report_manifest(opponent_signal_dir)
+            _rewrite_neural_manifest_yardstick(
+                opponent_signal_dir / "manifest.json",
+                max_damage_wins=8,
+                simple_wins=14,
+                random_wins=16,
+            )
+            baseline_summary = _write_foundation_summary(
+                baseline_dir,
+                profile="pilot",
+                variant=None,
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.11,
+            )
+            opponent_signal_summary = _write_foundation_summary(
+                opponent_signal_dir,
+                profile="pilot",
+                variant="opponent-signal",
+                value_correlation=0.36,
+                value_sign=0.53,
+                value_ece=0.20,
+                max_damage_win_rate=0.12,
+            )
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(baseline_summary),
+                        str(opponent_signal_summary),
+                    ]
+                )
+            with patch("sys.stdout", new_callable=io.StringIO) as json_stdout:
+                json_exit_code = neural_cli_main(
+                    [
+                        "foundation-compare",
+                        str(baseline_summary),
+                        str(opponent_signal_summary),
+                        "--json",
+                    ]
+                )
+
+        output = stdout.getvalue()
+        payload = json.loads(json_stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json_exit_code, 0)
+        self.assertIn("neural_foundation_compare:", output)
+        self.assertIn("not an MCTS verdict", output)
+        self.assertIn("baseline/pilot-001", output)
+        self.assertIn("opponent-signal", output)
+        self.assertIn("0.250", output)
+        self.assertIn("0.400", output)
+        self.assertIn("1.000", output)
+        self.assertIn("0.700", output)
+        self.assertIn("manifest=loaded", output)
+        self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["source"], "manifest")
+        self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["win_rate"], 0.25)
+        self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["source"], "manifest")
+        self.assertEqual(payload["entries"][1]["yardsticks"]["max-damage"]["win_rate"], 0.4)
+
+    def test_neural_cli_foundation_compare_keeps_good_rows_when_summary_load_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "baseline" / "pilot-001"
+            write_neural_report_manifest(run_dir)
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="pilot",
+                variant=None,
+                value_correlation=0.31,
+                value_sign=0.61,
+                value_ece=0.12,
+                max_damage_win_rate=0.25,
+            )
+            missing_path = temp_path / "missing-run"
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["foundation-compare", str(summary_path), str(missing_path)])
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("baseline/pilot-001", output)
+        self.assertIn("load_error", output)
+        self.assertIn(str(missing_path), output)
+
+    def test_neural_cli_foundation_compare_json_uses_summary_when_manifest_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "summary-only"
+            run_dir.mkdir()
+            summary_path = _write_foundation_summary(
+                run_dir,
+                profile="smoke",
+                variant="opponent-signal",
+                value_correlation=0.22,
+                value_sign=0.51,
+                value_ece=0.30,
+                max_damage_win_rate=0.125,
+            )
+            (run_dir / "manifest.json").unlink(missing_ok=True)
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = neural_cli_main(["foundation-compare", str(run_dir), "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        entry = payload["entries"][0]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "pokezero.neural_foundation_compare.v1")
+        self.assertFalse(entry["manifest_loaded"])
+        self.assertEqual(entry["manifest_error"], "manifest not found")
+        self.assertEqual(entry["variant"], "opponent-signal")
+        self.assertEqual(entry["yardsticks"]["max-damage"]["source"], "summary")
+        self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.125)
+        self.assertFalse(entry["yardsticks"]["simple-legal"]["available"])
+        self.assertEqual(entry["value_calibration"]["pearson_correlation"], 0.22)
+
     def test_neural_cli_iterate_summary_prints_ppo_diagnostics_when_present(self) -> None:
         result = SimpleNamespace(
             run_dir=Path("/tmp/run"),
@@ -2672,6 +2795,88 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
     if source is not None:
         run_manifest["source"] = source
     (run_dir / "manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
+
+
+def _rewrite_neural_manifest_yardstick(
+    manifest_path: Path,
+    *,
+    max_damage_wins: int,
+    simple_wins: int,
+    random_wins: int,
+) -> None:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for result in manifest["iterations"][0]["benchmark"]["head_to_heads"]:
+        opponent = result["second_policy_id"]
+        if opponent == "max-damage":
+            result["first_policy_wins"] = max_damage_wins
+            result["second_policy_wins"] = int(result["games"]) - max_damage_wins
+        elif opponent == "simple-legal":
+            result["first_policy_wins"] = simple_wins
+            result["second_policy_wins"] = int(result["games"]) - simple_wins
+        elif opponent == "random-legal":
+            result["first_policy_wins"] = random_wins
+            result["second_policy_wins"] = int(result["games"]) - random_wins
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _write_foundation_summary(
+    run_dir: Path,
+    *,
+    profile: str,
+    variant: str | None,
+    value_correlation: float,
+    value_sign: float,
+    value_ece: float,
+    max_damage_win_rate: float,
+) -> Path:
+    summary_path = run_dir / "neural-foundation-run-summary.json"
+    recipe = {
+        "profile": profile,
+        "run_dir": str(run_dir),
+        "manifest_path": str(run_dir / "manifest.json"),
+    }
+    if variant is not None:
+        recipe["variant"] = variant
+    summary = {
+        "schema_version": "pokezero.neural_foundation_run_summary.v1",
+        "status": "passed",
+        "duration_seconds": 12.5,
+        "recipe": recipe,
+        "foundation": {
+            "manifest_available": True,
+            "manifest_source": str(run_dir / "manifest.json"),
+            "manifest_error": None,
+            "latest_iteration": 1,
+            "latest_checkpoint_path": str(run_dir / "iteration-0001" / "transformer-policy.pt"),
+            "foundation_readiness": {
+                "latest_iteration": 1,
+                "milestone_benchmark_games": 300,
+                "foundation_evidence_status": "incomplete",
+                "reasons": ["max_damage_sample_below_milestone"],
+                "value_calibration": {
+                    "available": True,
+                    "examples": 100,
+                    "sign_accuracy": value_sign,
+                    "expected_calibration_error": value_ece,
+                    "pearson_correlation": value_correlation,
+                    "mse": 0.9,
+                    "mae": 0.8,
+                    "bias": 0.1,
+                },
+                "max_damage_yardstick": {
+                    "available": True,
+                    "opponent_policy_id": "max-damage",
+                    "iteration": 1,
+                    "win_rate": max_damage_win_rate,
+                    "games": 20,
+                    "capped_games": 2,
+                    "sample_games_ready": False,
+                },
+            },
+        },
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary_path
 
 
 def neural_report_source_metadata(
