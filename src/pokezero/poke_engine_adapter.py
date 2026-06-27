@@ -13,7 +13,8 @@ keep CI off the native dependency, or ``None`` to use the installed engine via
 
 This adapter only constructs a state; it does **not** prove Showdown or Gen 3
 random-battle mechanics equivalence. Legal-action equivalence against Showdown
-request payloads is the next, still-unowned step.
+request payloads lives in :mod:`pokezero.poke_engine_legal_actions` (currently
+gated on a poke-engine root-option export).
 """
 
 from __future__ import annotations
