@@ -452,6 +452,16 @@ Steps:
    retention yardstick: the first candidate initializes the baseline, and later candidates become the
    next rollout collector only when they beat the best accepted `max-damage` win rate so far. This is
    not a final promotion gate, but it directly targets the GRU/H3 always-advance regression pattern.
+   The first local yardstick-gated GRU pilot at
+   `runs/foundation-gru-yardstick-local-20260627/pilot-001` passed in 1,697 seconds and confirmed
+   the retention mechanism: iteration 1 initialized the collector baseline at `max-damage=0.085`,
+   iteration 2 improved to `0.113` and advanced, and iteration 3 regressed to `0.092` and did **not**
+   become the next collector. The run's `current_policy` and `latest_accepted_checkpoint` correctly
+   remained at iteration 2 even though the latest saved checkpoint is iteration 3. This is positive
+   evidence for collector retention, not a base-net breakthrough: best `max-damage` remained only
+   `0.113/400`, and the latest value read was weak (`sign=0.4249`, `ECE=0.2819`, `Pearson=0.2302`).
+   The next WS-A/WS-E lever should improve value/base-net quality rather than returning to search
+   micro-tuning.
 2. **History/league opponent pool — diversity, not just recency:** sample opponents from a bounded
    set of *past* checkpoints (not just the latest) to kill non-transitive cycling and forgetting.
    Crucially, guard pool *diversity*: a pool of near-identical aggression-exploiters (the failure
