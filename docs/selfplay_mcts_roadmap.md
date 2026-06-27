@@ -442,6 +442,14 @@ Steps:
    still far below the roughly 0.57 scripted-teacher bar. Treat this as useful negative WS-A
    evidence: teacher-cut PPO is wired and can climb slightly, but the current base-net/update
    recipe is not yet escaping the imitation ceiling.
+   A value-only tune of that teacher-cut iteration-3 checkpoint then used the three iteration
+   training shards, selected epochs by Pearson on the held-out value-selection shards, and reported
+   final calibration on a fresh 32-game independent mirror split at
+   `runs/foundation-teacher-cut-local-20260627/value-tune-best-max-pearson-001/independent-calibration-rollouts.jsonl`.
+   It did not materially improve the value head: on 2,749 independent examples, the original
+   checkpoint measured Pearson 0.1679, sign 0.5300, ECE 0.1201, and MAE 0.9744; the value-tuned
+   checkpoint measured Pearson 0.1694, sign 0.5278, ECE 0.1437, and MAE 0.9739. Treat this as
+   another negative WS-E read for simple value-only fine-tuning on the current teacher-cut data.
    The wrapper also supports `--variant opponent-signal` for the H3 ablation path: it keeps the
    same foundation recipe but raises opponent-action auxiliary supervision, so the result can be
    compared against the baseline wrapper before spending more effort on search tuning.
