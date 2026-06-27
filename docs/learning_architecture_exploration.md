@@ -181,7 +181,10 @@ privileged supervision, etc.).
   early mirror matches, so it tested the *loop*, not the pool. The open question is whether a
   healthy self-play arms race over this pool generates aggression on its own, or whether the
   pool must be *seeded* with a `max-damage`-like aggressor (curriculum) for the equilibrium to
-  account for relentless aggression.
+  account for relentless aggression. *Current update:* the `aggressive-damage` curriculum now
+  runs, but adding `scripted-teacher` back into that same 3x256 PPO shape made the model worse
+  versus `max-damage` (139/600 vs 159/600 for aggressive-only). That points away from generic
+  fixed-opponent diversity and toward targeted anti-aggression/counterplay pressure.
 
 ## Recommended Experiment Sequence (goal task order)
 
