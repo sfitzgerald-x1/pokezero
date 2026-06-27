@@ -1665,6 +1665,180 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(payload["report"]["sign_accuracy"], 0.75)
         self.assertIn(f"value_calibration: {calibration_path}", stdout.getvalue())
 
+    def test_value_selection_restores_best_epoch_state(self) -> None:
+        from pokezero.neural_cli import _train_with_value_selection
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.weight = 0
+                self.loaded_state = None
+
+            def state_dict(self) -> dict[str, int]:
+                return {"weight": self.weight}
+
+            def load_state_dict(self, state: dict[str, int]) -> None:
+                self.loaded_state = dict(state)
+                self.weight = int(state["weight"])
+
+        class FakeReport:
+            def __init__(self, *, mae: float, sign_accuracy: float = 0.5) -> None:
+                self.examples = 2
+                self.mse = mae * mae
+                self.mae = mae
+                self.bias = 0.0
+                self.sign_accuracy = sign_accuracy
+                self.expected_calibration_error = mae / 2.0
+
+            def to_dict(self) -> dict[str, float | int]:
+                return {
+                    "examples": self.examples,
+                    "mse": self.mse,
+                    "mae": self.mae,
+                    "bias": self.bias,
+                    "sign_accuracy": self.sign_accuracy,
+                    "expected_calibration_error": self.expected_calibration_error,
+                }
+
+        fake_model = FakeModel()
+        model_config = TransformerPolicyConfig.compact_category(category_vocab=("species:a",), category_oov_buckets=2)
+        training_config = TransformerTrainingConfig(epochs=3)
+        train_calls = 0
+
+        def fake_train(paths, *, model_config, training_config, initial_model=None, epoch_callback=None):
+            nonlocal train_calls
+            model = initial_model or fake_model
+            metrics = []
+            for epoch in range(1, training_config.epochs + 1):
+                train_calls += 1
+                model.weight = epoch
+                metrics.append(
+                    TransformerEpochMetrics(
+                        epoch=epoch,
+                        examples=2,
+                        loss=float(epoch),
+                        policy_loss=float(epoch),
+                        policy_accuracy=0.5,
+                        value_loss=float(epoch),
+                    )
+                )
+                if epoch_callback is not None:
+                    epoch_callback(
+                        model,
+                        TransformerTrainingResult(
+                            model_config=model_config,
+                            training_config=training_config,
+                            epochs=tuple(metrics),
+                        ),
+                    )
+            return model, TransformerTrainingResult(
+                model_config=model_config,
+                training_config=training_config,
+                epochs=tuple(metrics),
+            )
+
+        reports = [FakeReport(mae=0.4), FakeReport(mae=0.2), FakeReport(mae=0.3)]
+
+        with (
+            patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train),
+            patch("pokezero.neural_cli.evaluate_value_calibration", side_effect=reports),
+        ):
+            model, result, payload = _train_with_value_selection(
+                paths=[Path("train.jsonl")],
+                model_config=model_config,
+                training_config=training_config,
+                initial_model=fake_model,
+                selection_paths=[Path("heldout.jsonl")],
+                selection_metric="mae",
+                batch_size=5,
+                bins=4,
+            )
+
+        self.assertEqual(model.weight, 2)
+        self.assertEqual(model.loaded_state, {"weight": 2})
+        self.assertEqual(train_calls, 3)
+        self.assertEqual(result.training_config.epochs, 2)
+        self.assertEqual(result.final_metrics.epoch, 2)
+        self.assertEqual(payload["selected_epoch"], 2)
+        self.assertEqual(payload["selected_metric_value"], 0.2)
+        self.assertEqual(len(payload["epochs"]), 3)
+
+    def test_neural_cli_train_can_write_value_selection_artifact(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+
+        def fake_train_with_selection(**kwargs):
+            return fake_model, TransformerTrainingResult(
+                model_config=kwargs["model_config"],
+                training_config=kwargs["training_config"],
+                epochs=(
+                    TransformerEpochMetrics(
+                        epoch=1,
+                        examples=4,
+                        loss=0.25,
+                        policy_loss=0.2,
+                        policy_accuracy=0.75,
+                        value_loss=0.25,
+                    ),
+                ),
+            ), {
+                "paths": ["heldout.jsonl"],
+                "batch_size": 11,
+                "bins": 7,
+                "metric": "expected_calibration_error",
+                "metric_direction": "min",
+                "selected_epoch": 1,
+                "selected_metric_value": 0.12,
+                "epochs": [],
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "checkpoint.pt"
+            selection_path = Path(temp_dir) / "value-selection.json"
+            stdout = io.StringIO()
+            with (
+                patch("pokezero.neural_cli._train_with_value_selection", side_effect=fake_train_with_selection) as select_train,
+                patch("pokezero.neural_cli.save_transformer_checkpoint") as save,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "train",
+                        "--data",
+                        "train-rollouts.jsonl",
+                        "--out",
+                        str(checkpoint_path),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--objective",
+                        "value-only",
+                        "--freeze-non-value-parameters",
+                        "--value-selection-data",
+                        "heldout.jsonl",
+                        "--value-selection-metric",
+                        "expected_calibration_error",
+                        "--value-selection-out",
+                        str(selection_path),
+                        "--value-calibration-batch-size",
+                        "11",
+                        "--value-calibration-bins",
+                        "7",
+                    ]
+                )
+
+            payload = json.loads(selection_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(select_train.call_args.kwargs["selection_paths"], [Path("heldout.jsonl")])
+        self.assertEqual(select_train.call_args.kwargs["selection_metric"], "expected_calibration_error")
+        self.assertEqual(select_train.call_args.kwargs["batch_size"], 11)
+        self.assertEqual(select_train.call_args.kwargs["bins"], 7)
+        self.assertEqual(save.call_args.args[0], checkpoint_path)
+        self.assertEqual(payload["selected_epoch"], 1)
+        self.assertEqual(payload["selected_metric_value"], 0.12)
+        self.assertIn(f"value_selection: {selection_path}", stdout.getvalue())
+
     def test_neural_cli_train_can_warm_start_value_only_finetune(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
@@ -2309,6 +2483,44 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 ),
                 training_config=TransformerTrainingConfig(batch_size=2, epochs=1, window_size=4, device="cpu"),
             )
+
+    def test_train_transformer_policy_calls_epoch_callback(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+
+            callback_epochs = []
+            _, result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="callback-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=2,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+                epoch_callback=lambda model, epoch_result: callback_epochs.append(epoch_result.final_metrics.epoch),
+            )
+
+        self.assertEqual(callback_epochs, [1, 2])
+        self.assertEqual(result.final_metrics.epoch, 2)
 
 
 if __name__ == "__main__":

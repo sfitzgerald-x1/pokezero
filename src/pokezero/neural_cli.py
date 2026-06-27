@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from .neural_policy import (
     TransformerPolicyConfig,
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
+    TransformerTrainingResult,
     collect_categorical_ids,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
@@ -160,6 +162,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--value-calibration-batch-size", type=int, default=128, help="Post-train calibration batch size.")
     train.add_argument("--value-calibration-bins", type=int, default=10, help="Post-train calibration bin count.")
+    train.add_argument(
+        "--value-selection-data",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Optional held-out rollout JSONL path(s) evaluated after each epoch to restore the best value-calibrated epoch.",
+    )
+    train.add_argument(
+        "--value-selection-metric",
+        choices=("mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias"),
+        default="mae",
+        help="Held-out value metric used by --value-selection-data; sign_accuracy is maximized, others are minimized.",
+    )
+    train.add_argument(
+        "--value-selection-out",
+        type=Path,
+        default=None,
+        help="Optional JSON output path for per-epoch --value-selection-data reports.",
+    )
     train.set_defaults(func=_train)
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
@@ -572,6 +593,8 @@ def _train(args: argparse.Namespace) -> int:
     require_torch()
     if args.value_calibration_out is not None and not args.value_calibration_data:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
+    if args.value_selection_out is not None and not args.value_selection_data:
+        raise ValueError("--value-selection-out requires --value-selection-data.")
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -640,12 +663,31 @@ def _train(args: argparse.Namespace) -> int:
         )
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
-    model, result = train_transformer_policy(
-        args.data,
-        model_config=model_config,
-        training_config=training_config,
-        initial_model=initial_model,
-    )
+    if args.value_selection_data and training_config.objective != "value-only":
+        print(
+            "warning: --value-selection-data selects by held-out value calibration, not policy quality; "
+            "prefer objective=value-only for value-head calibration runs.",
+            file=sys.stderr,
+        )
+    value_selection_payload = None
+    if args.value_selection_data:
+        model, result, value_selection_payload = _train_with_value_selection(
+            paths=args.data,
+            model_config=model_config,
+            training_config=training_config,
+            initial_model=initial_model,
+            selection_paths=args.value_selection_data,
+            selection_metric=args.value_selection_metric,
+            batch_size=args.value_calibration_batch_size,
+            bins=args.value_calibration_bins,
+        )
+    else:
+        model, result = train_transformer_policy(
+            args.data,
+            model_config=model_config,
+            training_config=training_config,
+            initial_model=initial_model,
+        )
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
         line = (
@@ -662,6 +704,17 @@ def _train(args: argparse.Namespace) -> int:
             )
         print(line)
     print(f"checkpoint: {args.out}")
+    if value_selection_payload is not None:
+        if args.value_selection_out is not None:
+            _write_json(args.value_selection_out, value_selection_payload)
+            print(f"value_selection: {args.value_selection_out}")
+        else:
+            print(
+                "value_selection: "
+                f"selected_epoch={value_selection_payload['selected_epoch']} "
+                f"metric={value_selection_payload['metric']} "
+                f"value={value_selection_payload['selected_metric_value']:.6f}"
+            )
     if args.value_calibration_data:
         value_calibration = evaluate_value_calibration(
             model=model,
@@ -684,6 +737,105 @@ def _train(args: argparse.Namespace) -> int:
             print("")
             print_value_calibration_report(value_calibration)
     return 0
+
+
+def _train_with_value_selection(
+    *,
+    paths: list[Path],
+    model_config: TransformerPolicyConfig,
+    training_config: TransformerTrainingConfig,
+    initial_model: object | None,
+    selection_paths: list[Path],
+    selection_metric: str,
+    batch_size: int,
+    bins: int,
+) -> tuple[object, object, dict[str, object]]:
+    if batch_size <= 0:
+        raise ValueError("value selection batch_size must be positive.")
+    if bins <= 0:
+        raise ValueError("value selection bins must be positive.")
+    if selection_metric not in {"mae", "mse", "expected_calibration_error", "sign_accuracy", "abs_bias"}:
+        raise ValueError(f"unsupported value selection metric: {selection_metric!r}.")
+
+    selection_reports = []
+    best_state = None
+    best_epoch = None
+    best_metric_value = None
+    best_score = None
+    device = resolve_torch_device(training_config.device)
+
+    def evaluate_epoch(model: object, epoch_result: TransformerTrainingResult) -> None:
+        nonlocal best_epoch, best_metric_value, best_score, best_state
+        epoch_metric = epoch_result.final_metrics
+        report = evaluate_value_calibration(
+            model=model,
+            training_result=epoch_result,
+            paths=selection_paths,
+            batch_size=batch_size,
+            bins=bins,
+            device=device,
+        )
+        metric_value = _value_selection_metric_value(report, selection_metric)
+        score = _value_selection_score(metric_value, selection_metric)
+        epoch = epoch_metric.epoch
+        selection_reports.append(
+            {
+                "epoch": epoch,
+                "metric_value": metric_value,
+                "training_metrics": epoch_metric.to_dict(),
+                "report": report.to_dict(),
+            }
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_metric_value = metric_value
+            best_epoch = epoch
+            best_state = copy.deepcopy(model.state_dict())
+
+    model, full_result = train_transformer_policy(
+        paths,
+        model_config=model_config,
+        training_config=training_config,
+        initial_model=initial_model,
+        epoch_callback=evaluate_epoch,
+    )
+    if best_state is None or best_epoch is None or best_metric_value is None:
+        raise ValueError("value selection produced no epoch reports.")
+    model.load_state_dict(best_state)
+    selected_result = TransformerTrainingResult(
+        model_config=model_config,
+        training_config=replace(training_config, epochs=best_epoch),
+        epochs=tuple(full_result.epochs[:best_epoch]),
+    )
+    payload = {
+        "paths": [str(path) for path in selection_paths],
+        "batch_size": batch_size,
+        "bins": bins,
+        "metric": selection_metric,
+        "metric_direction": "max" if selection_metric == "sign_accuracy" else "min",
+        "selected_epoch": best_epoch,
+        "selected_metric_value": best_metric_value,
+        "epochs": selection_reports,
+    }
+    return model, selected_result, payload
+
+
+def _value_selection_metric_value(report: ValueCalibrationReport, metric: str) -> float:
+    if metric == "mae":
+        return float(report.mae)
+    if metric == "mse":
+        return float(report.mse)
+    if metric == "expected_calibration_error":
+        return float(report.expected_calibration_error)
+    if metric == "sign_accuracy":
+        return float(report.sign_accuracy)
+    if metric == "abs_bias":
+        return abs(float(report.bias))
+    raise ValueError(f"unsupported value selection metric: {metric!r}.")
+
+
+def _value_selection_score(metric_value: float, metric: str) -> float:
+    return metric_value if metric == "sign_accuracy" else -metric_value
 
 
 def _benchmark(args: argparse.Namespace) -> int:
