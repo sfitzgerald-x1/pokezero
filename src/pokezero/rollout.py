@@ -132,6 +132,7 @@ def continue_rollout_from_current_state(
                 observation=observation,
                 requested_players=tuple(requested_players),
                 trajectory=_trajectory_snapshot(trajectory),
+                requested_observations=dict(observations),
             )
             decision = _select_policy_decision(
                 policy,

@@ -74,6 +74,7 @@ class PolicyContext:
     observation: PokeZeroObservationV0
     requested_players: tuple[str, ...]
     trajectory: BattleTrajectory
+    requested_observations: Mapping[str, PokeZeroObservationV0] = field(default_factory=dict)
 
 
 @runtime_checkable

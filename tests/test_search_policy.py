@@ -98,6 +98,22 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
         self.assertEqual(observed_history_lengths, [1])
 
+    def test_greedy_opponent_action_planner_masks_requested_opponent_legal_actions(self) -> None:
+        planner = greedy_opponent_action_planner(lambda history: (0.1, 0.4, 0.9) + (0.0,) * 6)
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_observations={"p1": _observation(0, 1), "p2": _observation(1)},
+        )
+
+        self.assertEqual(planner(context, random.Random(1)), {"p2": 1})
+
     def test_greedy_opponent_action_planner_rejects_bad_prior_width(self) -> None:
         planner = greedy_opponent_action_planner(lambda history: (1.0,))
         context = PolicyContext(
@@ -145,6 +161,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertFalse(metadata["root_puct_fallback"])
         self.assertEqual(metadata["root_puct_candidate_count"], 2)
         self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
+        self.assertTrue(metadata["root_puct_opponent_actions_legality_checked"])
         self.assertEqual(live_env.step_calls, [{"p1": 1, "p2": 0}])
         self.assertEqual(len(branch_envs), 1)
         self.assertTrue(branch_envs[0].closed)
@@ -166,7 +183,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 config=RolloutConfig(max_decision_rounds=3),
             ).run(seed=92, battle_id="search-policy")
 
-    def test_root_puct_policy_falls_back_when_search_fails_if_enabled(self) -> None:
+    def test_root_puct_policy_falls_back_when_opponent_planner_returns_illegal_action(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
             rollout_config=RolloutConfig(max_decision_rounds=3),
@@ -187,7 +204,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         step = result.trajectory.steps_for_player("p1")[0]
         self.assertEqual(step.action_index, 1)
         self.assertTrue(step.metadata["root_puct_fallback"])
-        self.assertIn("search failed", step.metadata["root_puct_fallback_reason"])
+        self.assertIn("illegal action for p2", step.metadata["root_puct_fallback_reason"])
         self.assertEqual(step.metadata["fallback_policy_id"], "fallback-fixed")
 
     def test_root_puct_policy_can_fallback_when_context_is_missing(self) -> None:

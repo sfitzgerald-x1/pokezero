@@ -32,10 +32,9 @@ def greedy_opponent_action_planner(
     """Create a planner that predicts each requested opponent action from player-local history.
 
     The prior function sees only the acting player's observation history. It should model the
-    opponent-action auxiliary head, not the acting player's legal-action policy head. The selected
-    action is not legality-masked because opponent legal choices are not player-private data in the
-    current observation; future belief/request plumbing can replace this planner with a constrained
-    one.
+    opponent-action auxiliary head, not the acting player's legal-action policy head. When the
+    rollout harness has already observed requested-player legal masks, this planner uses those
+    masks only to keep the planned opponent action submit-valid for replay search.
     """
 
     def planner(context: PolicyContext, rng: random.Random) -> Mapping[PlayerId, int]:
@@ -51,8 +50,14 @@ def greedy_opponent_action_planner(
         )
         priors = tuple(float(value) for value in prior_fn(history))
         _validate_action_prior_vector(priors, name="opponent action priors")
-        action_index = max(range(ACTION_COUNT), key=lambda index: (priors[index], -index))
-        return {player: action_index for player in requested_opponents}
+        opponent_actions = {}
+        for player in requested_opponents:
+            legal = _legal_action_indices_for_requested_player(context, player)
+            if legal:
+                opponent_actions[player] = max(legal, key=lambda index: (priors[index], -index))
+            else:
+                opponent_actions[player] = max(range(ACTION_COUNT), key=lambda index: (priors[index], -index))
+        return opponent_actions
 
     return planner
 
@@ -118,6 +123,9 @@ class RootPUCTSearchPolicy:
         )
         if planner_error is not None:
             return self._fallback(context, rng=rng, reason=planner_error)
+        legality_report = _opponent_action_legality_report(context, opponent_actions)
+        if legality_report.error is not None:
+            return self._fallback(context, rng=rng, reason=legality_report.error)
 
         search_trajectory = _trajectory_with_current_observation(context)
         history = player_observation_history(
@@ -163,6 +171,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
                 "root_puct_opponent_actions": dict(opponent_actions),
+                "root_puct_opponent_actions_legality_checked": legality_report.checked,
             },
         )
 
@@ -204,6 +213,45 @@ def _opponent_action_planner_error(
             details.append(f"unexpected opponent actions for {', '.join(extra)}")
         return "; ".join(details)
     return None
+
+
+@dataclass(frozen=True)
+class _OpponentActionLegalityReport:
+    checked: bool
+    error: str | None = None
+
+
+def _opponent_action_legality_report(
+    context: PolicyContext,
+    opponent_actions: Mapping[PlayerId, int],
+) -> _OpponentActionLegalityReport:
+    checked = False
+    for player, action_index in opponent_actions.items():
+        legal = _legal_action_indices_for_requested_player(context, player)
+        if not legal:
+            continue
+        checked = True
+        if action_index not in legal:
+            return _OpponentActionLegalityReport(
+                checked=True,
+                error=(
+                    "opponent_action_planner returned an illegal action "
+                    f"for {player}: {action_index}"
+                ),
+            )
+    return _OpponentActionLegalityReport(checked=checked)
+
+
+def _legal_action_indices_for_requested_player(
+    context: PolicyContext,
+    player: PlayerId,
+) -> tuple[int, ...]:
+    observation = context.requested_observations.get(player)
+    if observation is None:
+        return ()
+    if len(observation.legal_action_mask) != ACTION_COUNT:
+        return ()
+    return tuple(index for index, legal in enumerate(observation.legal_action_mask) if legal)
 
 
 def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> None:
