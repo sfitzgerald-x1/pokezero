@@ -1078,6 +1078,11 @@ def _add_foundation_value_tune_arguments(parser: argparse.ArgumentParser, *, inc
     )
     parser.add_argument("--value-calibration-batch-size", type=int, default=128, help="Calibration batch size.")
     parser.add_argument("--value-calibration-bins", type=int, default=10, help="Calibration bin count.")
+    parser.add_argument(
+        "--require-heldout-selection",
+        action="store_true",
+        help="Fail unless the selected candidate has value-selection held-out rollout paths.",
+    )
     parser.add_argument("--max-batches", type=int, default=None, help="Optional max training batches per epoch for smoke runs.")
     parser.add_argument("--device", default=None, help="Torch device for the underlying train command.")
     if include_summary_path:
@@ -2485,6 +2490,7 @@ def _foundation_value_tune_plan(args: argparse.Namespace) -> int:
     print(f"candidate_iteration: {recipe['candidate_iteration']}")
     print(f"candidate_checkpoint: {recipe['candidate_checkpoint_path']}")
     print(f"out_dir: {recipe['out_dir']}")
+    _print_foundation_value_tune_warnings(recipe)
     print("command:")
     print(recipe["command"]["shell"])
     return 0
@@ -2532,7 +2538,7 @@ def _foundation_value_tune_run(args: argparse.Namespace) -> int:
     summary["returncode"] = int(completed.returncode)
     summary["stdout_tail"] = _text_tail(completed.stdout)
     summary["stderr_tail"] = _text_tail(completed.stderr)
-    summary["value_calibration"] = _load_optional_json(Path(str(recipe["artifacts"]["value_calibration_path"])))
+    summary["value_calibration"] = _load_optional_json_or_error(Path(str(recipe["artifacts"]["value_calibration_path"])))
     summary["status"] = "passed" if completed.returncode == 0 else "failed"
     summary["ended_at"] = _utc_timestamp()
     summary["duration_seconds"] = round(time.perf_counter() - started, 6)
@@ -2567,6 +2573,7 @@ def _foundation_value_tune_report(args: argparse.Namespace) -> int:
     print(f"candidate_iteration: {_format_manifest_value(recipe.get('candidate_iteration'))}")
     print(f"candidate_checkpoint: {_format_manifest_value(recipe.get('candidate_checkpoint_path'))}")
     print(f"value_tuned_checkpoint: {_format_manifest_value(artifacts.get('checkpoint_path'))}")
+    _print_foundation_value_tune_warnings(recipe)
     if calibration:
         print(
             "value_calibration: "
@@ -3220,6 +3227,7 @@ def _foundation_gate_status(entry: Mapping[str, Any]) -> str:
 
 
 def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
+    _validate_foundation_value_tune_args(args)
     summary_path, summary = _load_foundation_summary(args.path)
     manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
     if manifest is None:
@@ -3251,7 +3259,24 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         singular_key="value_selection_training_rollout_path",
     )
     if not selection_paths:
+        if args.require_heldout_selection:
+            raise ValueError("selected foundation candidate has no value-selection held-out rollout paths.")
         selection_paths = train_paths
+    selection_paths_fallback_to_train = selection_paths == train_paths
+    warnings = []
+    if selection_paths_fallback_to_train:
+        warnings.append(
+            {
+                "code": "selection_paths_fallback_to_train",
+                "message": "Value selection and calibration are using training rollout paths; calibration is in-sample.",
+            }
+        )
+    warnings.append(
+        {
+            "code": "calibration_reuses_value_selection_data",
+            "message": "Value calibration is reported on the same paths used for epoch selection; treat it as selection-set calibration, not a final unbiased read.",
+        }
+    )
     recipe = _optional_mapping(summary.get("recipe"))
     run_dir = Path(
         _string_or_none(recipe.get("run_dir"))
@@ -3314,7 +3339,8 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "out_dir": str(out_dir),
         "train_paths": [str(path) for path in train_paths],
         "selection_paths": [str(path) for path in selection_paths],
-        "selection_paths_fallback_to_train": selection_paths == train_paths,
+        "selection_paths_fallback_to_train": selection_paths_fallback_to_train,
+        "warnings": warnings,
         "config": {
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -3322,6 +3348,7 @@ def _foundation_value_tune_recipe(args: argparse.Namespace) -> dict[str, Any]:
             "value_selection_metric": args.value_selection_metric,
             "value_calibration_batch_size": args.value_calibration_batch_size,
             "value_calibration_bins": args.value_calibration_bins,
+            "require_heldout_selection": args.require_heldout_selection,
             "max_batches": args.max_batches,
             "device": args.device,
         },
@@ -3339,11 +3366,39 @@ def _foundation_iteration_paths(
     plural_key: str,
     singular_key: str,
 ) -> list[Path]:
-    paths = [Path(str(path)) for path in _sequence(iteration.get(plural_key, ())) if str(path)]
+    paths = []
+    for value in _sequence(iteration.get(plural_key, ())):
+        path_text = _string_or_none(value)
+        if path_text is not None:
+            paths.append(Path(path_text))
     if paths:
         return paths
     singular = _string_or_none(iteration.get(singular_key))
     return [Path(singular)] if singular is not None else []
+
+
+def _print_foundation_value_tune_warnings(recipe: Mapping[str, Any]) -> None:
+    warnings = tuple(_mapping(warning) for warning in _sequence(recipe.get("warnings", ())))
+    if not warnings:
+        return
+    print("warnings:")
+    for warning in warnings:
+        print(f"- {_format_manifest_value(warning.get('code'))}: {_format_manifest_value(warning.get('message'))}")
+
+
+def _validate_foundation_value_tune_args(args: argparse.Namespace) -> None:
+    if args.epochs <= 0:
+        raise ValueError("--epochs must be positive.")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive.")
+    if args.learning_rate <= 0.0 or not math.isfinite(args.learning_rate):
+        raise ValueError("--learning-rate must be a positive finite value.")
+    if args.value_calibration_batch_size <= 0:
+        raise ValueError("--value-calibration-batch-size must be positive.")
+    if args.value_calibration_bins <= 0:
+        raise ValueError("--value-calibration-bins must be positive.")
+    if args.max_batches is not None and args.max_batches <= 0:
+        raise ValueError("--max-batches must be positive when provided.")
 
 
 def _validate_foundation_value_tune_paths(out_dir: Path, *, summary_path: Path) -> None:
@@ -3357,6 +3412,13 @@ def _load_optional_json(path: Path) -> Mapping[str, Any] | None:
     if not path.exists():
         return None
     return _load_json_mapping(path)
+
+
+def _load_optional_json_or_error(path: Path) -> Mapping[str, Any] | None:
+    try:
+        return _load_optional_json(path)
+    except Exception as exc:
+        return {"load_error": str(exc), "path": str(path)}
 
 
 def _load_json_mapping(path: Path) -> Mapping[str, Any]:
