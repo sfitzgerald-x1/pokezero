@@ -69,6 +69,18 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertIsNone(report.pearson_correlation)
         self.assertIsNone(report.to_dict()["pearson_correlation"])
 
+    def test_value_calibration_correlation_is_absent_for_collapsed_prediction_head(self) -> None:
+        totals = _ValueCalibrationTotals(bin_count=2)
+
+        totals.add(
+            predictions=tuple(0.1 for _ in range(10_000)),
+            returns=tuple(1.0 if index % 2 else -1.0 for index in range(10_000)),
+        )
+        report = totals.to_report()
+
+        self.assertIsNone(report.pearson_correlation)
+        self.assertIsNone(report.to_dict()["pearson_correlation"])
+
     def test_value_calibration_totals_rejects_empty_report(self) -> None:
         with self.assertRaisesRegex(ValueError, "no examples"):
             _ValueCalibrationTotals(bin_count=2).to_report()
@@ -541,10 +553,14 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertAlmostEqual(slices["return:zero"].bias, -0.05)
         self.assertFalse(slices["return:zero"].sign_accuracy_applicable)
         self.assertTrue(slices["return:positive"].sign_accuracy_applicable)
+        self.assertIsNone(slices["return:positive"].pearson_correlation)
+        self.assertIsNone(slices["return:negative"].pearson_correlation)
+        self.assertIsNone(slices["return:zero"].pearson_correlation)
         payload = report.to_dict()
         self.assertIn("slices", payload)
         zero_payload = next(slice_payload for slice_payload in payload["slices"] if slice_payload["name"] == "return:zero")
         self.assertFalse(zero_payload["sign_accuracy_applicable"])
+        self.assertIsNone(zero_payload["pearson_correlation"])
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
