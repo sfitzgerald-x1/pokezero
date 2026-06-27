@@ -54,7 +54,11 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   opponent actions against requested-player legal masks to avoid invalid branch submissions; this is
   recorded as search metadata. Because the mask includes opponent legal-action availability, this is
   a privileged benchmark safety guard and is not a substitute for full hidden-information
-  determinization.
+  determinization. The play benchmark can also opt into `--root-opponent-action-policy benchmark`,
+  which asks the fixed benchmark opponent policy to choose the simultaneous non-search root action
+  from its own private observation. That mode is intentionally privileged evaluation plumbing: it
+  is useful for isolating fixed-opponent search modeling, but its win rates should not be read as
+  hidden-information-realistic strength.
   The play benchmark also has an opt-in conservative value gate (`--min-value-improvement`) that
   keeps the raw policy-prior action unless the configured root-selected action beats it by a configurable
   value margin; aggregate diagnostics report gate uses/checks so M0 runs can tell whether the knob
@@ -138,6 +142,16 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   simply matching the fixed benchmark opponent inside short leaf continuations is not enough to
   clear M0; the next useful search work should focus on value-target quality, root opponent-action
   modeling, determinization, or deeper search rather than only swapping the leaf opponent policy.
+  A same-seed sweep that aligned both the simultaneous root opponent action and the leaf rollout
+  opponent against the fixed `max-damage` policy produced the strongest search-lift signal so far,
+  but only in the privileged evaluation setting. On seed band `14062001`, raw again scored 3/16;
+  benchmark-root leaf0 scored 5/16, benchmark-root+leaf1 scored 7/16, and benchmark-root+leaf2
+  scored 4/16, with zero capped games and zero root-PUCT fallbacks. Diagnostics confirmed
+  `root_puct_opponent_action_policies: {"benchmark": ...}` for every searched row and
+  `root_puct_leaf_rollout_opponent_policies: {"benchmark": ...}` for leaf1/leaf2. This suggests
+  root opponent-action mismatch was a real part of the earlier search miss, while the leaf-depth
+  result is not monotonic. Next work should convert this privileged fixed-opponent signal into a
+  hidden-info-safe opponent model or determinization path before treating it as M0 progress.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
