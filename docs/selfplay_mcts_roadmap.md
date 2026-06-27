@@ -307,7 +307,9 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   the value/base-net/eval evidence is incomplete.
   `neural_cli foundation-compare` compares multiple foundation-run wrapper summaries side by side,
   including latest fixed-yardstick rates and value calibration signals, so WS-A/WS-E arms can be
-  selected from comparable artifacts before spending more time on search tuning.
+  selected from comparable artifacts before spending more time on search tuning. It also supports
+  caller-supplied quality thresholds for experiment-local gating, avoiding hardcoded "search ready"
+  claims while still making weak foundation runs fail fast in scripts.
 - **Online ladder client** (`online_client.py`) — can play a checkpoint against the live server.
 - **Raw-facts observation** with Markov-restoring encodings (turn count, future-sight, toxic stage,
   screens) already present (`showdown.py`).
