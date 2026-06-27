@@ -172,17 +172,16 @@ class RootPUCTSearchPolicy:
 
         search_best = search.best_candidate
         best = search_best
-        value_gate_used = False
-        prior_best = _best_prior_candidate(search.candidates)
-        if (
-            self.minimum_value_improvement is not None
-            and search_best.action_index != prior_best.action_index
-            and search_best.value < prior_best.value + self.minimum_value_improvement
-        ):
-            best = prior_best
-            value_gate_used = True
         gate_metadata = {}
         if self.minimum_value_improvement is not None:
+            value_gate_used = False
+            prior_best = _best_prior_candidate(search.candidates)
+            if (
+                search_best.action_index != prior_best.action_index
+                and search_best.value < prior_best.value + self.minimum_value_improvement
+            ):
+                best = prior_best
+                value_gate_used = True
             gate_metadata = {
                 "root_puct_minimum_value_improvement": self.minimum_value_improvement,
                 "root_puct_value_gate_used": value_gate_used,

@@ -360,6 +360,25 @@ class CollectionTest(unittest.TestCase):
             {"search failed: boom": 2},
         )
 
+    def test_benchmark_rollouts_summarizes_root_puct_value_gate_checks_without_uses(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct-gated vs random",
+                    MetadataPolicy(policy_id="root-puct-gated", value_gate_used=False),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-gated"]["root_puct_value_gate_checks"], 2)
+        self.assertEqual(summary["root-puct-gated"]["root_puct_value_gate_uses"], 0)
+
     def test_benchmark_rollouts_omits_missing_root_puct_elapsed_average(self) -> None:
         report = benchmark_rollouts(
             games=2,
