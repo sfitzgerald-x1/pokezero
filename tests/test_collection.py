@@ -142,10 +142,12 @@ class MetadataPolicy:
         policy_id: str = "root-puct-diagnostic",
         fallback: bool = False,
         include_elapsed: bool = True,
+        value_gate_used: bool | None = None,
     ) -> None:
         self.policy_id = policy_id
         self.fallback = fallback
         self.include_elapsed = include_elapsed
+        self.value_gate_used = value_gate_used
 
     def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
         if self.fallback:
@@ -167,6 +169,8 @@ class MetadataPolicy:
         }
         if self.include_elapsed:
             metadata["root_puct_elapsed_seconds"] = 0.25
+        if self.value_gate_used is not None:
+            metadata["root_puct_value_gate_used"] = self.value_gate_used
         return PolicyDecision(
             action_index=0,
             policy_id=self.policy_id,
@@ -311,7 +315,11 @@ class CollectionTest(unittest.TestCase):
             rollout_config=RolloutConfig(max_decision_rounds=5),
             seed_start=20,
             matchups=(
-                BenchmarkMatchup("root-puct vs random", MetadataPolicy(), RandomLegalPolicy()),
+                BenchmarkMatchup(
+                    "root-puct vs random",
+                    MetadataPolicy(value_gate_used=True),
+                    RandomLegalPolicy(),
+                ),
             ),
         )
 
@@ -323,6 +331,8 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_elapsed_seconds"], 0.25)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_value"], 0.5)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_score"], 0.75)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_checks"], 2)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_value_gate_uses"], 2)
         self.assertEqual(summary["random-legal"]["decisions"], 2)
         self.assertNotIn("root_puct_searches", summary["random-legal"])
 
@@ -349,6 +359,25 @@ class CollectionTest(unittest.TestCase):
             summary["root-puct-fallback"]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},
         )
+
+    def test_benchmark_rollouts_summarizes_root_puct_value_gate_checks_without_uses(self) -> None:
+        report = benchmark_rollouts(
+            games=2,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            seed_start=20,
+            matchups=(
+                BenchmarkMatchup(
+                    "root-puct-gated vs random",
+                    MetadataPolicy(policy_id="root-puct-gated", value_gate_used=False),
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        summary = report.to_dict()["matchups"][0]["metrics"]["policy_decision_summary"]
+        self.assertEqual(summary["root-puct-gated"]["root_puct_value_gate_checks"], 2)
+        self.assertEqual(summary["root-puct-gated"]["root_puct_value_gate_uses"], 0)
 
     def test_benchmark_rollouts_omits_missing_root_puct_elapsed_average(self) -> None:
         report = benchmark_rollouts(
@@ -390,6 +419,7 @@ class CollectionTest(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertIn("root-puct diagnostics:", output)
+        self.assertIn("gate", output)
         self.assertIn("root-puct-fallback", output)
         self.assertIn("fallback_reasons:", output)
         self.assertIn("search failed: boom=1", output)

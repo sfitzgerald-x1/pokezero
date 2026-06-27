@@ -13,7 +13,13 @@ from .env import PlayerId, PokeZeroEnv
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
 from .rollout import RolloutConfig
-from .search import ActionPriorVector, ObservationValueFunction, player_observation_history, puct_branch_search
+from .search import (
+    ActionPriorVector,
+    ObservationValueFunction,
+    PUCTBranchSearchCandidate,
+    player_observation_history,
+    puct_branch_search,
+)
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 OpponentActionPlanner = Callable[[PolicyContext, random.Random], Mapping[PlayerId, int]]
@@ -81,6 +87,13 @@ class RootPUCTSearchPolicy:
     opponent_action_planner: OpponentActionPlanner = no_opponent_action_planner
     fallback_policy: Policy = field(default_factory=RandomLegalPolicy)
     allow_fallback: bool = False
+    minimum_value_improvement: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.minimum_value_improvement is None:
+            return
+        if self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement):
+            raise ValueError("minimum_value_improvement must be a finite non-negative value when set.")
 
     def reset(self) -> None:
         reset = getattr(self.fallback_policy, "reset", None)
@@ -157,9 +170,28 @@ class RootPUCTSearchPolicy:
             if callable(close):
                 close()
 
-        best = search.best_candidate
+        search_best = search.best_candidate
+        best = search_best
+        gate_metadata = {}
+        if self.minimum_value_improvement is not None:
+            value_gate_used = False
+            prior_best = _best_prior_candidate(search.candidates)
+            if (
+                search_best.action_index != prior_best.action_index
+                and search_best.value < prior_best.value + self.minimum_value_improvement
+            ):
+                best = prior_best
+                value_gate_used = True
+            gate_metadata = {
+                "root_puct_minimum_value_improvement": self.minimum_value_improvement,
+                "root_puct_value_gate_used": value_gate_used,
+                "root_puct_pre_gate_action": search_best.action_index,
+                "root_puct_prior_action": prior_best.action_index,
+                "root_puct_prior_value": prior_best.value,
+                "root_puct_prior_score": prior_best.score,
+            }
         return PolicyDecision(
-            action_index=search.action_index,
+            action_index=best.action_index,
             policy_id=self.policy_id,
             action_probability=None,
             metadata={
@@ -172,6 +204,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_elapsed_seconds": elapsed_seconds,
                 "root_puct_opponent_actions": dict(opponent_actions),
                 "root_puct_opponent_actions_legality_checked": legality_report.checked,
+                **gate_metadata,
             },
         )
 
@@ -213,6 +246,14 @@ def _opponent_action_planner_error(
             details.append(f"unexpected opponent actions for {', '.join(extra)}")
         return "; ".join(details)
     return None
+
+
+def _best_prior_candidate(
+    candidates: tuple[PUCTBranchSearchCandidate, ...],
+) -> PUCTBranchSearchCandidate:
+    if not candidates:
+        raise ValueError("root PUCT search produced no candidates.")
+    return max(candidates, key=lambda candidate: (candidate.prior, -candidate.action_index))
 
 
 @dataclass(frozen=True)

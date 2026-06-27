@@ -290,7 +290,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     print("root-puct diagnostics:")
     header = (
         f"{'matchup':32} {'policy':32} {'dec':>5} {'search':>6} {'fallback':>8} "
-        f"{'cand':>7} {'ms/dec':>8} {'value':>8} {'score':>8}"
+        f"{'gate':>8} {'cand':>7} {'ms/dec':>8} {'value':>8} {'score':>8}"
     )
     print(header)
     print("-" * len(header))
@@ -300,12 +300,15 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
         average_elapsed_seconds = metrics.get("root_puct_average_elapsed_seconds")
         average_selected_value = metrics.get("root_puct_average_selected_value")
         average_selected_score = metrics.get("root_puct_average_selected_score")
+        value_gate_checks = metrics.get("root_puct_value_gate_checks")
+        value_gate_uses = metrics.get("root_puct_value_gate_uses")
         print(
             f"{matchup[:32]:32} "
             f"{policy_id[:32]:32} "
             f"{int(metrics.get('decisions', 0)):5d} "
             f"{int(metrics.get('root_puct_searches', 0)):6d} "
             f"{int(metrics.get('root_puct_fallbacks', 0)):8d} "
+            f"{_optional_report_ratio(value_gate_uses, value_gate_checks):>8} "
             f"{_optional_report_float(average_candidate_count):>7} "
             f"{_optional_report_millis(average_elapsed_seconds):>8} "
             f"{_optional_report_float(average_selected_value):>8} "
@@ -326,6 +329,15 @@ def _optional_report_float(value: object) -> str:
         return "-"
     try:
         return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _optional_report_ratio(numerator: object, denominator: object) -> str:
+    if numerator is None or denominator is None:
+        return "-"
+    try:
+        return f"{int(numerator)}/{int(denominator)}"
     except (TypeError, ValueError):
         return "-"
 

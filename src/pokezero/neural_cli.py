@@ -161,6 +161,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Fixed opponent policy spec. May be repeated. Defaults to random-legal and simple-legal.",
     )
     root_puct_play.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
+    root_puct_play.add_argument(
+        "--min-value-improvement",
+        type=float,
+        default=None,
+        help=(
+            "Optional conservative gate for root-PUCT play: keep the raw-prior action unless "
+            "the search-selected action beats it by at least this value margin."
+        ),
+    )
     root_puct_play.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
     root_puct_play.add_argument("--temperature", type=float, default=1.0, help="Softmax temperature for policy and opponent-action priors.")
     root_puct_play.add_argument(
@@ -636,6 +645,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             allow_fallback=not args.no_search_fallback,
             policy_id=search_policy_id,
             cpuct=args.cpuct,
+            minimum_value_improvement=args.min_value_improvement,
         )
 
     opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))

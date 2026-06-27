@@ -791,6 +791,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "random-legal",
                     "--cpuct",
                     "0.75",
+                    "--min-value-improvement",
+                    "0.2",
                     "--device",
                     "cpu",
                     "--temperature",
@@ -815,6 +817,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(matchups[2].p1_policy.policy_id, "neural-smoke+root-puct")
         self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct")
         self.assertEqual(matchups[2].p1_policy.cpuct, 0.75)
+        self.assertEqual(matchups[2].p1_policy.minimum_value_improvement, 0.2)
         self.assertTrue(matchups[2].p1_policy.allow_fallback)
         self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
