@@ -99,6 +99,7 @@ FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
 }
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
 NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
+NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v1"
 NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
     "smoke": {
         "iterations": 2,
@@ -850,6 +851,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     foundation_report.add_argument("path", type=Path, help="Foundation run directory or neural-foundation-run-summary.json path.")
     foundation_report.add_argument("--json", action="store_true", help="Print the summary payload as JSON.")
     foundation_report.set_defaults(func=_foundation_report)
+
+    foundation_compare = subparsers.add_parser(
+        "foundation-compare",
+        help="Compare neural foundation-run summaries without loading torch.",
+    )
+    foundation_compare.add_argument(
+        "paths",
+        type=Path,
+        nargs="+",
+        help="Foundation run directory or neural-foundation-run-summary.json path. Pass two or more for a useful comparison.",
+    )
+    foundation_compare.add_argument("--json", action="store_true", help="Print the comparison payload as JSON.")
+    foundation_compare.set_defaults(func=_foundation_compare)
 
     report = subparsers.add_parser("report", help="Print a summary of a neural self-play run manifest.")
     report.add_argument("--run-dir", type=Path, required=True, help="Neural self-play run directory containing manifest.json.")
@@ -2284,6 +2298,209 @@ def _foundation_report(args: argparse.Namespace) -> int:
     if isinstance(reasons, list) and reasons:
         print(f"reasons: {', '.join(str(reason) for reason in reasons)}")
     return 0 if status == "passed" else 2
+
+
+def _foundation_compare(args: argparse.Namespace) -> int:
+    payload = {
+        "schema_version": NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION,
+        "summary_count": len(args.paths),
+        "entries": [_foundation_compare_entry(path) for path in args.paths],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    _print_foundation_compare(payload)
+    return 0
+
+
+def _foundation_compare_entry(path: Path) -> dict[str, Any]:
+    summary_path, summary = _load_foundation_summary(path)
+    recipe = _optional_mapping(summary.get("recipe"))
+    foundation = _optional_mapping(summary.get("foundation"))
+    readiness = _optional_mapping(foundation.get("foundation_readiness"))
+    manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ()))) if manifest else ()
+    curves = _benchmark_opponent_curves(iterations) if iterations else {}
+    return {
+        "label": _foundation_compare_label(summary_path, recipe),
+        "summary_path": str(summary_path),
+        "status": str(summary.get("status", "unknown")),
+        "profile": str(recipe.get("profile", "unknown")),
+        "variant": str(recipe.get("variant", "baseline")),
+        "run_dir": _string_or_none(recipe.get("run_dir")),
+        "duration_seconds": _float_or_none(summary.get("duration_seconds")),
+        "latest_iteration": _int_or_none(foundation.get("latest_iteration")) or _int_or_none(readiness.get("latest_iteration")),
+        "latest_checkpoint_path": _string_or_none(foundation.get("latest_checkpoint_path")),
+        "foundation_evidence_status": _string_or_none(readiness.get("foundation_evidence_status")) or "unknown",
+        "reasons": [str(reason) for reason in _sequence(readiness.get("reasons", ()))],
+        "manifest_loaded": manifest is not None,
+        "manifest_source": manifest_source,
+        "manifest_error": manifest_error,
+        "value_calibration": _foundation_compare_value_calibration(readiness),
+        "yardsticks": {
+            policy_id: _foundation_compare_yardstick(policy_id, curves, readiness)
+            for policy_id in ("max-damage", "simple-legal", "random-legal")
+        },
+    }
+
+
+def _foundation_manifest_from_summary(
+    summary_path: Path,
+    summary: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, str | None, str | None]:
+    recipe = _optional_mapping(summary.get("recipe"))
+    foundation = _optional_mapping(summary.get("foundation"))
+    candidates: list[Path] = []
+    for value in (foundation.get("manifest_source"), recipe.get("manifest_path")):
+        if isinstance(value, str) and value:
+            candidates.append(Path(value))
+    candidates.append(summary_path.parent / "manifest.json")
+    seen: set[str] = set()
+    missing: list[str] = []
+    for candidate in candidates:
+        candidate_key = str(candidate)
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if not candidate.exists():
+            missing.append(candidate_key)
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return None, str(candidate), str(exc)
+        if not isinstance(payload, Mapping):
+            return None, str(candidate), "manifest JSON was not an object"
+        return payload, str(candidate), None
+    source = missing[0] if missing else None
+    error = "manifest not found" if source is not None else "manifest path unavailable"
+    return None, source, error
+
+
+def _foundation_compare_value_calibration(readiness: Mapping[str, Any]) -> dict[str, Any]:
+    value = _optional_mapping(readiness.get("value_calibration"))
+    if value.get("available") is not True:
+        return {"available": False}
+    return {
+        "available": True,
+        "examples": _int_or_none(value.get("examples")),
+        "sign_accuracy": _float_or_none(value.get("sign_accuracy")),
+        "expected_calibration_error": _float_or_none(value.get("expected_calibration_error")),
+        "pearson_correlation": _float_or_none(value.get("pearson_correlation")),
+        "mse": _float_or_none(value.get("mse")),
+        "mae": _float_or_none(value.get("mae")),
+        "bias": _float_or_none(value.get("bias")),
+    }
+
+
+def _foundation_compare_yardstick(
+    policy_id: str,
+    curves: Mapping[str, list[dict[str, Any]]],
+    readiness: Mapping[str, Any],
+) -> dict[str, Any]:
+    entry = _latest_curve_entry(curves, policy_id)
+    if entry is not None:
+        return {
+            "available": True,
+            "opponent_policy_id": policy_id,
+            "iteration": _int_or_none(entry.get("iteration")),
+            "win_rate": _float_or_none(entry.get("win_rate")),
+            "games": _int_or_none(entry.get("games")),
+            "capped_games": _int_or_none(entry.get("capped_games")) or 0,
+            "source": "manifest",
+        }
+    if policy_id == "max-damage":
+        max_damage = _optional_mapping(readiness.get("max_damage_yardstick"))
+        if max_damage.get("available") is True:
+            return {
+                "available": True,
+                "opponent_policy_id": policy_id,
+                "iteration": _int_or_none(max_damage.get("iteration")),
+                "win_rate": _float_or_none(max_damage.get("win_rate")),
+                "games": _int_or_none(max_damage.get("games")),
+                "capped_games": _int_or_none(max_damage.get("capped_games")) or 0,
+                "source": "summary",
+            }
+    return {"available": False, "opponent_policy_id": policy_id}
+
+
+def _foundation_compare_label(summary_path: Path, recipe: Mapping[str, Any]) -> str:
+    run_dir = _string_or_none(recipe.get("run_dir"))
+    if run_dir is not None:
+        path = Path(run_dir)
+    else:
+        path = summary_path.parent
+    parts = path.parts
+    if len(parts) >= 2:
+        return str(Path(parts[-2]) / parts[-1])
+    return str(path)
+
+
+def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
+    print("neural_foundation_compare:")
+    print("note: compares foundation readiness/value/base-net signals; this is not an MCTS verdict.")
+    entries = tuple(_mapping(entry) for entry in _sequence(payload.get("entries", ())))
+    if not entries:
+        print("entries: 0")
+        return
+    header = (
+        f"{'label':<44} {'status':>7} {'profile':>7} {'variant':>15} {'iter':>4} "
+        f"{'evidence':>24} {'max_wr':>7} {'max_g':>5} {'simple':>7} {'random':>7} "
+        f"{'val_corr':>8} {'val_sign':>8} {'val_ece':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for entry in entries:
+        yardsticks = _optional_mapping(entry.get("yardsticks"))
+        max_damage = _optional_mapping(yardsticks.get("max-damage"))
+        simple = _optional_mapping(yardsticks.get("simple-legal"))
+        random = _optional_mapping(yardsticks.get("random-legal"))
+        value = _optional_mapping(entry.get("value_calibration"))
+        print(
+            f"{_clip_table_cell(entry.get('label'), 44):<44} "
+            f"{_clip_table_cell(entry.get('status'), 7):>7} "
+            f"{_clip_table_cell(entry.get('profile'), 7):>7} "
+            f"{_clip_table_cell(entry.get('variant'), 15):>15} "
+            f"{_format_manifest_value(entry.get('latest_iteration')):>4} "
+            f"{_clip_table_cell(entry.get('foundation_evidence_status'), 24):>24} "
+            f"{_foundation_rate(max_damage):>7} "
+            f"{_foundation_games(max_damage):>5} "
+            f"{_foundation_rate(simple):>7} "
+            f"{_foundation_rate(random):>7} "
+            f"{_format_optional_float(value.get('pearson_correlation'), digits=4):>8} "
+            f"{_format_optional_float(value.get('sign_accuracy'), digits=4):>8} "
+            f"{_format_optional_float(value.get('expected_calibration_error'), digits=4):>8}"
+        )
+    print("")
+    print("checkpoint_sources:")
+    for entry in entries:
+        manifest_state = "loaded" if entry.get("manifest_loaded") is True else f"missing({_format_manifest_value(entry.get('manifest_error'))})"
+        print(
+            f"- {_format_manifest_value(entry.get('label'))}: "
+            f"checkpoint={_format_manifest_value(entry.get('latest_checkpoint_path'))} "
+            f"manifest={manifest_state}"
+        )
+
+
+def _foundation_rate(entry: Mapping[str, Any]) -> str:
+    if entry.get("available") is not True:
+        return "-"
+    return _format_optional_float(entry.get("win_rate"), digits=3)
+
+
+def _foundation_games(entry: Mapping[str, Any]) -> str:
+    if entry.get("available") is not True:
+        return "-"
+    return _format_manifest_value(entry.get("games"))
+
+
+def _clip_table_cell(value: object, width: int) -> str:
+    text = _format_manifest_value(value)
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
 
 
 def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:

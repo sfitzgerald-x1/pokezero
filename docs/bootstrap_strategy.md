@@ -497,6 +497,18 @@ below the 300-game foundation milestone unless `--evaluation-games` is overridde
 captures child output into the summary; use `foundation-plan` and run the printed command manually
 when live child output is more useful than wrapper capture.
 
+Compare completed foundation arms directly before returning to search tuning:
+
+```bash
+python -m pokezero.neural_cli foundation-compare \
+  runs/foundation-baseline/neural-foundation-run-summary.json \
+  runs/foundation-opponent-signal/neural-foundation-run-summary.json
+```
+
+`foundation-compare` is read-only and does not load torch. It reports each wrapper's process status,
+profile, variant, foundation-readiness status, latest fixed-yardstick win rates, and value-head
+correlation/sign/ECE metrics. Use this for WS-A/WS-E experiment selection; it is not an MCTS verdict.
+
 Use `--variant opponent-signal` as the H3 ablation arm when testing whether stronger
 opponent-action auxiliary supervision improves the foundation policy/value representation. The
 baseline variant leaves the underlying neural iterate default intact (currently `0.1`, not disabled);
