@@ -157,6 +157,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
     train.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
     train.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="PPO advantage/value-target source: discounted returns or recorded-value GAE.",
+    )
+    train.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+    train.add_argument(
         "--freeze-non-value-parameters",
         action="store_true",
         help="Train only value-head parameters; intended for value-only calibration fine-tunes from --initial-checkpoint.",
@@ -596,6 +603,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--clip-epsilon", type=float, default=0.2, help="PPO clipped-surrogate epsilon (objective=ppo).")
     iterate.add_argument("--entropy-coef", type=float, default=0.0, help="PPO entropy bonus coefficient (objective=ppo).")
     iterate.add_argument("--no-normalize-advantage", action="store_true", help="Disable PPO advantage normalization (objective=ppo).")
+    iterate.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="PPO advantage/value-target source: discounted returns or recorded-value GAE.",
+    )
+    iterate.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
     iterate.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     iterate.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     iterate.add_argument(
@@ -753,6 +767,8 @@ def _train(args: argparse.Namespace) -> int:
         clip_epsilon=args.clip_epsilon,
         entropy_coef=args.entropy_coef,
         normalize_advantage=not args.no_normalize_advantage,
+        ppo_target_mode=args.ppo_target_mode,
+        gae_lambda=args.gae_lambda,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
     )
     if initial_training_result is not None:
@@ -1452,6 +1468,8 @@ def _iterate(args: argparse.Namespace) -> int:
         clip_epsilon=args.clip_epsilon,
         entropy_coef=args.entropy_coef,
         normalize_advantage=not args.no_normalize_advantage,
+        ppo_target_mode=args.ppo_target_mode,
+        gae_lambda=args.gae_lambda,
     )
     iterate_model_config_kwargs = dict(
         policy_id=args.policy_id,

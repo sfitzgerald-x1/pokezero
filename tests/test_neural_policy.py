@@ -545,6 +545,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(turn_penalty=-0.1)
         with self.assertRaisesRegex(ValueError, "turn_penalty_after"):
             TransformerTrainingConfig(turn_penalty=0.1)
+        with self.assertRaisesRegex(ValueError, "ppo_target_mode"):
+            TransformerTrainingConfig(objective="ppo", ppo_target_mode="bad")
+        with self.assertRaisesRegex(ValueError, "requires objective='ppo'"):
+            TransformerTrainingConfig(ppo_target_mode="gae")
+        with self.assertRaisesRegex(ValueError, "gae_lambda"):
+            TransformerTrainingConfig(objective="ppo", ppo_target_mode="gae", gae_lambda=1.5)
         with self.assertRaisesRegex(ValueError, "objective"):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
@@ -598,6 +604,50 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         # Behavior-cloning objective on the same tensors yields a positive CE policy loss.
         bc_loss, bc_metrics = _transformer_loss(output, tensors, TransformerTrainingConfig())
         self.assertGreater(bc_metrics["policy_loss"], 0.0)
+
+    def test_ppo_objective_uses_recorded_gae_targets_when_present(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros(2, 9),
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.ones(2),
+            "ppo_advantages": torch.tensor([0.25, 99.0]),
+            "ppo_advantage_mask": torch.tensor([True, False]),
+            "ppo_value_targets": torch.tensor([0.4, 99.0]),
+            "ppo_value_target_mask": torch.tensor([True, False]),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+
+        loss, metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="ppo",
+                ppo_target_mode="gae",
+                normalize_advantage=False,
+                entropy_coef=0.0,
+                opponent_action_loss_weight=0.0,
+            ),
+        )
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertAlmostEqual(metrics["policy_loss"], -0.625, places=5)
+        self.assertAlmostEqual(metrics["value_loss"], ((0.4**2) + 1.0) / 2.0, places=5)
+        self.assertAlmostEqual(metrics["ppo_advantage_sum"], 1.25, places=5)
+        self.assertAlmostEqual(metrics["ppo_advantage_square_sum"], (0.25**2) + 1.0, places=5)
 
     def test_reward_weighted_objective_ignores_non_positive_returns(self) -> None:
         if not torch_available():
@@ -2089,6 +2139,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "180",
                         "--turn-penalty",
                         "0.01",
+                        "--objective",
+                        "ppo",
+                        "--ppo-target-mode",
+                        "gae",
+                        "--gae-lambda",
+                        "0.8",
                         "--value-calibration-data",
                         "calibration-rollouts.jsonl",
                         "--value-calibration-out",
@@ -2109,6 +2165,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(train.call_args.kwargs["training_config"].faint_delta_return_weight, 0.4)
         self.assertEqual(train.call_args.kwargs["training_config"].turn_penalty_after, 180)
         self.assertEqual(train.call_args.kwargs["training_config"].turn_penalty, 0.01)
+        self.assertEqual(train.call_args.kwargs["training_config"].objective, "ppo")
+        self.assertEqual(train.call_args.kwargs["training_config"].ppo_target_mode, "gae")
+        self.assertEqual(train.call_args.kwargs["training_config"].gae_lambda, 0.8)
         self.assertEqual(save.call_args.args[0], checkpoint_path)
         self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("calibration-rollouts.jsonl")])
         self.assertEqual(evaluate.call_args.kwargs["batch_size"], 9)
@@ -2429,6 +2488,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "180",
                     "--turn-penalty",
                     "0.01",
+                    "--objective",
+                    "ppo",
+                    "--ppo-target-mode",
+                    "gae",
+                    "--gae-lambda",
+                    "0.8",
                     "--policy-id",
                     "entity-cli",
                     "--promotion-registry",
@@ -2489,6 +2554,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].faint_delta_return_weight, 0.4)
         self.assertEqual(kwargs["training_config"].turn_penalty_after, 180)
         self.assertEqual(kwargs["training_config"].turn_penalty, 0.01)
+        self.assertEqual(kwargs["training_config"].objective, "ppo")
+        self.assertEqual(kwargs["training_config"].ppo_target_mode, "gae")
+        self.assertEqual(kwargs["training_config"].gae_lambda, 0.8)
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)

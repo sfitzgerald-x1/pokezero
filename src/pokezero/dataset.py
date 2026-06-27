@@ -35,6 +35,8 @@ class TrajectoryDatasetConfig:
     faint_delta_return_weight: float = 0.0
     turn_penalty_after: int | None = None
     turn_penalty: float = 0.0
+    ppo_target_mode: str = "returns"
+    gae_lambda: float = 0.95
 
     def __post_init__(self) -> None:
         if self.window_size <= 0:
@@ -53,6 +55,10 @@ class TrajectoryDatasetConfig:
             raise ValueError("turn_penalty must be non-negative.")
         if self.turn_penalty > 0.0 and self.turn_penalty_after is None:
             raise ValueError("turn_penalty_after must be set when turn_penalty is positive.")
+        if self.ppo_target_mode not in {"returns", "gae"}:
+            raise ValueError("ppo_target_mode must be 'returns' or 'gae'.")
+        if not 0.0 <= self.gae_lambda <= 1.0:
+            raise ValueError("gae_lambda must be between 0 and 1.")
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,9 @@ class TrajectoryExample:
     action_index: int
     reward: float
     return_value: float
+    value_estimate: float | None = None
+    ppo_advantage: float | None = None
+    ppo_value_target: float | None = None
     opponent_action_index: int | None = None
     action_probability: float | None = None
     step_metadata: Mapping[str, Any] | None = None
@@ -92,6 +101,10 @@ class TrainingBatch:
     action_indices: tuple[int, ...]
     rewards: tuple[float, ...]
     returns: tuple[float, ...]
+    ppo_advantages: tuple[float, ...]
+    ppo_advantage_mask: tuple[bool, ...]
+    ppo_value_targets: tuple[float, ...]
+    ppo_value_target_mask: tuple[bool, ...]
     opponent_action_indices: tuple[int, ...]
     opponent_action_mask: tuple[bool, ...]
     action_probabilities: tuple[float, ...]
@@ -117,6 +130,10 @@ class TrainingBatch:
             ("legal_action_mask", self.legal_action_mask),
             ("rewards", self.rewards),
             ("returns", self.returns),
+            ("ppo_advantages", self.ppo_advantages),
+            ("ppo_advantage_mask", self.ppo_advantage_mask),
+            ("ppo_value_targets", self.ppo_value_targets),
+            ("ppo_value_target_mask", self.ppo_value_target_mask),
             ("opponent_action_indices", self.opponent_action_indices),
             ("opponent_action_mask", self.opponent_action_mask),
             ("action_probabilities", self.action_probabilities),
@@ -162,6 +179,10 @@ def examples_from_record(
         record,
         config=dataset_config,
     )
+    ppo_targets_by_step_index = _ppo_targets_by_step_index(
+        record,
+        config=dataset_config,
+    )
     history_by_player: dict[str, list[TrajectoryStep]] = {}
 
     for step_index, step in enumerate(record.trajectory.steps):
@@ -173,6 +194,7 @@ def examples_from_record(
             step=step,
             window_steps=window_steps,
             return_value=returns_by_step_index[step_index],
+            ppo_target=ppo_targets_by_step_index.get(step_index),
             window_size=dataset_config.window_size,
         )
 
@@ -224,6 +246,10 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         action_indices=tuple(example.action_index for example in examples),
         rewards=tuple(example.reward for example in examples),
         returns=tuple(example.return_value for example in examples),
+        ppo_advantages=tuple(_optional_float(example.ppo_advantage) for example in examples),
+        ppo_advantage_mask=tuple(example.ppo_advantage is not None for example in examples),
+        ppo_value_targets=tuple(_optional_float(example.ppo_value_target) for example in examples),
+        ppo_value_target_mask=tuple(example.ppo_value_target is not None for example in examples),
         opponent_action_indices=tuple(_optional_action_index(example.opponent_action_index) for example in examples),
         opponent_action_mask=tuple(example.opponent_action_index is not None for example in examples),
         action_probabilities=tuple(_optional_float(example.action_probability) for example in examples),
@@ -244,6 +270,7 @@ def _example_from_window(
     step: TrajectoryStep,
     window_steps: tuple[TrajectoryStep, ...],
     return_value: float,
+    ppo_target: "_PPOTarget | None",
     window_size: int,
 ) -> TrajectoryExample:
     if len(window_steps) > window_size:
@@ -275,6 +302,9 @@ def _example_from_window(
         action_index=step.action_index,
         reward=float(step.reward),
         return_value=return_value,
+        value_estimate=step.value_estimate,
+        ppo_advantage=ppo_target.advantage if ppo_target is not None else None,
+        ppo_value_target=ppo_target.value_target if ppo_target is not None else None,
         opponent_action_index=step.opponent_action_index,
         action_probability=step.action_probability,
         step_metadata=dict(step.metadata),
@@ -304,6 +334,56 @@ def _discounted_returns_by_step_index(
             returns_by_step_index[step_index] = shaped_return
             running_return = shaped_return * config.discount
     return returns_by_step_index
+
+
+@dataclass(frozen=True)
+class _PPOTarget:
+    advantage: float
+    value_target: float
+
+
+def _ppo_targets_by_step_index(
+    record: RolloutRecord,
+    *,
+    config: TrajectoryDatasetConfig,
+) -> dict[int, _PPOTarget]:
+    if config.ppo_target_mode != "gae":
+        return {}
+    step_indices_by_player: dict[str, list[int]] = {}
+    for step_index, step in enumerate(record.trajectory.steps):
+        step_indices_by_player.setdefault(step.player_id, []).append(step_index)
+
+    targets_by_step_index: dict[int, _PPOTarget] = {}
+    for player_id, step_indices in step_indices_by_player.items():
+        steps = [record.trajectory.steps[step_index] for step_index in step_indices]
+        if not steps or any(step.value_estimate is None for step in steps):
+            continue
+        shaping_rewards = _shaping_rewards_by_step_index(record, step_indices=step_indices, config=config)
+        terminal_value = _terminal_value_for_player(
+            record,
+            player_id,
+            capped_terminal_value=config.capped_terminal_value,
+        )
+        running_advantage = 0.0
+        for position in range(len(step_indices) - 1, -1, -1):
+            step_index = step_indices[position]
+            step = record.trajectory.steps[step_index]
+            value_estimate = float(step.value_estimate)
+            is_last_player_step = position == len(step_indices) - 1
+            reward = shaping_rewards.get(step_index, 0.0)
+            if is_last_player_step:
+                reward += terminal_value
+                next_value_estimate = 0.0
+            else:
+                next_value_estimate = float(record.trajectory.steps[step_indices[position + 1]].value_estimate)
+            delta = reward + (config.discount * next_value_estimate) - value_estimate
+            running_advantage = delta + (config.discount * config.gae_lambda * running_advantage)
+            targets_by_step_index[step_index] = _PPOTarget(
+                advantage=running_advantage,
+                # Value loss remains clipped to the training target range; policy advantage stays unclipped.
+                value_target=_clip_return_value(value_estimate + running_advantage),
+            )
+    return targets_by_step_index
 
 
 def _clip_return_value(value: float) -> float:

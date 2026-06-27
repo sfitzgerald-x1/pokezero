@@ -129,6 +129,7 @@ def evaluate_value_calibration(
     if device is not None and hasattr(model, "to"):
         model.to(device)
     dataset_config = _trajectory_dataset_config_from_training_result(training_result)
+    # Calibration reports outcome-return quality; PPO GAE targets are bootstrapped training labels.
     totals = _ValueCalibrationTotals(bin_count=bins)
     slice_totals = _ValueCalibrationSliceTotals(bin_count=bins)
     try:
@@ -178,6 +179,7 @@ def fit_value_calibration_transform(
     if device is not None and hasattr(model, "to"):
         model.to(device)
     dataset_config = _trajectory_dataset_config_from_training_result(training_result)
+    # Fit transforms against realized outcome returns, not bootstrapped PPO GAE targets.
     totals = _AffineFitTotals()
     try:
         with torch_module.no_grad():

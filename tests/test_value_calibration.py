@@ -106,7 +106,7 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(transform.scale, 0.0)
         self.assertAlmostEqual(transform.bias, 0.0)
 
-    def test_calibration_dataset_config_matches_training_target_config(self) -> None:
+    def test_calibration_dataset_config_matches_training_return_target_config(self) -> None:
         training_config = TransformerTrainingConfig(
             window_size=3,
             discount=0.75,
@@ -115,6 +115,9 @@ class ValueCalibrationTest(unittest.TestCase):
             faint_delta_return_weight=0.3,
             turn_penalty_after=20,
             turn_penalty=0.01,
+            objective="ppo",
+            ppo_target_mode="gae",
+            gae_lambda=0.8,
         )
 
         dataset_config = _trajectory_dataset_config_from_training_result(
@@ -132,6 +135,8 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertEqual(dataset_config.faint_delta_return_weight, 0.3)
         self.assertEqual(dataset_config.turn_penalty_after, 20)
         self.assertEqual(dataset_config.turn_penalty, 0.01)
+        self.assertEqual(dataset_config.ppo_target_mode, "returns")
+        self.assertEqual(dataset_config.gae_lambda, 0.95)
 
     def test_evaluate_value_calibration_runs_model_over_rollout_batches(self) -> None:
         if not torch_available():
@@ -346,6 +351,87 @@ class ValueCalibrationTest(unittest.TestCase):
         self.assertAlmostEqual(report.mae, 0.3)
         self.assertAlmostEqual(report.bias, -0.3)
         self.assertAlmostEqual(transform.bias, 0.3)
+
+    def test_value_calibration_uses_outcome_returns_when_ppo_gae_is_configured(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class ZeroValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                batch_size = int(kwargs["categorical_ids"].shape[0])
+                return SimpleNamespace(value=torch.zeros(batch_size))
+
+        observation = _observation()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=9)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation,
+                legal_action_mask=observation.legal_action_mask,
+                action_index=0,
+                value_estimate=0.2,
+            )
+        )
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=1,
+                observation=observation,
+                legal_action_mask=observation.legal_action_mask,
+                action_index=0,
+                value_estimate=0.5,
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+        record = RolloutRecord(
+            battle_id="battle",
+            seed=9,
+            format_id="gen3randombattle",
+            policy_ids={"p1": "fixture"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        training_result = TransformerTrainingResult(
+            model_config=SimpleNamespace(),
+            training_config=TransformerTrainingConfig(
+                window_size=1,
+                objective="ppo",
+                ppo_target_mode="gae",
+                gae_lambda=0.0,
+            ),
+            epochs=(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+
+            report = evaluate_value_calibration(
+                model=ZeroValueModel(),
+                training_result=training_result,
+                paths=path,
+                batch_size=2,
+                bins=4,
+            )
+            transform = fit_value_calibration_transform(
+                model=ZeroValueModel(),
+                training_result=training_result,
+                paths=path,
+                batch_size=2,
+            )
+
+        self.assertEqual(report.examples, 2)
+        self.assertAlmostEqual(report.mae, 1.0)
+        self.assertAlmostEqual(report.bias, -1.0)
+        self.assertAlmostEqual(transform.bias, 1.0)
 
     def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
         if not torch_available():

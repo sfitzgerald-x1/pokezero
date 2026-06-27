@@ -250,11 +250,19 @@ class TransformerTrainingConfig:
     clip_epsilon: float = 0.2
     entropy_coef: float = 0.0
     normalize_advantage: bool = True
+    ppo_target_mode: str = "returns"
+    gae_lambda: float = 0.95
     freeze_non_value_parameters: bool = False
 
     def __post_init__(self) -> None:
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
             raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
+        if self.ppo_target_mode not in {"returns", "gae"}:
+            raise ValueError("ppo_target_mode must be 'returns' or 'gae'.")
+        if self.objective != "ppo" and self.ppo_target_mode != "returns":
+            raise ValueError("ppo_target_mode='gae' requires objective='ppo'.")
+        if not 0.0 <= self.gae_lambda <= 1.0:
+            raise ValueError("gae_lambda must be between 0 and 1.")
         if self.objective == "value-only" and not self.freeze_non_value_parameters:
             raise ValueError("objective='value-only' requires freeze_non_value_parameters=True.")
         if self.freeze_non_value_parameters and self.objective != "value-only":
@@ -514,6 +522,10 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "legal_action_mask": torch_module.tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
         "action_indices": torch_module.tensor(batch.action_indices, dtype=torch_module.long, device=device),
         "returns": torch_module.tensor(batch.returns, dtype=torch_module.float32, device=device),
+        "ppo_advantages": torch_module.tensor(batch.ppo_advantages, dtype=torch_module.float32, device=device),
+        "ppo_advantage_mask": torch_module.tensor(batch.ppo_advantage_mask, dtype=torch_module.bool, device=device),
+        "ppo_value_targets": torch_module.tensor(batch.ppo_value_targets, dtype=torch_module.float32, device=device),
+        "ppo_value_target_mask": torch_module.tensor(batch.ppo_value_target_mask, dtype=torch_module.bool, device=device),
         "opponent_action_indices": torch_module.tensor(batch.opponent_action_indices, dtype=torch_module.long, device=device),
         "opponent_action_mask": torch_module.tensor(batch.opponent_action_mask, dtype=torch_module.bool, device=device),
         "action_probabilities": torch_module.tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
@@ -839,6 +851,8 @@ def train_transformer_policy(
         faint_delta_return_weight=resolved_training_config.faint_delta_return_weight,
         turn_penalty_after=resolved_training_config.turn_penalty_after,
         turn_penalty=resolved_training_config.turn_penalty,
+        ppo_target_mode=resolved_training_config.ppo_target_mode,
+        gae_lambda=resolved_training_config.gae_lambda,
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
@@ -1089,7 +1103,8 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     functional = torch_module.nn.functional
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
-    value_loss = functional.mse_loss(output.value, tensors["returns"])
+    value_targets = _value_targets(tensors)
+    value_loss = functional.mse_loss(output.value, value_targets)
     ppo_objective_examples = 0
     ppo_valid_examples = 0
     ppo_advantage_sum = 0.0
@@ -1116,7 +1131,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         mask = (tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)).float()
         behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
         denom = mask.sum().clamp(min=1.0)
-        raw_advantage = tensors["returns"] - output.value.detach()
+        raw_advantage = _ppo_advantages(output, tensors)
         advantage = raw_advantage
         if config.normalize_advantage and float(denom.item()) > 1.0:
             masked_mean = (advantage * mask).sum() / denom
@@ -1198,6 +1213,29 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "ppo_clip_count": ppo_clip_count,
         "ppo_entropy_sum": ppo_entropy_sum,
     }
+
+
+def _value_targets(tensors: Mapping[str, Any]):
+    torch_module = require_torch()
+    if "ppo_value_target_mask" not in tensors or "ppo_value_targets" not in tensors:
+        return tensors["returns"]
+    return torch_module.where(
+        tensors["ppo_value_target_mask"],
+        tensors["ppo_value_targets"],
+        tensors["returns"],
+    )
+
+
+def _ppo_advantages(output: TransformerPolicyOutput, tensors: Mapping[str, Any]):
+    torch_module = require_torch()
+    fallback = tensors["returns"] - output.value.detach()
+    if "ppo_advantage_mask" not in tensors or "ppo_advantages" not in tensors:
+        return fallback
+    return torch_module.where(
+        tensors["ppo_advantage_mask"],
+        tensors["ppo_advantages"],
+        fallback,
+    )
 
 
 def _action_family_loss_terms(masked_policy_logits: Any, tensors: Mapping[str, Any], config: TransformerTrainingConfig):
