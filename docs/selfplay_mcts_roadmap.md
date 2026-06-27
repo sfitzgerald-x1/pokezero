@@ -58,6 +58,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   3-4 decisions/s, and no runtime crash. This is harness evidence only, not strength evidence: the
   tiny 4-game-trained smoke checkpoint lost to `max-damage`, and one root-PUCT orientation capped at
   the 50-decision smoke limit.
+  A first small current-schema probe then trained a 64-game scripted-teacher BC checkpoint and ran
+  `--games 4` against `max-damage`: raw scored 3/8, root-PUCT scored 2/8, both with zero capped
+  games. This is too small to decide strength, but it is negative search-lift evidence for the
+  current shallow operator and confirms active-search throughput around 3 decisions/s.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
   measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
   targets; this is the first WS-E metric before using the value head for MCTS leaf evaluation.
@@ -102,6 +106,9 @@ require a strong net — search improves any decent one — so it should not be 
   current-observation-schema checkpoint with meaningful strength. Older local checkpoints trained
   before the latest observation features can fail with numeric-feature shape mismatches and should
   be retrained or skipped for M0 evidence.
+  The first 64-game-BC probe did **not** show lift, so the next M0 step should improve the search
+  operator/value quality or run against a meaningfully stronger current-schema checkpoint before
+  spending larger benchmark samples.
 - **M1 gate:** the per-iteration strength curve must *rise* over ≥10 league iterations; a multi-
   iteration flatline = stuck → lean on search and revisit league diversity + exploration.
 
