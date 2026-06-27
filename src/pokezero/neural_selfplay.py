@@ -8,6 +8,7 @@ eval-only references such as max-damage), and write auditable manifests.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
@@ -40,7 +41,13 @@ from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .selfplay import POST_ITERATION_AUDIT_FAILURE_MODES, _report_post_iteration_audit_warnings, collect_selfplay_rollouts
 from .source_metadata import collect_source_metadata
-from .value_calibration import evaluate_value_calibration
+from .value_calibration import (
+    VALUE_SELECTION_METRICS,
+    evaluate_value_calibration,
+    value_selection_metric_direction,
+    value_selection_metric_value,
+    value_selection_score,
+)
 
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
@@ -78,6 +85,33 @@ class NeuralValueCalibrationConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "scope": self.scope,
+            "batch_size": self.batch_size,
+            "bins": self.bins,
+        }
+
+
+@dataclass(frozen=True)
+class NeuralValueSelectionConfig:
+    scope: str = "iteration"
+    metric: str = "mae"
+    batch_size: int = 128
+    bins: int = 10
+
+    def __post_init__(self) -> None:
+        if self.scope not in {"iteration", "history"}:
+            raise ValueError("value selection scope must be 'iteration' or 'history'.")
+        if self.metric not in VALUE_SELECTION_METRICS:
+            choices = ", ".join(VALUE_SELECTION_METRICS)
+            raise ValueError(f"value selection metric must be one of: {choices}.")
+        if self.batch_size <= 0:
+            raise ValueError("value selection batch_size must be positive.")
+        if self.bins <= 0:
+            raise ValueError("value selection bins must be positive.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "metric": self.metric,
             "batch_size": self.batch_size,
             "bins": self.bins,
         }
@@ -129,6 +163,7 @@ class NeuralSelfPlayIterationResult:
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     benchmark_reference_policy_specs: tuple[str, ...] = ()
     value_calibration: Mapping[str, Any] | None = None
+    value_selection: Mapping[str, Any] | None = None
     source: Mapping[str, Any] = field(default_factory=dict)
 
     @property
@@ -155,6 +190,7 @@ class NeuralSelfPlayIterationResult:
             "collection_metrics": self.metrics.to_dict(),
             "training": _training_result_to_dict(self.training),
             "value_calibration": dict(self.value_calibration) if self.value_calibration is not None else None,
+            "value_selection": dict(self.value_selection) if self.value_selection is not None else None,
             "benchmark": self.benchmark.to_dict() if self.benchmark is not None else None,
             "advancement": self.advancement.to_dict() if self.advancement is not None else None,
             "promotion": self.promotion.to_dict() if self.promotion is not None else None,
@@ -272,6 +308,7 @@ def run_neural_selfplay_iterations(
     post_iteration_audit_config: "RunAuditConfig | None" = None,
     post_iteration_audit_failure_mode: str = "strict",
     value_calibration_config: NeuralValueCalibrationConfig | None = None,
+    value_selection_config: NeuralValueSelectionConfig | None = None,
     tensorboard_log_dir: Path | str | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
@@ -371,6 +408,7 @@ def run_neural_selfplay_iterations(
         "mirror_match": mirror_match,
         "collection_temperature": collection_temperature,
         "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
+        "value_selection": value_selection_config.to_dict() if value_selection_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,
         "auto_promotion": auto_promotion_config_dict(
             enabled=auto_promotion_config is not None,
@@ -426,12 +464,25 @@ def run_neural_selfplay_iterations(
                 model_config,
                 policy_id=f"{model_config.policy_id}-iter-{iteration:04d}",
             )
-            model, training = train_transformer_policy(
-                tuple(training_rollout_history),
-                model_config=iteration_model_config,
-                training_config=training_config,
-                initial_model=current_model,
-            )
+            value_selection = None
+            if value_selection_config is None:
+                model, training = train_transformer_policy(
+                    tuple(training_rollout_history),
+                    model_config=iteration_model_config,
+                    training_config=training_config,
+                    initial_model=current_model,
+                )
+            else:
+                model, training, value_selection = _train_with_iteration_value_selection(
+                    paths=tuple(training_rollout_history),
+                    model_config=iteration_model_config,
+                    training_config=training_config,
+                    initial_model=current_model,
+                    training_rollout_path=training_rollout_path,
+                    training_rollout_history=tuple(training_rollout_history),
+                    config=value_selection_config,
+                    artifact_path=iteration_dir / "value-selection.json",
+                )
             save_transformer_checkpoint(checkpoint_path, model, result=training)
             value_calibration = _evaluate_iteration_value_calibration(
                 model=model,
@@ -492,6 +543,7 @@ def run_neural_selfplay_iterations(
                 invocation_config=invocation_config,
                 benchmark_reference_policy_specs=benchmark_references,
                 value_calibration=value_calibration,
+                value_selection=value_selection,
                 source=source_metadata,
             )
             _write_json(iteration_manifest_path, result.to_manifest_dict())
@@ -602,6 +654,92 @@ def run_neural_selfplay_iterations(
         prior_invocation_configs=prior_invocation_configs,
         source=source_metadata,
     )
+
+
+def _train_with_iteration_value_selection(
+    *,
+    paths: tuple[Path, ...],
+    model_config: TransformerPolicyConfig,
+    training_config: TransformerTrainingConfig,
+    initial_model: object | None,
+    training_rollout_path: Path,
+    training_rollout_history: tuple[Path, ...],
+    config: NeuralValueSelectionConfig,
+    artifact_path: Path,
+) -> tuple[object, TransformerTrainingResult, Mapping[str, Any]]:
+    selection_paths = (training_rollout_path,) if config.scope == "iteration" else training_rollout_history
+    selection_reports: list[dict[str, Any]] = []
+    best_state = None
+    best_epoch = None
+    best_metric_value = None
+    best_score = None
+    device = resolve_torch_device(training_config.device)
+
+    def evaluate_epoch(model: object, epoch_result: TransformerTrainingResult) -> None:
+        nonlocal best_epoch, best_metric_value, best_score, best_state
+        epoch_metric = epoch_result.final_metrics
+        report = evaluate_value_calibration(
+            model=model,
+            training_result=epoch_result,
+            paths=selection_paths,
+            batch_size=config.batch_size,
+            bins=config.bins,
+            device=device,
+        )
+        metric_value = value_selection_metric_value(report, config.metric)
+        score = value_selection_score(metric_value, config.metric)
+        selection_reports.append(
+            {
+                "epoch": epoch_metric.epoch,
+                "metric_value": metric_value,
+                "training_metrics": epoch_metric.to_dict(),
+                "report": report.to_dict(),
+            }
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_metric_value = metric_value
+            best_epoch = epoch_metric.epoch
+            best_state = copy.deepcopy(model.state_dict())
+
+    model, full_result = train_transformer_policy(
+        paths,
+        model_config=model_config,
+        training_config=training_config,
+        initial_model=initial_model,
+        epoch_callback=evaluate_epoch,
+    )
+    if best_state is None or best_epoch is None or best_metric_value is None:
+        raise ValueError("value selection produced no epoch reports.")
+    model.load_state_dict(best_state)
+    selected_result = TransformerTrainingResult(
+        model_config=model_config,
+        training_config=replace(training_config, epochs=best_epoch),
+        epochs=tuple(full_result.epochs[:best_epoch]),
+    )
+    artifact_payload = {
+        "scope": config.scope,
+        "paths": [str(path) for path in selection_paths],
+        "batch_size": config.batch_size,
+        "bins": config.bins,
+        "metric": config.metric,
+        "metric_direction": value_selection_metric_direction(config.metric),
+        "selected_epoch": best_epoch,
+        "selected_metric_value": best_metric_value,
+        "epochs": selection_reports,
+    }
+    _write_json(artifact_path, artifact_payload)
+    return model, selected_result, {
+        "scope": config.scope,
+        "paths": [str(path) for path in selection_paths],
+        "batch_size": config.batch_size,
+        "bins": config.bins,
+        "metric": config.metric,
+        "metric_direction": artifact_payload["metric_direction"],
+        "selected_epoch": best_epoch,
+        "selected_metric_value": best_metric_value,
+        "artifact_path": str(artifact_path),
+    }
 
 
 def _evaluate_iteration_value_calibration(

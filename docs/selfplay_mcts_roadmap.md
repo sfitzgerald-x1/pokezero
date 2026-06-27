@@ -175,7 +175,10 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
 - **Value-head fine-tuning path** (`neural_cli train --initial-checkpoint --objective value-only
   --freeze-non-value-parameters`): warm-starts from an existing checkpoint, trains only the value head,
   and leaves the policy prior intact while calibration is improved. `--value-selection-data` can score
-  each epoch on held-out calibration and restore the best epoch by MAE/MSE/ECE/sign/bias metric.
+  each standalone-train epoch on held-out calibration and restore the best epoch by
+  MAE/MSE/ECE/sign/bias metric. `neural_cli iterate --value-selection` applies the same epoch-selection
+  discipline inside self-play iterations, writes a per-iteration sidecar, and stores the selected
+  epoch in the run manifest.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
