@@ -171,6 +171,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--leaf-rollout-rounds-sweep",
+        type=int,
+        action="append",
+        default=None,
+        help=(
+            "Repeatable leaf-depth sweep value. When supplied, root-puct-play-benchmark "
+            "creates one root-PUCT policy variant per unique supplied depth on the same seed "
+            "range and ignores --leaf-rollout-rounds."
+        ),
+    )
+    root_puct_play.add_argument(
         "--selection-mode",
         choices=("puct", "value"),
         default="puct",
@@ -612,9 +623,15 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
     )
+    leaf_rollout_rounds_values = _root_puct_leaf_rollout_rounds_values(args)
+    tag_leaf_policy_ids = args.leaf_rollout_rounds_sweep is not None
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
     raw_policy_id = str(result.model_config.policy_id)
-    search_policy_id = f"{raw_policy_id}+root-puct"
+
+    def search_policy_id_for(leaf_rollout_rounds: int) -> str:
+        if tag_leaf_policy_ids:
+            return f"{raw_policy_id}+root-puct-leaf{leaf_rollout_rounds}"
+        return f"{raw_policy_id}+root-puct"
 
     def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
@@ -626,7 +643,11 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             policy_id=policy_id,
         )
 
-    def make_leaf_rollout_policy(player_id: str) -> TransformerSoftmaxPolicy:
+    def make_leaf_rollout_policy(
+        *,
+        search_policy_id: str,
+        player_id: str,
+    ) -> TransformerSoftmaxPolicy:
         return make_raw_policy(policy_id=f"{search_policy_id}-leaf-{player_id}")
 
     def value_fn(history):
@@ -655,7 +676,17 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             device=args.device,
         )
 
-    def make_search_policy() -> RootPUCTSearchPolicy:
+    def make_search_policy(
+        *,
+        search_policy_id: str,
+        leaf_rollout_rounds: int,
+    ) -> RootPUCTSearchPolicy:
+        leaf_rollout_policy_factory = None
+        if leaf_rollout_rounds:
+            leaf_rollout_policy_factory = lambda player_id: make_leaf_rollout_policy(
+                search_policy_id=search_policy_id,
+                player_id=player_id,
+            )
         return RootPUCTSearchPolicy(
             env_factory=lambda: LocalShowdownEnv(env_config),
             rollout_config=rollout_config,
@@ -668,10 +699,8 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
-            leaf_rollout_decision_rounds=args.leaf_rollout_rounds,
-            leaf_rollout_policy_factory=make_leaf_rollout_policy
-            if args.leaf_rollout_rounds
-            else None,
+            leaf_rollout_decision_rounds=leaf_rollout_rounds,
+            leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         )
 
     opponent_specs = tuple(args.opponent_policy or ("random-legal", "simple-legal"))
@@ -690,18 +719,30 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
                     policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
                     make_raw_policy(),
                 ),
-                BenchmarkMatchup(
-                    f"{search_policy_id} vs {opponent_id}",
-                    make_search_policy(),
-                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
-                ),
-                BenchmarkMatchup(
-                    f"{opponent_id} vs {search_policy_id}",
-                    policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
-                    make_search_policy(),
-                ),
             )
         )
+        for leaf_rollout_rounds in leaf_rollout_rounds_values:
+            search_policy_id = search_policy_id_for(leaf_rollout_rounds)
+            matchups.extend(
+                (
+                    BenchmarkMatchup(
+                        f"{search_policy_id} vs {opponent_id}",
+                        make_search_policy(
+                            search_policy_id=search_policy_id,
+                            leaf_rollout_rounds=leaf_rollout_rounds,
+                        ),
+                        policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                    ),
+                    BenchmarkMatchup(
+                        f"{opponent_id} vs {search_policy_id}",
+                        policy_from_spec(policy_spec_with_showdown_root(opponent_spec, policy_showdown_root)),
+                        make_search_policy(
+                            search_policy_id=search_policy_id,
+                            leaf_rollout_rounds=leaf_rollout_rounds,
+                        ),
+                    ),
+                )
+            )
 
     report = benchmark_rollouts(
         games=args.games,
@@ -715,6 +756,24 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     else:
         print_benchmark_report(report)
     return 0
+
+
+def _root_puct_leaf_rollout_rounds_values(args: argparse.Namespace) -> tuple[int, ...]:
+    raw_values = (
+        tuple(args.leaf_rollout_rounds_sweep)
+        if args.leaf_rollout_rounds_sweep is not None
+        else (args.leaf_rollout_rounds,)
+    )
+    values: list[int] = []
+    for raw_value in raw_values:
+        value = int(raw_value)
+        if value < 0:
+            raise ValueError("leaf rollout rounds must be non-negative.")
+        if value not in values:
+            values.append(value)
+    if not values:
+        raise ValueError("at least one leaf rollout round value is required.")
+    return tuple(values)
 
 
 def _root_puct_benchmark(args: argparse.Namespace) -> int:

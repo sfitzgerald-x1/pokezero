@@ -65,6 +65,8 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   It can also run opt-in bounded leaf continuations (`--leaf-rollout-rounds`) before evaluating a
   root candidate, using real simulator steps and raw checkpoint policies to test whether short
   rollout leaves produce a better root value signal than immediate one-ply value-head evaluation.
+  `--leaf-rollout-rounds-sweep` can run multiple leaf depths in one same-seed benchmark artifact so
+  depth comparisons are less error-prone than separate one-off commands.
   `neural_cli root-puct-play-benchmark` compares raw checkpoint play against root-PUCT checkpoint
   play over full games on the same fixed-opponent matchups.
   A first local smoke run against `max-damage` proved the full-game path executes end to end with a
