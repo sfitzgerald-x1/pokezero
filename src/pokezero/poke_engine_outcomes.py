@@ -17,11 +17,17 @@ Charmander/Squirtle damage smoke. That mismatch is surfaced, not hidden.
 When a mismatch is found, :func:`build_one_turn_damage_diagnostic` gathers structured,
 serializable evidence about *where* it lives -- observed vs. engine per-side damage
 deltas, the Python request-derived active-state summary fed into state construction
-(stats/hp/moves from the Showdown request, types from the dex), and the engine's direct
-``calculate_damage`` output when the binding exposes it -- and reports a conservative
-``likely_mismatch_surface`` without claiming a root cause it has not proven. The
-summaries describe the *input* to ``build_poke_engine_state``; they do not prove the
-engine's internal state is faithful (that would need separate engine-state inspection).
+(stats/hp/moves from the Showdown request, types from the dex), an active-state summary
+read back from the *built* ``poke_engine.State`` and compared field-by-field against the
+request-derived spec, and the engine's direct ``calculate_damage`` output when the
+binding exposes it -- and reports a conservative ``likely_mismatch_surface`` without
+claiming a root cause it has not proven. The request-derived summaries describe the
+*input* to ``build_poke_engine_state``; the engine-state summaries describe what the
+engine actually built from it, so a matching comparison narrows the mismatch off the
+spec->engine state-translation path. When both sides' comparisons match, the surface
+narrows to ``engine damage/data path``; if either mismatches or cannot be inspected, the
+broad ``engine damage/data or state-translation path`` stands with notes explaining why.
+Either way the *exact* cause is left explicitly unresolved.
 
 Scope is **singles, move-vs-move only.** The module is optional and lazy: importing
 it never requires the native wheel (the real engine is imported only when a
@@ -38,6 +44,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from .dex import normalize_id
 from .poke_engine_adapter import (
+    TYPELESS,
     BattleSpec,
     MoveSpec,
     PokemonSpec,
@@ -60,6 +67,34 @@ _HP_BEARING_TAGS = ("switch", "drag", "replace", "-damage", "-heal", "-sethp")
 # Default PP for moves whose request entry omits it; PP is irrelevant to a single
 # turn's damage outcome, so a fixed value keeps the spec construction simple.
 _DEFAULT_PP = 32
+
+# Conservative ``likely_mismatch_surface`` values. ``NARROW`` is only claimed once
+# the built engine state has been inspected and matches the request-derived spec
+# for every compared field; otherwise the broad surface stands.
+NO_MISMATCH_SURFACE = "none"
+NARROW_MISMATCH_SURFACE = "engine damage/data path"
+BROAD_MISMATCH_SURFACE = "engine damage/data or state-translation path"
+
+# Active-Pokemon fields compared between the request-derived spec and the built
+# engine state, in display order.
+ENGINE_STATE_COMPARED_FIELDS = (
+    "species",
+    "level",
+    "hp",
+    "maxhp",
+    "types",
+    "ability",
+    "item",
+    "attack",
+    "defense",
+    "special_attack",
+    "special_defense",
+    "speed",
+    "moves",
+)
+# Marker recorded as the engine-side value of a field the engine state could not
+# expose, so an unreadable field surfaces as an explicit mismatch (never a crash).
+ENGINE_FIELD_UNREAD = "<unread>"
 
 
 @dataclass(frozen=True)
@@ -540,11 +575,10 @@ class ActiveStateSummary:
 
     Fields come from the Python :class:`SideSpec` the comparator builds: stats, hp,
     level, ability, item, and moves are taken from the Showdown opening request, and
-    types are dex-derived. This is the *input* to ``build_poke_engine_state`` -- so a
-    summary that matches the Showdown request shows the Python request-derived spec is
-    faithful, but it does NOT prove the engine's internal state matches it (that would
-    need separate engine-state inspection), nor does it say anything about the engine's
-    damage math.
+    types are dex-derived. This is the *input* to ``build_poke_engine_state``. Whether
+    the engine actually built a faithful state from it is checked separately by
+    :func:`engine_active_state_summary` / :func:`compare_engine_active_state`; this
+    summary on its own says nothing about the engine's damage math.
     """
 
     species: str
@@ -577,6 +611,108 @@ class ActiveStateSummary:
             "speed": self.speed,
             "moves": [{"id": move_id, "pp": pp} for move_id, pp in self.moves],
         }
+
+
+@dataclass(frozen=True)
+class EngineActiveStateSummary:
+    """One seat's active Pokemon read back from a *built* ``poke_engine.State``.
+
+    Unlike :class:`ActiveStateSummary` (which summarizes the request-derived *input*
+    to ``build_poke_engine_state``), this reads the engine object that construction
+    actually produced. Values are normalized for comparison against the request
+    summary: ids are lower-cased, the Gen 3 ``typeless`` padding slot is dropped from
+    ``types``, and an ``ability``/``item`` of ``"none"`` (the engine's no-value
+    sentinel) becomes ``None``. Any field the engine could not expose is left ``None``
+    and named in ``missing_fields`` so it surfaces as an explicit comparison mismatch
+    rather than a crash.
+    """
+
+    species: str | None
+    level: int | None
+    hp: int | None
+    maxhp: int | None
+    types: tuple[str, ...] | None
+    ability: str | None
+    item: str | None
+    attack: int | None
+    defense: int | None
+    special_attack: int | None
+    special_defense: int | None
+    speed: int | None
+    moves: tuple[tuple[str, int], ...] | None
+    missing_fields: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "species": self.species,
+            "level": self.level,
+            "hp": self.hp,
+            "maxhp": self.maxhp,
+            "types": list(self.types) if self.types is not None else None,
+            "ability": self.ability,
+            "item": self.item,
+            "attack": self.attack,
+            "defense": self.defense,
+            "special_attack": self.special_attack,
+            "special_defense": self.special_defense,
+            "speed": self.speed,
+            "moves": (
+                [{"id": move_id, "pp": pp} for move_id, pp in self.moves]
+                if self.moves is not None
+                else None
+            ),
+            "missing_fields": list(self.missing_fields),
+        }
+
+
+@dataclass(frozen=True)
+class FieldMismatch:
+    """One field that differs between the request-derived spec and the engine state."""
+
+    field: str
+    request_value: Any
+    engine_value: Any
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "request": _jsonable_value(self.request_value),
+            "engine": _jsonable_value(self.engine_value),
+        }
+
+
+@dataclass(frozen=True)
+class ActiveStateComparison:
+    """Field-level comparison of one seat's request spec vs. its built engine state.
+
+    ``matched`` is ``True`` only when every compared field agrees. ``mismatches``
+    lists each disagreeing field (an unreadable engine field is reported with the
+    :data:`ENGINE_FIELD_UNREAD` marker, never silently skipped). ``reason`` is set
+    when the engine state could not be fully inspected.
+    """
+
+    side: str
+    matched: bool
+    mismatches: tuple[FieldMismatch, ...]
+    request_summary: ActiveStateSummary | None
+    engine_summary: EngineActiveStateSummary | None
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "side": self.side,
+            "matched": self.matched,
+            "mismatches": [mismatch.to_dict() for mismatch in self.mismatches],
+            "request_summary": self.request_summary.to_dict() if self.request_summary is not None else None,
+            "engine_summary": self.engine_summary.to_dict() if self.engine_summary is not None else None,
+            "reason": self.reason,
+        }
+
+    def summary(self) -> str:
+        if self.matched:
+            return f"{self.side} engine-state MATCH (all {len(ENGINE_STATE_COMPARED_FIELDS)} fields)"
+        fields = ", ".join(mismatch.field for mismatch in self.mismatches)
+        return f"{self.side} engine-state MISMATCH on: {fields}"
 
 
 @dataclass(frozen=True)
@@ -656,6 +792,10 @@ class OneTurnDamageDiagnostic:
     engine_branches: tuple[EngineBranchDamageSummary, ...]
     direct_calculate_damage: DirectCalculateDamageDiagnostic | None
     likely_mismatch_surface: str
+    side_one_engine_state: EngineActiveStateSummary | None = None
+    side_two_engine_state: EngineActiveStateSummary | None = None
+    side_one_comparison: ActiveStateComparison | None = None
+    side_two_comparison: ActiveStateComparison | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
     reason: str | None = None
 
@@ -675,6 +815,18 @@ class OneTurnDamageDiagnostic:
             "observed": self.observed.to_dict() if self.observed is not None else None,
             "side_one_state": self.side_one_state.to_dict() if self.side_one_state is not None else None,
             "side_two_state": self.side_two_state.to_dict() if self.side_two_state is not None else None,
+            "side_one_engine_state": (
+                self.side_one_engine_state.to_dict() if self.side_one_engine_state is not None else None
+            ),
+            "side_two_engine_state": (
+                self.side_two_engine_state.to_dict() if self.side_two_engine_state is not None else None
+            ),
+            "side_one_comparison": (
+                self.side_one_comparison.to_dict() if self.side_one_comparison is not None else None
+            ),
+            "side_two_comparison": (
+                self.side_two_comparison.to_dict() if self.side_two_comparison is not None else None
+            ),
             "engine_branches": [branch.to_dict() for branch in self.engine_branches],
             "engine_delta_tuples": [list(t) for t in self.engine_delta_tuples()],
             "direct_calculate_damage": (
@@ -692,8 +844,18 @@ class OneTurnDamageDiagnostic:
         observed = self.observed.deltas if self.observed is not None else None
         return (
             f"one-turn damage {status}: observed deltas {observed} vs. engine deltas "
-            f"{list(self.engine_delta_tuples())}; likely surface: {self.likely_mismatch_surface}"
+            f"{list(self.engine_delta_tuples())}; {self._engine_state_phrase()}; "
+            f"likely surface: {self.likely_mismatch_surface}"
         )
+
+    def _engine_state_phrase(self) -> str:
+        comparisons = (self.side_one_comparison, self.side_two_comparison)
+        if any(comparison is None for comparison in comparisons):
+            return "engine-state not inspected"
+        if all(comparison.matched for comparison in comparisons):  # type: ignore[union-attr]
+            return "engine-state matches request spec (both sides)"
+        mismatched = [c.side for c in comparisons if not c.matched]  # type: ignore[union-attr]
+        return f"engine-state mismatch on {', '.join(mismatched)}"
 
 
 def active_state_summary_from_side(side: SideSpec) -> ActiveStateSummary:
@@ -714,6 +876,197 @@ def active_state_summary_from_side(side: SideSpec) -> ActiveStateSummary:
         special_defense=mon.special_defense,
         speed=mon.speed,
         moves=tuple((move.id, int(move.pp)) for move in mon.moves),
+    )
+
+
+# --- engine-state inspection ----------------------------------------------
+#
+# The summary above describes the request-derived *input* to state construction.
+# The helpers below read the active Pokemon back off the *built* engine state and
+# compare it field-by-field, so a mismatch can be attributed to (or cleared from)
+# the spec->engine state-translation path. They never raise on a malformed/opaque
+# state: an unreadable field is recorded as missing and reported as a mismatch.
+
+
+def _jsonable_value(value: Any) -> Any:
+    """Coerce a comparison value (scalars, tuples, nested tuples) to JSON shape."""
+
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_value(item) for item in value]
+    return value
+
+
+def _lower_id(value: Any) -> str:
+    return str(value).strip().lower()
+
+
+def _normalize_optional_id(value: Any) -> str | None:
+    """Lower-case an id, treating ``None``/``""``/``"none"`` as no-value (``None``)."""
+
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("", "none"):
+        return None
+    return text
+
+
+def _coerce_engine_int(value: Any) -> int:
+    if isinstance(value, bool):
+        raise TypeError("bool is not a valid engine int field")
+    return int(value)
+
+
+def _normalize_engine_types(raw: Any) -> tuple[str, ...]:
+    """Lower-case engine type slots and drop the Gen 3 ``typeless`` padding slot."""
+
+    if isinstance(raw, str):
+        raw = (raw,)
+    out: list[str] = []
+    for entry in raw:
+        text = str(entry).strip().lower()
+        if text and text != TYPELESS:
+            out.append(text)
+    return tuple(out)
+
+
+def _coerce_request_moves(raw: Any) -> tuple[tuple[str, int], ...]:
+    out: list[tuple[str, int]] = []
+    for move_id, pp in raw:
+        out.append((_lower_id(move_id), _coerce_engine_int(pp)))
+    return tuple(out)
+
+
+def _coerce_engine_moves(raw: Any) -> tuple[tuple[str, int], ...]:
+    out: list[tuple[str, int]] = []
+    for move in raw:
+        move_id = _lower_id(getattr(move, "id"))
+        pp = getattr(move, "pp")
+        out.append((move_id, _coerce_engine_int(pp)))
+    return tuple(out)
+
+
+def _read_engine_field(obj: Any, attr: str, field: str, missing: list[str], coerce) -> Any:
+    """Read and normalize one engine attribute, recording ``field`` if it cannot be read."""
+
+    try:
+        raw = getattr(obj, attr)
+    except Exception:  # noqa: BLE001 - a diagnostic must survive opaque/foreign states
+        missing.append(field)
+        return None
+    try:
+        return coerce(raw)
+    except Exception:  # noqa: BLE001 - normalization failure is a missing field, not a crash
+        missing.append(field)
+        return None
+
+
+def engine_active_state_summary(state: Any, side_attr: str) -> EngineActiveStateSummary:
+    """Summarize the active Pokemon of a built engine ``state`` for one seat.
+
+    ``side_attr`` is ``"side_one"`` or ``"side_two"``. Reads species/level/hp/maxhp,
+    types (normalized), ability/item (``"none"`` -> ``None``), the five battle stats,
+    and move ids/pp off the engine objects, normalizing for comparison against an
+    :class:`ActiveStateSummary`. Never raises: a field that cannot be read is left
+    ``None`` and named in ``missing_fields``; if the active Pokemon itself cannot be
+    located, every field is reported missing.
+    """
+
+    missing: list[str] = []
+    mon = None
+    try:
+        side = getattr(state, side_attr)
+        mon = side.pokemon[int(side.active_index)]
+    except Exception:  # noqa: BLE001 - opaque/foreign state must not crash the diagnostic
+        mon = None
+    if mon is None:
+        return EngineActiveStateSummary(
+            species=None,
+            level=None,
+            hp=None,
+            maxhp=None,
+            types=None,
+            ability=None,
+            item=None,
+            attack=None,
+            defense=None,
+            special_attack=None,
+            special_defense=None,
+            speed=None,
+            moves=None,
+            missing_fields=ENGINE_STATE_COMPARED_FIELDS,
+        )
+
+    # ``ability``/``item`` use the optional normalizer (engine "none" -> None) and are
+    # only "missing" when the attribute itself is absent; the others are missing when
+    # absent or un-coercible.
+    ability = _read_engine_field(mon, "ability", "ability", missing, _normalize_optional_id)
+    item = _read_engine_field(mon, "item", "item", missing, _normalize_optional_id)
+    return EngineActiveStateSummary(
+        species=_read_engine_field(mon, "id", "species", missing, _lower_id),
+        level=_read_engine_field(mon, "level", "level", missing, _coerce_engine_int),
+        hp=_read_engine_field(mon, "hp", "hp", missing, _coerce_engine_int),
+        maxhp=_read_engine_field(mon, "maxhp", "maxhp", missing, _coerce_engine_int),
+        types=_read_engine_field(mon, "types", "types", missing, _normalize_engine_types),
+        ability=ability,
+        item=item,
+        attack=_read_engine_field(mon, "attack", "attack", missing, _coerce_engine_int),
+        defense=_read_engine_field(mon, "defense", "defense", missing, _coerce_engine_int),
+        special_attack=_read_engine_field(mon, "special_attack", "special_attack", missing, _coerce_engine_int),
+        special_defense=_read_engine_field(mon, "special_defense", "special_defense", missing, _coerce_engine_int),
+        speed=_read_engine_field(mon, "speed", "speed", missing, _coerce_engine_int),
+        moves=_read_engine_field(mon, "moves", "moves", missing, _coerce_engine_moves),
+        missing_fields=tuple(missing),
+    )
+
+
+def compare_engine_active_state(
+    request_summary: ActiveStateSummary,
+    engine_summary: EngineActiveStateSummary,
+    side: str,
+) -> ActiveStateComparison:
+    """Compare a request-derived summary against an engine-state summary, field by field.
+
+    A field the engine could not read (named in ``engine_summary.missing_fields``) is
+    reported as a mismatch carrying the :data:`ENGINE_FIELD_UNREAD` marker. ``matched``
+    is ``True`` only when no field disagrees.
+    """
+
+    missing = set(engine_summary.missing_fields)
+    checks: tuple[tuple[str, Any, Any], ...] = (
+        ("species", _lower_id(request_summary.species), engine_summary.species),
+        ("level", request_summary.level, engine_summary.level),
+        ("hp", request_summary.hp, engine_summary.hp),
+        ("maxhp", request_summary.maxhp, engine_summary.maxhp),
+        ("types", _normalize_engine_types(request_summary.types), engine_summary.types),
+        ("ability", _normalize_optional_id(request_summary.ability), engine_summary.ability),
+        ("item", _normalize_optional_id(request_summary.item), engine_summary.item),
+        ("attack", request_summary.attack, engine_summary.attack),
+        ("defense", request_summary.defense, engine_summary.defense),
+        ("special_attack", request_summary.special_attack, engine_summary.special_attack),
+        ("special_defense", request_summary.special_defense, engine_summary.special_defense),
+        ("speed", request_summary.speed, engine_summary.speed),
+        ("moves", _coerce_request_moves(request_summary.moves), engine_summary.moves),
+    )
+
+    mismatches: list[FieldMismatch] = []
+    for field_name, request_value, engine_value in checks:
+        if field_name in missing:
+            mismatches.append(FieldMismatch(field_name, request_value, ENGINE_FIELD_UNREAD))
+            continue
+        if request_value != engine_value:
+            mismatches.append(FieldMismatch(field_name, request_value, engine_value))
+
+    reason = None
+    if missing:
+        reason = "engine state could not expose fields: " + ", ".join(sorted(missing))
+    return ActiveStateComparison(
+        side=side,
+        matched=not mismatches,
+        mismatches=tuple(mismatches),
+        request_summary=request_summary,
+        engine_summary=engine_summary,
+        reason=reason,
     )
 
 
@@ -848,36 +1201,92 @@ def _mismatch_surface_and_notes(
     matched: bool,
     observed: ObservedDamage,
     engine_branches: Sequence[EngineBranchDamageSummary],
+    side_one_comparison: ActiveStateComparison | None,
+    side_two_comparison: ActiveStateComparison | None,
 ) -> tuple[str, tuple[str, ...]]:
     """Conservatively describe where a damage mismatch appears to live.
 
-    The active-state summaries show only that the *Python* request-derived spec fed
-    into state construction matches the Showdown request; they do NOT prove the
-    engine's internal state is faithful (no engine-state inspection is done here). So
-    a surviving mismatch is left on the broad surface of the engine's damage/data or
-    the spec->engine state-translation path, and the *exact* cause (base power,
-    category, type chart, stat usage, rounding, or a translation defect) is left
-    explicitly unresolved.
+    The built engine state is read back and compared field-by-field against the
+    request-derived spec (``side_one_comparison``/``side_two_comparison``). When both
+    sides match, the exposed/stored engine active fields line up with the request
+    spec, so the surface narrows to the engine's damage/data path for those inspected
+    fields. When either side mismatches or could not be inspected, the broad
+    engine-damage-or-translation surface stands. Either way the *exact* cause (base
+    power, category, type chart, stat usage, rounding, or a translation defect) is
+    left explicitly unresolved -- a matching state-comparison narrows *where* the bug
+    is, it does not name it.
     """
 
     if matched:
-        return "none", ("engine reproduces the observed one-turn damage outcome",)
+        return NO_MISMATCH_SURFACE, ("engine reproduces the observed one-turn damage outcome",)
 
-    engine_deltas = []
+    engine_deltas: list[tuple[int, int]] = []
     for branch in engine_branches:
         if branch.deltas not in engine_deltas:
             engine_deltas.append(branch.deltas)
-    notes = (
-        "active-state stats/hp/moves are request-derived and types are dex-derived (see "
-        "side_one_state/side_two_state); these match the Showdown request, but the engine's "
-        "internal state was not separately inspected, so engine-state fidelity is unproven",
+    deltas_note = (
         f"observed per-side damage deltas {list(observed.deltas)} are not reproduced by any "
-        f"engine branch ({[list(d) for d in engine_deltas]})",
+        f"engine branch ({[list(d) for d in engine_deltas]})"
+    )
+
+    comparisons = (side_one_comparison, side_two_comparison)
+    inspectable = all(comparison is not None for comparison in comparisons)
+    both_match = inspectable and all(comparison.matched for comparison in comparisons)  # type: ignore[union-attr]
+
+    if both_match:
+        notes = (
+            "built engine-state active summaries were read back and match the request-derived "
+            "spec on BOTH sides for every inspected exposed/stored field (species/level/hp/maxhp/"
+            "types/ability/item/stats/moves; types are dex-derived)",
+            deltas_note,
+            "the surviving mismatch is therefore on the engine's damage/data path, but the exact "
+            "cause (move base power/category, type-effectiveness table, stat usage, or rounding) "
+            "remains UNRESOLVED -- this narrows the surface, it does not prove a cause",
+        )
+        return NARROW_MISMATCH_SURFACE, notes
+
+    # Either a comparison disagreed or the engine state could not be fully inspected:
+    # the spec->engine state-translation path cannot be cleared, so keep the broad surface.
+    notes_list = [
+        "active-state stats/hp/moves are request-derived and types are dex-derived (see "
+        "side_one_state/side_two_state)",
+    ]
+    if not inspectable:
+        notes_list.append(
+            "the built engine state could not be inspected for at least one side, so engine-state "
+            "fidelity is unproven and the spec->engine state-translation path cannot be cleared"
+        )
+    else:
+        notes_list.append(
+            "the built engine state was inspected but did not clear the request-derived "
+            "comparison: "
+            + "; ".join(
+                _comparison_mismatch_phrase(comparison)
+                for comparison in comparisons
+                if comparison is not None and not comparison.matched
+            )
+        )
+    notes_list.append(deltas_note)
+    notes_list.append(
         "exact root cause (move base power/category, type-effectiveness table, stat usage, "
         "rounding, or a spec->engine state-translation defect) remains UNRESOLVED -- this "
-        "records the surface, not a proven cause",
+        "records the surface, not a proven cause"
     )
-    return "engine damage/data or state-translation path", notes
+    return BROAD_MISMATCH_SURFACE, tuple(notes_list)
+
+
+def _comparison_mismatch_phrase(comparison: ActiveStateComparison) -> str:
+    parts = []
+    for mismatch in comparison.mismatches:
+        parts.append(
+            f"{mismatch.field} (request={_jsonable_value(mismatch.request_value)!r} "
+            f"vs engine={_jsonable_value(mismatch.engine_value)!r})"
+        )
+    if comparison.reason:
+        parts.append(f"reason={comparison.reason}")
+    if not parts:
+        parts.append("no field-level mismatch recorded")
+    return f"{comparison.side}: " + ", ".join(parts)
 
 
 def build_one_turn_damage_diagnostic(
@@ -922,6 +1331,14 @@ def build_one_turn_damage_diagnostic(
         for outcome in branch_outcomes
     )
 
+    # Read the active Pokemon back off the built state and compare it field-by-field
+    # against the request-derived spec, so the spec->engine translation path can be
+    # cleared (or implicated) rather than left to guesswork.
+    side_one_engine_state = engine_active_state_summary(state, "side_one")
+    side_two_engine_state = engine_active_state_summary(state, "side_two")
+    side_one_comparison = compare_engine_active_state(side_one_state, side_one_engine_state, "side_one")
+    side_two_comparison = compare_engine_active_state(side_two_state, side_two_engine_state, "side_two")
+
     direct = direct_calculate_damage_diagnostic(engine, state, move_one, move_two)
 
     # Reuse the comparator's matching rule rather than recomputing it inline.
@@ -929,7 +1346,11 @@ def build_one_turn_damage_diagnostic(
         observed.final_hp, branch_outcomes, p1_move=move_one, p2_move=move_two
     ).matched
     surface, notes = _mismatch_surface_and_notes(
-        matched=matched, observed=observed, engine_branches=engine_branches
+        matched=matched,
+        observed=observed,
+        engine_branches=engine_branches,
+        side_one_comparison=side_one_comparison,
+        side_two_comparison=side_two_comparison,
     )
 
     return OneTurnDamageDiagnostic(
@@ -943,6 +1364,10 @@ def build_one_turn_damage_diagnostic(
         engine_branches=engine_branches,
         direct_calculate_damage=direct,
         likely_mismatch_surface=surface,
+        side_one_engine_state=side_one_engine_state,
+        side_two_engine_state=side_two_engine_state,
+        side_one_comparison=side_one_comparison,
+        side_two_comparison=side_two_comparison,
         notes=notes,
     )
 
