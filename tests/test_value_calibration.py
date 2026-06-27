@@ -15,6 +15,7 @@ from pokezero.value_calibration import (
     ValueCalibrationReport,
     evaluate_value_calibration,
     fit_affine_value_calibration_transform,
+    fit_value_calibration_transform,
     value_selection_metric_direction,
     value_selection_metric_value,
     value_selection_score,
@@ -225,6 +226,91 @@ class ValueCalibrationTest(unittest.TestCase):
 
         self.assertAlmostEqual(report.mae, (abs(0.8 - 1.0) + abs(-0.8 - -1.0)) / 2)
         self.assertEqual(report.sign_accuracy, 1.0)
+
+    def test_value_calibration_uses_training_shaped_return_targets(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+
+        class ZeroValueModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, **kwargs):
+                batch_size = int(kwargs["categorical_ids"].shape[0])
+                return SimpleNamespace(value=torch.zeros(batch_size))
+
+        first_observation = PokeZeroObservationV0(
+            categorical_ids=(),
+            numeric_features=(),
+            token_type_ids=(),
+            attention_mask=(),
+            legal_action_mask=(True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_team": [{"species": "Charizard", "hp_fraction": 1.0, "fainted": False}],
+                "opponent_team": [{"species": "Xatu", "hp_fraction": 1.0, "fainted": False}],
+            },
+        )
+        second_observation = PokeZeroObservationV0(
+            categorical_ids=(),
+            numeric_features=(),
+            token_type_ids=(),
+            attention_mask=(),
+            legal_action_mask=(True, False, False, False, False, False, False, False, False),
+            metadata={
+                "self_team": [{"species": "Charizard", "hp_fraction": 1.0, "fainted": False}],
+                "opponent_team": [{"species": "Xatu", "hp_fraction": 0.4, "fainted": False}],
+            },
+        )
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=9)
+        for turn_index, observation in enumerate((first_observation, second_observation)):
+            trajectory.append(
+                TrajectoryStep(
+                    player_id="p1",
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=observation.legal_action_mask,
+                    action_index=0,
+                )
+            )
+        trajectory.record_terminal(TerminalState(winner=None, turn_count=2))
+        record = RolloutRecord(
+            battle_id="battle",
+            seed=9,
+            format_id="gen3randombattle",
+            policy_ids={"p1": "fixture"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        training_result = SimpleNamespace(
+            training_config=TransformerTrainingConfig(window_size=1, hp_delta_return_weight=3.0),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+
+            report = evaluate_value_calibration(
+                model=ZeroValueModel(),
+                training_result=training_result,
+                paths=path,
+                batch_size=2,
+                bins=4,
+            )
+            transform = fit_value_calibration_transform(
+                model=ZeroValueModel(),
+                training_result=training_result,
+                paths=path,
+                batch_size=2,
+            )
+
+        self.assertEqual(report.examples, 2)
+        self.assertAlmostEqual(report.mae, 0.3)
+        self.assertAlmostEqual(report.bias, -0.3)
+        self.assertAlmostEqual(transform.bias, 0.3)
 
     def test_evaluate_value_calibration_reports_stratified_slices(self) -> None:
         if not torch_available():
