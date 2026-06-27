@@ -56,6 +56,13 @@ and to make larger from-scratch self-play experiments cheaper on CPU.
    `python -m pokezero.engine_cli doctor`.
    This verifies the Python reversible-state API seam and prints the recommended Gen 3 build
    command; it does not prove Gen 3 mechanics equivalence by itself.
+   `python -m pokezero.engine_cli doctor --smoke` adds a real apply/reverse smoke: it builds a
+   minimal Gen 3-compatible battle state (Charmander ember vs. Squirtle watergun), generates the
+   instruction branches, applies and reverses several of them, and confirms the serialized state
+   returns to the original while at least one branch actually mutated state. The smoke only runs
+   when the API probe is ready and exits nonzero if the round-trip fails. This is still only a
+   reversible-API smoke; it is **not** Showdown or Gen 3 random-battle equivalence, which the
+   fixture-based steps below still own.
 2. Build a tiny adapter from a curated Showdown Gen 3 battle fixture into a `poke_engine.State`.
 3. Validate legal root actions against the Showdown request payload for both seats.
 4. Validate one-turn instruction outcomes against Showdown for a small fixture matrix:

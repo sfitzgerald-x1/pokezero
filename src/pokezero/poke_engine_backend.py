@@ -32,6 +32,11 @@ POKE_ENGINE_OPTIONAL_MODULE_ATTRIBUTES = (
     "calculate_damage",
     "monte_carlo_tree_search",
 )
+POKE_ENGINE_SMOKE_MODULE_ATTRIBUTES = (
+    "Move",
+    "Pokemon",
+    "Side",
+)
 POKE_ENGINE_REQUIRED_STATE_METHODS = (
     "apply_instructions",
     "reverse_instructions",
@@ -93,6 +98,50 @@ class PokeEngineProbe:
             "install_command": self.install_command,
             "gen3_feature_verified": False,
             "gen3_feature_note": POKE_ENGINE_GEN3_FEATURE_NOTE,
+        }
+
+
+@dataclass(frozen=True)
+class PokeEngineReversibleSmokeResult:
+    """Result from a minimal real-engine apply/reverse smoke check."""
+
+    instruction_count: int
+    checked_instruction_count: int
+    mutated_any_state: bool
+    round_trip_ok: bool
+    instruction_percentages: tuple[float, ...]
+
+    @property
+    def succeeded(self) -> bool:
+        """A smoke run is only meaningful if it reversed cleanly AND changed something.
+
+        ``round_trip_ok`` on its own can pass vacuously when no checked branch
+        mutates the serialized state, so the spike requires at least one real
+        mutation before it counts the reversible seam as exercised.
+        """
+
+        return (
+            self.checked_instruction_count > 0
+            and self.mutated_any_state
+            and self.round_trip_ok
+        )
+
+    def summary(self) -> str:
+        status = "PASS" if self.succeeded else "FAIL"
+        return (
+            f"reversible smoke {status}: "
+            f"{self.checked_instruction_count}/{self.instruction_count} branches checked, "
+            f"mutated_any_state={self.mutated_any_state}, round_trip_ok={self.round_trip_ok}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "instruction_count": self.instruction_count,
+            "checked_instruction_count": self.checked_instruction_count,
+            "mutated_any_state": self.mutated_any_state,
+            "round_trip_ok": self.round_trip_ok,
+            "succeeded": self.succeeded,
+            "instruction_percentages": list(self.instruction_percentages),
         }
 
 
@@ -179,6 +228,103 @@ def inspect_poke_engine_optional_api(module: Any) -> tuple[str, ...]:
         if not hasattr(module, attribute):
             missing.append(attribute)
     return tuple(missing)
+
+
+def run_poke_engine_reversible_smoke(
+    *,
+    module: Any | None = None,
+    max_instruction_checks: int = 8,
+) -> PokeEngineReversibleSmokeResult:
+    """Run a minimal real-engine instruction apply/reverse smoke check.
+
+    This intentionally does not compare against Showdown. It only verifies that
+    a locally installed poke-engine wheel can construct a basic battle state,
+    generate possible instructions, apply them, and reverse them back to the
+    original serialized state.
+    """
+
+    engine = require_poke_engine() if module is None else module
+    missing = tuple(attribute for attribute in POKE_ENGINE_SMOKE_MODULE_ATTRIBUTES if not hasattr(engine, attribute))
+    if missing:
+        raise PokeEngineUnavailableError("Missing smoke-test API: " + ", ".join(missing))
+
+    state = _basic_gen3_smoke_state(engine)
+    original = state.to_string()
+    if engine.State.from_string(original).to_string() != original:
+        raise PokeEngineUnavailableError("poke-engine State.from_string did not round-trip the smoke state")
+
+    instructions = tuple(engine.generate_instructions(state, "ember", "watergun"))
+    if not instructions:
+        raise PokeEngineUnavailableError("poke-engine generated no instructions for the smoke state")
+
+    checked = instructions[:max_instruction_checks]
+    mutated_any_state = False
+    round_trip_ok = True
+    percentages: list[float] = []
+    for instruction in checked:
+        percentages.append(float(getattr(instruction, "percentage", 0.0)))
+        # ``apply_instructions``/``reverse_instructions`` return fresh states and
+        # leave ``state`` untouched, so each branch is applied to the same original.
+        after = state.apply_instructions(instruction)
+        if after.to_string() != original:
+            mutated_any_state = True
+        restored = after.reverse_instructions(instruction)
+        if restored.to_string() != original:
+            round_trip_ok = False
+            break
+
+    return PokeEngineReversibleSmokeResult(
+        instruction_count=len(instructions),
+        checked_instruction_count=len(percentages),
+        mutated_any_state=mutated_any_state,
+        round_trip_ok=round_trip_ok,
+        instruction_percentages=tuple(percentages),
+    )
+
+
+def _basic_gen3_smoke_state(engine: Any) -> Any:
+    move = engine.Move
+    pokemon = engine.Pokemon
+    side = engine.Side
+    state = engine.State
+    return state(
+        side_one=side(
+            pokemon=[
+                pokemon(
+                    id="charmander",
+                    level=100,
+                    types=("fire", "typeless"),
+                    hp=100,
+                    maxhp=100,
+                    attack=100,
+                    defense=100,
+                    special_attack=100,
+                    special_defense=100,
+                    speed=100,
+                    status="none",
+                    moves=[move(id="ember", pp=32), move(id="tackle", pp=32)],
+                )
+            ]
+        ),
+        side_two=side(
+            pokemon=[
+                pokemon(
+                    id="squirtle",
+                    level=100,
+                    types=("water", "typeless"),
+                    hp=100,
+                    maxhp=100,
+                    attack=100,
+                    defense=100,
+                    special_attack=100,
+                    special_defense=100,
+                    speed=100,
+                    status="none",
+                    moves=[move(id="watergun", pp=32), move(id="tackle", pp=32)],
+                )
+            ]
+        ),
+    )
 
 
 def _lookup_version(version_lookup: Callable[[str], str]) -> str | None:
