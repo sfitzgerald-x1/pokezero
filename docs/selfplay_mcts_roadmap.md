@@ -168,13 +168,13 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   guard is privileged and shapes both scenario support and scenario weights. This remains a harness
   step, not M0 evidence until measured and not a replacement for belief determinization.
 - **Value-head calibration report** (`value_calibration.py`, `neural_cli value-calibration`):
-  measures MSE/MAE/bias/sign accuracy and predicted-value calibration bins against rollout return
-  targets; reports stratified return/turn/terminal slices; and can be emitted from standalone
-  calibration, `neural_cli train`, or `neural_cli iterate`. This is the first WS-E metric before using
-  the value head for MCTS leaf evaluation. The standalone command can also fit an affine
-  calibration transform and save a calibrated checkpoint copy; pass a separate `--eval-data` set
-  for a held-out calibration read. Value-head consumers such as search leaf scoring read the stored
-  transform when evaluating checkpoint values.
+  measures MSE/MAE/bias/sign accuracy, linear value-return Pearson correlation, and predicted-value
+  calibration bins against rollout return targets; reports stratified return/turn/terminal slices; and
+  can be emitted from standalone calibration, `neural_cli train`, or `neural_cli iterate`. This is the
+  first WS-E metric before using the value head for MCTS leaf evaluation. The standalone command can
+  also fit an affine calibration transform and save a calibrated checkpoint copy; pass a separate
+  `--eval-data` set for a held-out calibration read. Value-head consumers such as search leaf scoring
+  read the stored transform when evaluating checkpoint values.
 - **Value-head fine-tuning path** (`neural_cli train --initial-checkpoint --objective value-only
   --freeze-non-value-parameters`): warm-starts from an existing checkpoint, trains only the value head,
   and leaves the policy prior intact while calibration is improved. `--value-selection-data` can score

@@ -1818,7 +1818,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             "note: presence/sample-size only; inspect value quality and strength separately.",
             output,
         )
-        self.assertIn("- value_calibration: present examples=6 sign=0.7200 ece=0.180000", output)
+        self.assertIn("- value_calibration: present examples=6 sign=0.7200 ece=0.180000 corr=0.4200", output)
         self.assertIn(
             "- max_damage_yardstick: iter=1 win_rate=0.250 games=20 cap=2 sample=below_milestone(20/300)",
             output,
@@ -2227,6 +2227,7 @@ def write_neural_report_manifest(run_dir: Path, *, top_level: bool = True, sourc
                 "bias": -0.1,
                 "sign_accuracy": 0.72,
                 "expected_calibration_error": 0.18,
+                "pearson_correlation": 0.42,
                 "bins": [],
                 "slices": [],
             },

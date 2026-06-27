@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from os import PathLike
 from pathlib import Path
 from typing import Iterable
@@ -51,6 +52,7 @@ class ValueCalibrationReport:
     sign_accuracy: float
     expected_calibration_error: float
     bins: tuple[ValueCalibrationBin, ...]
+    pearson_correlation: float | None = None
     slices: tuple["ValueCalibrationSlice", ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -61,6 +63,7 @@ class ValueCalibrationReport:
             "bias": self.bias,
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
+            "pearson_correlation": self.pearson_correlation,
             "bins": [bin_result.to_dict() for bin_result in self.bins],
             "slices": [slice_result.to_dict() for slice_result in self.slices],
         }
@@ -75,6 +78,7 @@ class ValueCalibrationSlice:
     bias: float
     sign_accuracy: float
     expected_calibration_error: float
+    pearson_correlation: float | None = None
     sign_accuracy_applicable: bool = True
 
     @classmethod
@@ -83,6 +87,7 @@ class ValueCalibrationSlice:
         *,
         name: str,
         report: ValueCalibrationReport,
+        pearson_correlation_applicable: bool = True,
         sign_accuracy_applicable: bool = True,
     ) -> "ValueCalibrationSlice":
         return cls(
@@ -93,6 +98,7 @@ class ValueCalibrationSlice:
             bias=report.bias,
             sign_accuracy=report.sign_accuracy,
             expected_calibration_error=report.expected_calibration_error,
+            pearson_correlation=report.pearson_correlation if pearson_correlation_applicable else None,
             sign_accuracy_applicable=sign_accuracy_applicable,
         )
 
@@ -105,6 +111,7 @@ class ValueCalibrationSlice:
             "bias": self.bias,
             "sign_accuracy": self.sign_accuracy,
             "expected_calibration_error": self.expected_calibration_error,
+            "pearson_correlation": self.pearson_correlation,
             "sign_accuracy_applicable": self.sign_accuracy_applicable,
         }
 
@@ -293,6 +300,11 @@ class _ValueCalibrationTotals:
     absolute_error: float = 0.0
     signed_error: float = 0.0
     sign_correct: int = 0
+    prediction_mean: float = 0.0
+    return_mean: float = 0.0
+    prediction_m2: float = 0.0
+    return_m2: float = 0.0
+    prediction_return_coproduct: float = 0.0
 
     def __post_init__(self) -> None:
         self._bin_totals: list[_BinTotals] = [_BinTotals() for _ in range(self.bin_count)]
@@ -302,7 +314,7 @@ class _ValueCalibrationTotals:
             raise ValueError("predictions and returns must have the same length.")
         for prediction, target in zip(predictions, returns, strict=True):
             error = prediction - target
-            self.examples += 1
+            self._add_correlation_sample(prediction=prediction, target=target)
             self.squared_error += error * error
             self.absolute_error += abs(error)
             self.signed_error += error
@@ -333,8 +345,25 @@ class _ValueCalibrationTotals:
             sign_accuracy=self.sign_correct / self.examples,
             expected_calibration_error=expected_calibration_error,
             bins=bins,
+            pearson_correlation=_pearson_correlation(
+                count=self.examples,
+                prediction_m2=self.prediction_m2,
+                return_m2=self.return_m2,
+                prediction_return_coproduct=self.prediction_return_coproduct,
+            ),
             slices=slices,
         )
+
+    def _add_correlation_sample(self, *, prediction: float, target: float) -> None:
+        # Centered online moments avoid cancellation when a collapsed value head emits near-constant values.
+        self.examples += 1
+        prediction_delta = prediction - self.prediction_mean
+        return_delta = target - self.return_mean
+        self.prediction_mean += prediction_delta / self.examples
+        self.return_mean += return_delta / self.examples
+        self.prediction_m2 += prediction_delta * (prediction - self.prediction_mean)
+        self.return_m2 += return_delta * (target - self.return_mean)
+        self.prediction_return_coproduct += prediction_delta * (target - self.return_mean)
 
     def _bin_index(self, prediction: float) -> int:
         clipped = min(1.0, max(-1.0, prediction))
@@ -409,6 +438,7 @@ class _ValueCalibrationSliceTotals:
                     ValueCalibrationSlice.from_report(
                         name=name,
                         report=totals.to_report(),
+                        pearson_correlation_applicable=not name.startswith("return:"),
                         sign_accuracy_applicable=(name != "return:zero"),
                     )
                 )
@@ -459,3 +489,20 @@ def _sign(value: float) -> int:
     if value < 0.0:
         return -1
     return 0
+
+
+def _pearson_correlation(
+    *,
+    count: int,
+    prediction_m2: float,
+    return_m2: float,
+    prediction_return_coproduct: float,
+) -> float | None:
+    if count <= 1:
+        return None
+    prediction_variance = prediction_m2 / count
+    return_variance = return_m2 / count
+    if prediction_variance <= 1e-12 or return_variance <= 1e-12:
+        return None
+    correlation = prediction_return_coproduct / math.sqrt(prediction_m2 * return_m2)
+    return max(-1.0, min(1.0, correlation))
