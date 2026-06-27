@@ -432,6 +432,16 @@ Steps:
    to game outcome only, and uses `max-damage` as an eval-only yardstick. Do not read sub-300-game
    rows as strength evidence; use them only as wiring checks. If no learned initial checkpoint is
    supplied, the variant is a random-legal cold start rather than a teacher-bootstrap run.
+   A real local teacher-cut pilot then ran from the compatible current-schema teacher-BC/value
+   seed at `runs/foundation-teacher-cut-local-20260627/pilot-001`. The run completed three
+   iterations of 256 self-play games each, with no fixed training opponents, zero capped collection
+   games, and sample-sized 400-game `max-damage` rows. It did not break the teacher ceiling:
+   `max-damage` win rates were 0.2275, 0.2775, then 0.2825. The latest checkpoint remained strong
+   against weak baselines (`random-legal=0.9375`, `simple-legal=0.7925`), and value calibration was
+   present over 10,102 examples (sign accuracy 0.6446, ECE 0.1245, Pearson 0.2985), but this is
+   still far below the roughly 0.57 scripted-teacher bar. Treat this as useful negative WS-A
+   evidence: teacher-cut PPO is wired and can climb slightly, but the current base-net/update
+   recipe is not yet escaping the imitation ceiling.
    The wrapper also supports `--variant opponent-signal` for the H3 ablation path: it keeps the
    same foundation recipe but raises opponent-action auxiliary supervision, so the result can be
    compared against the baseline wrapper before spending more effort on search tuning.
