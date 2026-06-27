@@ -1456,10 +1456,6 @@ def _value_calibration(args: argparse.Namespace) -> int:
                 "value_calibration_transform": transform.to_dict() if transform is not None else None,
                 "report": payload,
             }
-        elif quality_gates["configured"]:
-            payload = {
-                "report": payload,
-            }
         if quality_gates["configured"]:
             payload["quality_gates"] = quality_gates
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -1480,7 +1476,7 @@ def _value_calibration(args: argparse.Namespace) -> int:
     if quality_gates["configured"] and not quality_gates["passed"]:
         failed = ", ".join(str(check["metric"]) for check in quality_gates["checks"] if not check["passed"])
         print(f"value_calibration_quality_gates_failed: {failed}", file=sys.stderr)
-        return 2
+        return 4
     return 0
 
 
