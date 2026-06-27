@@ -256,6 +256,15 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   The return-target path now has opt-in, clipped shaping knobs for visible HP-differential
   deltas, faint-differential deltas, and late-turn penalties. Defaults remain terminal-only for
   comparability; shaped targets are a WS-A/WS-E experiment lever, not yet evidence of strength.
+  A controlled same-seed shaping ablation then tested conservative weights
+  (`--hp-delta-return-weight 0.5`, `--faint-delta-return-weight 0.5`,
+  `--turn-penalty-after 180`, `--turn-penalty 0.005`) on the same 3x256 aggressive
+  always-advance PPO shape and seed bands as the mean/GRU runs. It scored 50/200, 49/200,
+  and 55/200 versus `max-damage` (154/600 total, 0.257), with zero capped games. The
+  unshaped mean run on the same seed bands scored 159/600, and the GRU run scored 166/600.
+  A second shaped run on fresh seed bands scored 156/600. This is negative evidence for
+  these shaping weights as a standalone base-net fix; shaping remains a tunable lever, not
+  the current bottleneck answer.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs. The trunk now also has
