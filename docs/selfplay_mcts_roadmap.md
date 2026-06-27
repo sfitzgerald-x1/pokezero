@@ -211,6 +211,12 @@ research gamble. Our job is to reproduce it for Gen 3 on our stack and push past
   0.9446 to 0.9403, but sign accuracy barely moved (0.5920 to 0.5936) and ECE worsened from
   0.0484 to 0.0879. This validates the applied-transform plumbing and may help value magnitude, but
   it is not enough to make the current value head search-ready; the WS-E/WS-A bottleneck remains.
+  A targeted current-schema strength read confirmed the base-net gap: the same
+  `transformer-teacher-bc-split-value-selected.pt` checkpoint scored 150/600 (0.250) against
+  `max-damage` over a 300-game-per-orientation benchmark, with 3 ties and zero capped games
+  (`runs/max-damage-goal-local-20260627/current-schema-value-selected-vs-max-damage-300.json`).
+  This is a valid current-observation-schema checkpoint but not a useful M0 search substrate; the
+  next WS-A task is to produce a stronger current-schema PPO/base-net checkpoint.
 - **Entity-token transformer policy+value net** (`neural_policy.py`) — richer than the thesis's
   3-layer MLP; already has policy, value, and opponent-action heads. New configs bound value outputs
   with `tanh`; legacy checkpoints remain loadable with linear value outputs.
