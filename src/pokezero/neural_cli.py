@@ -1326,6 +1326,18 @@ def _iterate(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, args.showdown_root)
         for spec in (args.benchmark_reference_policy or ())
     )
+    if args.value_selection:
+        print(
+            "warning: --value-selection in neural iterate scores self-play training rollouts, "
+            "not held-out validation; use it as value-head calibration plumbing, not policy-strength evidence.",
+            file=sys.stderr,
+        )
+        if args.value_selection_scope == "history":
+            print(
+                "warning: --value-selection-scope history re-evaluates the full accumulated training "
+                "history after every epoch and can become expensive.",
+                file=sys.stderr,
+            )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,

@@ -720,6 +720,8 @@ def _train_with_iteration_value_selection(
     artifact_payload = {
         "scope": config.scope,
         "paths": [str(path) for path in selection_paths],
+        "data_role": "training_rollouts",
+        "data_note": "Selection data comes from self-play training rollouts, not held-out validation.",
         "batch_size": config.batch_size,
         "bins": config.bins,
         "metric": config.metric,
@@ -732,6 +734,8 @@ def _train_with_iteration_value_selection(
     return model, selected_result, {
         "scope": config.scope,
         "paths": [str(path) for path in selection_paths],
+        "data_role": artifact_payload["data_role"],
+        "data_note": artifact_payload["data_note"],
         "batch_size": config.batch_size,
         "bins": config.bins,
         "metric": config.metric,
