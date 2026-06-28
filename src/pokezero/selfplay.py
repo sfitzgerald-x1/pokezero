@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from collections import deque
+from contextlib import closing, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 import json
@@ -682,27 +683,31 @@ def _collect_selfplay_records(
     max_workers = min(worker_count, games)
     try:
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
-            results = executor.map(
-                lambda game_index: _run_selfplay_game_record(
-                    game_index=game_index,
-                    seed_start=seed_start,
-                    env_provider=env_pool.get,
-                    rollout_config=rollout_config,
-                    current_policy_spec=current_policy_spec,
-                    opponent_specs=opponent_specs,
-                    policy_factories=policy_factories,
+            with closing(
+                _bounded_ordered_map(
+                    executor,
+                    lambda game_index: _run_selfplay_game_record(
+                        game_index=game_index,
+                        seed_start=seed_start,
+                        env_provider=env_pool.get,
+                        rollout_config=rollout_config,
+                        current_policy_spec=current_policy_spec,
+                        opponent_specs=opponent_specs,
+                        policy_factories=policy_factories,
+                    ),
+                    range(games),
+                    buffersize=max_workers * 2,
                 ),
-                range(games),
-            )
-            _write_selfplay_game_results(
-                handle=handle,
-                training_handle=training_handle,
-                training_cache_writer=training_cache_writer,
-                metrics_accumulator=metrics_accumulator,
-                results=results,
-                total_results=games,
-                rss_recorder=rss_recorder,
-            )
+            ) as results:
+                _write_selfplay_game_results(
+                    handle=handle,
+                    training_handle=training_handle,
+                    training_cache_writer=training_cache_writer,
+                    metrics_accumulator=metrics_accumulator,
+                    results=results,
+                    total_results=games,
+                    rss_recorder=rss_recorder,
+                )
     finally:
         env_pool.close_all()
 
@@ -1121,6 +1126,37 @@ def _validate_validation_rollout_paths(paths: Iterable[Path]) -> None:
             raise ValueError(f"Validation rollout path must be a file: {path}")
         if path.stat().st_size == 0:
             raise ValueError(f"Validation rollout path is empty: {path}")
+
+
+def _bounded_ordered_map(
+    executor: ThreadPoolExecutor,
+    fn: Callable[[int], Any],
+    values: Iterable[int],
+    *,
+    buffersize: int,
+) -> Iterable[Any]:
+    if buffersize <= 0:
+        raise ValueError("buffersize must be positive.")
+    iterator = iter(values)
+    pending = deque()
+
+    def fill_pending() -> None:
+        while len(pending) < buffersize:
+            try:
+                value = next(iterator)
+            except StopIteration:
+                return
+            pending.append(executor.submit(fn, value))
+
+    try:
+        fill_pending()
+        while pending:
+            future = pending.popleft()
+            yield future.result()
+            fill_pending()
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def _seat_policy_specs(
