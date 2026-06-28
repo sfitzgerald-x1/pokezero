@@ -76,6 +76,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Collect the current-policy self-play training perspective directly into compact "
             "neural training cache shards."
         ),
+        epilog=(
+            "Fleet wrappers must assign each shard a disjoint --seed-start range. Dataset flags "
+            "such as --window-size, --discount, --ppo-target-mode, and --gae-lambda are baked "
+            "into the cache and must match the central trainer config."
+        ),
     )
     collect_selfplay_cache.add_argument("--games", type=int, required=True, help="Number of games to collect.")
     collect_selfplay_cache.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
@@ -85,7 +90,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect_selfplay_cache.add_argument(
         "--format", dest="format_id", default="gen3randombattle", help="Showdown format id."
     )
-    collect_selfplay_cache.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
+    collect_selfplay_cache.add_argument(
+        "--seed-start",
+        type=int,
+        default=1,
+        help="First deterministic rollout seed. Fleet shards must use non-overlapping seed ranges.",
+    )
     collect_selfplay_cache.add_argument(
         "--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap."
     )
