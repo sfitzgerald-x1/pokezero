@@ -339,6 +339,8 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   raw rollout omission, post-train chunk deletion, and the same controls exposed through
   `neural foundation-plan/run`. This makes mid-scale foundation runs practical without changing the
   PPO contract or writing deployment-specific assumptions into the public repo.
+  Multi-worker self-play collection keeps deterministic record ordering while bounding in-flight
+  game futures, so large recipe chunks do not queue the entire game range in memory before writing.
   The foundation wrapper also has a `midscale` profile (`5 × 10,000` games) for the 50k
   recipe-faithful rising-curve gate before any full multimillion-battle spend.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs

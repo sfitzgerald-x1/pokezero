@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -682,7 +683,8 @@ def _collect_selfplay_records(
     max_workers = min(worker_count, games)
     try:
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
-            results = executor.map(
+            results = _bounded_ordered_map(
+                executor,
                 lambda game_index: _run_selfplay_game_record(
                     game_index=game_index,
                     seed_start=seed_start,
@@ -693,6 +695,7 @@ def _collect_selfplay_records(
                     policy_factories=policy_factories,
                 ),
                 range(games),
+                buffersize=max_workers * 2,
             )
             _write_selfplay_game_results(
                 handle=handle,
@@ -1121,6 +1124,37 @@ def _validate_validation_rollout_paths(paths: Iterable[Path]) -> None:
             raise ValueError(f"Validation rollout path must be a file: {path}")
         if path.stat().st_size == 0:
             raise ValueError(f"Validation rollout path is empty: {path}")
+
+
+def _bounded_ordered_map(
+    executor: ThreadPoolExecutor,
+    fn: Callable[[int], Any],
+    values: Iterable[int],
+    *,
+    buffersize: int,
+) -> Iterable[Any]:
+    if buffersize <= 0:
+        raise ValueError("buffersize must be positive.")
+    iterator = iter(values)
+    pending = deque()
+
+    def fill_pending() -> None:
+        while len(pending) < buffersize:
+            try:
+                value = next(iterator)
+            except StopIteration:
+                return
+            pending.append(executor.submit(fn, value))
+
+    try:
+        fill_pending()
+        while pending:
+            future = pending.popleft()
+            yield future.result()
+            fill_pending()
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def _seat_policy_specs(

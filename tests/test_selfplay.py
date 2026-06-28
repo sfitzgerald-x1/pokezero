@@ -29,6 +29,7 @@ from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayPromotionConfig,
+    _bounded_ordered_map,
     _promoted_checkpoint_specs,
     collect_selfplay_rollouts,
     load_selfplay_run_manifest,
@@ -110,6 +111,45 @@ def _rollout_action_signature(records) -> list[tuple]:
 
 
 class SelfPlayTest(unittest.TestCase):
+    def test_bounded_ordered_map_limits_submitted_work(self) -> None:
+        observed_submissions_at_result: list[tuple[int, ...]] = []
+
+        class FakeFuture:
+            def __init__(self, value: int, executor: "FakeExecutor") -> None:
+                self._value = value
+                self._executor = executor
+                self.cancelled = False
+
+            def result(self) -> int:
+                observed_submissions_at_result.append(tuple(self._executor.submitted))
+                return self._value
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        class FakeExecutor:
+            def __init__(self) -> None:
+                self.submitted: list[int] = []
+
+            def submit(self, fn, value: int) -> FakeFuture:
+                self.submitted.append(value)
+                return FakeFuture(fn(value), self)
+
+        executor = FakeExecutor()
+        results = _bounded_ordered_map(executor, lambda value: value, range(5), buffersize=2)
+
+        self.assertEqual(next(results), 0)
+        self.assertEqual(executor.submitted, [0, 1])
+        self.assertEqual(observed_submissions_at_result[0], (0, 1))
+        self.assertEqual(next(results), 1)
+        self.assertEqual(executor.submitted, [0, 1, 2])
+        self.assertEqual(list(results), [2, 3, 4])
+        self.assertEqual(executor.submitted, [0, 1, 2, 3, 4])
+
+    def test_bounded_ordered_map_rejects_non_positive_buffer(self) -> None:
+        with self.assertRaisesRegex(ValueError, "buffersize must be positive"):
+            list(_bounded_ordered_map(SimpleNamespace(submit=None), lambda value: value, [1], buffersize=0))
+
     def test_collect_selfplay_rollouts_alternates_current_policy_seat(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
