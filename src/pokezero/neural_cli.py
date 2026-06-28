@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import math
@@ -22,10 +22,12 @@ from .cli_audit import (
 )
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
 from .dataset import (
+    MAX_ACTIVE_TRAINING_CACHE_GB,
     TrajectoryDatasetConfig,
     delete_training_cache_path,
     is_training_cache_path,
     training_cache_paths_byte_size,
+    training_cache_root_byte_size,
     write_training_cache_from_rollouts,
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -299,19 +301,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--max-cache-gb",
         type=float,
-        default=None,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
         help=(
-            "Reject training-cache inputs whose current on-disk footprint exceeds this many GiB. "
-            "Use 50 for chunked runs that must keep active storage under 50GB."
+            f"Reject training-cache inputs whose active cache root exceeds this many GiB "
+            f"(default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
         ),
     )
-    train.add_argument(
+    cache_delete_group = train.add_mutually_exclusive_group()
+    cache_delete_group.add_argument(
         "--delete-cache-after-read",
+        dest="delete_cache_after_read",
         action="store_true",
+        default=True,
         help=(
-            "Delete each training cache directory after the final training epoch consumes it. "
-            "This is intended for collect-train-delete chunk lifecycles."
+            "Delete each consumed training cache directory after the checkpoint is safely written. "
+            "This is the default for training-cache inputs."
         ),
+    )
+    cache_delete_group.add_argument(
+        "--keep-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_false",
+        help="Keep consumed training cache directories after training for debugging or audit runs.",
     )
     train.add_argument(
         "--initial-checkpoint",
@@ -485,10 +496,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cache_data.add_argument(
         "--max-cache-gb",
         type=float,
-        default=None,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
         help=(
             "Reject the write if existing caches under the output parent plus the new cache "
-            "would exceed this many GiB."
+            f"would exceed this many GiB (default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
         ),
     )
     _add_training_dataset_arguments(cache_data)
@@ -1408,7 +1419,7 @@ def _train(args: argparse.Namespace) -> int:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
-    consumed_cache_callback = _training_cache_lifecycle_callback(args)
+    cache_lifecycle = _training_cache_lifecycle(args)
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -1504,12 +1515,12 @@ def _train(args: argparse.Namespace) -> int:
             selection_metric=args.value_selection_metric,
             batch_size=args.value_calibration_batch_size,
             bins=args.value_calibration_bins,
-            consumed_cache_callback=consumed_cache_callback,
+            consumed_cache_callback=cache_lifecycle.consumed_cache_callback,
         )
     else:
         train_kwargs: dict[str, object] = {}
-        if consumed_cache_callback is not None:
-            train_kwargs["consumed_cache_callback"] = consumed_cache_callback
+        if cache_lifecycle.consumed_cache_callback is not None:
+            train_kwargs["consumed_cache_callback"] = cache_lifecycle.consumed_cache_callback
         model, result = train_transformer_policy(
             args.data,
             model_config=model_config,
@@ -1570,48 +1581,90 @@ def _train(args: argparse.Namespace) -> int:
         else:
             print("")
             print_value_calibration_report(value_calibration)
+    cache_lifecycle.finalize_after_checkpoint()
     return 0
 
 
-def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Path], None] | None:
-    if args.max_cache_gb is None and not args.delete_cache_after_read:
-        return None
-    if any(not is_training_cache_path(path) for path in args.data):
+@dataclass
+class _TrainingCacheLifecycle:
+    delete_after_checkpoint: bool = False
+    consumed_paths: list[Path] = field(default_factory=list)
+
+    @property
+    def consumed_cache_callback(self) -> Callable[[Path], None] | None:
+        return self._record_consumed_cache if self.delete_after_checkpoint else None
+
+    def _record_consumed_cache(self, path: Path) -> None:
+        resolved = Path(path)
+        if resolved not in self.consumed_paths:
+            self.consumed_paths.append(resolved)
+
+    def finalize_after_checkpoint(self) -> None:
+        if not self.delete_after_checkpoint:
+            return
+        for path in self.consumed_paths:
+            byte_size = training_cache_paths_byte_size([path])
+            delete_training_cache_path(path)
+            print(f"deleted_training_cache: {path} bytes={byte_size}")
+
+
+def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecycle:
+    cache_flags = tuple(is_training_cache_path(path) for path in args.data)
+    if not any(cache_flags):
+        return _TrainingCacheLifecycle()
+    if not all(cache_flags):
         raise ValueError("--max-cache-gb and --delete-cache-after-read require training cache directories.")
-    if args.max_cache_gb is not None:
-        max_bytes = _cache_gb_to_bytes(args.max_cache_gb)
-        assert max_bytes is not None
-        cache_bytes = training_cache_paths_byte_size(args.data)
-        print(f"training_cache_footprint_bytes: {cache_bytes}")
-        print(f"training_cache_footprint_limit_bytes: {max_bytes}")
-        if cache_bytes > max_bytes:
-            raise ValueError(
-                f"training cache footprint {cache_bytes} bytes exceeds --max-cache-gb "
-                f"limit of {max_bytes} bytes."
-            )
-    if not args.delete_cache_after_read:
-        return None
+
+    max_bytes = _cache_gb_to_bytes(getattr(args, "max_cache_gb", None))
+    cache_root = _common_cache_root(tuple(Path(path) for path in args.data))
+    cache_bytes = training_cache_root_byte_size(cache_root)
+    print(f"training_cache_root: {cache_root}")
+    print(f"training_cache_footprint_bytes: {cache_bytes}")
+    print(f"training_cache_footprint_limit_bytes: {max_bytes}")
+    if cache_bytes > max_bytes:
+        raise ValueError(
+            f"training cache root footprint {cache_bytes} bytes exceeds --max-cache-gb "
+            f"limit of {max_bytes} bytes."
+        )
+
+    delete_after_read = bool(getattr(args, "delete_cache_after_read", True))
+    if not delete_after_read:
+        return _TrainingCacheLifecycle()
     deleted_paths = tuple(Path(path) for path in args.data)
     for name in ("value_calibration_data", "value_selection_data"):
         for path in tuple(getattr(args, name, None) or ()):
             if any(_paths_overlap(path, deleted_path) for deleted_path in deleted_paths):
                 flag = "--value-calibration-data" if name == "value_calibration_data" else "--value-selection-data"
                 raise ValueError(f"--delete-cache-after-read cannot be used when {flag} overlaps training cache data.")
-
-    def delete_consumed_cache(path: Path) -> None:
-        byte_size = training_cache_paths_byte_size([path])
-        delete_training_cache_path(path)
-        print(f"deleted_training_cache: {path} bytes={byte_size}")
-
-    return delete_consumed_cache
+    return _TrainingCacheLifecycle(delete_after_checkpoint=True)
 
 
-def _cache_gb_to_bytes(value: float | None) -> int | None:
-    if value is None:
-        return None
-    if value <= 0:
+def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Path], None] | None:
+    return _training_cache_lifecycle(args).consumed_cache_callback
+
+
+def _cache_gb_to_bytes(value: float | None) -> int:
+    resolved = MAX_ACTIVE_TRAINING_CACHE_GB if value is None else value
+    if resolved <= 0:
         raise ValueError("--max-cache-gb must be positive.")
-    return int(value * 1024 * 1024 * 1024)
+    if resolved > MAX_ACTIVE_TRAINING_CACHE_GB:
+        raise ValueError(f"--max-cache-gb cannot exceed {MAX_ACTIVE_TRAINING_CACHE_GB:g}.")
+    return int(resolved * 1024 * 1024 * 1024)
+
+
+def _common_cache_root(paths: tuple[Path, ...]) -> Path:
+    if not paths:
+        raise ValueError("at least one training cache path is required.")
+    resolved_paths = tuple(path.expanduser().resolve(strict=False) for path in paths)
+    if len(resolved_paths) == 1:
+        return resolved_paths[0].parent
+    common = Path(str(resolved_paths[0]))
+    for path in resolved_paths[1:]:
+        while common != common.parent and common not in (path, *path.parents):
+            common = common.parent
+    if any(common == path for path in resolved_paths):
+        return common.parent
+    return common
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:

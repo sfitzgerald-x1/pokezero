@@ -634,6 +634,24 @@ class DatasetTest(unittest.TestCase):
 
             self.assertFalse(cache_path.exists())
 
+    def test_training_cache_rejects_categorical_ids_outside_compact_range_before_cast(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        builder._categorical_rows[0] = _fill_like(builder._categorical_rows[0], 70_000)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "categorical ids"):
+                builder.write(Path(temp_dir) / "cache")
+
+    def test_training_cache_rejects_token_type_ids_outside_compact_range_before_cast(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        builder._token_type_rows[0] = tuple(300 for _ in builder._token_type_rows[0])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "token type ids"):
+                builder.write(Path(temp_dir) / "cache")
+
     def test_training_cache_rejects_mismatched_dataset_config(self) -> None:
         self._require_numpy()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -755,6 +773,12 @@ def _tolist(value):
     if isinstance(value, list):
         return [_tolist(item) for item in value]
     return value
+
+
+def _fill_like(value, replacement):
+    if isinstance(value, tuple):
+        return tuple(_fill_like(item, replacement) for item in value)
+    return replacement
 
 
 if __name__ == "__main__":

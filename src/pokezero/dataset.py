@@ -16,6 +16,8 @@ from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
 TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v1"
+MAX_ACTIVE_TRAINING_CACHE_GB = 50.0
+MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024 * 1024)
 
 PathInput = str | PathLike[str] | Path
 
@@ -283,7 +285,7 @@ class TrainingCacheBuilder:
         path: PathInput,
         *,
         overwrite: bool = False,
-        max_cache_root_bytes: int | None = None,
+        max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
         cache_root: PathInput | None = None,
     ) -> TrainingCacheSummary:
         if self.example_count == 0:
@@ -344,13 +346,15 @@ class TrainingCacheBuilder:
         )
 
     def _arrays(self, numpy: Any) -> dict[str, Any]:
-        categorical = numpy.asarray(self._categorical_rows, dtype=numpy.uint16)
+        categorical_raw = numpy.asarray(self._categorical_rows)
         numeric = numpy.asarray(self._numeric_rows, dtype=numpy.float16)
-        token_type = numpy.asarray(self._token_type_rows, dtype=numpy.uint8)
-        if int(categorical.max(initial=0)) > int(numpy.iinfo(numpy.uint16).max):
+        token_type_raw = numpy.asarray(self._token_type_rows)
+        if _array_min(numpy, categorical_raw) < 0 or _array_max(numpy, categorical_raw) > int(numpy.iinfo(numpy.uint16).max):
             raise ValueError("categorical ids exceed uint16 training-cache range.")
-        if int(token_type.max(initial=0)) > int(numpy.iinfo(numpy.uint8).max):
+        if _array_min(numpy, token_type_raw) < 0 or _array_max(numpy, token_type_raw) > int(numpy.iinfo(numpy.uint8).max):
             raise ValueError("token type ids exceed uint8 training-cache range.")
+        categorical = categorical_raw.astype(numpy.uint16, copy=False)
+        token_type = token_type_raw.astype(numpy.uint8, copy=False)
         return {
             "categorical_ids": _prepend_zero_row(numpy, categorical),
             "numeric_features": _prepend_zero_row(numpy, numeric),
@@ -464,7 +468,7 @@ def write_training_cache_from_rollouts(
     *,
     config: TrajectoryDatasetConfig | None = None,
     overwrite: bool = False,
-    max_cache_root_bytes: int | None = None,
+    max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     cache_root: PathInput | None = None,
 ) -> TrainingCacheSummary:
     builder = TrainingCacheBuilder(config=config)
@@ -493,6 +497,15 @@ def training_cache_byte_size(path: PathInput) -> int:
 
 def training_cache_paths_byte_size(paths: PathInput | Iterable[PathInput]) -> int:
     return sum(training_cache_byte_size(path) for path in _normalize_paths(paths))
+
+
+def training_cache_root_byte_size(path: PathInput) -> int:
+    resolved = Path(path)
+    if not resolved.exists():
+        return 0
+    if not resolved.is_dir():
+        raise ValueError(f"training cache root is not a directory: {resolved}")
+    return _directory_byte_size(resolved)
 
 
 def delete_training_cache_path(path: PathInput) -> None:
@@ -918,6 +931,18 @@ def _estimated_training_cache_byte_size(arrays: Mapping[str, Any]) -> int:
     # NPY headers and metadata are small, but overestimate so write-time caps fail before
     # the active cache root can cross the requested storage ceiling.
     return array_bytes + max(16 * 1024 * 1024, array_bytes // 100)
+
+
+def _array_min(numpy: Any, value: Any) -> int:
+    if int(getattr(value, "size", 0)) == 0:
+        return 0
+    return int(numpy.min(value))
+
+
+def _array_max(numpy: Any, value: Any) -> int:
+    if int(getattr(value, "size", 0)) == 0:
+        return 0
+    return int(numpy.max(value))
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

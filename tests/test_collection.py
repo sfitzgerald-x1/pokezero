@@ -995,8 +995,6 @@ class CollectionTest(unittest.TestCase):
                         "3",
                         "--discount",
                         "0.9",
-                        "--max-cache-gb",
-                        "50",
                         "--ppo-target-mode",
                         "gae",
                         "--gae-lambda",

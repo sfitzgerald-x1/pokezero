@@ -303,12 +303,12 @@ def collect_training_cache(
             )
             accumulator.add(record)
             builder.add_record(record)
-        summary = builder.write(
-            output_path,
-            overwrite=overwrite,
-            max_cache_root_bytes=max_cache_root_bytes,
-            cache_root=cache_root,
-        )
+        write_kwargs: dict[str, object] = {"overwrite": overwrite}
+        if max_cache_root_bytes is not None:
+            write_kwargs["max_cache_root_bytes"] = max_cache_root_bytes
+        if cache_root is not None:
+            write_kwargs["cache_root"] = cache_root
+        summary = builder.write(output_path, **write_kwargs)
     finally:
         close = getattr(env, "close", None)
         if callable(close):

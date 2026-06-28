@@ -16,7 +16,7 @@ from .collection import (
     policy_from_spec,
     policy_spec_with_showdown_root,
 )
-from .dataset import TrajectoryDatasetConfig
+from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
@@ -60,10 +60,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect_cache.add_argument(
         "--max-cache-gb",
         type=float,
-        default=None,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
         help=(
             "Reject the write if existing caches under the output parent plus the new cache "
-            "would exceed this many GiB."
+            f"would exceed this many GiB (default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
         ),
     )
     _add_dataset_config_arguments(collect_cache)
@@ -332,12 +332,13 @@ def _dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConf
     )
 
 
-def _cache_gb_to_bytes(value: float | None) -> int | None:
-    if value is None:
-        return None
-    if value <= 0:
+def _cache_gb_to_bytes(value: float | None) -> int:
+    resolved = MAX_ACTIVE_TRAINING_CACHE_GB if value is None else value
+    if resolved <= 0:
         raise ValueError("--max-cache-gb must be positive.")
-    return int(value * 1024 * 1024 * 1024)
+    if resolved > MAX_ACTIVE_TRAINING_CACHE_GB:
+        raise ValueError(f"--max-cache-gb cannot exceed {MAX_ACTIVE_TRAINING_CACHE_GB:g}.")
+    return int(resolved * 1024 * 1024 * 1024)
 
 
 def print_benchmark_report(report: BenchmarkReport) -> None:

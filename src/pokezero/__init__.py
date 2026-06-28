@@ -55,6 +55,8 @@ from .collection import (
 )
 from .dex import MoveInfo, ShowdownDex, SpeciesInfo, load_showdown_dex, load_showdown_dex_cached
 from .dataset import (
+    MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    MAX_ACTIVE_TRAINING_CACHE_GB,
     MISSING_ACTION_INDEX,
     TRAINING_CACHE_SCHEMA_VERSION,
     TrajectoryDatasetConfig,
@@ -71,6 +73,7 @@ from .dataset import (
     iter_training_examples,
     training_cache_byte_size,
     training_cache_paths_byte_size,
+    training_cache_root_byte_size,
     training_batch_from_examples,
     write_training_cache_from_rollouts,
 )
@@ -322,6 +325,8 @@ __all__ = [
     "EVALUATION_PROFILES",
     "EvaluationProfile",
     "FlatBranchSearchResult",
+    "MAX_ACTIVE_TRAINING_CACHE_BYTES",
+    "MAX_ACTIVE_TRAINING_CACHE_GB",
     "MOVE_ACTION_COUNT",
     "MISSING_ACTION_INDEX",
     "MoveInfo",
@@ -492,6 +497,7 @@ __all__ = [
     "import_replay_files",
     "is_training_cache_path",
     "iter_training_cache_batches",
+    "training_cache_root_byte_size",
     "read_rollout_records",
     "record_promotion",
     "action_rounds_from_trajectory",
