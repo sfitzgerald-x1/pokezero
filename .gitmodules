@@ -1,0 +1,3 @@
+[submodule "third_party/foul-play"]
+	path = third_party/foul-play
+	url = https://github.com/pmariglia/foul-play.git
