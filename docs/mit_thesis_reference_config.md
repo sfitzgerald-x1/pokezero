@@ -112,7 +112,7 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 | `entropy_coef` | **0.0588** | **0.0** | **0.0588 ✅** | **was no exploration pressure at all** — now aligned |
 | `n_epochs` | **7** | **1** | **7 ✅** | now aligned |
 | `learning_rate` (base) | 10^−4.23 ≈ **5.9e-5** | 3e-4 | **5.9e-5 ✅** | base LR aligned |
-| `learning_rate` annealing | **annealed** (massive impact) | constant | **`mit-thesis` ✅** | implemented as global-progress windows per self-play iteration: `ℓ(x)=10^−4.23/(8x+1)^1.5` |
+| `learning_rate` annealing | **annealed** (massive impact) | constant | **`mit-thesis` ✅** | implemented as completed-game progress against the recipe-scale denominator: `ℓ(x)=10^−4.23/(8x+1)^1.5` |
 | `gamma` | 0.9999 | 1.0 | **0.9999 ✅** | now aligned (audit uses a tight tolerance so 1.0 is never read as 0.9999) |
 | `gae_lambda` | 0.754 | 0.95 | **0.754 ✅** (with `ppo_target_mode=gae`) | now aligned |
 | `clip_range` | 0.0829 | 0.2 (`clip_epsilon`) | **0.0829 ✅** | now aligned |
@@ -131,7 +131,8 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discount=0.9999`,
 `gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`, `value_loss_weight=0.4375`,
 `max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
-`batch_size=1024`, plus standard `collection_temperature=1.0`.
+`learning_rate_schedule_total_games=3_000_000`, `batch_size=1024`, plus standard
+`collection_temperature=1.0`.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.

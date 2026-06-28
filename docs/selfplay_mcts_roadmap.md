@@ -392,7 +392,8 @@ Near-term priority order:
    recipe-fidelity` (and `neural foundation-plan/run --recipe-fidelity`, usable with the teacher-cut
    variant). It bundles the expressible Table A.3 knobs (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing, standard collection temperature), records them in the manifest/run summary, and a
+   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
+   temperature), records them in the manifest/run summary, and a
    `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
    on-recipe rather than just named so. **Missing recipe components (from the paper — not yet
    implemented):**
@@ -507,7 +508,8 @@ Steps:
    wrapper's `--recipe-fidelity` flag), reuses that same arms-race scaffolding but overrides the PPO
    hyperparameters to the MIT thesis Table A.3 values (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing, standard collection temperature 1.0). It is the config-fidelity half of near-term
+   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
+   temperature 1.0). It is the config-fidelity half of near-term
    priority #1. A `recipe_fidelity` audit (printed by `neural report`, embedded in foundation run
    summaries, and computed by `recipe_fidelity_audit()`) compares the *actual* resolved config
    against the reference table so a run is verifiable as recipe-fidelity, and flags the remaining

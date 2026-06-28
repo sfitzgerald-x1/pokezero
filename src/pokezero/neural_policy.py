@@ -230,6 +230,7 @@ class TransformerTrainingConfig:
     epochs: int = 1
     learning_rate: float = 3e-4
     learning_rate_schedule: str = CONSTANT_LEARNING_RATE_SCHEDULE
+    learning_rate_schedule_total_games: int | None = None
     learning_rate_progress_start: float = 0.0
     learning_rate_progress_end: float = 0.0
     weight_decay: float = 0.0
@@ -292,6 +293,8 @@ class TransformerTrainingConfig:
             raise ValueError("learning_rate must be positive.")
         if self.learning_rate_schedule not in LEARNING_RATE_SCHEDULES:
             raise ValueError(f"learning_rate_schedule must be one of: {', '.join(LEARNING_RATE_SCHEDULES)}.")
+        if self.learning_rate_schedule_total_games is not None and self.learning_rate_schedule_total_games <= 0:
+            raise ValueError("learning_rate_schedule_total_games must be positive when set.")
         if not math.isfinite(self.learning_rate_progress_start):
             raise ValueError("learning_rate_progress_start must be finite.")
         if not math.isfinite(self.learning_rate_progress_end):

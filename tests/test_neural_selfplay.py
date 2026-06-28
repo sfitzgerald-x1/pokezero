@@ -31,6 +31,7 @@ from pokezero.neural_selfplay import (
 )
 from pokezero.neural_cli import (
     MIT_THESIS_REFERENCE_CONFIG,
+    MIT_THESIS_REFERENCE_TRAINING_GAMES,
     RECIPE_FIDELITY_PRESET_DEFAULTS,
     RECIPE_FIDELITY_UNSUPPORTED_KNOBS,
     _explicit_cli_options,
@@ -440,6 +441,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(config.max_grad_norm, MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"])
         self.assertEqual(config.learning_rate, MIT_THESIS_REFERENCE_CONFIG["learning_rate"])
         self.assertEqual(config.learning_rate_schedule, MIT_THESIS_LEARNING_RATE_SCHEDULE)
+        self.assertEqual(config.learning_rate_schedule_total_games, MIT_THESIS_REFERENCE_TRAINING_GAMES)
         self.assertEqual(config.batch_size, MIT_THESIS_REFERENCE_CONFIG["batch_size"])
         self.assertEqual(kwargs["collection_temperature"], 1.0)
         # The audit over the resolved config must report fully aligned.
@@ -520,6 +522,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIsNone(config.max_grad_norm)
         self.assertEqual(config.discount, 1.0)
         self.assertEqual(config.learning_rate_schedule, "constant")
+        self.assertIsNone(config.learning_rate_schedule_total_games)
 
     def test_recipe_fidelity_audit_reports_off_recipe_and_unsupported_knobs(self) -> None:
         # The legacy teacher-cut defaults are materially off-recipe.
@@ -532,6 +535,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("ppo_target_mode", off["off_recipe"])
         self.assertIn("collection_temperature", off["off_recipe"])
         self.assertIn("learning_rate_schedule", off["off_recipe"])
+        self.assertIn("learning_rate_schedule_total_games", off["off_recipe"])
         # Undiscounted (1.0) must not be confused with the thesis near-1 gamma (0.9999).
         self.assertIn("discount", off["off_recipe"])
         self.assertFalse(off["knobs"]["discount"]["aligned"])
@@ -553,6 +557,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "objective": "ppo",
                         "ppo_target_mode": "gae",
                         "learning_rate_schedule": MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                        "learning_rate_schedule_total_games": MIT_THESIS_REFERENCE_TRAINING_GAMES,
                         **{name: value for name, value in MIT_THESIS_REFERENCE_CONFIG.items()},
                     },
                 }
@@ -565,6 +570,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                             "objective": "ppo",
                             "ppo_target_mode": "gae",
                             "learning_rate_schedule": MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                            "learning_rate_schedule_total_games": MIT_THESIS_REFERENCE_TRAINING_GAMES,
                             **{name: value for name, value in MIT_THESIS_REFERENCE_CONFIG.items()},
                             # Value-selection training results may store the selected epoch here.
                             # Recipe-fidelity auditing must judge the configured run, not this
@@ -822,7 +828,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
         ])
 
-    def test_run_neural_selfplay_iterations_assigns_lr_schedule_progress_per_iteration(self) -> None:
+    def test_run_neural_selfplay_iterations_assigns_lr_schedule_progress_from_total_games(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
 
@@ -840,6 +846,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         batch_size=2,
                         objective="ppo",
                         learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                        learning_rate_schedule_total_games=3_000,
                     ),
                     seed_start=20,
                     fixed_opponent_policy_specs=("random-legal",),
@@ -860,14 +867,15 @@ class NeuralSelfPlayTest(unittest.TestCase):
             for iteration in result.iterations
         ]
         self.assertEqual(result.invocation_config["training_config"]["learning_rate_schedule"], MIT_THESIS_LEARNING_RATE_SCHEDULE)
+        self.assertEqual(result.invocation_config["training_config"]["learning_rate_schedule_total_games"], 3_000)
         self.assertAlmostEqual(progress_windows[0][0], 0.0)
-        self.assertAlmostEqual(progress_windows[0][1], 1.0 / 3.0)
-        self.assertAlmostEqual(progress_windows[1][0], 1.0 / 3.0)
-        self.assertAlmostEqual(progress_windows[1][1], 2.0 / 3.0)
-        self.assertAlmostEqual(progress_windows[2][0], 2.0 / 3.0)
-        self.assertAlmostEqual(progress_windows[2][1], 1.0)
-        self.assertAlmostEqual(manifests[0]["training"]["config"]["learning_rate_progress_end"], 1.0 / 3.0)
-        self.assertAlmostEqual(manifests[2]["training"]["config"]["learning_rate_progress_start"], 2.0 / 3.0)
+        self.assertAlmostEqual(progress_windows[0][1], 10.0 / 3_000)
+        self.assertAlmostEqual(progress_windows[1][0], 10.0 / 3_000)
+        self.assertAlmostEqual(progress_windows[1][1], 20.0 / 3_000)
+        self.assertAlmostEqual(progress_windows[2][0], 20.0 / 3_000)
+        self.assertAlmostEqual(progress_windows[2][1], 30.0 / 3_000)
+        self.assertAlmostEqual(manifests[0]["training"]["config"]["learning_rate_progress_end"], 10.0 / 3_000)
+        self.assertAlmostEqual(manifests[2]["training"]["config"]["learning_rate_progress_start"], 20.0 / 3_000)
 
     def test_run_neural_selfplay_iterations_keeps_ppo_training_iteration_only_with_value_selection(self) -> None:
         trained_paths = []

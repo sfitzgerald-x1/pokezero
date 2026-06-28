@@ -1646,15 +1646,19 @@ def _training_config_for_iteration_learning_rate_schedule(
         raise ValueError("iteration must be positive.")
     if games_per_iteration <= 0:
         raise ValueError("games_per_iteration must be positive.")
-    if total_scheduled_iterations < iteration:
+    if training_config.learning_rate_schedule_total_games is None and total_scheduled_iterations < iteration:
         raise ValueError("total_scheduled_iterations must include the current iteration.")
-    total_scheduled_games = total_scheduled_iterations * games_per_iteration
+    total_scheduled_games = (
+        training_config.learning_rate_schedule_total_games
+        if training_config.learning_rate_schedule_total_games is not None
+        else total_scheduled_iterations * games_per_iteration
+    )
     completed_games_before = (iteration - 1) * games_per_iteration
     completed_games_after = iteration * games_per_iteration
     return replace(
         training_config,
-        learning_rate_progress_start=completed_games_before / total_scheduled_games,
-        learning_rate_progress_end=completed_games_after / total_scheduled_games,
+        learning_rate_progress_start=min(1.0, completed_games_before / total_scheduled_games),
+        learning_rate_progress_end=min(1.0, completed_games_after / total_scheduled_games),
     )
 
 

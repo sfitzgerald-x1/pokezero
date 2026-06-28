@@ -124,6 +124,7 @@ MIT_THESIS_REFERENCE_CONFIG: Mapping[str, float | int] = {
     "batch_size": 1024,
 }
 MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE = MIT_THESIS_LEARNING_RATE_SCHEDULE
+MIT_THESIS_REFERENCE_TRAINING_GAMES = 3_000_000
 # The thesis ran standard temperature-1.0 sampling for self-play collection.
 MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE = 1.0
 # Knobs the thesis used that our per-iteration training loop cannot yet express faithfully. These
@@ -160,6 +161,7 @@ RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
     "max_grad_norm": MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"],
     "learning_rate": MIT_THESIS_REFERENCE_CONFIG["learning_rate"],
     "learning_rate_schedule": MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE,
+    "learning_rate_schedule_total_games": MIT_THESIS_REFERENCE_TRAINING_GAMES,
     "batch_size": MIT_THESIS_REFERENCE_CONFIG["batch_size"],
 }
 
@@ -167,6 +169,7 @@ RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
 def recipe_fidelity_reference_config() -> dict[str, Any]:
     payload: dict[str, Any] = dict(MIT_THESIS_REFERENCE_CONFIG)
     payload["learning_rate_schedule"] = MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE
+    payload["learning_rate_schedule_total_games"] = MIT_THESIS_REFERENCE_TRAINING_GAMES
     return payload
 
 
@@ -198,6 +201,7 @@ _ITERATE_PRESET_PPO_KEYS = (
     "max_grad_norm",
     "learning_rate",
     "learning_rate_schedule",
+    "learning_rate_schedule_total_games",
     "batch_size",
 )
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
@@ -345,6 +349,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=LEARNING_RATE_SCHEDULES,
         default=CONSTANT_LEARNING_RATE_SCHEDULE,
         help="Learning-rate schedule. 'mit-thesis' applies base_lr/(8x+1)^1.5 over the supplied progress window.",
+    )
+    train.add_argument(
+        "--learning-rate-schedule-total-games",
+        type=int,
+        default=None,
+        help="Optional total-game denominator used by schedule-aware self-play configs. Standalone train uses progress flags directly.",
     )
     train.add_argument(
         "--learning-rate-progress-start",
@@ -938,6 +948,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "run progress; each iteration's fresh optimizer receives its own progress window."
         ),
     )
+    iterate.add_argument(
+        "--learning-rate-schedule-total-games",
+        type=int,
+        default=None,
+        help=(
+            "Total self-play games mapped to LR progress 1.0 for non-constant schedules. "
+            "The recipe-fidelity preset uses the thesis-scale 3,000,000-game denominator."
+        ),
+    )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -1466,6 +1485,7 @@ def _train(args: argparse.Namespace) -> int:
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         learning_rate_schedule=args.learning_rate_schedule,
+        learning_rate_schedule_total_games=args.learning_rate_schedule_total_games,
         learning_rate_progress_start=args.learning_rate_progress_start,
         learning_rate_progress_end=args.learning_rate_progress_end,
         weight_decay=args.weight_decay,
@@ -2657,6 +2677,7 @@ def _iterate(args: argparse.Namespace) -> int:
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         learning_rate_schedule=args.learning_rate_schedule,
+        learning_rate_schedule_total_games=args.learning_rate_schedule_total_games,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
@@ -4218,6 +4239,16 @@ def recipe_fidelity_audit(
     }
     if not schedule_ok:
         off_recipe.append("learning_rate_schedule")
+
+    schedule_total_games = config.get("learning_rate_schedule_total_games")
+    schedule_total_games_ok = schedule_total_games == MIT_THESIS_REFERENCE_TRAINING_GAMES
+    knobs["learning_rate_schedule_total_games"] = {
+        "value": schedule_total_games,
+        "reference": MIT_THESIS_REFERENCE_TRAINING_GAMES,
+        "aligned": schedule_total_games_ok,
+    }
+    if not schedule_total_games_ok:
+        off_recipe.append("learning_rate_schedule_total_games")
 
     for name, reference in MIT_THESIS_REFERENCE_CONFIG.items():
         value = config.get(name)

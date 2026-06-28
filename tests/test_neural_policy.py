@@ -600,6 +600,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(max_grad_norm=-1.0)
         with self.assertRaisesRegex(ValueError, "learning_rate_schedule"):
             TransformerTrainingConfig(learning_rate_schedule="bogus")
+        with self.assertRaisesRegex(ValueError, "learning_rate_schedule_total_games"):
+            TransformerTrainingConfig(learning_rate_schedule_total_games=0)
         with self.assertRaisesRegex(ValueError, "learning_rate_progress_start"):
             TransformerTrainingConfig(learning_rate_progress_start=-0.1)
         with self.assertRaisesRegex(ValueError, "learning_rate_progress_end"):
