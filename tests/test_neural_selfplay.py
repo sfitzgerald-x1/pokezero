@@ -2475,6 +2475,108 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["invocation_configs"][1]["first_iteration_evaluation_seed_start"], 102)
         self.assertEqual(second_manifest["invocation_config"], run_manifest["invocation_configs"][1])
 
+    def test_run_neural_selfplay_iterations_lr_schedule_uses_completed_games_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies():
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=10,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                        learning_rate_schedule_total_games=100,
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    learning_rate_schedule_completed_games=50,
+                )
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=10,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                        learning_rate_schedule_total_games=100,
+                    ),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    resume=True,
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        first_config = first_manifest["training"]["config"]
+        second_config = second_manifest["training"]["config"]
+        self.assertEqual(first_config["learning_rate_progress_start"], 0.5)
+        self.assertEqual(first_config["learning_rate_progress_end"], 0.6)
+        self.assertEqual(second_config["learning_rate_progress_start"], 0.6)
+        self.assertEqual(second_config["learning_rate_progress_end"], 0.7)
+        self.assertEqual(run_manifest["invocation_configs"][0]["learning_rate_schedule_completed_games"], 50)
+        self.assertEqual(run_manifest["invocation_configs"][1]["learning_rate_schedule_completed_games"], 50)
+
+    def test_run_neural_selfplay_iterations_rejects_offset_at_lr_schedule_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "completed_games_offset must be less"):
+                    run_neural_selfplay_iterations(
+                        run_dir=run_dir,
+                        iterations=1,
+                        games_per_iteration=10,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(
+                            window_size=4,
+                            epochs=1,
+                            batch_size=2,
+                            learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                            learning_rate_schedule_total_games=50,
+                        ),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        learning_rate_schedule_completed_games=50,
+                    )
+
+    def test_run_neural_selfplay_iterations_rejects_lr_schedule_total_before_requested_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "cover the full requested run window"):
+                    run_neural_selfplay_iterations(
+                        run_dir=run_dir,
+                        iterations=2,
+                        games_per_iteration=10,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(
+                            window_size=4,
+                            epochs=1,
+                            batch_size=2,
+                            learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                            learning_rate_schedule_total_games=60,
+                        ),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        evaluation_games=1,
+                        learning_rate_schedule_completed_games=50,
+                    )
+
     def test_run_neural_selfplay_iterations_resume_eval_seed_uses_all_prior_benchmarks(self) -> None:
         captured_benchmarks = []
 
@@ -3811,6 +3913,137 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(args.command, "iterate")
         self.assertEqual(args.experiment_preset, "recipe-fidelity")
         self.assertEqual(args.learning_rate_schedule_total_games, 50_000)
+
+    def test_neural_cli_foundation_plan_continue_from_resolves_checkpoint_and_lr_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prior_run = temp_path / "prior"
+            write_neural_report_manifest(prior_run)
+            prior_manifest_path = prior_run / "manifest.json"
+            prior_manifest = json.loads(prior_manifest_path.read_text(encoding="utf-8"))
+            prior_manifest["invocation_configs"] = [{"learning_rate_schedule_completed_games": 50}]
+            prior_manifest_path.write_text(json.dumps(prior_manifest, indent=2), encoding="utf-8")
+            with (
+                patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-plan",
+                        "--run-dir",
+                        str(temp_path / "next"),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--profile",
+                        "midscale",
+                        "--variant",
+                        "teacher-cut",
+                        "--continue-from",
+                        str(prior_run),
+                        "--recipe-fidelity",
+                        "--learning-rate-schedule-total-games",
+                        "100000",
+                        "--json",
+                    ]
+                )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        continuation = recipe["resolved_options"]["continuation"]
+        expected_checkpoint = prior_run / "iteration-0001" / "transformer-policy.pt"
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["initial_policy"], f"neural:{expected_checkpoint}")
+        self.assertEqual(recipe["experiment_contract"]["live_initial_policy"], f"neural:{expected_checkpoint}")
+        self.assertEqual(continuation["completed_iterations"], 1)
+        self.assertEqual(continuation["completed_games"], 53)
+        self.assertEqual(continuation["checkpoint_path"], str(expected_checkpoint))
+        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_completed_games"], 53)
+        self.assertEqual(argv[argv.index("--initial-policy") + 1], f"neural:{expected_checkpoint}")
+        self.assertEqual(argv[argv.index("--learning-rate-schedule-completed-games") + 1], "53")
+
+    def test_neural_cli_foundation_plan_rejects_continue_from_with_explicit_initial_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prior_run = Path(temp_dir) / "prior"
+            write_neural_report_manifest(prior_run)
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-plan",
+                        "--run-dir",
+                        str(Path(temp_dir) / "next"),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--variant",
+                        "teacher-cut",
+                        "--continue-from",
+                        str(prior_run),
+                        "--initial-policy",
+                        "random-legal",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--continue-from cannot be combined", stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_continue_from_without_larger_lr_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prior_run = Path(temp_dir) / "prior"
+            write_neural_report_manifest(prior_run)
+            prior_manifest_path = prior_run / "manifest.json"
+            prior_manifest = json.loads(prior_manifest_path.read_text(encoding="utf-8"))
+            prior_manifest["invocation_configs"] = [{"learning_rate_schedule_completed_games": 47}]
+            prior_manifest_path.write_text(json.dumps(prior_manifest, indent=2), encoding="utf-8")
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-plan",
+                        "--run-dir",
+                        str(Path(temp_dir) / "next"),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--variant",
+                        "teacher-cut",
+                        "--continue-from",
+                        str(prior_run),
+                        "--recipe-fidelity",
+                        "--learning-rate-schedule-total-games",
+                        "50",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("set the total to the new global game total", stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_continue_from_with_partial_lr_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prior_run = Path(temp_dir) / "prior"
+            write_neural_report_manifest(prior_run)
+            prior_manifest_path = prior_run / "manifest.json"
+            prior_manifest = json.loads(prior_manifest_path.read_text(encoding="utf-8"))
+            prior_manifest["invocation_configs"] = [{"learning_rate_schedule_completed_games": 47}]
+            prior_manifest_path.write_text(json.dumps(prior_manifest, indent=2), encoding="utf-8")
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = neural_cli_main(
+                    [
+                        "foundation-plan",
+                        "--run-dir",
+                        str(Path(temp_dir) / "next"),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--profile",
+                        "midscale",
+                        "--variant",
+                        "teacher-cut",
+                        "--continue-from",
+                        str(prior_run),
+                        "--recipe-fidelity",
+                        "--learning-rate-schedule-total-games",
+                        "1000",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("completed games plus requested foundation games", stderr.getvalue())
 
     def test_neural_cli_foundation_run_writes_summary_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

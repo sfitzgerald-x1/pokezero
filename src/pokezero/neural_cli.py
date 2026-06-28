@@ -1040,6 +1040,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "The recipe-fidelity preset uses the thesis-scale 3,000,000-game denominator."
         ),
     )
+    iterate.add_argument(
+        "--learning-rate-schedule-completed-games",
+        type=int,
+        default=None,
+        help=(
+            "External self-play games already completed before this run starts, used as an LR progress "
+            "offset for non-constant schedules. Use when continuing from a checkpoint in a fresh run_dir; "
+            "--resume inherits the prior offset from the run manifest."
+        ),
+    )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -1329,6 +1339,16 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help="Initial rollout collector policy spec. Defaults to random-legal for a cold CPU self-play start.",
     )
     parser.add_argument(
+        "--continue-from",
+        type=Path,
+        default=None,
+        help=(
+            "Continue a fresh foundation run from an existing neural self-play/foundation run directory "
+            "or summary. Resolves the latest checkpoint as the initial policy and uses prior collected "
+            "games as the LR schedule completed-games offset."
+        ),
+    )
+    parser.add_argument(
         "--profile",
         choices=profile_choices,
         default="smoke",
@@ -1366,6 +1386,15 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help=(
             "Override the nested neural iterate LR schedule denominator. Use this for midscale "
             "recipe-fidelity reads that should anneal over the read's own total game count."
+        ),
+    )
+    parser.add_argument(
+        "--learning-rate-schedule-completed-games",
+        type=int,
+        default=None,
+        help=(
+            "External self-play games completed before this foundation run starts. Usually derived "
+            "from --continue-from; pass explicitly only when continuing from a checkpoint without a run manifest."
         ),
     )
     parser.add_argument(
@@ -3119,6 +3148,7 @@ def _iterate(args: argparse.Namespace) -> int:
         training_cache_max_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
         delete_training_cache_after_train=args.delete_cache_after_read,
         write_rollout_jsonl=args.write_rollout_jsonl,
+        learning_rate_schedule_completed_games=args.learning_rate_schedule_completed_games,
         resume=args.resume,
     )
     if args.json:
@@ -3753,7 +3783,7 @@ def _checkpoint_path_from_policy_spec(policy_spec: str | None) -> str | None:
     if policy_spec is None:
         return None
     if policy_spec.startswith("neural:"):
-        return policy_spec[len("neural:") :]
+        return policy_spec[len("neural:") :].partition("?")[0]
     return None
 
 
@@ -4291,7 +4321,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "--showdown-root",
         str(args.showdown_root),
         "--initial-policy",
-        str(args.initial_policy),
+        str(resolved["initial_policy"]),
         "--experiment-preset",
         str(resolved["experiment_preset"]),
         "--epochs",
@@ -4312,6 +4342,13 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if resolved["learning_rate_schedule_total_games"] is not None:
         argv.extend(["--learning-rate-schedule-total-games", str(resolved["learning_rate_schedule_total_games"])])
+    if resolved["learning_rate_schedule_completed_games"] is not None:
+        argv.extend(
+            [
+                "--learning-rate-schedule-completed-games",
+                str(resolved["learning_rate_schedule_completed_games"]),
+            ]
+        )
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
     if resolved["value_ranking_loss_weight"] is not None:
@@ -4361,7 +4398,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "run_dir": str(args.run_dir),
         "manifest_path": str(args.run_dir / "manifest.json"),
         "showdown_root": str(args.showdown_root),
-        "initial_policy": str(args.initial_policy),
+        "initial_policy": str(resolved["initial_policy"]),
         "experiment_preset": str(resolved["experiment_preset"]),
         "recipe_fidelity": bool(resolved["recipe_fidelity"]),
         "recipe_fidelity_reference": recipe_fidelity_reference_config() if resolved["recipe_fidelity"] else None,
@@ -4378,11 +4415,13 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
+    explicit_options = getattr(args, "_explicit_cli_options", frozenset())
     profile = NEURAL_FOUNDATION_PROFILES[args.profile]
     variant = NEURAL_FOUNDATION_VARIANTS[args.variant]
     teacher_cut = bool(variant["teacher_cut"])
+    continuation = _foundation_continuation_from_args(args, explicit_options=explicit_options)
     if teacher_cut:
-        _validate_teacher_cut_foundation_args(args)
+        _validate_teacher_cut_foundation_args(args, continuation=continuation)
     opponent_action_loss_weight = (
         args.opponent_action_loss_weight
         if args.opponent_action_loss_weight is not None
@@ -4402,6 +4441,10 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     # Recipe-fidelity runs default to the thesis epoch count; the preset would set it, but the
     # wrapper always emits --epochs explicitly, so derive the default here to stay consistent.
     default_epochs = int(MIT_THESIS_REFERENCE_CONFIG["epochs"]) if recipe_fidelity else profile["epochs"]
+    initial_policy = str(continuation["initial_policy"]) if continuation is not None else str(args.initial_policy)
+    learning_rate_schedule_completed_games = args.learning_rate_schedule_completed_games
+    if continuation is not None and learning_rate_schedule_completed_games is None:
+        learning_rate_schedule_completed_games = int(continuation["completed_games"])
     resolved = {
         "iterations": _foundation_option(args.iterations, profile["iterations"]),
         "games_per_iteration": _foundation_option(args.games_per_iteration, profile["games_per_iteration"]),
@@ -4409,10 +4452,13 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "evaluation_games": _foundation_option(args.evaluation_games, profile["evaluation_games"]),
         "epochs": _foundation_option(args.epochs, default_epochs),
         "batch_size": args.batch_size,
+        "initial_policy": initial_policy,
+        "continuation": continuation,
         "recipe_fidelity": recipe_fidelity,
         "experiment_preset": "recipe-fidelity" if recipe_fidelity else "foundation-arms-race",
         "max_batches": _foundation_max_batches(args.max_batches, profile["max_batches"]),
         "learning_rate_schedule_total_games": args.learning_rate_schedule_total_games,
+        "learning_rate_schedule_completed_games": learning_rate_schedule_completed_games,
         "value_selection_heldout_games": _foundation_option(
             args.value_selection_heldout_games,
             profile["value_selection_heldout_games"],
@@ -4449,6 +4495,33 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         and int(resolved["learning_rate_schedule_total_games"]) <= 0
     ):
         raise ValueError("learning-rate-schedule-total-games must be positive.")
+    if (
+        resolved["learning_rate_schedule_completed_games"] is not None
+        and int(resolved["learning_rate_schedule_completed_games"]) < 0
+    ):
+        raise ValueError("learning-rate-schedule-completed-games must be non-negative.")
+    if (
+        resolved["learning_rate_schedule_total_games"] is not None
+        and resolved["learning_rate_schedule_completed_games"] is not None
+        and int(resolved["learning_rate_schedule_completed_games"]) >= int(resolved["learning_rate_schedule_total_games"])
+    ):
+        raise ValueError(
+            "learning-rate-schedule-completed-games must be less than "
+            "learning-rate-schedule-total-games; when continuing a run, set the total to the new global game total."
+        )
+    if (
+        resolved["learning_rate_schedule_total_games"] is not None
+        and resolved["learning_rate_schedule_completed_games"] is not None
+        and (
+            int(resolved["learning_rate_schedule_completed_games"])
+            + (int(resolved["iterations"]) * int(resolved["games_per_iteration"]))
+            > int(resolved["learning_rate_schedule_total_games"])
+        )
+    ):
+        raise ValueError(
+            "learning-rate-schedule-total-games must cover completed games plus requested foundation games; "
+            "set the total to the new global game total for continuation runs."
+        )
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
     if resolved["value_ranking_loss_weight"] is not None and float(resolved["value_ranking_loss_weight"]) < 0.0:
@@ -4491,10 +4564,127 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     return resolved
 
 
-def _validate_teacher_cut_foundation_args(args: argparse.Namespace) -> None:
+def _foundation_continuation_from_args(
+    args: argparse.Namespace,
+    *,
+    explicit_options: frozenset[str],
+) -> dict[str, Any] | None:
+    if args.continue_from is None:
+        return None
+    if "initial_policy" in explicit_options:
+        raise ValueError("--continue-from cannot be combined with explicit --initial-policy.")
+    continuation = _load_foundation_continuation(args.continue_from)
+    if args.learning_rate_schedule_completed_games is not None and int(args.learning_rate_schedule_completed_games) != int(
+        continuation["completed_games"]
+    ):
+        raise ValueError(
+            "--learning-rate-schedule-completed-games must match --continue-from completed games "
+            f"({continuation['completed_games']}) or be omitted."
+        )
+    return continuation
+
+
+def _load_foundation_continuation(path: Path) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        summary_path, summary = _load_foundation_summary(path)
+        manifest, manifest_source, manifest_error = _foundation_manifest_from_summary(summary_path, summary)
+        if manifest is not None:
+            return _foundation_continuation_from_manifest(
+                manifest,
+                source_path=summary_path,
+                source_kind="foundation-summary",
+                manifest_source=manifest_source,
+            )
+        errors.append(f"foundation summary manifest unavailable: {manifest_error}")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"foundation summary load failed: {exc}")
+
+    run_dir = path.parent if path.name == "manifest.json" else path
+    try:
+        manifest = load_neural_selfplay_run_manifest(run_dir)
+        return _foundation_continuation_from_manifest(
+            manifest,
+            source_path=run_dir,
+            source_kind="neural-selfplay-run",
+            manifest_source=str(run_dir / "manifest.json"),
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"neural run manifest load failed: {exc}")
+
+    details = "; ".join(errors)
+    raise ValueError(
+        "--continue-from must point to a neural foundation summary, foundation run directory, "
+        f"or neural self-play run directory. {details}"
+    )
+
+
+def _foundation_continuation_from_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    source_path: Path,
+    source_kind: str,
+    manifest_source: str,
+) -> dict[str, Any]:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        raise ValueError("--continue-from manifest contains no iterations.")
+    current_policy_spec = _string_or_none(manifest.get("current_policy_spec"))
+    latest_checkpoint = _string_or_none(manifest.get("latest_checkpoint_path"))
+    initial_policy = current_policy_spec if _is_learned_policy_spec(current_policy_spec) else None
+    if initial_policy is None and latest_checkpoint is not None:
+        initial_policy = f"neural:{latest_checkpoint}"
+    if initial_policy is None:
+        raise ValueError("--continue-from manifest does not expose a learned current policy or latest checkpoint.")
+    checkpoint_path = _checkpoint_path_from_policy_spec(initial_policy) or latest_checkpoint
+    completed_games = _manifest_learning_rate_schedule_completed_games(manifest) + sum(
+        int(_mapping(iteration.get("collection_metrics", {})).get("games", 0))
+        for iteration in iterations
+    )
+    if completed_games <= 0:
+        raise ValueError("--continue-from manifest has no completed collection games.")
+    return {
+        "source_path": str(source_path),
+        "source_kind": source_kind,
+        "manifest_source": manifest_source,
+        "completed_iterations": len(iterations),
+        "completed_games": completed_games,
+        "initial_policy": initial_policy,
+        "checkpoint_path": checkpoint_path,
+    }
+
+
+def _manifest_learning_rate_schedule_completed_games(manifest: Mapping[str, Any]) -> int:
+    for config in reversed(tuple(_mapping(config) for config in _sequence(manifest.get("invocation_configs", ())))):
+        value = config.get("learning_rate_schedule_completed_games")
+        if value is None:
+            continue
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError("manifest learning_rate_schedule_completed_games must be non-negative.")
+        return parsed
+    legacy_config = manifest.get("run_config")
+    if legacy_config is not None:
+        value = _mapping(legacy_config).get("learning_rate_schedule_completed_games")
+        if value is not None:
+            parsed = int(value)
+            if parsed < 0:
+                raise ValueError("manifest learning_rate_schedule_completed_games must be non-negative.")
+            return parsed
+    return 0
+
+
+def _is_learned_policy_spec(policy_spec: str | None) -> bool:
+    if policy_spec is None:
+        return False
+    return policy_spec.startswith("neural:") or policy_spec.startswith("linear:")
+
+
+def _validate_teacher_cut_foundation_args(args: argparse.Namespace, *, continuation: Mapping[str, Any] | None = None) -> None:
     if args.opponent_policy is not None:
         raise ValueError("--variant teacher-cut does not allow fixed --opponent-policy training opponents.")
-    initial_body = _policy_spec_name(args.initial_policy)
+    initial_policy = str(continuation["initial_policy"]) if continuation is not None else str(args.initial_policy)
+    initial_body = _policy_spec_name(initial_policy)
     if (
         initial_body in FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES
         or initial_body.startswith(FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES)
@@ -4541,8 +4731,9 @@ def _foundation_experiment_contract(args: argparse.Namespace, resolved: Mapping[
         **contract,
         "goal": "test whether PPO self-play can exceed the scripted-teacher ceiling after one-shot initialization",
         "teacher_allowed_as_initial_checkpoint_only": True,
-        "live_initial_policy": str(args.initial_policy),
+        "live_initial_policy": str(resolved["initial_policy"]),
         "allowed_live_initial_policy_forms": _foundation_teacher_cut_allowed_initial_policy_forms(),
+        "continuation": resolved.get("continuation"),
         "fixed_training_opponents": [],
         "uses_mirror_self_play": True,
         "collector_advancement_mode": resolved.get("collector_advancement_mode")

@@ -401,6 +401,7 @@ def run_neural_selfplay_iterations(
     training_cache_max_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     delete_training_cache_after_train: bool = True,
     write_rollout_jsonl: bool = True,
+    learning_rate_schedule_completed_games: int | None = None,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -437,6 +438,8 @@ def run_neural_selfplay_iterations(
         raise ValueError("write_rollout_jsonl=False requires training_cache_root.")
     if training_cache_root is not None and training_cache_max_root_bytes is not None and training_cache_max_root_bytes <= 0:
         raise ValueError("training_cache_max_root_bytes must be positive when set.")
+    if learning_rate_schedule_completed_games is not None and learning_rate_schedule_completed_games < 0:
+        raise ValueError("learning_rate_schedule_completed_games must be non-negative.")
     if (
         training_cache_root is not None
         and training_config.objective != "ppo"
@@ -484,6 +487,15 @@ def run_neural_selfplay_iterations(
 
     prior_iteration_manifests = _load_prior_iteration_manifests(run_dir, resume=resume)
     prior_invocation_configs = _load_prior_invocation_configs(run_dir) if prior_iteration_manifests else ()
+    learning_rate_schedule_completed_games = _resolve_learning_rate_schedule_completed_games(
+        learning_rate_schedule_completed_games,
+        prior_invocation_configs=prior_invocation_configs,
+    )
+    _validate_learning_rate_schedule_window(
+        training_config,
+        completed_games_offset=learning_rate_schedule_completed_games,
+        requested_games=iterations * games_per_iteration,
+    )
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
         current_policy_spec = str(last_iteration.get("next_current_policy_spec") or last_iteration["checkpoint_policy_spec"])
@@ -578,6 +590,7 @@ def run_neural_selfplay_iterations(
             "delete_after_train": delete_training_cache_after_train,
             "write_rollout_jsonl": write_rollout_jsonl,
         },
+        "learning_rate_schedule_completed_games": learning_rate_schedule_completed_games,
         "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
         "value_selection": value_selection_config.to_dict() if value_selection_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,
@@ -712,6 +725,7 @@ def run_neural_selfplay_iterations(
                 iteration=iteration,
                 games_per_iteration=games_per_iteration,
                 total_scheduled_iterations=first_iteration + iterations - 1,
+                completed_games_offset=learning_rate_schedule_completed_games,
             )
             training_input_bytes = _paths_byte_size_best_effort(
                 training_input_paths,
@@ -1739,6 +1753,70 @@ def _load_prior_invocation_configs(run_dir: Path) -> tuple[Mapping[str, Any], ..
     return tuple(configs_by_fingerprint.values())
 
 
+def _resolve_learning_rate_schedule_completed_games(
+    requested: int | None,
+    *,
+    prior_invocation_configs: tuple[Mapping[str, Any], ...],
+) -> int:
+    prior = _prior_learning_rate_schedule_completed_games(prior_invocation_configs)
+    if requested is None:
+        return prior or 0
+    if requested < 0:
+        raise ValueError("learning_rate_schedule_completed_games must be non-negative.")
+    if prior is not None and requested != prior:
+        raise ValueError(
+            "learning_rate_schedule_completed_games must match the existing run on resume "
+            f"({prior}); use a fresh run directory to change the external progress offset."
+        )
+    return requested
+
+
+def _prior_learning_rate_schedule_completed_games(
+    prior_invocation_configs: tuple[Mapping[str, Any], ...],
+) -> int | None:
+    for config in reversed(prior_invocation_configs):
+        value = config.get("learning_rate_schedule_completed_games")
+        if value is None:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("prior learning_rate_schedule_completed_games must be an integer.") from exc
+        if parsed < 0:
+            raise ValueError("prior learning_rate_schedule_completed_games must be non-negative.")
+        return parsed
+    return None
+
+
+def _validate_learning_rate_schedule_window(
+    training_config: TransformerTrainingConfig,
+    *,
+    completed_games_offset: int,
+    requested_games: int,
+) -> None:
+    if training_config.learning_rate_schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
+        return
+    if requested_games <= 0:
+        raise ValueError("requested_games must be positive.")
+    if completed_games_offset < 0:
+        raise ValueError("completed_games_offset must be non-negative.")
+    total_games = training_config.learning_rate_schedule_total_games
+    if total_games is None:
+        return
+    if completed_games_offset >= total_games:
+        raise ValueError(
+            "completed_games_offset must be less than the learning-rate schedule total games; "
+            f"got offset={completed_games_offset} total={total_games}. "
+            "Increase learning_rate_schedule_total_games to the new global total when continuing a run."
+        )
+    if completed_games_offset + requested_games > total_games:
+        raise ValueError(
+            "learning-rate schedule total games must cover the full requested run window; "
+            f"got offset={completed_games_offset} requested={requested_games} total={total_games}. "
+            "Set learning_rate_schedule_total_games to at least completed games plus requested games."
+        )
+
+
 def _advancement_from_manifest(iteration: Mapping[str, Any]) -> Mapping[str, Any]:
     advancement = iteration.get("advancement")
     if advancement is None:
@@ -1796,6 +1874,7 @@ def _training_config_for_iteration_learning_rate_schedule(
     iteration: int,
     games_per_iteration: int,
     total_scheduled_iterations: int,
+    completed_games_offset: int = 0,
 ) -> TransformerTrainingConfig:
     if training_config.learning_rate_schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
         return training_config
@@ -1803,15 +1882,23 @@ def _training_config_for_iteration_learning_rate_schedule(
         raise ValueError("iteration must be positive.")
     if games_per_iteration <= 0:
         raise ValueError("games_per_iteration must be positive.")
+    if completed_games_offset < 0:
+        raise ValueError("completed_games_offset must be non-negative.")
     if training_config.learning_rate_schedule_total_games is None and total_scheduled_iterations < iteration:
         raise ValueError("total_scheduled_iterations must include the current iteration.")
     total_scheduled_games = (
         training_config.learning_rate_schedule_total_games
         if training_config.learning_rate_schedule_total_games is not None
-        else total_scheduled_iterations * games_per_iteration
+        else completed_games_offset + (total_scheduled_iterations * games_per_iteration)
     )
-    completed_games_before = (iteration - 1) * games_per_iteration
-    completed_games_after = iteration * games_per_iteration
+    if completed_games_offset >= total_scheduled_games:
+        raise ValueError(
+            "completed_games_offset must be less than the learning-rate schedule total games; "
+            f"got offset={completed_games_offset} total={total_scheduled_games}. "
+            "Increase learning_rate_schedule_total_games to the new global total when continuing a run."
+        )
+    completed_games_before = completed_games_offset + ((iteration - 1) * games_per_iteration)
+    completed_games_after = completed_games_offset + (iteration * games_per_iteration)
     return replace(
         training_config,
         learning_rate_progress_start=min(1.0, completed_games_before / total_scheduled_games),
