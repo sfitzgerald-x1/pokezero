@@ -17,6 +17,7 @@ from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
 
 if TYPE_CHECKING:
+    from .dataset import TrajectoryDatasetConfig, TrainingCacheSummary
     from .linear_policy import LinearPolicyModel
 
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
@@ -265,6 +266,48 @@ def collect_rollouts(
             close()
     elapsed = perf_counter() - collection_start
     return accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb())
+
+
+def collect_training_cache(
+    *,
+    output_path: Path,
+    games: int,
+    env_factory: Callable[[], PokeZeroEnv],
+    policies: Mapping[str, Policy],
+    rollout_config: RolloutConfig,
+    dataset_config: "TrajectoryDatasetConfig",
+    seed_start: int = 1,
+    overwrite: bool = False,
+) -> tuple[CollectionMetrics, "TrainingCacheSummary"]:
+    """Collect rollouts and persist compact training examples instead of raw JSONL."""
+
+    if games <= 0:
+        raise ValueError("games must be positive.")
+    from .dataset import TrainingCacheBuilder
+
+    accumulator = _MetricsAccumulator()
+    builder = TrainingCacheBuilder(config=dataset_config)
+    collection_start = perf_counter()
+    env = env_factory()
+    try:
+        for game_index in range(games):
+            seed = seed_start + game_index
+            record = run_rollout_record_on_env(
+                env=env,
+                policies=policies,
+                rollout_config=rollout_config,
+                seed=seed,
+                battle_id=f"rollout-{seed}",
+            )
+            accumulator.add(record)
+            builder.add_record(record)
+        summary = builder.write(output_path, overwrite=overwrite)
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
+    elapsed = perf_counter() - collection_start
+    return accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()), summary
 
 
 def benchmark_rollouts(

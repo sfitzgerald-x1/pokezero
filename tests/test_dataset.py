@@ -6,12 +6,19 @@ import unittest
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import (
     MISSING_ACTION_INDEX,
+    TRAINING_CACHE_SCHEMA_VERSION,
     TrajectoryDatasetConfig,
+    TrainingCacheBuilder,
     batch_training_examples,
+    delete_training_cache_path,
     examples_from_record,
+    is_training_cache_path,
+    iter_training_cache_batches,
     iter_training_batches,
     iter_training_examples,
+    training_cache_paths_byte_size,
     training_batch_from_examples,
+    write_training_cache_from_rollouts,
 )
 from pokezero.env import TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
@@ -581,6 +588,100 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(len(examples), 3)
         self.assertEqual([batch.batch_size for batch in batches], [2, 1])
 
+    def test_training_cache_round_trips_raw_training_batches(self) -> None:
+        self._require_numpy()
+        config = TrajectoryDatasetConfig(window_size=2)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+
+            summary = write_training_cache_from_rollouts(path, cache_path, config=config)
+            raw_batches = list(iter_training_batches(path, batch_size=2, config=config))
+            cached_batches = list(iter_training_batches(cache_path, batch_size=2, config=config))
+            explicit_cached_batches = list(iter_training_cache_batches(cache_path, batch_size=2, config=config))
+
+            self.assertTrue(is_training_cache_path(summary.path))
+            self.assertEqual(summary.record_count, 1)
+            self.assertEqual(summary.example_count, 3)
+            self.assertGreater(summary.byte_size, 0)
+            self.assertEqual([batch.batch_size for batch in cached_batches], [2, 1])
+            self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
+            self.assertEqual(_batch_payload(explicit_cached_batches), _batch_payload(raw_batches))
+
+    def test_training_cache_builder_writes_schema_metadata(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1, discount=0.5))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            builder.write(cache_path)
+            metadata = (cache_path / "metadata.json").read_text(encoding="utf-8")
+
+        self.assertIn(TRAINING_CACHE_SCHEMA_VERSION, metadata)
+        self.assertIn('"discount": 0.5', metadata)
+
+    def test_training_cache_rejects_mismatched_dataset_config(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(path, cache_path, config=TrajectoryDatasetConfig(window_size=2))
+
+            with self.assertRaisesRegex(ValueError, "dataset config"):
+                list(iter_training_batches(cache_path, batch_size=2, config=TrajectoryDatasetConfig(window_size=1)))
+
+    def test_training_cache_rejects_mixed_cache_and_jsonl_paths(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(path, cache_path, config=TrajectoryDatasetConfig(window_size=1))
+
+            with self.assertRaisesRegex(ValueError, "cannot be mixed"):
+                list(iter_training_batches([path, cache_path], batch_size=2, config=TrajectoryDatasetConfig(window_size=1)))
+
+    def test_training_cache_consumed_callback_fires_after_cache_read(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(path, cache_path, config=TrajectoryDatasetConfig(window_size=1))
+
+            consumed: list[Path] = []
+            batches = list(
+                iter_training_batches(
+                    cache_path,
+                    batch_size=2,
+                    config=TrajectoryDatasetConfig(window_size=1),
+                    consumed_cache_callback=consumed.append,
+                )
+            )
+
+            self.assertEqual([batch.batch_size for batch in batches], [2, 1])
+            self.assertEqual(consumed, [cache_path])
+
+    def test_training_cache_delete_helper_removes_only_cache_directory(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(path, cache_path, config=TrajectoryDatasetConfig(window_size=1))
+
+            self.assertGreater(training_cache_paths_byte_size(cache_path), 0)
+            delete_training_cache_path(cache_path)
+
+            self.assertFalse(cache_path.exists())
+
     def test_dataset_config_validates_window_and_discount(self) -> None:
         with self.assertRaisesRegex(ValueError, "window_size"):
             TrajectoryDatasetConfig(window_size=0)
@@ -606,6 +707,42 @@ class DatasetTest(unittest.TestCase):
     def test_training_batch_rejects_empty_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one"):
             training_batch_from_examples([])
+
+    def _require_numpy(self) -> None:
+        try:
+            import numpy  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("NumPy is not installed in this environment.")
+
+
+def _batch_payload(batches) -> list[dict]:
+    return [
+        {
+            "categorical_ids": _tolist(batch.categorical_ids),
+            "numeric_features": _tolist(batch.numeric_features),
+            "token_type_ids": _tolist(batch.token_type_ids),
+            "attention_mask": _tolist(batch.attention_mask),
+            "history_mask": _tolist(batch.history_mask),
+            "legal_action_mask": _tolist(batch.legal_action_mask),
+            "action_indices": _tolist(batch.action_indices),
+            "returns": _tolist(batch.returns),
+            "opponent_action_indices": _tolist(batch.opponent_action_indices),
+            "opponent_action_mask": _tolist(batch.opponent_action_mask),
+            "action_probabilities": _tolist(batch.action_probabilities),
+            "action_probability_mask": _tolist(batch.action_probability_mask),
+        }
+        for batch in batches
+    ]
+
+
+def _tolist(value):
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    if isinstance(value, tuple):
+        return [_tolist(item) for item in value]
+    if isinstance(value, list):
+        return [_tolist(item) for item in value]
+    return value
 
 
 if __name__ == "__main__":
