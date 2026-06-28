@@ -1629,7 +1629,7 @@ def _train(args: argparse.Namespace) -> int:
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
     cache_lifecycle = _training_cache_lifecycle(args)
-    input_data_bytes = _input_data_paths_byte_size(args.data)
+    input_data_bytes = _input_data_paths_byte_size(args.data) if args.summary_out is not None else None
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:

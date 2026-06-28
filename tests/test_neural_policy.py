@@ -1371,6 +1371,26 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
             self.assertEqual(_input_data_paths_byte_size([first, second]), 6)
 
+    def test_neural_cli_input_data_paths_byte_size_counts_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            nested = temp_path / "nested"
+            nested.mkdir()
+            (temp_path / "first.bin").write_bytes(b"abcd")
+            (nested / "second.bin").write_bytes(b"efg")
+
+            self.assertEqual(_input_data_paths_byte_size([temp_path]), 7)
+
+    def test_neural_cli_input_data_paths_byte_size_uses_cache_sizer(self) -> None:
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch("pokezero.neural_cli.training_cache_paths_byte_size", return_value=1234) as cache_size,
+        ):
+            size = _input_data_paths_byte_size([Path("cache-a")])
+
+        self.assertEqual(size, 1234)
+        cache_size.assert_called_once_with([Path("cache-a")])
+
     def test_neural_cli_training_cache_lifecycle_rejects_delete_with_overlapping_value_data(self) -> None:
         args = SimpleNamespace(
             data=[Path("cache-root/cache-a")],
