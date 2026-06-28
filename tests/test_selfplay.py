@@ -13,6 +13,7 @@ from pokezero.collection import (
     read_rollout_records,
     rollout_record_to_dict,
 )
+from pokezero.dataset import TrajectoryDatasetConfig, is_training_cache_path, iter_training_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import (
     LINEAR_FEATURE_SCHEMA_VERSION,
@@ -135,6 +136,34 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(training_records[0].policy_ids, {"p1": "simple-legal"})
         self.assertEqual(training_records[1].policy_ids, {"p2": "simple-legal"})
         self.assertEqual({step.player_id for record in training_records for step in record.trajectory.steps}, {"p1", "p2"})
+
+    def test_collect_selfplay_rollouts_can_write_training_cache_chunks_without_raw_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cache_root = temp_path / "training-cache"
+            cache_paths: list[Path] = []
+            dataset_config = TrajectoryDatasetConfig(window_size=1)
+
+            metrics = collect_selfplay_rollouts(
+                output_path=None,
+                training_cache_output_path=cache_root,
+                training_cache_chunk_games=1,
+                training_cache_dataset_config=dataset_config,
+                training_cache_paths_out=cache_paths,
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=50,
+                current_policy_spec="random-legal",
+                opponent_policy_specs=("simple-legal",),
+            )
+
+            batches = list(iter_training_batches(cache_paths, batch_size=8, config=dataset_config))
+            self.assertTrue(all(is_training_cache_path(path) for path in cache_paths))
+
+        self.assertEqual(metrics.games, 2)
+        self.assertEqual([path.name for path in cache_paths], ["cache-00001", "cache-00002"])
+        self.assertEqual(sum(batch.batch_size for batch in batches), 2)
 
     def test_collect_selfplay_rollouts_filters_current_seat_even_when_policy_ids_match(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

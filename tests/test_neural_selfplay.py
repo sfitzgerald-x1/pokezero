@@ -449,6 +449,42 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertTrue(audit["aligned"])
         self.assertEqual(audit["off_recipe"], [])
 
+    def test_neural_cli_iterate_wires_training_cache_options(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--training-cache-root",
+                        "cache-root",
+                        "--training-cache-chunk-games",
+                        "2",
+                        "--max-cache-gb",
+                        "1.5",
+                        "--omit-rollout-jsonl",
+                        "--keep-cache-after-read",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(kwargs["training_cache_root"], Path("cache-root"))
+        self.assertEqual(kwargs["training_cache_chunk_games"], 2)
+        self.assertEqual(kwargs["training_cache_max_root_bytes"], int(1.5 * 1024 * 1024 * 1024))
+        self.assertFalse(kwargs["delete_training_cache_after_train"])
+        self.assertFalse(kwargs["write_rollout_jsonl"])
+
     def test_neural_cli_iterate_recipe_fidelity_preset_respects_explicit_overrides(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
@@ -827,6 +863,93 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(second_manifest["training_input_paths"], [
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
         ])
+
+    def test_run_neural_selfplay_iterations_can_train_from_cache_chunks_without_raw_rollouts(self) -> None:
+        collected = []
+        trained_paths = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            cache_root = Path(temp_dir) / "cache"
+
+            with patched_neural_selfplay_dependencies(collected=collected, trained_paths=trained_paths):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=3,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="ppo",
+                    ),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=3,
+                    training_cache_root=cache_root,
+                    training_cache_chunk_games=1,
+                    delete_training_cache_after_train=False,
+                    write_rollout_jsonl=False,
+                )
+
+            manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+        expected_paths = [
+            str(cache_root / "iteration-0001" / "cache-00001"),
+            str(cache_root / "iteration-0001" / "cache-00002"),
+            str(cache_root / "iteration-0001" / "cache-00003"),
+        ]
+        self.assertIsNone(collected[0]["output_path"])
+        self.assertIsNone(collected[0]["training_output_path"])
+        self.assertEqual(collected[0]["training_cache_output_path"], cache_root / "iteration-0001")
+        self.assertEqual([str(path) for path in trained_paths[0]], expected_paths)
+        self.assertIsNone(manifest["rollout_path"])
+        self.assertIsNone(manifest["training_rollout_path"])
+        self.assertEqual(manifest["training_cache_paths"], expected_paths)
+        self.assertEqual(manifest["training_rollout_paths"], expected_paths)
+        self.assertEqual(manifest["training_input_paths"], expected_paths)
+        self.assertFalse(manifest["training_cache_deleted_after_train"])
+
+    def test_run_neural_selfplay_iterations_deletes_cache_chunks_after_ppo_train_by_default(self) -> None:
+        trained_paths = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            cache_root = Path(temp_dir) / "cache"
+
+            with patched_neural_selfplay_dependencies(trained_paths=trained_paths):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="ppo",
+                    ),
+                    seed_start=20,
+                    fixed_opponent_policy_specs=("random-legal",),
+                    worker_count=2,
+                    training_cache_root=cache_root,
+                    training_cache_chunk_games=1,
+                    write_rollout_jsonl=False,
+                )
+
+            manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            trained_cache_paths = tuple(trained_paths[0])
+
+            self.assertTrue(trained_cache_paths)
+            self.assertTrue(all(not path.exists() for path in trained_cache_paths))
+            self.assertTrue(manifest["training_cache_deleted_after_train"])
+            self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
+            self.assertEqual(manifest["training_cache_paths"], [str(path) for path in trained_cache_paths])
 
     def test_run_neural_selfplay_iterations_assigns_lr_schedule_progress_from_total_games(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4620,9 +4743,25 @@ def patched_neural_selfplay_dependencies(
     def fake_collect_selfplay_rollouts(**kwargs):
         output_path = kwargs["output_path"]
         training_output_path = kwargs["training_output_path"]
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text("", encoding="utf-8")
-        training_output_path.write_text("", encoding="utf-8")
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text("", encoding="utf-8")
+        if training_output_path is not None:
+            training_output_path.parent.mkdir(parents=True, exist_ok=True)
+            training_output_path.write_text("", encoding="utf-8")
+        training_cache_paths_out = kwargs.get("training_cache_paths_out")
+        if training_cache_paths_out is not None:
+            cache_output_path = kwargs["training_cache_output_path"]
+            chunk_games = kwargs.get("training_cache_chunk_games")
+            if chunk_games is None:
+                cache_paths = (cache_output_path,)
+            else:
+                chunk_count = (kwargs["games"] + chunk_games - 1) // chunk_games
+                cache_paths = tuple(cache_output_path / f"cache-{index + 1:05d}" for index in range(chunk_count))
+            for path in cache_paths:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "metadata.json").write_text("{}", encoding="utf-8")
+            training_cache_paths_out.extend(cache_paths)
         collected.append(kwargs)
         return CollectionMetrics(
             games=kwargs["games"],

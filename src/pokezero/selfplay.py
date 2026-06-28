@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 import json
@@ -10,23 +11,29 @@ import sys
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
+from . import collection as _collection
 from .collection import (
     BenchmarkMatchup,
     BenchmarkReport,
     CollectionMetrics,
+    _MetricsAccumulator,
     NEURAL_POLICY_SPEC_PREFIX,
     RolloutRecord,
     benchmark_rollouts,
     current_peak_rss_mb,
-    iter_rollout_records,
     linear_policy_factory_from_model_spec,
     policy_factory_from_spec,
     policy_from_spec,
     run_rollout_record,
     run_rollout_record_on_env,
     ReusableEnvPool,
-    summarize_records,
     write_rollout_record,
+)
+from .dataset import (
+    MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    TrajectoryDatasetConfig,
+    TrainingCacheBuilder,
+    delete_training_cache_path,
 )
 from .env import PokeZeroEnv
 from .linear_policy import (
@@ -526,8 +533,14 @@ def _report_post_iteration_audit_warnings(result: "RunAuditResult | None", *, fa
 
 def collect_selfplay_rollouts(
     *,
-    output_path: Path,
+    output_path: Path | None,
     training_output_path: Path | None = None,
+    training_cache_output_path: Path | None = None,
+    training_cache_chunk_games: int | None = None,
+    training_cache_dataset_config: TrajectoryDatasetConfig | None = None,
+    training_cache_max_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    training_cache_root: Path | None = None,
+    training_cache_paths_out: list[Path] | None = None,
     games: int,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -544,6 +557,8 @@ def collect_selfplay_rollouts(
     opponent_specs = tuple(opponent_policy_specs)
     if not opponent_specs:
         raise ValueError("at least one opponent policy spec is required.")
+    if training_cache_chunk_games is not None and training_cache_chunk_games <= 0:
+        raise ValueError("training_cache_chunk_games must be positive when set.")
     collection_peak_rss_mb_by_phase: dict[str, float | None] = {}
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "collection_start")
     policy_factories = _policy_factories_for_specs(
@@ -551,21 +566,36 @@ def collect_selfplay_rollouts(
         overrides=policy_factory_overrides,
     )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_policy_factories")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_path = output_path.with_name(f".{output_path.name}.tmp")
+    write_path = None
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_path = output_path.with_name(f".{output_path.name}.tmp")
     training_write_path = None
     if training_output_path is not None:
         training_output_path.parent.mkdir(parents=True, exist_ok=True)
         training_write_path = training_output_path.with_name(f".{training_output_path.name}.tmp")
+    training_cache_writer = None
+    if training_cache_output_path is not None:
+        training_cache_writer = _TrainingCacheChunkWriter(
+            output_path=training_cache_output_path,
+            chunk_games=training_cache_chunk_games,
+            dataset_config=training_cache_dataset_config,
+            max_cache_root_bytes=training_cache_max_root_bytes,
+            cache_root=training_cache_root,
+            paths_out=training_cache_paths_out,
+        )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_setup")
     collection_start = perf_counter()
+    metrics_accumulator = _MetricsAccumulator()
     try:
-        with write_path.open("w", encoding="utf-8") as handle:
+        with write_path.open("w", encoding="utf-8") if write_path is not None else nullcontext(None) as handle:
             training_handle = training_write_path.open("w", encoding="utf-8") if training_write_path is not None else None
             try:
                 _collect_selfplay_records(
                     handle=handle,
                     training_handle=training_handle,
+                    training_cache_writer=training_cache_writer,
+                    metrics_accumulator=metrics_accumulator,
                     games=games,
                     env_factory=env_factory,
                     rollout_config=rollout_config,
@@ -580,18 +610,24 @@ def collect_selfplay_rollouts(
             finally:
                 if training_handle is not None:
                     training_handle.close()
-        write_path.replace(output_path)
+        if training_cache_writer is not None:
+            training_cache_writer.close()
+        if write_path is not None and output_path is not None:
+            write_path.replace(output_path)
         if training_write_path is not None and training_output_path is not None:
             training_write_path.replace(training_output_path)
         _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_commit")
     except Exception:
-        write_path.unlink(missing_ok=True)
+        if write_path is not None:
+            write_path.unlink(missing_ok=True)
         if training_write_path is not None:
             training_write_path.unlink(missing_ok=True)
+        if training_cache_writer is not None:
+            training_cache_writer.cleanup()
         raise
-    metrics = summarize_records(
-        iter_rollout_records(output_path),
+    metrics = metrics_accumulator.to_metrics(
         elapsed_seconds=perf_counter() - collection_start,
+        peak_rss_mb=_collection.current_peak_rss_mb(),
     )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_summary")
     return replace(metrics, peak_rss_mb_by_phase=dict(collection_peak_rss_mb_by_phase))
@@ -601,6 +637,8 @@ def _collect_selfplay_records(
     *,
     handle,
     training_handle,
+    training_cache_writer: "_TrainingCacheChunkWriter | None",
+    metrics_accumulator: _MetricsAccumulator,
     games: int,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -631,6 +669,8 @@ def _collect_selfplay_records(
             _write_selfplay_game_results(
                 handle=handle,
                 training_handle=training_handle,
+                training_cache_writer=training_cache_writer,
+                metrics_accumulator=metrics_accumulator,
                 results=results,
                 total_results=games,
                 rss_recorder=rss_recorder,
@@ -657,6 +697,8 @@ def _collect_selfplay_records(
             _write_selfplay_game_results(
                 handle=handle,
                 training_handle=training_handle,
+                training_cache_writer=training_cache_writer,
+                metrics_accumulator=metrics_accumulator,
                 results=results,
                 total_results=games,
                 rss_recorder=rss_recorder,
@@ -669,15 +711,21 @@ def _write_selfplay_game_results(
     *,
     handle,
     training_handle,
+    training_cache_writer: "_TrainingCacheChunkWriter | None",
+    metrics_accumulator: _MetricsAccumulator,
     results: Iterable[tuple[RolloutRecord, RolloutRecord]],
     total_results: int | None = None,
     rss_recorder: Callable[[str], None] | None = None,
 ) -> None:
     midpoint = max(1, total_results // 2) if total_results else None
     for index, (record, training_record) in enumerate(results, start=1):
-        write_rollout_record(handle, record)
+        metrics_accumulator.add(record)
+        if handle is not None:
+            write_rollout_record(handle, record)
         if training_handle is not None:
             write_rollout_record(training_handle, training_record)
+        if training_cache_writer is not None:
+            training_cache_writer.add_record(training_record)
         if rss_recorder is not None:
             if index == 1:
                 rss_recorder("after_first_record")
@@ -685,6 +733,69 @@ def _write_selfplay_game_results(
                 rss_recorder("after_half_records")
             if total_results is not None and index == total_results:
                 rss_recorder("after_all_records")
+
+
+class _TrainingCacheChunkWriter:
+    def __init__(
+        self,
+        *,
+        output_path: Path,
+        chunk_games: int | None,
+        dataset_config: TrajectoryDatasetConfig | None,
+        max_cache_root_bytes: int | None,
+        cache_root: Path | None,
+        paths_out: list[Path] | None,
+    ) -> None:
+        self._output_path = output_path
+        self._chunk_games = chunk_games
+        self._dataset_config = dataset_config or TrajectoryDatasetConfig()
+        self._max_cache_root_bytes = max_cache_root_bytes
+        self._cache_root = cache_root or (output_path if chunk_games is not None else output_path.parent)
+        self._paths_out = paths_out
+        self._paths: list[Path] = []
+        self._chunk_index = 0
+        self._builder = TrainingCacheBuilder(config=self._dataset_config)
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return tuple(self._paths)
+
+    def add_record(self, record: RolloutRecord) -> None:
+        self._builder.add_record(record)
+        if self._chunk_games is not None and self._builder.record_count >= self._chunk_games:
+            self._flush()
+
+    def close(self) -> None:
+        self._flush()
+        if self._paths_out is not None:
+            self._paths_out.extend(self._paths)
+
+    def cleanup(self) -> None:
+        for path in reversed(self._paths):
+            try:
+                delete_training_cache_path(path)
+            except Exception:
+                pass
+
+    def _flush(self) -> None:
+        if self._builder.record_count == 0:
+            return
+        output_path = self._next_output_path()
+        self._builder.write(
+            output_path,
+            max_cache_root_bytes=self._max_cache_root_bytes,
+            cache_root=self._cache_root,
+        )
+        self._paths.append(output_path)
+        self._builder = TrainingCacheBuilder(config=self._dataset_config)
+
+    def _next_output_path(self) -> Path:
+        if self._chunk_games is None:
+            if self._paths:
+                raise ValueError("single training cache output can only be written once.")
+            return self._output_path
+        self._chunk_index += 1
+        return self._output_path / f"cache-{self._chunk_index:05d}"
 
 
 def _run_selfplay_game_record(

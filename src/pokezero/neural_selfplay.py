@@ -36,6 +36,12 @@ from .neural_policy import (
     _validate_initial_model_config,
     train_transformer_policy,
 )
+from .dataset import (
+    MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    TrajectoryDatasetConfig,
+    delete_training_cache_path,
+    training_cache_paths_byte_size,
+)
 from .opponents import (
     HISTORICAL_OPPONENT_SELECTION_MODES,
     opponent_pool_policy_specs,
@@ -173,8 +179,8 @@ class NeuralAdvancementDecision:
 @dataclass(frozen=True)
 class NeuralSelfPlayIterationResult:
     iteration: int
-    rollout_path: Path
-    training_rollout_path: Path
+    rollout_path: Path | None
+    training_rollout_path: Path | None
     value_selection_rollout_path: Path | None
     value_selection_training_rollout_path: Path | None
     value_selection_seed_start: int | None
@@ -198,6 +204,9 @@ class NeuralSelfPlayIterationResult:
     opponent_pool_config: Mapping[str, Any] = field(default_factory=dict)
     invocation_config: Mapping[str, Any] = field(default_factory=dict)
     benchmark_reference_policy_specs: tuple[str, ...] = ()
+    training_cache_paths: tuple[Path, ...] = ()
+    training_cache_deleted_after_train: bool = False
+    training_cache_deleted_bytes: int = 0
     value_calibration: Mapping[str, Any] | None = None
     value_selection: Mapping[str, Any] | None = None
     source: Mapping[str, Any] = field(default_factory=dict)
@@ -211,8 +220,10 @@ class NeuralSelfPlayIterationResult:
             "schema_version": NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
             "iteration": self.iteration,
             "source": dict(self.source),
-            "rollout_path": str(self.rollout_path),
-            "training_rollout_path": str(self.training_rollout_path),
+            "rollout_path": str(self.rollout_path) if self.rollout_path is not None else None,
+            "training_rollout_path": (
+                str(self.training_rollout_path) if self.training_rollout_path is not None else None
+            ),
             "value_selection_rollout_path": (
                 str(self.value_selection_rollout_path) if self.value_selection_rollout_path is not None else None
             ),
@@ -235,6 +246,9 @@ class NeuralSelfPlayIterationResult:
             "value_selection_training_rollout_paths": [
                 str(path) for path in self.value_selection_training_rollout_paths
             ],
+            "training_cache_paths": [str(path) for path in self.training_cache_paths],
+            "training_cache_deleted_after_train": self.training_cache_deleted_after_train,
+            "training_cache_deleted_bytes": self.training_cache_deleted_bytes,
             "seed_start": self.seed_start,
             "worker_count": self.worker_count,
             "collection_metrics": self.metrics.to_dict(),
@@ -375,6 +389,11 @@ def run_neural_selfplay_iterations(
     collector_advancement_mode: str = "incumbent-gate",
     experiment_preset: str = "none",
     tensorboard_log_dir: Path | str | None = None,
+    training_cache_root: Path | None = None,
+    training_cache_chunk_games: int | None = None,
+    training_cache_max_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    delete_training_cache_after_train: bool = True,
+    write_rollout_jsonl: bool = True,
     resume: bool = False,
 ) -> NeuralSelfPlayRunResult:
     require_torch()
@@ -405,6 +424,40 @@ def run_neural_selfplay_iterations(
         raise ValueError(f"collector_advancement_mode must be one of: {choices}.")
     if collector_advancement_mode != "incumbent-gate" and auto_promotion_config is not None:
         raise ValueError(f"collector_advancement_mode={collector_advancement_mode!r} cannot be combined with auto promotion.")
+    if training_cache_chunk_games is not None and training_cache_chunk_games <= 0:
+        raise ValueError("training_cache_chunk_games must be positive when set.")
+    if not write_rollout_jsonl and training_cache_root is None:
+        raise ValueError("write_rollout_jsonl=False requires training_cache_root.")
+    if training_cache_root is not None and training_cache_max_root_bytes is not None and training_cache_max_root_bytes <= 0:
+        raise ValueError("training_cache_max_root_bytes must be positive when set.")
+    if (
+        training_cache_root is not None
+        and training_config.objective != "ppo"
+        and delete_training_cache_after_train
+    ):
+        raise ValueError(
+            "delete_training_cache_after_train=True with training_cache_root requires objective='ppo' "
+            "because non-PPO objectives replay historical training data."
+        )
+    if (
+        training_cache_root is not None
+        and delete_training_cache_after_train
+        and value_calibration_config is not None
+        and value_calibration_config.scope == "history"
+    ):
+        raise ValueError(
+            "history-scoped value calibration cannot delete per-iteration training caches after each train step."
+        )
+    if (
+        training_cache_root is not None
+        and delete_training_cache_after_train
+        and value_selection_config is not None
+        and value_selection_config.scope == "history"
+        and value_selection_config.heldout_games_per_iteration == 0
+    ):
+        raise ValueError(
+            "history-scoped value selection on training data cannot delete per-iteration training caches after each train step."
+        )
     fixed_opponents = tuple(fixed_opponent_policy_specs)
     if not fixed_opponents and not mirror_match:
         raise ValueError("at least one fixed opponent policy spec is required unless mirror_match=True.")
@@ -509,6 +562,13 @@ def run_neural_selfplay_iterations(
         "collector_advancement_mode": collector_advancement_mode,
         "experiment_preset": experiment_preset,
         "training_config": training_config.to_dict(),
+        "training_cache": {
+            "root": str(training_cache_root) if training_cache_root is not None else None,
+            "chunk_games": training_cache_chunk_games,
+            "max_root_bytes": training_cache_max_root_bytes,
+            "delete_after_train": delete_training_cache_after_train,
+            "write_rollout_jsonl": write_rollout_jsonl,
+        },
         "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
         "value_selection": value_selection_config.to_dict() if value_selection_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,
@@ -531,8 +591,8 @@ def run_neural_selfplay_iterations(
             iteration = first_iteration + offset
             iteration_dir = run_dir / f"iteration-{iteration:04d}"
             iteration_dir.mkdir(parents=True, exist_ok=True)
-            rollout_path = iteration_dir / "rollouts.jsonl"
-            training_rollout_path = iteration_dir / "training-rollouts.jsonl"
+            rollout_path = iteration_dir / "rollouts.jsonl" if write_rollout_jsonl else None
+            training_rollout_path = None if training_cache_root is not None else iteration_dir / "training-rollouts.jsonl"
             value_selection_rollout_path = None
             value_selection_training_rollout_path = None
             value_selection_seed_start = None
@@ -554,10 +614,24 @@ def run_neural_selfplay_iterations(
                 historical_opponent_selection=historical_opponent_selection,
                 include_current_policy=mirror_match,
             )
+            iteration_training_paths: tuple[Path, ...]
+            training_cache_paths: tuple[Path, ...] = ()
+            training_cache_paths_out: list[Path] | None = [] if training_cache_root is not None else None
+            training_cache_output_path = (
+                training_cache_root / f"iteration-{iteration:04d}"
+                if training_cache_root is not None
+                else None
+            )
 
             metrics = collect_selfplay_rollouts(
                 output_path=rollout_path,
                 training_output_path=training_rollout_path,
+                training_cache_output_path=training_cache_output_path,
+                training_cache_chunk_games=training_cache_chunk_games,
+                training_cache_dataset_config=_dataset_config_from_training_config(training_config),
+                training_cache_max_root_bytes=training_cache_max_root_bytes,
+                training_cache_root=training_cache_root,
+                training_cache_paths_out=training_cache_paths_out,
                 games=games_per_iteration,
                 env_factory=env_factory,
                 rollout_config=rollout_config,
@@ -566,10 +640,19 @@ def run_neural_selfplay_iterations(
                 opponent_policy_specs=opponent_policy_specs,
                 worker_count=worker_count,
             )
-            training_rollout_history.append(training_rollout_path)
+            if training_cache_paths_out is not None:
+                training_cache_paths = tuple(training_cache_paths_out)
+                if not training_cache_paths:
+                    raise ValueError("training cache collection produced no cache paths.")
+                iteration_training_paths = training_cache_paths
+            elif training_rollout_path is not None:
+                iteration_training_paths = (training_rollout_path,)
+            else:
+                raise ValueError("self-play collection produced no training input paths.")
+            training_rollout_history.extend(iteration_training_paths)
             training_input_paths = _training_input_paths_for_objective(
                 objective=training_config.objective,
-                iteration_training_rollout_path=training_rollout_path,
+                iteration_training_rollout_paths=iteration_training_paths,
                 training_rollout_history=tuple(training_rollout_history),
             )
             value_selection_metrics = None
@@ -611,7 +694,7 @@ def run_neural_selfplay_iterations(
                 )
             elif value_selection_config is not None:
                 selection_paths = (
-                    (training_rollout_path,)
+                    iteration_training_paths
                     if value_selection_config.scope == "iteration"
                     else tuple(training_rollout_history)
                 )
@@ -644,10 +727,17 @@ def run_neural_selfplay_iterations(
             value_calibration = _evaluate_iteration_value_calibration(
                 model=model,
                 training=training,
-                training_rollout_path=training_rollout_path,
+                iteration_training_rollout_paths=iteration_training_paths,
                 training_rollout_history=tuple(training_rollout_history),
                 config=value_calibration_config,
             )
+            training_cache_deleted = False
+            training_cache_deleted_bytes = 0
+            if training_cache_paths and delete_training_cache_after_train:
+                training_cache_deleted_bytes = training_cache_paths_byte_size(training_cache_paths)
+                for path in training_cache_paths:
+                    delete_training_cache_path(path)
+                training_cache_deleted = True
             benchmark = None
             if evaluation_games:
                 benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
@@ -718,6 +808,9 @@ def run_neural_selfplay_iterations(
                 opponent_pool_config=opponent_pool_manifest_config,
                 invocation_config=invocation_config,
                 benchmark_reference_policy_specs=benchmark_references,
+                training_cache_paths=training_cache_paths,
+                training_cache_deleted_after_train=training_cache_deleted,
+                training_cache_deleted_bytes=training_cache_deleted_bytes,
                 value_calibration=value_calibration,
                 value_selection=value_selection,
                 source=source_metadata,
@@ -835,14 +928,28 @@ def run_neural_selfplay_iterations(
 def _training_input_paths_for_objective(
     *,
     objective: str,
-    iteration_training_rollout_path: Path,
+    iteration_training_rollout_paths: tuple[Path, ...],
     training_rollout_history: tuple[Path, ...],
 ) -> tuple[Path, ...]:
     # PPO is on-policy enough that replaying older iteration shards as policy-gradient data makes
     # the behavior-policy ratio stale. If future on-policy objectives are added, route them here too.
     if objective == "ppo":
-        return (iteration_training_rollout_path,)
+        return iteration_training_rollout_paths
     return training_rollout_history
+
+
+def _dataset_config_from_training_config(config: TransformerTrainingConfig) -> TrajectoryDatasetConfig:
+    return TrajectoryDatasetConfig(
+        window_size=config.window_size,
+        discount=config.discount,
+        capped_terminal_value=config.capped_terminal_value,
+        hp_delta_return_weight=config.hp_delta_return_weight,
+        faint_delta_return_weight=config.faint_delta_return_weight,
+        turn_penalty_after=config.turn_penalty_after,
+        turn_penalty=config.turn_penalty,
+        ppo_target_mode=config.ppo_target_mode,
+        gae_lambda=config.gae_lambda,
+    )
 
 
 def _train_with_iteration_value_selection(
@@ -952,13 +1059,13 @@ def _evaluate_iteration_value_calibration(
     *,
     model: object,
     training: TransformerTrainingResult,
-    training_rollout_path: Path,
+    iteration_training_rollout_paths: tuple[Path, ...],
     training_rollout_history: tuple[Path, ...],
     config: NeuralValueCalibrationConfig | None,
 ) -> Mapping[str, Any] | None:
     if config is None:
         return None
-    paths = (training_rollout_path,) if config.scope == "iteration" else training_rollout_history
+    paths = iteration_training_rollout_paths if config.scope == "iteration" else training_rollout_history
     report = evaluate_value_calibration(
         model=model,
         training_result=training,

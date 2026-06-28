@@ -819,6 +819,57 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--seed-start", type=int, default=1, help="First deterministic self-play seed.")
     iterate.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
     iterate.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    iterate.add_argument(
+        "--training-cache-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional root for compact per-iteration training cache chunks. When set, neural self-play "
+            "trains from array-backed caches instead of raw training-rollouts JSONL."
+        ),
+    )
+    iterate.add_argument(
+        "--training-cache-chunk-games",
+        type=int,
+        default=None,
+        help=(
+            "When --training-cache-root is set, flush compact training caches every N collected games. "
+            "Defaults to one cache directory per iteration."
+        ),
+    )
+    iterate.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            f"Reject compact training-cache writes whose active cache root would exceed this many GiB "
+            f"(default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    iterate_cache_delete_group = iterate.add_mutually_exclusive_group()
+    iterate_cache_delete_group.add_argument(
+        "--delete-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_true",
+        default=True,
+        help="Delete per-iteration compact training cache chunks after checkpoint save and calibration uses finish.",
+    )
+    iterate_cache_delete_group.add_argument(
+        "--keep-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_false",
+        help="Keep compact training cache chunks after training for debugging or audit runs.",
+    )
+    iterate.add_argument(
+        "--omit-rollout-jsonl",
+        dest="write_rollout_jsonl",
+        action="store_false",
+        default=True,
+        help=(
+            "Do not write full raw rollouts.jsonl during collection. Requires --training-cache-root "
+            "so the iteration still has trainable data."
+        ),
+    )
     iterate.add_argument("--initial-policy", required=True, help="Policy spec used before the first checkpoint exists.")
     iterate.add_argument(
         "--opponent-policy",
@@ -2791,6 +2842,11 @@ def _iterate(args: argparse.Namespace) -> int:
         value_selection_config=_value_selection_config_from_args(args),
         collector_advancement_mode=args.collector_advancement_mode,
         experiment_preset=args.experiment_preset,
+        training_cache_root=args.training_cache_root,
+        training_cache_chunk_games=args.training_cache_chunk_games,
+        training_cache_max_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        delete_training_cache_after_train=args.delete_cache_after_read,
+        write_rollout_jsonl=args.write_rollout_jsonl,
         resume=args.resume,
     )
     if args.json:
