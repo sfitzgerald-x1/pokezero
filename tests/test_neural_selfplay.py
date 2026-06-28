@@ -3113,6 +3113,118 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertNotIn("--keep-cache-after-read", argv)
         self.assertNotIn("--omit-rollout-jsonl", argv)
 
+    def test_neural_cli_foundation_plan_wires_architecture_controls(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-cpu-fast",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--recipe-fidelity",
+                    "--embedding-dim",
+                    "64",
+                    "--layers",
+                    "0",
+                    "--attention-heads",
+                    "2",
+                    "--feedforward-dim",
+                    "128",
+                    "--dropout",
+                    "0.0",
+                    "--category-oov-buckets",
+                    "256",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["profile"], "midscale")
+        self.assertEqual(recipe["experiment_preset"], "recipe-fidelity")
+        self.assertEqual(recipe["resolved_options"]["embedding_dim"], 64)
+        self.assertEqual(recipe["resolved_options"]["layers"], 0)
+        self.assertEqual(recipe["resolved_options"]["attention_heads"], 2)
+        self.assertEqual(recipe["resolved_options"]["feedforward_dim"], 128)
+        self.assertEqual(recipe["resolved_options"]["dropout"], 0.0)
+        self.assertEqual(recipe["resolved_options"]["category_oov_buckets"], 256)
+        self.assertEqual(argv[argv.index("--embedding-dim") + 1], "64")
+        self.assertEqual(argv[argv.index("--layers") + 1], "0")
+        self.assertEqual(argv[argv.index("--attention-heads") + 1], "2")
+        self.assertEqual(argv[argv.index("--feedforward-dim") + 1], "128")
+        self.assertEqual(argv[argv.index("--dropout") + 1], "0.0")
+        self.assertEqual(argv[argv.index("--category-oov-buckets") + 1], "256")
+
+    def test_neural_cli_foundation_plan_omits_default_architecture_flags(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-default-architecture",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(recipe["resolved_options"]["embedding_dim"])
+        self.assertIsNone(recipe["resolved_options"]["layers"])
+        self.assertIsNone(recipe["resolved_options"]["attention_heads"])
+        self.assertIsNone(recipe["resolved_options"]["feedforward_dim"])
+        self.assertIsNone(recipe["resolved_options"]["dropout"])
+        self.assertIsNone(recipe["resolved_options"]["category_oov_buckets"])
+        self.assertNotIn("--embedding-dim", argv)
+        self.assertNotIn("--layers", argv)
+        self.assertNotIn("--attention-heads", argv)
+        self.assertNotIn("--feedforward-dim", argv)
+        self.assertNotIn("--dropout", argv)
+        self.assertNotIn("--category-oov-buckets", argv)
+
+    def test_neural_cli_foundation_plan_rejects_invalid_architecture_controls(self) -> None:
+        cases = (
+            ("--embedding-dim", "0", "embedding-dim must be positive"),
+            ("--layers", "-1", "layers must be non-negative"),
+            ("--attention-heads", "0", "attention-heads must be positive"),
+            ("--feedforward-dim", "0", "feedforward-dim must be positive"),
+            ("--dropout", "1.0", "dropout must be >= 0 and < 1"),
+            ("--category-oov-buckets", "-1", "category-oov-buckets must be non-negative"),
+        )
+        for flag, value, message in cases:
+            with self.subTest(flag=flag):
+                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    exit_code = neural_cli_main(
+                        [
+                            "foundation-plan",
+                            "--run-dir",
+                            "runs/foundation-invalid-architecture",
+                            "--showdown-root",
+                            "/tmp/showdown",
+                            flag,
+                            value,
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(message, stderr.getvalue())
+
     def test_neural_cli_foundation_plan_rejects_cache_chunk_games_without_cache_root(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
             exit_code = neural_cli_main(

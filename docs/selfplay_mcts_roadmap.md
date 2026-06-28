@@ -341,6 +341,9 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   PPO contract or writing deployment-specific assumptions into the public repo.
   Multi-worker self-play collection keeps deterministic record ordering while bounding in-flight
   game futures, so large recipe chunks do not queue the entire game range in memory before writing.
+  The foundation wrapper also exposes the nested neural architecture knobs, including `--layers 0`
+  for the CPU-fast pooled encoder path, so training-throughput probes can be launched from the same
+  audited foundation recipe interface instead of bespoke `neural iterate` commands.
   The foundation wrapper also has a `midscale` profile (`5 × 10,000` games) for the 50k
   recipe-faithful rising-curve gate before any full multimillion-battle spend.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs

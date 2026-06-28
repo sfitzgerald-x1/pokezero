@@ -1368,6 +1368,42 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help="Override the variant's temporal aggregator for value/opponent heads.",
     )
     parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=None,
+        help="Override the nested neural iterate transformer embedding width.",
+    )
+    parser.add_argument(
+        "--layers",
+        type=int,
+        default=None,
+        help="Override the nested neural iterate transformer layer count. Use 0 for the CPU-fast pooled encoder.",
+    )
+    parser.add_argument(
+        "--attention-heads",
+        type=int,
+        default=None,
+        help="Override the nested neural iterate transformer attention head count.",
+    )
+    parser.add_argument(
+        "--feedforward-dim",
+        type=int,
+        default=None,
+        help="Override the nested neural iterate transformer feedforward width.",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=None,
+        help="Override the nested neural iterate transformer dropout.",
+    )
+    parser.add_argument(
+        "--category-oov-buckets",
+        type=int,
+        default=None,
+        help="Override compact categorical embedding OOV bucket count for the nested neural iterate command.",
+    )
+    parser.add_argument(
         "--collector-advancement-mode",
         choices=COLLECTOR_ADVANCEMENT_MODES,
         default=None,
@@ -4109,6 +4145,16 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.append("--no-fixed-opponents")
     if resolved["temporal_aggregator"] is not None:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
+    for flag, key in (
+        ("--embedding-dim", "embedding_dim"),
+        ("--layers", "layers"),
+        ("--attention-heads", "attention_heads"),
+        ("--feedforward-dim", "feedforward_dim"),
+        ("--dropout", "dropout"),
+        ("--category-oov-buckets", "category_oov_buckets"),
+    ):
+        if key in explicit_options:
+            argv.extend([flag, str(resolved[key])])
     if resolved["collector_advancement_mode"] is not None:
         argv.extend(["--collector-advancement-mode", str(resolved["collector_advancement_mode"])])
     if resolved["training_cache_root"] is not None:
@@ -4193,6 +4239,12 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "value_ranking_loss_weight": args.value_ranking_loss_weight,
         "value_ranking_margin": args.value_ranking_margin,
         "temporal_aggregator": temporal_aggregator,
+        "embedding_dim": args.embedding_dim,
+        "layers": args.layers,
+        "attention_heads": args.attention_heads,
+        "feedforward_dim": args.feedforward_dim,
+        "dropout": args.dropout,
+        "category_oov_buckets": args.category_oov_buckets,
         "opponent_policies": list(opponent_policies) if opponent_policies is not None else None,
         "no_fixed_opponents": teacher_cut and opponent_policies == (),
         "collector_advancement_mode": args.collector_advancement_mode,
@@ -4216,6 +4268,18 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("value-ranking-margin must be non-negative.")
     if resolved["temporal_aggregator"] is not None and resolved["temporal_aggregator"] not in {"mean", "gru"}:
         raise ValueError("temporal-aggregator must be 'mean' or 'gru'.")
+    if resolved["embedding_dim"] is not None and int(resolved["embedding_dim"]) <= 0:
+        raise ValueError("embedding-dim must be positive.")
+    if resolved["layers"] is not None and int(resolved["layers"]) < 0:
+        raise ValueError("layers must be non-negative.")
+    if resolved["attention_heads"] is not None and int(resolved["attention_heads"]) <= 0:
+        raise ValueError("attention-heads must be positive.")
+    if resolved["feedforward_dim"] is not None and int(resolved["feedforward_dim"]) <= 0:
+        raise ValueError("feedforward-dim must be positive.")
+    if resolved["dropout"] is not None and not 0.0 <= float(resolved["dropout"]) < 1.0:
+        raise ValueError("dropout must be >= 0 and < 1.")
+    if resolved["category_oov_buckets"] is not None and int(resolved["category_oov_buckets"]) < 0:
+        raise ValueError("category-oov-buckets must be non-negative.")
     if (
         resolved["collector_advancement_mode"] is not None
         and resolved["collector_advancement_mode"] not in COLLECTOR_ADVANCEMENT_MODES
