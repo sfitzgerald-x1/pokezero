@@ -35,9 +35,11 @@ from pokezero.neural_cli import (
     MIT_THESIS_REFERENCE_TRAINING_GAMES,
     RECIPE_FIDELITY_PRESET_DEFAULTS,
     RECIPE_FIDELITY_UNSUPPORTED_KNOBS,
+    _apply_iterate_experiment_preset,
     _explicit_cli_options,
     _manifest_recipe_fidelity_audit,
     _print_iterate_summary,
+    build_arg_parser,
     main as neural_cli_main,
     recipe_fidelity_audit,
     recipe_fidelity_reference_config,
@@ -3210,12 +3212,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIsNone(recipe["resolved_options"]["feedforward_dim"])
         self.assertIsNone(recipe["resolved_options"]["dropout"])
         self.assertIsNone(recipe["resolved_options"]["category_oov_buckets"])
+        self.assertIsNone(recipe["resolved_options"]["learning_rate_schedule_total_games"])
         self.assertNotIn("--embedding-dim", argv)
         self.assertNotIn("--layers", argv)
         self.assertNotIn("--attention-heads", argv)
         self.assertNotIn("--feedforward-dim", argv)
         self.assertNotIn("--dropout", argv)
         self.assertNotIn("--category-oov-buckets", argv)
+        self.assertNotIn("--learning-rate-schedule-total-games", argv)
 
     def test_neural_cli_foundation_plan_rejects_invalid_architecture_controls(self) -> None:
         cases = (
@@ -3260,6 +3264,23 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("embedding-dim must be divisible by attention-heads", stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_invalid_lr_schedule_total_games(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-invalid-lr-denominator",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--learning-rate-schedule-total-games",
+                    "0",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("learning-rate-schedule-total-games must be positive", stderr.getvalue())
 
     def test_neural_cli_foundation_plan_rejects_cache_chunk_games_without_cache_root(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
@@ -3729,6 +3750,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "--initial-policy",
                     "random-legal",
                     "--recipe-fidelity",
+                    "--learning-rate-schedule-total-games",
+                    "50000",
                     "--json",
                 ]
             )
@@ -3742,13 +3765,52 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 10_000)
         self.assertEqual(recipe["resolved_options"]["workers"], 128)
         self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_total_games"], 50_000)
         self.assertEqual(argv[argv.index("--iterations") + 1], "5")
         self.assertEqual(argv[argv.index("--games-per-iteration") + 1], "10000")
         self.assertEqual(argv[argv.index("--workers") + 1], "128")
         self.assertEqual(argv[argv.index("--epochs") + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
+        self.assertEqual(argv[argv.index("--learning-rate-schedule-total-games") + 1], "50000")
         self.assertNotIn("--evaluation-games", argv)
         self.assertNotIn("--value-selection-heldout-games", argv)
         self.assertNotIn("--max-batches", argv)
+
+    def test_neural_cli_foundation_midscale_lr_denominator_survives_nested_recipe_preset(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-midscale",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--recipe-fidelity",
+                    "--learning-rate-schedule-total-games",
+                    "50000",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        nested_argv = recipe["command"]["argv"][3:]
+        parser = build_arg_parser()
+        args = parser.parse_args(nested_argv)
+        args._explicit_cli_options = _explicit_cli_options(nested_argv)
+        _apply_iterate_experiment_preset(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(args.command, "iterate")
+        self.assertEqual(args.experiment_preset, "recipe-fidelity")
+        self.assertEqual(args.learning_rate_schedule_total_games, 50_000)
 
     def test_neural_cli_foundation_run_writes_summary_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
