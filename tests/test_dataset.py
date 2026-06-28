@@ -611,6 +611,36 @@ class DatasetTest(unittest.TestCase):
             self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
             self.assertEqual(_batch_payload(explicit_cached_batches), _batch_payload(raw_batches))
 
+    def test_training_cache_batches_coalesce_across_cache_paths(self) -> None:
+        self._require_numpy()
+        config = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first_jsonl = temp_path / "first.jsonl"
+            second_jsonl = temp_path / "second.jsonl"
+            first_cache = temp_path / "cache-1"
+            second_cache = temp_path / "cache-2"
+            for path in (first_jsonl, second_jsonl):
+                with path.open("w", encoding="utf-8") as handle:
+                    write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(first_jsonl, first_cache, config=config)
+            write_training_cache_from_rollouts(second_jsonl, second_cache, config=config)
+
+            consumed: list[Path] = []
+            raw_batches = list(iter_training_batches([first_jsonl, second_jsonl], batch_size=6, config=config))
+            cached_batches = list(
+                iter_training_batches(
+                    [first_cache, second_cache],
+                    batch_size=6,
+                    config=config,
+                    consumed_cache_callback=consumed.append,
+                )
+            )
+
+        self.assertEqual([batch.batch_size for batch in cached_batches], [6])
+        self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
+        self.assertEqual(consumed, [first_cache, second_cache])
+
     def test_training_cache_round_trips_gae_ppo_training_targets(self) -> None:
         self._require_numpy()
         trajectory = BattleTrajectory(battle_id="gae-cache", format_id="gen3randombattle", seed=5)
