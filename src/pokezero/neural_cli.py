@@ -2212,7 +2212,7 @@ def _benchmark(args: argparse.Namespace) -> int:
     payload = report.to_dict()
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
-        print(f"benchmark_summary: {args.summary_out}")
+        print(f"benchmark_summary: {args.summary_out}", file=sys.stderr)
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
