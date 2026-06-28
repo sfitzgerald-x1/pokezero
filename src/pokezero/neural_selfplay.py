@@ -491,6 +491,11 @@ def run_neural_selfplay_iterations(
         learning_rate_schedule_completed_games,
         prior_invocation_configs=prior_invocation_configs,
     )
+    _validate_learning_rate_schedule_window(
+        training_config,
+        completed_games_offset=learning_rate_schedule_completed_games,
+        requested_games=iterations * games_per_iteration,
+    )
     if prior_iteration_manifests:
         last_iteration = prior_iteration_manifests[-1]
         current_policy_spec = str(last_iteration.get("next_current_policy_spec") or last_iteration["checkpoint_policy_spec"])
@@ -1781,6 +1786,35 @@ def _prior_learning_rate_schedule_completed_games(
             raise ValueError("prior learning_rate_schedule_completed_games must be non-negative.")
         return parsed
     return None
+
+
+def _validate_learning_rate_schedule_window(
+    training_config: TransformerTrainingConfig,
+    *,
+    completed_games_offset: int,
+    requested_games: int,
+) -> None:
+    if training_config.learning_rate_schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
+        return
+    if requested_games <= 0:
+        raise ValueError("requested_games must be positive.")
+    if completed_games_offset < 0:
+        raise ValueError("completed_games_offset must be non-negative.")
+    total_games = training_config.learning_rate_schedule_total_games
+    if total_games is None:
+        return
+    if completed_games_offset >= total_games:
+        raise ValueError(
+            "completed_games_offset must be less than the learning-rate schedule total games; "
+            f"got offset={completed_games_offset} total={total_games}. "
+            "Increase learning_rate_schedule_total_games to the new global total when continuing a run."
+        )
+    if completed_games_offset + requested_games > total_games:
+        raise ValueError(
+            "learning-rate schedule total games must cover the full requested run window; "
+            f"got offset={completed_games_offset} requested={requested_games} total={total_games}. "
+            "Set learning_rate_schedule_total_games to at least completed games plus requested games."
+        )
 
 
 def _advancement_from_manifest(iteration: Mapping[str, Any]) -> Mapping[str, Any]:
