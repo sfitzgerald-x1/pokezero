@@ -4465,6 +4465,31 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIn("--batch-size", argv)
         self.assertEqual(argv[argv.index("--batch-size") + 1], "8192")
 
+    def test_neural_cli_foundation_plan_omits_batch_size_without_override(self) -> None:
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "run",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--recipe-fidelity",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(payload["resolved_options"]["batch_size"])
+        self.assertNotIn("--batch-size", payload["command"]["argv"])
+
     def test_neural_cli_foundation_plan_rejects_nonpositive_batch_size(self) -> None:
         stderr = io.StringIO()
 
