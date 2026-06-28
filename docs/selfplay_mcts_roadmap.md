@@ -394,22 +394,44 @@ Near-term priority order:
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
    5.9e-5, standard collection temperature), records them in the manifest/run summary, and a
    `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
-   on-recipe rather than just named so. **Still off-recipe by construction:** LR *annealing* (no
-   global-step schedule under the per-iteration optimizer reset) and value-function clipping
-   (`clip_range_vf`); both are surfaced in the audit's `unsupported_knobs`. Config fidelity is
-   independent of scale (item 2).
+   on-recipe rather than just named so. **Missing recipe components (from the paper — not yet
+   implemented):**
+   - **LR annealing** — no global-step schedule under the per-iteration optimizer reset. This is
+     **first-order**: the thesis credits annealing alone for ~55% → 80% vs its heuristic baseline, so
+     a scaled run without it may under-deliver at *any* battle count. **Must be closed before the
+     recipe-scale run** (see item 2 guardrail).
+   - **Value-function clipping** (`clip_range_vf`) — second-order; close opportunistically.
+
+   Both are surfaced in the audit's `unsupported_knobs` so a run is never silently mis-labelled
+   on-recipe. Config fidelity is otherwise independent of scale (item 2).
 2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
    a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
    the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
    on-recipe and justified — the thesis used 80 CPU workers; our fleet is the equivalent, not premature
    optimization.
+   **Status:** the collection engine is proven at **~200 games/s** — ~4× the ~46 g/s needed for 4M
+   battles/day — so the recipe's ~3–4M-battle budget is now a matter of **hours, not days**, and a
+   mid-scale read is **minutes**. Remaining WS-B work is closing the full collect→train→promote loop
+   (the central trainer must keep pace, or it becomes the new bottleneck) plus the single-box
+   equivalence test.
+   **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on both:
+   (a) **closing LR annealing** (the first-order missing recipe component, item 1); and (b) a **cheap
+   mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose net-alone
+   curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve means stop
+   and fix the recipe, **not** buy more battles. Throughput is no longer the constraint; recipe
+   fidelity and a confirmed rising curve are.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete
    bar, then add test-time MCTS (determinization via Showdown's randbats generator) as a topper on an
-   already-strong net. `poke-engine` assessment feeds both phases: it could cut CPU battle/branch cost
-   enough to make recipe-scale training and MCTS rollouts affordable — gated on proving Gen 3
-   randbats equivalence first.
+   already-strong net. **These are the gate for the ladder *endgame* (net+MCTS), not a precondition for
+   the training run:** in the recipe, training is pure PPO self-play with no search in the loop, and the
+   value head co-trains as the PPO critic, so neither needs to be *solved* before the multimillion run.
+   They should, however, be **probed cheaply in parallel** on the mid-scale checkpoint from item 2
+   (value-head calibration read + a small test-time-MCTS lift probe) to build confidence that search
+   will lift *before* the full training spend. `poke-engine` assessment feeds both phases: it could cut
+   CPU battle/branch cost enough to make recipe-scale training and MCTS rollouts affordable — gated on
+   proving Gen 3 randbats equivalence first.
 
 ## Strategy hypothesis & go/no-go gates
 
@@ -635,6 +657,13 @@ Touches: `neural_selfplay.py`, `selfplay.py`, `collection.py`, `neural_cli.py`.
 ### WS-B — Distributed scaling (parallel collection → central train)
 **Owner goal:** turn one-box self-play into a CPU fleet hitting the thesis's ~3M-battles budget in
 days. Collection is the CPU bottleneck; fan it out.
+
+**Status:** collection throughput is **proven at ~200 games/s** (well above the ~46 g/s needed for
+4M battles/day), so the ~3M-battle budget is now ~hours. The remaining WS-B work is closing the full
+**collect→train→promote loop with the central trainer keeping pace** (else it becomes the new
+bottleneck), plus the single-box **equivalence test** (acceptance below). Note: throughput being
+solved does **not** unlock the full multimillion run — that is gated by the WS-A guardrail (close LR
+annealing + confirm a *rising* mid-scale net-alone curve) before spending the budget.
 
 Steps:
 1. **Collection/train split:** make collectors emit rollout JSONL to shared storage keyed by
