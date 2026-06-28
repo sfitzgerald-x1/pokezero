@@ -437,7 +437,8 @@ def run_neural_selfplay_iterations(
     ):
         raise ValueError(
             "delete_training_cache_after_train=True with training_cache_root requires objective='ppo' "
-            "because non-PPO objectives replay historical training data."
+            "because non-PPO objectives replay historical training data. Use objective='ppo' or "
+            "delete_training_cache_after_train=False."
         )
     if (
         training_cache_root is not None

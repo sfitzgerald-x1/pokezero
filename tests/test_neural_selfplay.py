@@ -951,6 +951,115 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
             self.assertEqual(manifest["training_cache_paths"], [str(path) for path in trained_cache_paths])
 
+    def test_run_neural_selfplay_iterations_rejects_omit_rollout_jsonl_without_cache_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "write_rollout_jsonl=False requires training_cache_root"):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=1,
+                        games_per_iteration=1,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        seed_start=20,
+                        fixed_opponent_policy_specs=("random-legal",),
+                        write_rollout_jsonl=False,
+                    )
+
+    def test_run_neural_selfplay_iterations_rejects_cache_deletion_for_history_replay_modes(self) -> None:
+        cases = (
+            (
+                "non_ppo_objective",
+                dict(
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="behavior-cloning",
+                    ),
+                    value_calibration_config=None,
+                    value_selection_config=None,
+                    message="requires objective='ppo'",
+                ),
+            ),
+            (
+                "history_calibration",
+                dict(
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="ppo",
+                    ),
+                    value_calibration_config=NeuralValueCalibrationConfig(scope="history"),
+                    value_selection_config=None,
+                    message="history-scoped value calibration",
+                ),
+            ),
+            (
+                "history_value_selection_on_training_data",
+                dict(
+                    training_config=TransformerTrainingConfig(
+                        window_size=4,
+                        epochs=1,
+                        batch_size=2,
+                        objective="ppo",
+                    ),
+                    value_calibration_config=None,
+                    value_selection_config=NeuralValueSelectionConfig(scope="history"),
+                    message="history-scoped value selection on training data",
+                ),
+            ),
+        )
+        for name, params in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                with patched_neural_selfplay_dependencies():
+                    with self.assertRaisesRegex(ValueError, str(params["message"])):
+                        run_neural_selfplay_iterations(
+                            run_dir=Path(temp_dir) / "run",
+                            iterations=1,
+                            games_per_iteration=1,
+                            env_factory=lambda: None,  # type: ignore[return-value]
+                            rollout_config=RolloutConfig(max_decision_rounds=5),
+                            model_config=_entity_test_model_config(),
+                            training_config=params["training_config"],
+                            seed_start=20,
+                            fixed_opponent_policy_specs=("random-legal",),
+                            training_cache_root=Path(temp_dir) / "cache",
+                            value_calibration_config=params["value_calibration_config"],
+                            value_selection_config=params["value_selection_config"],
+                        )
+
+    def test_run_neural_selfplay_iterations_rejects_invalid_training_cache_limits(self) -> None:
+        cases = (
+            ("chunk_games", dict(training_cache_chunk_games=0), "training_cache_chunk_games"),
+            ("max_root_bytes", dict(training_cache_max_root_bytes=0), "training_cache_max_root_bytes"),
+        )
+        for name, kwargs, message in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                with patched_neural_selfplay_dependencies():
+                    with self.assertRaisesRegex(ValueError, message):
+                        run_neural_selfplay_iterations(
+                            run_dir=Path(temp_dir) / "run",
+                            iterations=1,
+                            games_per_iteration=1,
+                            env_factory=lambda: None,  # type: ignore[return-value]
+                            rollout_config=RolloutConfig(max_decision_rounds=5),
+                            model_config=_entity_test_model_config(),
+                            training_config=TransformerTrainingConfig(
+                                window_size=4,
+                                epochs=1,
+                                batch_size=2,
+                                objective="ppo",
+                            ),
+                            seed_start=20,
+                            fixed_opponent_policy_specs=("random-legal",),
+                            training_cache_root=Path(temp_dir) / "cache",
+                            **kwargs,
+                        )
+
     def test_run_neural_selfplay_iterations_assigns_lr_schedule_progress_from_total_games(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -4403,6 +4512,59 @@ class NeuralSelfPlayTest(unittest.TestCase):
             # it, so checking .exists() after the `with` exits would always fail (the dir is gone).
             self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
             self.assertIsNotNone(result.iterations[0].benchmark)
+
+    def test_torch_smoke_trains_from_real_cache_chunks_and_deletes_them(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            run_dir = temp_path / "run"
+            cache_root = temp_path / "cache"
+
+            result = run_neural_selfplay_iterations(
+                run_dir=run_dir,
+                iterations=1,
+                games_per_iteration=1,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="entity-cache-smoke",
+                    window_size=2,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    window_size=2,
+                    epochs=1,
+                    batch_size=2,
+                    max_batches=1,
+                    objective="ppo",
+                    device="cpu",
+                ),
+                fixed_opponent_policy_specs=("random-legal",),
+                evaluation_games=0,
+                training_cache_root=cache_root,
+                training_cache_chunk_games=1,
+                write_rollout_jsonl=False,
+            )
+
+            manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+
+            self.assertTrue(result.latest_checkpoint_path and result.latest_checkpoint_path.exists())
+            self.assertIsNone(manifest["rollout_path"])
+            self.assertIsNone(manifest["training_rollout_path"])
+            self.assertTrue(manifest["training_cache_deleted_after_train"])
+            self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
+            self.assertTrue(manifest["training_cache_paths"])
+            self.assertTrue(all(not Path(path).exists() for path in manifest["training_cache_paths"]))
 
     def test_value_ranking_loss_uses_pairwise_return_ordering(self) -> None:
         if not torch_available():
