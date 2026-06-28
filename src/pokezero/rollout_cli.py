@@ -16,10 +16,11 @@ from .collection import (
     policy_from_spec,
     policy_spec_with_showdown_root,
 )
-from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig
+from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig, training_cache_paths_byte_size
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
+from .selfplay import collect_selfplay_rollouts
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -68,6 +69,76 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     _add_dataset_config_arguments(collect_cache)
     collect_cache.set_defaults(func=_collect_training_cache)
+
+    collect_selfplay_cache = subparsers.add_parser(
+        "collect-selfplay-training-cache",
+        help=(
+            "Collect the current-policy self-play training perspective directly into compact "
+            "neural training cache shards."
+        ),
+        epilog=(
+            "Fleet wrappers must assign each shard a disjoint --seed-start range. Dataset flags "
+            "such as --window-size, --discount, --ppo-target-mode, and --gae-lambda are baked "
+            "into the cache and must match the central trainer config."
+        ),
+    )
+    collect_selfplay_cache.add_argument("--games", type=int, required=True, help="Number of games to collect.")
+    collect_selfplay_cache.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
+    collect_selfplay_cache.add_argument(
+        "--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root."
+    )
+    collect_selfplay_cache.add_argument(
+        "--format", dest="format_id", default="gen3randombattle", help="Showdown format id."
+    )
+    collect_selfplay_cache.add_argument(
+        "--seed-start",
+        type=int,
+        default=1,
+        help="First deterministic rollout seed. Fleet shards must use non-overlapping seed ranges.",
+    )
+    collect_selfplay_cache.add_argument(
+        "--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap."
+    )
+    collect_selfplay_cache.add_argument(
+        "--current-policy",
+        default="random-legal",
+        help=f"Current policy spec whose training perspective is recorded. {policy_help}",
+    )
+    collect_selfplay_cache.add_argument(
+        "--opponent-policy",
+        action="append",
+        default=None,
+        help=(
+            "Opponent policy spec. May be repeated. When omitted, mirrors --current-policy "
+            "for teacher-cut/current-policy self-play."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Worker threads within this shard. For fleet collection, prefer more pods over a large value.",
+    )
+    collect_selfplay_cache.add_argument(
+        "--chunk-games",
+        type=int,
+        default=None,
+        help="Optional games per cache chunk. When omitted, writes one cache at --out.",
+    )
+    collect_selfplay_cache.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            "Reject the write if existing caches under the output parent plus the new cache "
+            f"would exceed this many GiB (default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
+        "--node-binary", default="node", help="Node executable used for the BattleStream bridge."
+    )
+    _add_dataset_config_arguments(collect_selfplay_cache)
+    collect_selfplay_cache.set_defaults(func=_collect_selfplay_training_cache)
 
     benchmark = subparsers.add_parser("benchmark", help="Run rollout benchmarks without writing trajectories.")
     benchmark.add_argument(
@@ -197,6 +268,48 @@ def _collect_training_cache(args: argparse.Namespace) -> int:
     print(f"training_cache: {cache.path}")
     print(f"training_cache_examples: {cache.example_count}")
     print(f"training_cache_bytes: {cache.byte_size}")
+    return 0
+
+
+def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    current_policy = policy_spec_with_showdown_root(args.current_policy, policy_showdown_root)
+    opponent_policies = tuple(
+        policy_spec_with_showdown_root(spec, policy_showdown_root)
+        for spec in (args.opponent_policy or (args.current_policy,))
+    )
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    cache_paths: list[Path] = []
+    metrics = collect_selfplay_rollouts(
+        output_path=None,
+        training_output_path=None,
+        training_cache_output_path=args.out,
+        training_cache_chunk_games=args.chunk_games,
+        training_cache_dataset_config=_dataset_config_from_args(args),
+        training_cache_max_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        training_cache_root=args.out.parent,
+        training_cache_paths_out=cache_paths,
+        games=args.games,
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        rollout_config=rollout_config,
+        seed_start=args.seed_start,
+        current_policy_spec=current_policy,
+        opponent_policy_specs=opponent_policies,
+        worker_count=args.workers,
+    )
+    _print_metrics(metrics.to_dict())
+    for cache_path in cache_paths:
+        print(f"training_cache: {cache_path}")
+    print(f"training_cache_count: {len(cache_paths)}")
+    if cache_paths:
+        print(f"training_cache_bytes: {training_cache_paths_byte_size(cache_paths)}")
     return 0
 
 

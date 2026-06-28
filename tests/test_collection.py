@@ -1017,6 +1017,111 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("training_cache: runs/cache", stdout.getvalue())
         self.assertIn("training_cache_examples: 4", stdout.getvalue())
 
+    def test_rollout_cli_collect_selfplay_training_cache_wires_arguments_and_prints_cache_summary(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=4.0,
+            total_decision_rounds=8,
+            total_simulator_turns=6,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+            peak_rss_mb=66.0,
+        )
+
+        def fake_collect(**kwargs):
+            kwargs["training_cache_paths_out"].extend([Path("runs/cache/cache-00001"), Path("runs/cache/cache-00002")])
+            return fake_metrics
+
+        with (
+            patch("pokezero.rollout_cli.collect_selfplay_rollouts", side_effect=fake_collect) as collect,
+            patch("pokezero.rollout_cli.training_cache_paths_byte_size", return_value=1024),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = rollout_cli_main(
+                [
+                    "collect-selfplay-training-cache",
+                    "--games",
+                    "2",
+                    "--out",
+                    "runs/cache",
+                    "--seed-start",
+                    "50",
+                    "--max-decision-rounds",
+                    "7",
+                    "--current-policy",
+                    "simple-legal",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--workers",
+                    "3",
+                    "--chunk-games",
+                    "1",
+                    "--window-size",
+                    "3",
+                    "--discount",
+                    "0.9",
+                    "--ppo-target-mode",
+                    "gae",
+                    "--gae-lambda",
+                    "0.7",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = collect.call_args.kwargs
+        self.assertIsNone(kwargs["output_path"])
+        self.assertIsNone(kwargs["training_output_path"])
+        self.assertEqual(kwargs["training_cache_output_path"], Path("runs/cache"))
+        self.assertEqual(kwargs["training_cache_chunk_games"], 1)
+        self.assertEqual(kwargs["training_cache_root"], Path("runs"))
+        self.assertEqual(kwargs["games"], 2)
+        self.assertEqual(kwargs["seed_start"], 50)
+        self.assertEqual(kwargs["worker_count"], 3)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 7)
+        self.assertEqual(kwargs["current_policy_spec"], "simple-legal")
+        self.assertEqual(kwargs["opponent_policy_specs"], ("random-legal",))
+        self.assertEqual(kwargs["training_cache_dataset_config"].window_size, 3)
+        self.assertEqual(kwargs["training_cache_dataset_config"].discount, 0.9)
+        self.assertEqual(kwargs["training_cache_dataset_config"].ppo_target_mode, "gae")
+        self.assertEqual(kwargs["training_cache_dataset_config"].gae_lambda, 0.7)
+        self.assertEqual(kwargs["training_cache_max_root_bytes"], 50 * 1024 * 1024 * 1024)
+        self.assertIn("training_cache: runs/cache/cache-00001", stdout.getvalue())
+        self.assertIn("training_cache_count: 2", stdout.getvalue())
+        self.assertIn("training_cache_bytes: 1024", stdout.getvalue())
+
+    def test_rollout_cli_collect_selfplay_training_cache_defaults_to_mirror_current_policy(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=1,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        with (
+            patch("pokezero.rollout_cli.collect_selfplay_rollouts", return_value=fake_metrics) as collect,
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            exit_code = rollout_cli_main(
+                [
+                    "collect-selfplay-training-cache",
+                    "--games",
+                    "1",
+                    "--out",
+                    "runs/cache",
+                    "--current-policy",
+                    "simple-legal",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(collect.call_args.kwargs["current_policy_spec"], "simple-legal")
+        self.assertEqual(collect.call_args.kwargs["opponent_policy_specs"], ("simple-legal",))
+
     def test_rollout_cli_collect_loads_linear_policy_spec(self) -> None:
         fake_metrics = CollectionMetrics(
             games=1,
