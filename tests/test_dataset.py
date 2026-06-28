@@ -611,6 +611,36 @@ class DatasetTest(unittest.TestCase):
             self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
             self.assertEqual(_batch_payload(explicit_cached_batches), _batch_payload(raw_batches))
 
+    def test_training_cache_batches_coalesce_across_cache_paths(self) -> None:
+        self._require_numpy()
+        config = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            jsonl_paths = tuple(temp_path / f"rollouts-{index}.jsonl" for index in range(3))
+            cache_paths = tuple(temp_path / f"cache-{index}" for index in range(3))
+            for path in jsonl_paths:
+                with path.open("w", encoding="utf-8") as handle:
+                    write_rollout_record(handle, rollout_record())
+            for jsonl_path, cache_path in zip(jsonl_paths, cache_paths, strict=True):
+                write_training_cache_from_rollouts(jsonl_path, cache_path, config=config)
+
+            consumed: list[Path] = []
+            raw_batches = list(iter_training_batches(jsonl_paths, batch_size=4, config=config))
+            cached_batches = list(
+                iter_training_batches(
+                    cache_paths,
+                    batch_size=4,
+                    config=config,
+                    consumed_cache_callback=consumed.append,
+                )
+            )
+
+        self.assertEqual([batch.batch_size for batch in cached_batches], [4, 4, 1])
+        self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
+        self.assertEqual([batch.battle_ids for batch in cached_batches], [("", "", "", ""), ("", "", "", ""), ("",)])
+        self.assertEqual([batch.step_metadata for batch in cached_batches], [({}, {}, {}, {}), ({}, {}, {}, {}), ({},)])
+        self.assertEqual(consumed, list(cache_paths))
+
     def test_training_cache_round_trips_gae_ppo_training_targets(self) -> None:
         self._require_numpy()
         trajectory = BattleTrajectory(battle_id="gae-cache", format_id="gen3randombattle", seed=5)

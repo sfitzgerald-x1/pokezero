@@ -449,10 +449,12 @@ def iter_training_batches(
     if any(cache_flags):
         if not all(cache_flags):
             raise ValueError("training cache directories cannot be mixed with rollout JSONL paths.")
-        for path in normalized_paths:
-            yield from iter_training_cache_batches(path, batch_size=batch_size, config=config)
-            if consumed_cache_callback is not None:
-                consumed_cache_callback(path)
+        yield from _iter_coalesced_training_cache_batches(
+            normalized_paths,
+            batch_size=batch_size,
+            config=config,
+            consumed_cache_callback=consumed_cache_callback,
+        )
         return
     if consumed_cache_callback is not None:
         raise ValueError("consumed_cache_callback requires training cache directories.")
@@ -481,6 +483,121 @@ def write_training_cache_from_rollouts(
         max_cache_root_bytes=max_cache_root_bytes,
         cache_root=cache_root,
     )
+
+
+def _iter_coalesced_training_cache_batches(
+    paths: Sequence[Path],
+    *,
+    batch_size: int,
+    config: TrajectoryDatasetConfig | None,
+    consumed_cache_callback: Callable[[Path], None] | None,
+) -> Iterator[TrainingBatch]:
+    pending: list[TrainingBatch] = []
+    pending_size = 0
+    for path in paths:
+        for batch in iter_training_cache_batches(path, batch_size=batch_size, config=config):
+            remainder: TrainingBatch | None = batch
+            while remainder is not None:
+                available = batch_size - pending_size
+                if remainder.batch_size <= available:
+                    pending.append(remainder)
+                    pending_size += remainder.batch_size
+                    remainder = None
+                else:
+                    pending.append(_slice_training_batch(remainder, 0, available))
+                    pending_size += available
+                    remainder = _slice_training_batch(remainder, available, remainder.batch_size)
+                if pending_size == batch_size:
+                    yield _combine_training_batches(pending)
+                    pending = []
+                    pending_size = 0
+        if consumed_cache_callback is not None:
+            consumed_cache_callback(path)
+    if pending:
+        yield _combine_training_batches(pending)
+
+
+def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch:
+    if not batches:
+        raise ValueError("cannot combine zero training batches.")
+    if len(batches) == 1:
+        return batches[0]
+    return TrainingBatch(
+        categorical_ids=_concat_batch_field(tuple(batch.categorical_ids for batch in batches)),
+        numeric_features=_concat_batch_field(tuple(batch.numeric_features for batch in batches)),
+        token_type_ids=_concat_batch_field(tuple(batch.token_type_ids for batch in batches)),
+        attention_mask=_concat_batch_field(tuple(batch.attention_mask for batch in batches)),
+        history_mask=_concat_batch_field(tuple(batch.history_mask for batch in batches)),
+        legal_action_mask=_concat_batch_field(tuple(batch.legal_action_mask for batch in batches)),
+        action_indices=_concat_batch_field(tuple(batch.action_indices for batch in batches)),
+        rewards=_concat_batch_field(tuple(batch.rewards for batch in batches)),
+        returns=_concat_batch_field(tuple(batch.returns for batch in batches)),
+        ppo_advantages=_concat_batch_field(tuple(batch.ppo_advantages for batch in batches)),
+        ppo_advantage_mask=_concat_batch_field(tuple(batch.ppo_advantage_mask for batch in batches)),
+        ppo_value_targets=_concat_batch_field(tuple(batch.ppo_value_targets for batch in batches)),
+        ppo_value_target_mask=_concat_batch_field(tuple(batch.ppo_value_target_mask for batch in batches)),
+        opponent_action_indices=_concat_batch_field(tuple(batch.opponent_action_indices for batch in batches)),
+        opponent_action_mask=_concat_batch_field(tuple(batch.opponent_action_mask for batch in batches)),
+        action_probabilities=_concat_batch_field(tuple(batch.action_probabilities for batch in batches)),
+        action_probability_mask=_concat_batch_field(tuple(batch.action_probability_mask for batch in batches)),
+        battle_ids=_concat_batch_field(tuple(batch.battle_ids for batch in batches)),
+        seeds=_concat_batch_field(tuple(batch.seeds for batch in batches)),
+        format_ids=_concat_batch_field(tuple(batch.format_ids for batch in batches)),
+        player_ids=_concat_batch_field(tuple(batch.player_ids for batch in batches)),
+        turn_indices=_concat_batch_field(tuple(batch.turn_indices for batch in batches)),
+        terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
+        step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
+    )
+
+
+def _concat_batch_field(values: Sequence[Any]) -> Any:
+    if not values:
+        return ()
+    if len(values) == 1:
+        return values[0]
+    first = values[0]
+    if hasattr(first, "shape"):
+        numpy = _require_numpy()
+        return numpy.concatenate(values, axis=0)
+    combined: list[Any] = []
+    for value in values:
+        combined.extend(tuple(value))
+    return tuple(combined)
+
+
+def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> TrainingBatch:
+    if start < 0 or stop < start or stop > batch.batch_size:
+        raise ValueError("invalid training batch slice.")
+    return TrainingBatch(
+        categorical_ids=_slice_batch_field(batch.categorical_ids, start, stop),
+        numeric_features=_slice_batch_field(batch.numeric_features, start, stop),
+        token_type_ids=_slice_batch_field(batch.token_type_ids, start, stop),
+        attention_mask=_slice_batch_field(batch.attention_mask, start, stop),
+        history_mask=_slice_batch_field(batch.history_mask, start, stop),
+        legal_action_mask=_slice_batch_field(batch.legal_action_mask, start, stop),
+        action_indices=_slice_batch_field(batch.action_indices, start, stop),
+        rewards=_slice_batch_field(batch.rewards, start, stop),
+        returns=_slice_batch_field(batch.returns, start, stop),
+        ppo_advantages=_slice_batch_field(batch.ppo_advantages, start, stop),
+        ppo_advantage_mask=_slice_batch_field(batch.ppo_advantage_mask, start, stop),
+        ppo_value_targets=_slice_batch_field(batch.ppo_value_targets, start, stop),
+        ppo_value_target_mask=_slice_batch_field(batch.ppo_value_target_mask, start, stop),
+        opponent_action_indices=_slice_batch_field(batch.opponent_action_indices, start, stop),
+        opponent_action_mask=_slice_batch_field(batch.opponent_action_mask, start, stop),
+        action_probabilities=_slice_batch_field(batch.action_probabilities, start, stop),
+        action_probability_mask=_slice_batch_field(batch.action_probability_mask, start, stop),
+        battle_ids=_slice_batch_field(batch.battle_ids, start, stop),
+        seeds=_slice_batch_field(batch.seeds, start, stop),
+        format_ids=_slice_batch_field(batch.format_ids, start, stop),
+        player_ids=_slice_batch_field(batch.player_ids, start, stop),
+        turn_indices=_slice_batch_field(batch.turn_indices, start, stop),
+        terminal_capped=_slice_batch_field(batch.terminal_capped, start, stop),
+        step_metadata=_slice_batch_field(batch.step_metadata, start, stop),
+    )
+
+
+def _slice_batch_field(value: Any, start: int, stop: int) -> Any:
+    return value[start:stop]
 
 
 def is_training_cache_path(path: PathInput) -> bool:
