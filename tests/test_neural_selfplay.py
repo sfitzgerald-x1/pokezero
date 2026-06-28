@@ -3039,6 +3039,113 @@ class NeuralSelfPlayTest(unittest.TestCase):
         )
         self.assertTrue(recipe["experiment_contract"]["recipe_fidelity"])
 
+    def test_neural_cli_foundation_plan_wires_training_cache_controls(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-cache",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--training-cache-root",
+                    "cache-root",
+                    "--training-cache-chunk-games",
+                    "1000",
+                    "--max-cache-gb",
+                    "12.5",
+                    "--omit-rollout-jsonl",
+                    "--keep-cache-after-read",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["resolved_options"]["training_cache_root"], "cache-root")
+        self.assertEqual(recipe["resolved_options"]["training_cache_chunk_games"], 1000)
+        self.assertEqual(recipe["resolved_options"]["max_cache_gb"], 12.5)
+        self.assertFalse(recipe["resolved_options"]["delete_cache_after_read"])
+        self.assertFalse(recipe["resolved_options"]["write_rollout_jsonl"])
+        self.assertIn("--training-cache-root", argv)
+        self.assertEqual(argv[argv.index("--training-cache-root") + 1], "cache-root")
+        self.assertIn("--training-cache-chunk-games", argv)
+        self.assertEqual(argv[argv.index("--training-cache-chunk-games") + 1], "1000")
+        self.assertIn("--max-cache-gb", argv)
+        self.assertEqual(argv[argv.index("--max-cache-gb") + 1], "12.5")
+        self.assertIn("--keep-cache-after-read", argv)
+        self.assertIn("--omit-rollout-jsonl", argv)
+
+    def test_neural_cli_foundation_plan_omits_default_training_cache_flags(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-cache-defaults",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(recipe["resolved_options"]["training_cache_root"])
+        self.assertIsNone(recipe["resolved_options"]["training_cache_chunk_games"])
+        self.assertTrue(recipe["resolved_options"]["delete_cache_after_read"])
+        self.assertTrue(recipe["resolved_options"]["write_rollout_jsonl"])
+        self.assertNotIn("--training-cache-root", argv)
+        self.assertNotIn("--training-cache-chunk-games", argv)
+        self.assertNotIn("--max-cache-gb", argv)
+        self.assertNotIn("--keep-cache-after-read", argv)
+        self.assertNotIn("--omit-rollout-jsonl", argv)
+
+    def test_neural_cli_foundation_plan_rejects_cache_chunk_games_without_cache_root(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-cache",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--training-cache-chunk-games",
+                    "1000",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--training-cache-chunk-games requires --training-cache-root", stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_omit_rollout_jsonl_without_cache_root(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-cache",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--omit-rollout-jsonl",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--omit-rollout-jsonl requires --training-cache-root", stderr.getvalue())
+
     def test_neural_cli_foundation_teacher_cut_variant_records_contract(self) -> None:
         with (
             patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),

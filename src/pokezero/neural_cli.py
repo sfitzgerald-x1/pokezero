@@ -1362,6 +1362,54 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help="Override the foundation preset's rollout-collector advancement mode.",
     )
     parser.add_argument(
+        "--training-cache-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional compact training-cache root passed through to neural iterate. Use this for "
+            "mid-scale runs that should avoid raw training-rollouts JSONL."
+        ),
+    )
+    parser.add_argument(
+        "--training-cache-chunk-games",
+        type=int,
+        default=None,
+        help=(
+            "Flush compact training cache chunks every N collected games in the nested neural iterate command. "
+            "Requires --training-cache-root."
+        ),
+    )
+    parser.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            f"Reject compact training-cache writes whose active cache root would exceed this many GiB "
+            f"(default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    foundation_cache_delete_group = parser.add_mutually_exclusive_group()
+    foundation_cache_delete_group.add_argument(
+        "--delete-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_true",
+        default=True,
+        help="Delete per-iteration compact training cache chunks after nested PPO train uses finish.",
+    )
+    foundation_cache_delete_group.add_argument(
+        "--keep-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_false",
+        help="Keep compact training cache chunks after nested PPO training for debugging or audit runs.",
+    )
+    parser.add_argument(
+        "--omit-rollout-jsonl",
+        dest="write_rollout_jsonl",
+        action="store_false",
+        default=True,
+        help="Do not write full raw rollouts.jsonl in the nested neural iterate command. Requires --training-cache-root.",
+    )
+    parser.add_argument(
         "--recipe-fidelity",
         action="store_true",
         help=(
@@ -4051,6 +4099,16 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--temporal-aggregator", str(resolved["temporal_aggregator"])])
     if resolved["collector_advancement_mode"] is not None:
         argv.extend(["--collector-advancement-mode", str(resolved["collector_advancement_mode"])])
+    if resolved["training_cache_root"] is not None:
+        argv.extend(["--training-cache-root", str(resolved["training_cache_root"])])
+    if resolved["training_cache_chunk_games"] is not None:
+        argv.extend(["--training-cache-chunk-games", str(resolved["training_cache_chunk_games"])])
+    if "max_cache_gb" in explicit_options:
+        argv.extend(["--max-cache-gb", str(resolved["max_cache_gb"])])
+    if not resolved["delete_cache_after_read"]:
+        argv.append("--keep-cache-after-read")
+    if not resolved["write_rollout_jsonl"]:
+        argv.append("--omit-rollout-jsonl")
     if args.device is not None:
         argv.extend(["--device", str(args.device)])
     if args.resume:
@@ -4127,6 +4185,11 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "no_fixed_opponents": teacher_cut and opponent_policies == (),
         "collector_advancement_mode": args.collector_advancement_mode,
         "teacher_cut": teacher_cut,
+        "training_cache_root": str(args.training_cache_root) if args.training_cache_root is not None else None,
+        "training_cache_chunk_games": args.training_cache_chunk_games,
+        "max_cache_gb": args.max_cache_gb,
+        "delete_cache_after_read": bool(args.delete_cache_after_read),
+        "write_rollout_jsonl": bool(args.write_rollout_jsonl),
     }
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
@@ -4146,6 +4209,13 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         and resolved["collector_advancement_mode"] not in COLLECTOR_ADVANCEMENT_MODES
     ):
         raise ValueError("collector-advancement-mode is invalid.")
+    if resolved["training_cache_chunk_games"] is not None and int(resolved["training_cache_chunk_games"]) <= 0:
+        raise ValueError("training-cache-chunk-games must be positive.")
+    _cache_gb_to_bytes(float(resolved["max_cache_gb"]))
+    if resolved["training_cache_chunk_games"] is not None and resolved["training_cache_root"] is None:
+        raise ValueError("--training-cache-chunk-games requires --training-cache-root.")
+    if not resolved["write_rollout_jsonl"] and resolved["training_cache_root"] is None:
+        raise ValueError("--omit-rollout-jsonl requires --training-cache-root.")
     opponent_policy_values = _sequence_or_empty(resolved["opponent_policies"])
     if any(not str(policy).strip() for policy in opponent_policy_values):
         raise ValueError("opponent-policy entries must be non-empty.")
