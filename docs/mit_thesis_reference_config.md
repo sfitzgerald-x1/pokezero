@@ -97,24 +97,64 @@ test-time addition on top of an already-strong net.**
 
 ## Gap analysis — our current config vs the thesis
 
-Our PPO knobs are `TransformerTrainingConfig` defaults (`neural_policy.py`); the teacher-cut variant
-flips `objective` to `ppo`. The first teacher-cut pilot ran **3 iterations × 256 games = 768
-battles** and reached **0.2825 vs max-damage**.
+Our default PPO knobs are `TransformerTrainingConfig` defaults (`neural_policy.py`); the teacher-cut
+variant flips `objective` to `ppo`. The first teacher-cut pilot ran **3 iterations × 256 games = 768
+battles** and reached **0.2825 vs max-damage** — with the *default* (off-recipe) hyperparameters
+below.
 
-| dimension | thesis | ours (current) | gap / risk |
-|---|---|---|---|
-| **training scale** | **~3,000,000 battles** | **768 battles** | **~3,900× under-budget — the dominant gap.** The thesis needed ~1 day / 40M steps just to reach 80% vs SimpleHeuristics. |
-| `entropy_coef` | **0.0588** | **0.0** | **no exploration pressure at all** — directly relevant to escaping a local equilibrium |
-| `n_epochs` | **7** | **1** | 7× less optimization per batch |
-| `learning_rate` | 10^−4.23, **annealed** | **3e-4, constant** | the thesis credits annealing for 55%→80% — a first-order effect |
-| `gamma` | 0.9999 | 1.0 | undiscounted vs near-1 |
-| `gae_lambda` | 0.754 | 0.95 | different bias/variance point |
-| `clip_range` | 0.0829 | 0.2 (`clip_epsilon`) | ours ~2.4× looser |
-| `clip_range_vf` | 0.0184 | (none) | thesis clips value updates; we don't |
-| `value_coef` | 0.4375 | 0.25 (`value_loss_weight`) | |
-| `batch_size` | 1024 | 64 | 16× smaller |
-| validation opponent | SimpleHeuristics (weak/smooth) | max-damage (harder/noisier) | the thesis tracked a smoother strength signal during training |
-| architecture | embedding + 3-layer MLP, non-recurrent | entity-token transformer | different (not necessarily worse); a variable to hold in mind |
+The `default` column is what an unconfigured `neural iterate` / teacher-cut run uses. The
+`recipe-fidelity` column is what the new `--experiment-preset recipe-fidelity` path (and
+`neural foundation-plan/run --recipe-fidelity`) sets — see "Recipe-fidelity preset" below.
+
+| dimension | thesis | default (off-recipe) | recipe-fidelity preset | gap / risk |
+|---|---|---|---|---|
+| **training scale** | **~3,000,000 battles** | **768 battles** | **unchanged (scale is orthogonal to config)** | **~3,900× under-budget — the dominant gap.** Config fidelity does not change scale; the preset only aligns *knobs*. |
+| `entropy_coef` | **0.0588** | **0.0** | **0.0588 ✅** | **was no exploration pressure at all** — now aligned |
+| `n_epochs` | **7** | **1** | **7 ✅** | now aligned |
+| `learning_rate` (base) | 10^−4.23 ≈ **5.9e-5** | 3e-4 | **5.9e-5 ✅** | base LR aligned; **annealing still missing — see below** |
+| `learning_rate` annealing | **annealed** (massive impact) | constant | **constant ❌ (unsupported)** | per-iteration optimizer reset has no global-step schedule yet — listed in `unsupported_knobs` |
+| `gamma` | 0.9999 | 1.0 | **0.9999 ✅** | now aligned (audit uses a tight tolerance so 1.0 is never read as 0.9999) |
+| `gae_lambda` | 0.754 | 0.95 | **0.754 ✅** (with `ppo_target_mode=gae`) | now aligned |
+| `clip_range` | 0.0829 | 0.2 (`clip_epsilon`) | **0.0829 ✅** | now aligned |
+| `clip_range_vf` | 0.0184 | (none) | **(none) ❌ (unsupported)** | our PPO value loss is an unclipped MSE — listed in `unsupported_knobs` |
+| `value_coef` | 0.4375 | 0.25 (`value_loss_weight`) | **0.4375 ✅** | now aligned |
+| `max_grad_norm` | 0.5430 | (none) | **0.5430 ✅** (new `--max-grad-norm` knob) | now aligned |
+| `batch_size` | 1024 | 64 | **1024 ✅** | now aligned |
+| collection temperature | standard (1.0) | 1.0 (arms-race uses 1.4) | **1.0 ✅** | recipe preset reverts the arms-race 1.4 to standard sampling |
+| validation opponent | SimpleHeuristics (weak/smooth) | max-damage (harder/noisier) | unchanged | the thesis tracked a smoother strength signal during training; still a difference |
+| architecture | embedding + 3-layer MLP, non-recurrent | entity-token transformer | unchanged | different (not necessarily worse); a variable to hold in mind |
+
+### Recipe-fidelity preset (what is now aligned, what remains off)
+
+`neural iterate --experiment-preset recipe-fidelity` (and the foundation wrapper's
+`--recipe-fidelity` flag, usable with the `teacher-cut` variant) bundles the thesis Table A.3 knobs
+that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discount=0.9999`,
+`gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`, `value_loss_weight=0.4375`,
+`max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `batch_size=1024`, plus standard `collection_temperature=1.0`.
+It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
+held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
+only fills options not explicitly passed on the command line, so existing commands are unchanged.
+
+**Audit, not just a name.** Every knob is recorded in the run manifest (per-iteration
+`training.config` and the run-level `invocation_config.training_config`). `neural report` prints a
+`recipe_fidelity:` block, `neural foundation-run` summaries carry a `recipe_fidelity` audit, and
+`recipe_fidelity_audit()` compares the *actual* resolved config against the reference table — so a
+run is verifiable as recipe-fidelity rather than merely labeled that way. The audit reports
+`aligned=true` only when the expressible knobs match, and **always** reports `fully_on_recipe=false`
+plus an `unsupported_knobs` list.
+
+**What remains off-recipe / scale-limited (intentionally surfaced, not hidden):**
+
+- **Learning-rate annealing** — the thesis anneals LR by *global* training progress across ~150M
+  steps (`ℓ(x)=10^−4.23/(8x+1)^1.5`) and credits it for a 55%→80% jump. Our self-play loop builds a
+  fresh optimizer per iteration, so there is no global-step schedule to anneal against yet. The
+  preset sets the thesis *base* LR but runs it constant. Reported under `unsupported_knobs`.
+- **Value-function clipping** (`clip_range_vf=0.0184`) — our PPO value loss is an unclipped MSE.
+  Reported under `unsupported_knobs`.
+- **Training scale (~3M battles)** — config fidelity is independent of scale. The preset changes
+  *knobs*, not battle count; reaching recipe scale is WS-B.
+- **Validation opponent / architecture** — still max-damage (not SimpleHeuristics) and an
+  entity-token transformer (not the thesis MLP).
 
 ### What this means
 

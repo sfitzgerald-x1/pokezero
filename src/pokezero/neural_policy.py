@@ -254,6 +254,9 @@ class TransformerTrainingConfig:
     normalize_advantage: bool = True
     ppo_target_mode: str = "returns"
     gae_lambda: float = 0.95
+    # Optional global gradient-norm clip (torch.nn.utils.clip_grad_norm_) applied before each
+    # optimizer step. None disables clipping (legacy behavior). The MIT thesis recipe uses 0.5430.
+    max_grad_norm: float | None = None
     freeze_non_value_parameters: bool = False
 
     def __post_init__(self) -> None:
@@ -273,6 +276,8 @@ class TransformerTrainingConfig:
             raise ValueError("clip_epsilon must be positive.")
         if self.entropy_coef < 0.0:
             raise ValueError("entropy_coef must be non-negative.")
+        if self.max_grad_norm is not None and self.max_grad_norm <= 0.0:
+            raise ValueError("max_grad_norm must be positive when set.")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive.")
         if self.epochs <= 0:
@@ -919,6 +924,11 @@ def train_transformer_policy(
             loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            if resolved_training_config.max_grad_norm is not None:
+                torch_module.nn.utils.clip_grad_norm_(
+                    trainable_parameters,
+                    resolved_training_config.max_grad_norm,
+                )
             optimizer.step()
             totals.add(batch.batch_size, pieces)
             if resolved_training_config.max_batches is not None and batch_index >= resolved_training_config.max_batches:
