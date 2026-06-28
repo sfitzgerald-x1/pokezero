@@ -1483,7 +1483,14 @@ def _validate_tensor_shapes(
     history_mask: Any,
     config: TransformerPolicyConfig,
 ) -> None:
-    if tuple(categorical_ids.shape[1:]) != (config.window_size, config.token_count, config.categorical_feature_count):
+    categorical_shape = tuple(categorical_ids.shape[1:])
+    if (
+        len(categorical_shape) != 3
+        or categorical_shape[0] != config.window_size
+        or categorical_shape[1] != config.token_count
+        or categorical_shape[2] <= 0
+        or categorical_shape[2] > config.categorical_feature_count
+    ):
         raise ValueError("categorical_ids shape does not match TransformerPolicyConfig.")
     if tuple(numeric_features.shape[1:]) != (config.window_size, config.token_count, config.numeric_feature_count):
         raise ValueError("numeric_features shape does not match TransformerPolicyConfig.")

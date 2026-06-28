@@ -327,6 +327,12 @@ class TrainingCacheBuilder:
                 "array_dtypes": {name: str(value.dtype) for name, value in arrays.items()},
                 "format": "directory-of-npy-arrays",
                 "padding_row": 0,
+                "categorical_storage": {
+                    "mode": "compact-nonzero",
+                    "original_feature_count": int(len(self._categorical_rows[0][0])),
+                    "stored_feature_count": int(arrays["categorical_ids"].shape[2]),
+                    "semantic": "summed category embeddings are identical to dense zero-padded rows",
+                },
             }
             (temp_path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             if output_path.exists():
@@ -353,7 +359,10 @@ class TrainingCacheBuilder:
             raise ValueError("categorical ids exceed uint16 training-cache range.")
         if _array_min(numpy, token_type_raw) < 0 or _array_max(numpy, token_type_raw) > int(numpy.iinfo(numpy.uint8).max):
             raise ValueError("token type ids exceed uint8 training-cache range.")
-        categorical = categorical_raw.astype(numpy.uint16, copy=False)
+        categorical = _compact_categorical_rows(
+            numpy,
+            categorical_raw.astype(numpy.uint16, copy=False),
+        )
         token_type = token_type_raw.astype(numpy.uint8, copy=False)
         return {
             "categorical_ids": _prepend_zero_row(numpy, categorical),
@@ -523,7 +532,7 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
     if len(batches) == 1:
         return batches[0]
     return TrainingBatch(
-        categorical_ids=_concat_batch_field(tuple(batch.categorical_ids for batch in batches)),
+        categorical_ids=_concat_categorical_batch_field(tuple(batch.categorical_ids for batch in batches)),
         numeric_features=_concat_batch_field(tuple(batch.numeric_features for batch in batches)),
         token_type_ids=_concat_batch_field(tuple(batch.token_type_ids for batch in batches)),
         attention_mask=_concat_batch_field(tuple(batch.attention_mask for batch in batches)),
@@ -548,6 +557,28 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
     )
+
+
+def _concat_categorical_batch_field(values: Sequence[Any]) -> Any:
+    if not values:
+        return ()
+    if len(values) == 1:
+        return values[0]
+    first = values[0]
+    if not hasattr(first, "shape"):
+        return _concat_batch_field(values)
+    numpy = _require_numpy()
+    max_width = max(int(value.shape[-1]) for value in values)
+    padded_values = []
+    for value in values:
+        width = int(value.shape[-1])
+        if width == max_width:
+            padded_values.append(value)
+            continue
+        padding = [(0, 0) for _ in range(len(value.shape))]
+        padding[-1] = (0, max_width - width)
+        padded_values.append(numpy.pad(value, padding, mode="constant"))
+    return numpy.concatenate(padded_values, axis=0)
 
 
 def _concat_batch_field(values: Sequence[Any]) -> Any:
@@ -598,6 +629,43 @@ def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Traini
 
 def _slice_batch_field(value: Any, start: int, stop: int) -> Any:
     return value[start:stop]
+
+
+def _compact_categorical_rows(numpy: Any, categorical: Any) -> Any:
+    """Drop per-token zero padding from cache categorical rows.
+
+    The neural model sums category embeddings across the final categorical-feature dimension, so
+    zero padding and feature order are not semantically meaningful. Keeping only nonzero category
+    ids preserves the exact summed embedding while reducing both cache size and CPU embedding work
+    during cache-backed training.
+    """
+
+    if len(categorical.shape) != 3:
+        raise ValueError("categorical training-cache rows must be rank 3.")
+    original_width = int(categorical.shape[2])
+    if original_width <= 1:
+        return categorical
+    nonzero_mask = categorical != 0
+    max_nonzero = int(nonzero_mask.sum(axis=2).max())
+    compact_width = max(1, max_nonzero)
+    if compact_width >= original_width:
+        return categorical
+
+    compacted = numpy.zeros(
+        (*categorical.shape[:2], compact_width),
+        dtype=categorical.dtype,
+    )
+    slot_count_dtype = numpy.uint16 if original_width > int(numpy.iinfo(numpy.uint8).max) else numpy.uint8
+    slot_counts = numpy.zeros(categorical.shape[:2], dtype=slot_count_dtype)
+    for feature_index in range(original_width):
+        values = categorical[:, :, feature_index]
+        row_indices, token_indices = numpy.nonzero(values)
+        if not len(row_indices):
+            continue
+        slot_indices = slot_counts[row_indices, token_indices]
+        compacted[row_indices, token_indices, slot_indices] = values[row_indices, token_indices]
+        slot_counts[row_indices, token_indices] += 1
+    return compacted
 
 
 def is_training_cache_path(path: PathInput) -> bool:

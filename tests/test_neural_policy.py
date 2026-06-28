@@ -194,6 +194,57 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(tuple(output.value.shape), (1,))
         self.assertEqual(tuple(output.opponent_action_logits.shape), (1, 9))
 
+    def test_transformer_forward_accepts_compact_categorical_training_cache_rows(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="compact-categories",
+            category_vocab=tuple(f"token-{index}" for index in range(16)),
+            category_oov_buckets=1,
+            window_size=4,
+            categorical_feature_count=4,
+            numeric_feature_count=2,
+            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            embedding_dim=8,
+            transformer_layers=0,
+            attention_heads=1,
+            feedforward_dim=8,
+            dropout=0.0,
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        dense_categories = torch.zeros((1, config.window_size, config.token_count, 4), dtype=torch.long)
+        compact_categories = torch.zeros((1, config.window_size, config.token_count, 2), dtype=torch.long)
+        dense_categories[..., 1] = 2
+        dense_categories[..., 3] = 3
+        compact_categories[..., 0] = 2
+        compact_categories[..., 1] = 3
+        numeric_features = torch.ones((1, config.window_size, config.token_count, config.numeric_feature_count))
+        token_type_ids = torch.zeros((1, config.window_size, config.token_count), dtype=torch.long)
+        attention_mask = torch.ones((1, config.window_size, config.token_count), dtype=torch.bool)
+        history_mask = torch.ones((1, config.window_size), dtype=torch.bool)
+
+        with torch.no_grad():
+            dense_output = model(
+                categorical_ids=dense_categories,
+                numeric_features=numeric_features,
+                token_type_ids=token_type_ids,
+                attention_mask=attention_mask,
+                history_mask=history_mask,
+            )
+            compact_output = model(
+                categorical_ids=compact_categories,
+                numeric_features=numeric_features,
+                token_type_ids=token_type_ids,
+                attention_mask=attention_mask,
+                history_mask=history_mask,
+            )
+
+        self.assertTrue(torch.allclose(compact_output.policy_logits, dense_output.policy_logits))
+        self.assertTrue(torch.allclose(compact_output.value, dense_output.value))
+        self.assertTrue(torch.allclose(compact_output.opponent_action_logits, dense_output.opponent_action_logits))
+
     def test_evaluate_transformer_observation_value_uses_configured_history_window(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")
