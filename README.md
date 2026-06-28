@@ -47,6 +47,28 @@ python -m pokezero.neural_cli train --data runs/rollouts.jsonl --out runs/policy
   --objective behavior-cloning --showdown-root /path/to/pokemon-showdown
 ```
 
+For larger CPU self-play runs, prefer compact training caches over raw JSONL and process them in
+bounded shards. The training cache stores array-backed examples directly. Cache creation and
+training-cache consumption default to a 50GiB active-root cap; `train` deletes consumed cache shards
+after the checkpoint is safely written unless `--keep-cache-after-read` is passed:
+
+```bash
+mkdir -p runs/cache-chunk-000
+
+python -m pokezero.rollout_cli collect-training-cache --games 1000 \
+  --out runs/cache-chunk-000/cache-000 --showdown-root /path/to/pokemon-showdown \
+  --p1-policy random-legal --p2-policy random-legal --window-size 4
+
+# Repeat cache-001, cache-002, ... until the current chunk is ready, then train/delete it
+# before collecting the next chunk. Keep each shard small enough that collection memory stays
+# bounded; the default 50GiB cap is the on-disk guardrail for the active cache root.
+# The active-root cap counts all files under that root, so keep checkpoints/raw JSONL outside it.
+
+python -m pokezero.neural_cli train --data runs/cache-chunk-000/cache-* \
+  --out runs/policy.pt --objective ppo --showdown-root /path/to/pokemon-showdown \
+  --max-cache-gb 50
+```
+
 Run neural self-play iterations (collect → train → benchmark each round):
 
 ```bash

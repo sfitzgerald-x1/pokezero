@@ -153,8 +153,8 @@ class TransformerPolicyConfig:
             raise ValueError("token_count must include action-candidate tokens.")
         if self.embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive.")
-        if self.transformer_layers <= 0:
-            raise ValueError("transformer_layers must be positive.")
+        if self.transformer_layers < 0:
+            raise ValueError("transformer_layers must be non-negative.")
         if self.attention_heads <= 0:
             raise ValueError("attention_heads must be positive.")
         if self.embedding_dim % self.attention_heads != 0:
@@ -464,22 +464,29 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             self.token_type_embedding = nn.Embedding(config.token_type_vocab_size, config.embedding_dim)
             self.history_position_embedding = nn.Embedding(config.window_size, config.embedding_dim)
             self.numeric_projection = nn.Linear(config.numeric_feature_count, config.embedding_dim)
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=config.embedding_dim,
-                nhead=config.attention_heads,
-                dim_feedforward=config.feedforward_dim,
-                dropout=config.dropout,
-                batch_first=True,
-                activation="gelu",
-                norm_first=True,
-            )
-            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
+            if config.transformer_layers > 0:
+                encoder_layer = nn.TransformerEncoderLayer(
+                    d_model=config.embedding_dim,
+                    nhead=config.attention_heads,
+                    dim_feedforward=config.feedforward_dim,
+                    dropout=config.dropout,
+                    batch_first=True,
+                    activation="gelu",
+                    norm_first=True,
+                )
+                self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.transformer_layers)
+                policy_input_dim = config.embedding_dim
+            else:
+                self.encoder = None
+                # Zero-layer CPU mode has no attention path to mix board context into action tokens.
+                # Score each candidate from its own token features plus the pooled position.
+                policy_input_dim = config.embedding_dim * 2
             self.temporal_gru = (
                 nn.GRU(config.embedding_dim, config.embedding_dim, batch_first=True)
                 if config.temporal_aggregator == "gru"
                 else None
             )
-            self.policy_head = nn.Linear(config.embedding_dim, 1)
+            self.policy_head = nn.Linear(policy_input_dim, 1)
             self.value_head = nn.Linear(config.embedding_dim, 1)
             self.opponent_action_head = nn.Linear(config.embedding_dim, ACTION_COUNT)
             # The observation already stores compact embedding rows (the encoder converts token
@@ -508,7 +515,10 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             x = category_embeddings + token_embeddings + numeric_embeddings + history_embeddings
             x = x.view(batch_size, window_size * token_count, self.config.embedding_dim)
             valid_tokens = (attention_mask.bool() & history_mask.bool().unsqueeze(-1)).view(batch_size, window_size * token_count)
-            encoded = self.encoder(x, src_key_padding_mask=~valid_tokens)
+            if self.encoder is None:
+                encoded = x
+            else:
+                encoded = self.encoder(x, src_key_padding_mask=~valid_tokens)
             pooled = self._pool_encoded_history(
                 encoded=encoded,
                 attention_mask=attention_mask.bool(),
@@ -516,6 +526,9 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             )
             latest_action_start = ((window_size - 1) * token_count) + ACTION_CANDIDATE_TOKEN_OFFSET
             action_tokens = encoded[:, latest_action_start : latest_action_start + ACTION_COUNT, :]
+            if self.encoder is None:
+                pooled_actions = pooled.unsqueeze(1).expand(batch_size, ACTION_COUNT, self.config.embedding_dim)
+                action_tokens = torch.cat((action_tokens, pooled_actions), dim=-1)
             raw_value = self.value_head(pooled).squeeze(-1)
             value = torch.tanh(raw_value) if self.config.value_activation == "tanh" else raw_value
             return TransformerPolicyOutput(
@@ -565,23 +578,24 @@ else:
 
 def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = None) -> dict[str, Any]:
     torch_module = require_torch()
+    tensor = torch_module.as_tensor
     tensors = {
-        "categorical_ids": torch_module.tensor(batch.categorical_ids, dtype=torch_module.long, device=device),
-        "numeric_features": torch_module.tensor(batch.numeric_features, dtype=torch_module.float32, device=device),
-        "token_type_ids": torch_module.tensor(batch.token_type_ids, dtype=torch_module.long, device=device),
-        "attention_mask": torch_module.tensor(batch.attention_mask, dtype=torch_module.bool, device=device),
-        "history_mask": torch_module.tensor(batch.history_mask, dtype=torch_module.bool, device=device),
-        "legal_action_mask": torch_module.tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
-        "action_indices": torch_module.tensor(batch.action_indices, dtype=torch_module.long, device=device),
-        "returns": torch_module.tensor(batch.returns, dtype=torch_module.float32, device=device),
-        "ppo_advantages": torch_module.tensor(batch.ppo_advantages, dtype=torch_module.float32, device=device),
-        "ppo_advantage_mask": torch_module.tensor(batch.ppo_advantage_mask, dtype=torch_module.bool, device=device),
-        "ppo_value_targets": torch_module.tensor(batch.ppo_value_targets, dtype=torch_module.float32, device=device),
-        "ppo_value_target_mask": torch_module.tensor(batch.ppo_value_target_mask, dtype=torch_module.bool, device=device),
-        "opponent_action_indices": torch_module.tensor(batch.opponent_action_indices, dtype=torch_module.long, device=device),
-        "opponent_action_mask": torch_module.tensor(batch.opponent_action_mask, dtype=torch_module.bool, device=device),
-        "action_probabilities": torch_module.tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
-        "action_probability_mask": torch_module.tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
+        "categorical_ids": tensor(batch.categorical_ids, dtype=torch_module.long, device=device),
+        "numeric_features": tensor(batch.numeric_features, dtype=torch_module.float32, device=device),
+        "token_type_ids": tensor(batch.token_type_ids, dtype=torch_module.long, device=device),
+        "attention_mask": tensor(batch.attention_mask, dtype=torch_module.bool, device=device),
+        "history_mask": tensor(batch.history_mask, dtype=torch_module.bool, device=device),
+        "legal_action_mask": tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
+        "action_indices": tensor(batch.action_indices, dtype=torch_module.long, device=device),
+        "returns": tensor(batch.returns, dtype=torch_module.float32, device=device),
+        "ppo_advantages": tensor(batch.ppo_advantages, dtype=torch_module.float32, device=device),
+        "ppo_advantage_mask": tensor(batch.ppo_advantage_mask, dtype=torch_module.bool, device=device),
+        "ppo_value_targets": tensor(batch.ppo_value_targets, dtype=torch_module.float32, device=device),
+        "ppo_value_target_mask": tensor(batch.ppo_value_target_mask, dtype=torch_module.bool, device=device),
+        "opponent_action_indices": tensor(batch.opponent_action_indices, dtype=torch_module.long, device=device),
+        "opponent_action_mask": tensor(batch.opponent_action_mask, dtype=torch_module.bool, device=device),
+        "action_probabilities": tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
+        "action_probability_mask": tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
     }
     return tensors
 
@@ -868,6 +882,7 @@ def train_transformer_policy(
     training_config: TransformerTrainingConfig | None = None,
     initial_model: Any | None = None,
     epoch_callback: Callable[[Any, TransformerTrainingResult], None] | None = None,
+    consumed_cache_callback: Callable[[Path], None] | None = None,
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
@@ -909,8 +924,18 @@ def train_transformer_policy(
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
         totals = _TorchMetricTotals()
+        cache_callback_for_epoch = (
+            consumed_cache_callback
+            if consumed_cache_callback is not None and epoch == resolved_training_config.epochs
+            else None
+        )
         for batch_index, batch in enumerate(
-            iter_training_batches(paths, batch_size=resolved_training_config.batch_size, config=dataset_config),
+            iter_training_batches(
+                paths,
+                batch_size=resolved_training_config.batch_size,
+                config=dataset_config,
+                consumed_cache_callback=cache_callback_for_epoch,
+            ),
             start=1,
         ):
             tensors = training_batch_to_torch(batch, device=device)

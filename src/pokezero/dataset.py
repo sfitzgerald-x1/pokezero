@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from os import PathLike
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+import shutil
+import tempfile
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .collection import RolloutRecord, iter_rollout_records
 from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
+TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v1"
+MAX_ACTIVE_TRAINING_CACHE_GB = 50.0
+MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024 * 1024)
 
 PathInput = str | PathLike[str] | Path
 
@@ -59,6 +65,35 @@ class TrajectoryDatasetConfig:
             raise ValueError("ppo_target_mode must be 'returns' or 'gae'.")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda must be between 0 and 1.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "window_size": self.window_size,
+            "discount": self.discount,
+            "capped_terminal_value": self.capped_terminal_value,
+            "hp_delta_return_weight": self.hp_delta_return_weight,
+            "faint_delta_return_weight": self.faint_delta_return_weight,
+            "turn_penalty_after": self.turn_penalty_after,
+            "turn_penalty": self.turn_penalty,
+            "ppo_target_mode": self.ppo_target_mode,
+            "gae_lambda": self.gae_lambda,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "TrajectoryDatasetConfig":
+        return cls(
+            window_size=int(payload.get("window_size", 1)),
+            discount=float(payload.get("discount", 1.0)),
+            capped_terminal_value=float(payload.get("capped_terminal_value", 0.0)),
+            hp_delta_return_weight=float(payload.get("hp_delta_return_weight", 0.0)),
+            faint_delta_return_weight=float(payload.get("faint_delta_return_weight", 0.0)),
+            turn_penalty_after=(
+                None if payload.get("turn_penalty_after") is None else int(payload["turn_penalty_after"])
+            ),
+            turn_penalty=float(payload.get("turn_penalty", 0.0)),
+            ppo_target_mode=str(payload.get("ppo_target_mode", "returns")),
+            gae_lambda=float(payload.get("gae_lambda", 0.95)),
+        )
 
 
 @dataclass(frozen=True)
@@ -158,6 +193,192 @@ class TrainingBatch:
         return len(self.history_mask[0])
 
 
+@dataclass(frozen=True)
+class TrainingCacheSummary:
+    path: Path
+    record_count: int
+    example_count: int
+    byte_size: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "record_count": self.record_count,
+            "example_count": self.example_count,
+            "byte_size": self.byte_size,
+        }
+
+
+class TrainingCacheBuilder:
+    """Build a compact, array-backed training cache from rollout records.
+
+    The raw rollout JSONL stores every public observation as nested JSON. The cache stores each
+    observation once, uses small numeric dtypes, and represents history windows as integer row
+    references. This keeps shard storage bounded while letting training batch with memmapped arrays.
+    """
+
+    def __init__(self, *, config: TrajectoryDatasetConfig | None = None) -> None:
+        self.config = config or TrajectoryDatasetConfig()
+        self._record_count = 0
+        self._categorical_rows: list[Any] = []
+        self._numeric_rows: list[Any] = []
+        self._token_type_rows: list[Any] = []
+        self._attention_rows: list[Any] = []
+        self._window_indices: list[tuple[int, ...]] = []
+        self._legal_action_masks: list[Any] = []
+        self._action_indices: list[int] = []
+        self._rewards: list[float] = []
+        self._returns: list[float] = []
+        self._ppo_advantages: list[float] = []
+        self._ppo_advantage_masks: list[bool] = []
+        self._ppo_value_targets: list[float] = []
+        self._ppo_value_target_masks: list[bool] = []
+        self._opponent_action_indices: list[int] = []
+        self._opponent_action_masks: list[bool] = []
+        self._action_probabilities: list[float] = []
+        self._action_probability_masks: list[bool] = []
+        self._seeds: list[int] = []
+        self._turn_indices: list[int] = []
+        self._terminal_capped: list[bool] = []
+
+    @property
+    def record_count(self) -> int:
+        return self._record_count
+
+    @property
+    def example_count(self) -> int:
+        return len(self._action_indices)
+
+    def add_record(self, record: RolloutRecord) -> None:
+        history_by_player: dict[str, list[int]] = {}
+        for example in examples_from_record(record, config=self.config):
+            row_index = len(self._categorical_rows) + 1
+            history = history_by_player.setdefault(example.player_id, [])
+            history.append(row_index)
+            window = tuple(history[-self.config.window_size :])
+            padding_count = self.config.window_size - len(window)
+            self._window_indices.append(tuple(0 for _ in range(padding_count)) + window)
+
+            self._categorical_rows.append(example.categorical_ids[-1])
+            self._numeric_rows.append(example.numeric_features[-1])
+            self._token_type_rows.append(example.token_type_ids[-1])
+            self._attention_rows.append(example.attention_mask[-1])
+            self._legal_action_masks.append(example.legal_action_mask)
+            self._action_indices.append(example.action_index)
+            self._rewards.append(example.reward)
+            self._returns.append(example.return_value)
+            self._ppo_advantages.append(_optional_float(example.ppo_advantage))
+            self._ppo_advantage_masks.append(example.ppo_advantage is not None)
+            self._ppo_value_targets.append(_optional_float(example.ppo_value_target))
+            self._ppo_value_target_masks.append(example.ppo_value_target is not None)
+            self._opponent_action_indices.append(_optional_action_index(example.opponent_action_index))
+            self._opponent_action_masks.append(example.opponent_action_index is not None)
+            self._action_probabilities.append(_optional_float(example.action_probability))
+            self._action_probability_masks.append(example.action_probability is not None)
+            self._seeds.append(example.seed)
+            self._turn_indices.append(example.turn_index)
+            self._terminal_capped.append(example.terminal_capped)
+        self._record_count += 1
+
+    def write(
+        self,
+        path: PathInput,
+        *,
+        overwrite: bool = False,
+        max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+        cache_root: PathInput | None = None,
+    ) -> TrainingCacheSummary:
+        if self.example_count == 0:
+            raise ValueError("training cache cannot be written with zero examples.")
+        numpy = _require_numpy()
+        output_path = Path(path)
+        if output_path.exists() and not overwrite:
+            raise FileExistsError(f"training cache already exists: {output_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        arrays = self._arrays(numpy)
+        if max_cache_root_bytes is not None:
+            if max_cache_root_bytes <= 0:
+                raise ValueError("max_cache_root_bytes must be positive.")
+            root = Path(cache_root) if cache_root is not None else output_path.parent
+            current_bytes = _directory_byte_size(root) if root.exists() else 0
+            estimated_bytes = _estimated_training_cache_byte_size(arrays)
+            if current_bytes + estimated_bytes > max_cache_root_bytes:
+                raise ValueError(
+                    f"training cache write would exceed storage cap: existing={current_bytes} bytes "
+                    f"estimated_new={estimated_bytes} bytes limit={max_cache_root_bytes} bytes."
+                )
+        temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
+        try:
+            for name, value in arrays.items():
+                numpy.save(temp_path / f"{name}.npy", value, allow_pickle=False)
+            metadata = {
+                "schema_version": TRAINING_CACHE_SCHEMA_VERSION,
+                "dataset_config": self.config.to_dict(),
+                "record_count": self.record_count,
+                "example_count": self.example_count,
+                "observation_shapes": {
+                    "categorical_ids": list(arrays["categorical_ids"].shape[1:]),
+                    "numeric_features": list(arrays["numeric_features"].shape[1:]),
+                    "token_type_ids": list(arrays["token_type_ids"].shape[1:]),
+                    "attention_mask": list(arrays["attention_mask"].shape[1:]),
+                    "legal_action_mask": [ACTION_COUNT],
+                    "window_size": self.config.window_size,
+                },
+                "array_dtypes": {name: str(value.dtype) for name, value in arrays.items()},
+                "format": "directory-of-npy-arrays",
+                "padding_row": 0,
+            }
+            (temp_path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            if output_path.exists():
+                if output_path.is_dir():
+                    shutil.rmtree(output_path)
+                else:
+                    output_path.unlink()
+            temp_path.rename(output_path)
+        except Exception:
+            shutil.rmtree(temp_path, ignore_errors=True)
+            raise
+        return TrainingCacheSummary(
+            path=output_path,
+            record_count=self.record_count,
+            example_count=self.example_count,
+            byte_size=_directory_byte_size(output_path),
+        )
+
+    def _arrays(self, numpy: Any) -> dict[str, Any]:
+        categorical_raw = numpy.asarray(self._categorical_rows)
+        numeric = numpy.asarray(self._numeric_rows, dtype=numpy.float16)
+        token_type_raw = numpy.asarray(self._token_type_rows)
+        if _array_min(numpy, categorical_raw) < 0 or _array_max(numpy, categorical_raw) > int(numpy.iinfo(numpy.uint16).max):
+            raise ValueError("categorical ids exceed uint16 training-cache range.")
+        if _array_min(numpy, token_type_raw) < 0 or _array_max(numpy, token_type_raw) > int(numpy.iinfo(numpy.uint8).max):
+            raise ValueError("token type ids exceed uint8 training-cache range.")
+        categorical = categorical_raw.astype(numpy.uint16, copy=False)
+        token_type = token_type_raw.astype(numpy.uint8, copy=False)
+        return {
+            "categorical_ids": _prepend_zero_row(numpy, categorical),
+            "numeric_features": _prepend_zero_row(numpy, numeric),
+            "token_type_ids": _prepend_zero_row(numpy, token_type),
+            "attention_mask": _prepend_zero_row(numpy, numpy.asarray(self._attention_rows, dtype=numpy.bool_)),
+            "window_indices": numpy.asarray(self._window_indices, dtype=numpy.uint32),
+            "legal_action_mask": numpy.asarray(self._legal_action_masks, dtype=numpy.bool_),
+            "action_indices": numpy.asarray(self._action_indices, dtype=numpy.int16),
+            "rewards": numpy.asarray(self._rewards, dtype=numpy.float32),
+            "returns": numpy.asarray(self._returns, dtype=numpy.float32),
+            "ppo_advantages": numpy.asarray(self._ppo_advantages, dtype=numpy.float32),
+            "ppo_advantage_mask": numpy.asarray(self._ppo_advantage_masks, dtype=numpy.bool_),
+            "ppo_value_targets": numpy.asarray(self._ppo_value_targets, dtype=numpy.float32),
+            "ppo_value_target_mask": numpy.asarray(self._ppo_value_target_masks, dtype=numpy.bool_),
+            "opponent_action_indices": numpy.asarray(self._opponent_action_indices, dtype=numpy.int16),
+            "opponent_action_mask": numpy.asarray(self._opponent_action_masks, dtype=numpy.bool_),
+            "action_probabilities": numpy.asarray(self._action_probabilities, dtype=numpy.float32),
+            "action_probability_mask": numpy.asarray(self._action_probability_masks, dtype=numpy.bool_),
+            "seeds": numpy.asarray(self._seeds, dtype=numpy.int64),
+            "turn_indices": numpy.asarray(self._turn_indices, dtype=numpy.int32),
+            "terminal_capped": numpy.asarray(self._terminal_capped, dtype=numpy.bool_),
+        }
+
+
 def iter_training_examples(
     paths: PathInput | Iterable[PathInput],
     *,
@@ -221,11 +442,126 @@ def iter_training_batches(
     *,
     batch_size: int,
     config: TrajectoryDatasetConfig | None = None,
+    consumed_cache_callback: Callable[[Path], None] | None = None,
 ) -> Iterator[TrainingBatch]:
+    normalized_paths = _normalize_paths(paths)
+    cache_flags = tuple(is_training_cache_path(path) for path in normalized_paths)
+    if any(cache_flags):
+        if not all(cache_flags):
+            raise ValueError("training cache directories cannot be mixed with rollout JSONL paths.")
+        for path in normalized_paths:
+            yield from iter_training_cache_batches(path, batch_size=batch_size, config=config)
+            if consumed_cache_callback is not None:
+                consumed_cache_callback(path)
+        return
+    if consumed_cache_callback is not None:
+        raise ValueError("consumed_cache_callback requires training cache directories.")
     yield from batch_training_examples(
-        iter_training_examples(paths, config=config),
+        iter_training_examples(normalized_paths, config=config),
         batch_size=batch_size,
     )
+
+
+def write_training_cache_from_rollouts(
+    paths: PathInput | Iterable[PathInput],
+    output_path: PathInput,
+    *,
+    config: TrajectoryDatasetConfig | None = None,
+    overwrite: bool = False,
+    max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    cache_root: PathInput | None = None,
+) -> TrainingCacheSummary:
+    builder = TrainingCacheBuilder(config=config)
+    for path in _normalize_paths(paths):
+        for record in iter_rollout_records(path):
+            builder.add_record(record)
+    return builder.write(
+        output_path,
+        overwrite=overwrite,
+        max_cache_root_bytes=max_cache_root_bytes,
+        cache_root=cache_root,
+    )
+
+
+def is_training_cache_path(path: PathInput) -> bool:
+    resolved = Path(path)
+    return resolved.is_dir() and (resolved / "metadata.json").is_file()
+
+
+def training_cache_byte_size(path: PathInput) -> int:
+    resolved = Path(path)
+    if not is_training_cache_path(resolved):
+        raise ValueError(f"not a training cache directory: {resolved}")
+    return _directory_byte_size(resolved)
+
+
+def training_cache_paths_byte_size(paths: PathInput | Iterable[PathInput]) -> int:
+    return sum(training_cache_byte_size(path) for path in _normalize_paths(paths))
+
+
+def training_cache_root_byte_size(path: PathInput) -> int:
+    resolved = Path(path)
+    if not resolved.exists():
+        return 0
+    if not resolved.is_dir():
+        raise ValueError(f"training cache root is not a directory: {resolved}")
+    return _directory_byte_size(resolved)
+
+
+def delete_training_cache_path(path: PathInput) -> None:
+    resolved = Path(path)
+    if not is_training_cache_path(resolved):
+        raise ValueError(f"not a training cache directory: {resolved}")
+    shutil.rmtree(resolved)
+
+
+def iter_training_cache_batches(
+    path: PathInput,
+    *,
+    batch_size: int,
+    config: TrajectoryDatasetConfig | None = None,
+) -> Iterator[TrainingBatch]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    numpy = _require_numpy()
+    cache_path = Path(path)
+    metadata = _read_training_cache_metadata(cache_path)
+    cache_config = TrajectoryDatasetConfig.from_dict(_mapping(metadata["dataset_config"]))
+    if config is not None and cache_config.to_dict() != config.to_dict():
+        raise ValueError("training cache dataset config does not match requested training config.")
+    example_count = int(metadata["example_count"])
+    arrays = _load_training_cache_arrays(cache_path, numpy)
+    for start in range(0, example_count, batch_size):
+        stop = min(example_count, start + batch_size)
+        example_slice = slice(start, stop)
+        window_indices = _owned_array(arrays["window_indices"][example_slice])
+        batch_len = stop - start
+        yield TrainingBatch(
+            categorical_ids=_owned_array(arrays["categorical_ids"][window_indices]),
+            numeric_features=_owned_array(arrays["numeric_features"][window_indices]),
+            token_type_ids=_owned_array(arrays["token_type_ids"][window_indices]),
+            attention_mask=_owned_array(arrays["attention_mask"][window_indices]),
+            history_mask=_owned_array(window_indices != 0),
+            legal_action_mask=_owned_array(arrays["legal_action_mask"][example_slice]),
+            action_indices=_owned_array(arrays["action_indices"][example_slice]),
+            rewards=_owned_array(arrays["rewards"][example_slice]),
+            returns=_owned_array(arrays["returns"][example_slice]),
+            ppo_advantages=_owned_array(arrays["ppo_advantages"][example_slice]),
+            ppo_advantage_mask=_owned_array(arrays["ppo_advantage_mask"][example_slice]),
+            ppo_value_targets=_owned_array(arrays["ppo_value_targets"][example_slice]),
+            ppo_value_target_mask=_owned_array(arrays["ppo_value_target_mask"][example_slice]),
+            opponent_action_indices=_owned_array(arrays["opponent_action_indices"][example_slice]),
+            opponent_action_mask=_owned_array(arrays["opponent_action_mask"][example_slice]),
+            action_probabilities=_owned_array(arrays["action_probabilities"][example_slice]),
+            action_probability_mask=_owned_array(arrays["action_probability_mask"][example_slice]),
+            battle_ids=tuple("" for _ in range(batch_len)),
+            seeds=_owned_array(arrays["seeds"][example_slice]),
+            format_ids=tuple("" for _ in range(batch_len)),
+            player_ids=tuple("" for _ in range(batch_len)),
+            turn_indices=_owned_array(arrays["turn_indices"][example_slice]),
+            terminal_capped=_owned_array(arrays["terminal_capped"][example_slice]),
+            step_metadata=tuple({} for _ in range(batch_len)),
+        )
 
 
 def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> TrainingBatch:
@@ -528,6 +864,91 @@ def _normalize_paths(paths: PathInput | Iterable[PathInput]) -> tuple[Path, ...]
     if isinstance(paths, (str, PathLike)):
         return (Path(paths),)
     return tuple(Path(path) for path in paths)
+
+
+def _require_numpy() -> Any:
+    try:
+        import numpy
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("NumPy is required for training caches. Install with `pip install -e .[neural]`.") from exc
+    return numpy
+
+
+def _prepend_zero_row(numpy: Any, array: Any) -> Any:
+    zero = numpy.zeros((1, *array.shape[1:]), dtype=array.dtype)
+    return numpy.concatenate((zero, array), axis=0)
+
+
+def _read_training_cache_metadata(path: Path) -> Mapping[str, Any]:
+    metadata_path = path / "metadata.json"
+    if not metadata_path.is_file():
+        raise ValueError(f"not a training cache directory: {path}")
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"invalid training cache metadata: {metadata_path}")
+    if payload.get("schema_version") != TRAINING_CACHE_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported training cache schema: {payload.get('schema_version')!r}.")
+    return payload
+
+
+def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
+    names = (
+        "categorical_ids",
+        "numeric_features",
+        "token_type_ids",
+        "attention_mask",
+        "window_indices",
+        "legal_action_mask",
+        "action_indices",
+        "rewards",
+        "returns",
+        "ppo_advantages",
+        "ppo_advantage_mask",
+        "ppo_value_targets",
+        "ppo_value_target_mask",
+        "opponent_action_indices",
+        "opponent_action_mask",
+        "action_probabilities",
+        "action_probability_mask",
+        "seeds",
+        "turn_indices",
+        "terminal_capped",
+    )
+    return {name: numpy.load(path / f"{name}.npy", mmap_mode="c") for name in names}
+
+
+def _owned_array(value: Any) -> Any:
+    copy = getattr(value, "copy", None)
+    return copy() if callable(copy) else value
+
+
+def _directory_byte_size(path: Path) -> int:
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _estimated_training_cache_byte_size(arrays: Mapping[str, Any]) -> int:
+    array_bytes = sum(int(getattr(value, "nbytes", 0)) for value in arrays.values())
+    # NPY headers and metadata are small, but overestimate so write-time caps fail before
+    # the active cache root can cross the requested storage ceiling.
+    return array_bytes + max(16 * 1024 * 1024, array_bytes // 100)
+
+
+def _array_min(numpy: Any, value: Any) -> int:
+    if int(getattr(value, "size", 0)) == 0:
+        return 0
+    return int(numpy.min(value))
+
+
+def _array_max(numpy: Any, value: Any) -> int:
+    if int(getattr(value, "size", 0)) == 0:
+        return 0
+    return int(numpy.max(value))
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected mapping payload.")
+    return value
 
 
 def _optional_action_index(value: int | None) -> int:

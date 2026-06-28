@@ -14,6 +14,7 @@ from pokezero.collection import (
     aggregate_benchmark_head_to_heads,
     ReusableEnvPool,
     benchmark_rollouts,
+    collect_training_cache,
     collect_rollouts,
     current_peak_rss_mb,
     default_benchmark_matchups,
@@ -29,6 +30,7 @@ from pokezero.collection import (
     rollout_record_to_dict,
     summarize_records,
 )
+from pokezero.dataset import TrajectoryDatasetConfig, TrainingCacheSummary, is_training_cache_path, iter_training_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.linear_policy import LinearPolicyModel, LinearSoftmaxPolicy, save_linear_model
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
@@ -292,6 +294,52 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(len(instances), 1)  # one env reused, not three fresh spawns
         self.assertEqual(instances[0].reset_seeds, [10, 11, 12])  # reset once per game
         self.assertTrue(instances[0].closed)  # closed when collection finishes
+
+    def test_collect_training_cache_writes_compact_cache_and_metrics(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "cache"
+
+            with patch("pokezero.collection.current_peak_rss_mb", return_value=123.5):
+                metrics, cache = collect_training_cache(
+                    output_path=output_path,
+                    games=2,
+                    env_factory=OneTurnEnv,
+                    policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    dataset_config=TrajectoryDatasetConfig(window_size=2),
+                    seed_start=10,
+                )
+            batches = list(iter_training_batches(output_path, batch_size=2, config=TrajectoryDatasetConfig(window_size=2)))
+
+            self.assertEqual(metrics.games, 2)
+            self.assertEqual(metrics.p1_wins, 2)
+            self.assertEqual(metrics.total_decision_rounds, 2)
+            self.assertEqual(metrics.peak_rss_mb, 123.5)
+            self.assertTrue(is_training_cache_path(cache.path))
+            self.assertEqual(cache.record_count, 2)
+            self.assertEqual(cache.example_count, 4)
+            self.assertEqual([batch.batch_size for batch in batches], [2, 2])
+
+    def test_collect_training_cache_rejects_storage_cap(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "cache"
+
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                collect_training_cache(
+                    output_path=output_path,
+                    games=1,
+                    env_factory=OneTurnEnv,
+                    policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    dataset_config=TrajectoryDatasetConfig(window_size=2),
+                    seed_start=10,
+                    max_cache_root_bytes=1,
+                    cache_root=Path(temp_dir),
+                )
+
+            self.assertFalse(output_path.exists())
 
     def test_reusable_env_pool_reuses_per_thread_and_closes(self) -> None:
         instances: list[OneTurnEnv] = []
@@ -913,6 +961,62 @@ class CollectionTest(unittest.TestCase):
         self.assertIn("games_per_second: 0.500", stdout.getvalue())
         self.assertIn("peak_rss_mb: 55.50", stdout.getvalue())
 
+    def test_rollout_cli_collect_training_cache_wires_arguments_and_prints_cache_summary(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=1,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+            peak_rss_mb=55.5,
+        )
+        fake_cache = TrainingCacheSummary(path=Path("runs/cache"), record_count=1, example_count=4, byte_size=512)
+        with patch("pokezero.rollout_cli.collect_training_cache", return_value=(fake_metrics, fake_cache)) as collect:
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = rollout_cli_main(
+                    [
+                        "collect-training-cache",
+                        "--games",
+                        "1",
+                        "--out",
+                        "runs/cache",
+                        "--seed-start",
+                        "50",
+                        "--max-decision-rounds",
+                        "7",
+                        "--p1-policy",
+                        "simple-legal",
+                        "--p2-policy",
+                        "random-legal",
+                        "--window-size",
+                        "3",
+                        "--discount",
+                        "0.9",
+                        "--ppo-target-mode",
+                        "gae",
+                        "--gae-lambda",
+                        "0.7",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = collect.call_args.kwargs
+        self.assertEqual(kwargs["games"], 1)
+        self.assertEqual(kwargs["seed_start"], 50)
+        self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 7)
+        self.assertEqual(kwargs["policies"]["p1"].policy_id, "simple-legal")
+        self.assertEqual(kwargs["dataset_config"].window_size, 3)
+        self.assertEqual(kwargs["dataset_config"].discount, 0.9)
+        self.assertEqual(kwargs["dataset_config"].ppo_target_mode, "gae")
+        self.assertEqual(kwargs["dataset_config"].gae_lambda, 0.7)
+        self.assertEqual(kwargs["max_cache_root_bytes"], 50 * 1024 * 1024 * 1024)
+        self.assertEqual(kwargs["cache_root"], Path("runs"))
+        self.assertIn("training_cache: runs/cache", stdout.getvalue())
+        self.assertIn("training_cache_examples: 4", stdout.getvalue())
+
     def test_rollout_cli_collect_loads_linear_policy_spec(self) -> None:
         fake_metrics = CollectionMetrics(
             games=1,
@@ -1145,6 +1249,12 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(kwargs["rollout_config"].max_decision_rounds, 9)
         self.assertEqual(kwargs["policies"]["p1"].policy_id, "random-legal")
         self.assertIn("p95_replay_ms: 3.00", stdout.getvalue())
+
+    def _require_numpy(self) -> None:
+        try:
+            import numpy  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("NumPy is not installed in this environment.")
 
     @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
     def test_collect_rollouts_smoke_with_local_showdown_env(self) -> None:

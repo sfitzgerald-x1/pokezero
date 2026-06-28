@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import math
@@ -13,7 +13,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .cli_audit import (
     add_post_iteration_audit_arguments,
@@ -21,6 +21,15 @@ from .cli_audit import (
     validate_post_iteration_audit_evaluation_games,
 )
 from .collection import BenchmarkMatchup, benchmark_rollouts, policy_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
+from .dataset import (
+    MAX_ACTIVE_TRAINING_CACHE_GB,
+    TrajectoryDatasetConfig,
+    delete_training_cache_path,
+    is_training_cache_path,
+    training_cache_paths_byte_size,
+    training_cache_root_byte_size,
+    write_training_cache_from_rollouts,
+)
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
     DEFAULT_CATEGORY_OOV_BUCKETS,
@@ -286,9 +295,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
     describe.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     describe.set_defaults(func=_describe)
 
-    train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL.")
-    train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
+    train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL or training caches.")
+    train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files or training cache directories.")
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
+    train.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            f"Reject training-cache inputs whose active cache root exceeds this many GiB "
+            f"(default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    cache_delete_group = train.add_mutually_exclusive_group()
+    cache_delete_group.add_argument(
+        "--delete-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_true",
+        default=True,
+        help=(
+            "Delete each consumed training cache directory after the checkpoint is safely written. "
+            "This is the default for training-cache inputs."
+        ),
+    )
+    cache_delete_group.add_argument(
+        "--keep-cache-after-read",
+        dest="delete_cache_after_read",
+        action="store_false",
+        help="Keep consumed training cache directories after training for debugging or audit runs.",
+    )
     train.add_argument(
         "--initial-checkpoint",
         type=Path,
@@ -391,7 +426,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     train.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     train.add_argument("--embedding-dim", type=int, default=128, help="Transformer embedding width.")
-    train.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count.")
+    train.add_argument("--layers", type=int, default=2, help="Transformer encoder layer count. Use 0 for the CPU-fast pooled encoder.")
     train.add_argument("--attention-heads", type=int, default=4, help="Transformer attention head count.")
     train.add_argument("--feedforward-dim", type=int, default=256, help="Transformer feedforward width.")
     train.add_argument("--dropout", type=float, default=0.1, help="Transformer dropout.")
@@ -453,6 +488,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional JSON output path for per-epoch --value-selection-data reports.",
     )
     train.set_defaults(func=_train)
+
+    cache_data = subparsers.add_parser("cache-data", help="Convert rollout JSONL into a compact neural training cache.")
+    cache_data.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
+    cache_data.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
+    cache_data.add_argument("--overwrite", action="store_true", help="Replace an existing training cache directory.")
+    cache_data.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            "Reject the write if existing caches under the output parent plus the new cache "
+            f"would exceed this many GiB (default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    _add_training_dataset_arguments(cache_data)
+    cache_data.set_defaults(func=_cache_data)
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
     benchmark.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
@@ -1345,6 +1396,22 @@ def _describe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cache_data(args: argparse.Namespace) -> int:
+    summary = write_training_cache_from_rollouts(
+        args.data,
+        args.out,
+        config=_training_dataset_config_from_args(args),
+        overwrite=args.overwrite,
+        max_cache_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        cache_root=args.out.parent,
+    )
+    print(f"training_cache: {summary.path}")
+    print(f"training_cache_records: {summary.record_count}")
+    print(f"training_cache_examples: {summary.example_count}")
+    print(f"training_cache_bytes: {summary.byte_size}")
+    return 0
+
+
 def _train(args: argparse.Namespace) -> int:
     # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
     require_torch()
@@ -1352,6 +1419,7 @@ def _train(args: argparse.Namespace) -> int:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
+    cache_lifecycle = _training_cache_lifecycle(args)
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -1447,13 +1515,18 @@ def _train(args: argparse.Namespace) -> int:
             selection_metric=args.value_selection_metric,
             batch_size=args.value_calibration_batch_size,
             bins=args.value_calibration_bins,
+            consumed_cache_callback=cache_lifecycle.consumed_cache_callback,
         )
     else:
+        train_kwargs: dict[str, object] = {}
+        if cache_lifecycle.consumed_cache_callback is not None:
+            train_kwargs["consumed_cache_callback"] = cache_lifecycle.consumed_cache_callback
         model, result = train_transformer_policy(
             args.data,
             model_config=model_config,
             training_config=training_config,
             initial_model=initial_model,
+            **train_kwargs,
         )
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
@@ -1508,7 +1581,151 @@ def _train(args: argparse.Namespace) -> int:
         else:
             print("")
             print_value_calibration_report(value_calibration)
+    cache_lifecycle.finalize_after_checkpoint()
     return 0
+
+
+@dataclass
+class _TrainingCacheLifecycle:
+    delete_after_checkpoint: bool = False
+    consumed_paths: list[Path] = field(default_factory=list)
+
+    @property
+    def consumed_cache_callback(self) -> Callable[[Path], None] | None:
+        return self._record_consumed_cache if self.delete_after_checkpoint else None
+
+    def _record_consumed_cache(self, path: Path) -> None:
+        resolved = Path(path)
+        if resolved not in self.consumed_paths:
+            self.consumed_paths.append(resolved)
+
+    def finalize_after_checkpoint(self) -> None:
+        if not self.delete_after_checkpoint:
+            return
+        for path in self.consumed_paths:
+            byte_size = training_cache_paths_byte_size([path])
+            delete_training_cache_path(path)
+            print(f"deleted_training_cache: {path} bytes={byte_size}")
+
+
+def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecycle:
+    cache_flags = tuple(is_training_cache_path(path) for path in args.data)
+    if not any(cache_flags):
+        return _TrainingCacheLifecycle()
+    if not all(cache_flags):
+        raise ValueError("training cache directories cannot be mixed with rollout JSONL paths.")
+
+    max_bytes = _cache_gb_to_bytes(getattr(args, "max_cache_gb", None))
+    cache_root = _common_cache_root(tuple(Path(path) for path in args.data))
+    cache_bytes = training_cache_root_byte_size(cache_root)
+    print(f"training_cache_root: {cache_root}")
+    print(f"training_cache_footprint_bytes: {cache_bytes}")
+    print(f"training_cache_footprint_limit_bytes: {max_bytes}")
+    if cache_bytes > max_bytes:
+        raise ValueError(
+            f"training cache root footprint {cache_bytes} bytes exceeds --max-cache-gb "
+            f"limit of {max_bytes} bytes."
+        )
+
+    delete_after_read = bool(getattr(args, "delete_cache_after_read", True))
+    if not delete_after_read:
+        return _TrainingCacheLifecycle()
+    deleted_paths = tuple(Path(path) for path in args.data)
+    for name in ("value_calibration_data", "value_selection_data"):
+        for path in tuple(getattr(args, name, None) or ()):
+            if any(_paths_overlap(path, deleted_path) for deleted_path in deleted_paths):
+                flag = "--value-calibration-data" if name == "value_calibration_data" else "--value-selection-data"
+                raise ValueError(f"--delete-cache-after-read cannot be used when {flag} overlaps training cache data.")
+    return _TrainingCacheLifecycle(delete_after_checkpoint=True)
+
+
+def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Path], None] | None:
+    return _training_cache_lifecycle(args).consumed_cache_callback
+
+
+def _cache_gb_to_bytes(value: float | None) -> int:
+    resolved = MAX_ACTIVE_TRAINING_CACHE_GB if value is None else value
+    if resolved <= 0:
+        raise ValueError("--max-cache-gb must be positive.")
+    if resolved > MAX_ACTIVE_TRAINING_CACHE_GB:
+        raise ValueError(f"--max-cache-gb cannot exceed {MAX_ACTIVE_TRAINING_CACHE_GB:g}.")
+    return int(resolved * 1024 * 1024 * 1024)
+
+
+def _common_cache_root(paths: tuple[Path, ...]) -> Path:
+    if not paths:
+        raise ValueError("at least one training cache path is required.")
+    resolved_paths = tuple(path.expanduser().resolve(strict=False) for path in paths)
+    if len(resolved_paths) == 1:
+        return resolved_paths[0].parent
+    common = Path(str(resolved_paths[0]))
+    for path in resolved_paths[1:]:
+        while common != common.parent and common not in (path, *path.parents):
+            common = common.parent
+    if any(common == path for path in resolved_paths):
+        return common.parent
+    return common
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    resolved_left = Path(left).expanduser().resolve(strict=False)
+    resolved_right = Path(right).expanduser().resolve(strict=False)
+    return (
+        resolved_left == resolved_right
+        or resolved_left in resolved_right.parents
+        or resolved_right in resolved_left.parents
+    )
+
+
+def _add_training_dataset_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    parser.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    parser.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
+    parser.add_argument(
+        "--hp-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative HP differential changes.",
+    )
+    parser.add_argument(
+        "--faint-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative faint differential changes.",
+    )
+    parser.add_argument(
+        "--turn-penalty-after",
+        type=int,
+        default=None,
+        help="Optional turn index at which to start applying a per-decision shaped return penalty.",
+    )
+    parser.add_argument(
+        "--turn-penalty",
+        type=float,
+        default=0.0,
+        help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
+    )
+    parser.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="PPO advantage/value-target source baked into the cache.",
+    )
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+
+
+def _training_dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConfig:
+    return TrajectoryDatasetConfig(
+        window_size=args.window_size,
+        discount=args.discount,
+        capped_terminal_value=args.capped_terminal_value,
+        hp_delta_return_weight=args.hp_delta_return_weight,
+        faint_delta_return_weight=args.faint_delta_return_weight,
+        turn_penalty_after=args.turn_penalty_after,
+        turn_penalty=args.turn_penalty,
+        ppo_target_mode=args.ppo_target_mode,
+        gae_lambda=args.gae_lambda,
+    )
 
 
 def _train_with_value_selection(
@@ -1521,6 +1738,7 @@ def _train_with_value_selection(
     selection_metric: str,
     batch_size: int,
     bins: int,
+    consumed_cache_callback: Callable[[Path], None] | None = None,
 ) -> tuple[object, object, dict[str, object]]:
     if batch_size <= 0:
         raise ValueError("value selection batch_size must be positive.")
@@ -1574,12 +1792,16 @@ def _train_with_value_selection(
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
 
+    train_kwargs: dict[str, object] = {}
+    if consumed_cache_callback is not None:
+        train_kwargs["consumed_cache_callback"] = consumed_cache_callback
     model, full_result = train_transformer_policy(
         paths,
         model_config=model_config,
         training_config=training_config,
         initial_model=initial_model,
         epoch_callback=evaluate_epoch,
+        **train_kwargs,
     )
     if best_state is None or best_epoch is None or best_metric_value is None:
         raise ValueError("value selection produced no selectable epoch reports.")

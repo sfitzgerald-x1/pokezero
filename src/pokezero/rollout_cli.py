@@ -10,11 +10,13 @@ import sys
 from .collection import (
     BenchmarkReport,
     benchmark_rollouts,
+    collect_training_cache,
     collect_rollouts,
     policy_benchmark_matchups,
     policy_from_spec,
     policy_spec_with_showdown_root,
 )
+from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
@@ -40,6 +42,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect.add_argument("--append", action="store_true", help="Append to the output JSONL instead of replacing it.")
     collect.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     collect.set_defaults(func=_collect)
+
+    collect_cache = subparsers.add_parser(
+        "collect-training-cache",
+        help="Collect self-play rollouts directly into a compact neural training cache.",
+    )
+    collect_cache.add_argument("--games", type=int, required=True, help="Number of games to collect.")
+    collect_cache.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
+    collect_cache.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    collect_cache.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    collect_cache.add_argument("--seed-start", type=int, default=1, help="First deterministic rollout seed.")
+    collect_cache.add_argument("--max-decision-rounds", type=int, default=250, help="Rollout decision-round cap.")
+    collect_cache.add_argument("--p1-policy", default="random-legal", help=f"Policy for p1. {policy_help}")
+    collect_cache.add_argument("--p2-policy", default="random-legal", help=f"Policy for p2. {policy_help}")
+    collect_cache.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    collect_cache.add_argument("--overwrite", action="store_true", help="Replace an existing training cache directory.")
+    collect_cache.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=MAX_ACTIVE_TRAINING_CACHE_GB,
+        help=(
+            "Reject the write if existing caches under the output parent plus the new cache "
+            f"would exceed this many GiB (default and maximum: {MAX_ACTIVE_TRAINING_CACHE_GB:g})."
+        ),
+    )
+    _add_dataset_config_arguments(collect_cache)
+    collect_cache.set_defaults(func=_collect_training_cache)
 
     benchmark = subparsers.add_parser("benchmark", help="Run rollout benchmarks without writing trajectories.")
     benchmark.add_argument(
@@ -139,6 +167,39 @@ def _collect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_training_cache(args: argparse.Namespace) -> int:
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    policies = {
+        "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
+        "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
+    }
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    metrics, cache = collect_training_cache(
+        output_path=args.out,
+        games=args.games,
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        policies=policies,
+        rollout_config=rollout_config,
+        dataset_config=_dataset_config_from_args(args),
+        seed_start=args.seed_start,
+        overwrite=args.overwrite,
+        max_cache_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        cache_root=args.out.parent,
+    )
+    _print_metrics(metrics.to_dict())
+    print(f"training_cache: {cache.path}")
+    print(f"training_cache_examples: {cache.example_count}")
+    print(f"training_cache_bytes: {cache.byte_size}")
+    return 0
+
+
 def _benchmark(args: argparse.Namespace) -> int:
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -218,6 +279,66 @@ def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"capped_games: {metrics['capped_games']}")
     print(f"average_decision_rounds: {float(metrics['average_decision_rounds']):.2f}")
     print(f"average_simulator_turns: {float(metrics['average_simulator_turns']):.2f}")
+
+
+def _add_dataset_config_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    parser.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
+    parser.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
+    parser.add_argument(
+        "--hp-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative HP differential changes.",
+    )
+    parser.add_argument(
+        "--faint-delta-return-weight",
+        type=float,
+        default=0.0,
+        help="Optional return-shaping weight for visible player-relative faint differential changes.",
+    )
+    parser.add_argument(
+        "--turn-penalty-after",
+        type=int,
+        default=None,
+        help="Optional turn index at which to start applying a per-decision shaped return penalty.",
+    )
+    parser.add_argument(
+        "--turn-penalty",
+        type=float,
+        default=0.0,
+        help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
+    )
+    parser.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="PPO advantage/value-target source baked into the cache.",
+    )
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+
+
+def _dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConfig:
+    return TrajectoryDatasetConfig(
+        window_size=args.window_size,
+        discount=args.discount,
+        capped_terminal_value=args.capped_terminal_value,
+        hp_delta_return_weight=args.hp_delta_return_weight,
+        faint_delta_return_weight=args.faint_delta_return_weight,
+        turn_penalty_after=args.turn_penalty_after,
+        turn_penalty=args.turn_penalty,
+        ppo_target_mode=args.ppo_target_mode,
+        gae_lambda=args.gae_lambda,
+    )
+
+
+def _cache_gb_to_bytes(value: float | None) -> int:
+    resolved = MAX_ACTIVE_TRAINING_CACHE_GB if value is None else value
+    if resolved <= 0:
+        raise ValueError("--max-cache-gb must be positive.")
+    if resolved > MAX_ACTIVE_TRAINING_CACHE_GB:
+        raise ValueError(f"--max-cache-gb cannot exceed {MAX_ACTIVE_TRAINING_CACHE_GB:g}.")
+    return int(resolved * 1024 * 1024 * 1024)
 
 
 def print_benchmark_report(report: BenchmarkReport) -> None:
