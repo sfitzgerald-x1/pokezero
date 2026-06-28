@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import tempfile
 from typing import Any
 import unittest
+from urllib.parse import urlencode
 from unittest.mock import patch
 
 from pokezero import neural_policy as neural_policy_module
@@ -1753,6 +1754,112 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[2].p1_policy, fake_policy)
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
+
+    def test_neural_cli_benchmark_wires_reference_policy_matchups(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeReferencePolicy:
+            policy_id = "max-damage"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+        resolved_reference_specs = []
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        reference_instances = [FakeReferencePolicy(), FakeReferencePolicy()]
+
+        def fake_policy_from_spec(spec: str, *, device: str | None):
+            resolved_reference_specs.append((spec, device))
+            return reference_instances[len(resolved_reference_specs) - 1]
+
+        fake_policy = FakePolicy()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=fake_policy),
+            patch("pokezero.neural_cli._policy_from_spec_for_evaluation", side_effect=fake_policy_from_spec),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--games",
+                    "2",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--benchmark-reference-policy",
+                    "max-damage",
+                    "--device",
+                    "cpu",
+                    "--json",
+                ]
+            )
+
+        matchups = captured["matchups"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke vs simple-legal",
+            "simple-legal vs neural-smoke",
+            "neural-smoke vs max-damage",
+            "max-damage vs neural-smoke",
+        ])
+        self.assertIs(matchups[4].p1_policy, fake_policy)
+        self.assertIs(matchups[5].p2_policy, fake_policy)
+        self.assertIs(matchups[4].p2_policy, reference_instances[0])
+        self.assertIs(matchups[5].p1_policy, reference_instances[1])
+        expected_reference_spec = (
+            f"max-damage?{urlencode({'showdown_root': str(Path('/tmp/showdown').resolve())})}"
+        )
+        self.assertEqual(resolved_reference_specs, [(expected_reference_spec, "cpu"), (expected_reference_spec, "cpu")])
+
+    def test_neural_cli_benchmark_skips_duplicate_reference_policy_ids(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeDuplicatePolicy:
+            policy_id = "random-legal"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+            patch("pokezero.neural_cli._policy_from_spec_for_evaluation", return_value=FakeDuplicatePolicy()) as ref,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--benchmark-reference-policy",
+                    "random-legal",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(ref.call_args.args[0], "random-legal")
+        self.assertEqual(len(captured["matchups"]), 4)
 
     def test_neural_cli_benchmark_writes_summary_out(self) -> None:
         class FakePolicy:
