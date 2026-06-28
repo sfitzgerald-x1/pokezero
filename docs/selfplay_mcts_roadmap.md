@@ -334,6 +334,11 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   valid behavior-probability coverage, raw value-baselined advantage mean/std, probability-ratio
   mean, clip fraction, and policy entropy in nats. These are tuning/audit signals for WS-A, not policy
   strength metrics.
+  The neural path now supports compact training-cache chunks as an alternative to raw
+  `training-rollouts.jsonl` materialization, with a default 50 GiB active-cache ceiling, optional
+  raw rollout omission, post-train chunk deletion, and the same controls exposed through
+  `neural foundation-plan/run`. This makes mid-scale foundation runs practical without changing the
+  PPO contract or writing deployment-specific assumptions into the public repo.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
   random/simple/max-damage baselines.
 - **Neural self-play report yardstick curves** (`neural_cli report`) — text reports include
@@ -411,6 +416,11 @@ Near-term priority order:
    mid-scale read is **minutes**. Remaining WS-B work is closing the full collect→train→promote loop
    (the central trainer must keep pace, or it becomes the new bottleneck) plus the single-box
    equivalence test.
+   A first 20k-game fast PPO/cache checkpoint is not a candidate to scale: its 300-game-per-orientation
+   read versus `max-damage` scored **10/600** (`1.67%`), with one tie and zero capped games. Treat
+   that as negative evidence for the specific fast 20k setting and a reminder that throughput/storage
+   plumbing is solved before learning quality is solved; it is not evidence against a recipe-faithful
+   mid-scale run because the result was not enough to show a rising net-alone curve.
    **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on a
    **cheap mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
