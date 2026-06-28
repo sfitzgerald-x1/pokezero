@@ -388,6 +388,16 @@ Near-term priority order:
    thesis reference (`entropy_coef`≈0.0588, `n_epochs`≈7, annealed LR, `gamma`≈0.9999, `gae_lambda`,
    clip ranges, value coef, batch size) — see the gap table in the reference doc. Several of these
    (exploration entropy, epochs, LR annealing) are first-order and currently set to no-op values.
+   **Status:** the config-fidelity half now exists as `neural iterate --experiment-preset
+   recipe-fidelity` (and `neural foundation-plan/run --recipe-fidelity`, usable with the teacher-cut
+   variant). It bundles the expressible Table A.3 knobs (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
+   lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
+   5.9e-5, standard collection temperature), records them in the manifest/run summary, and a
+   `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
+   on-recipe rather than just named so. **Still off-recipe by construction:** LR *annealing* (no
+   global-step schedule under the per-iteration optimizer reset) and value-function clipping
+   (`clip_range_vf`); both are surfaced in the audit's `unsupported_knobs`. Config fidelity is
+   independent of scale (item 2).
 2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
    a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
    the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
@@ -476,6 +486,15 @@ Steps:
    convenience for WS-A/WS-E foundation runs, not promotion evidence.
    `neural foundation-plan/run/report` wraps this preset with smoke/pilot profile defaults and a
    compact summary artifact so CPU foundation attempts can be launched and audited consistently.
+   A second preset, `neural iterate --experiment-preset recipe-fidelity` (and the foundation
+   wrapper's `--recipe-fidelity` flag), reuses that same arms-race scaffolding but overrides the PPO
+   hyperparameters to the MIT thesis Table A.3 values (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
+   lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
+   5.9e-5, standard collection temperature 1.0). It is the config-fidelity half of near-term
+   priority #1. A `recipe_fidelity` audit (printed by `neural report`, embedded in foundation run
+   summaries, and computed by `recipe_fidelity_audit()`) compares the *actual* resolved config
+   against the reference table so a run is verifiable as recipe-fidelity, and always flags the two
+   knobs we cannot yet express — LR annealing and value-function clipping — under `unsupported_knobs`.
    The highest-priority WS-A question is now explicit: can self-play break the scripted-teacher
    ceiling at all? The `teacher-cut` foundation variant is the clean experiment contract for that
    question. It permits a one-shot learned checkpoint as the initial collector, then removes fixed

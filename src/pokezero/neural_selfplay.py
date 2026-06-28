@@ -507,6 +507,7 @@ def run_neural_selfplay_iterations(
         "collection_temperature": collection_temperature,
         "collector_advancement_mode": collector_advancement_mode,
         "experiment_preset": experiment_preset,
+        "training_config": training_config.to_dict(),
         "value_calibration": value_calibration_config.to_dict() if value_calibration_config is not None else None,
         "value_selection": value_selection_config.to_dict() if value_selection_config is not None else None,
         "opponent_pool": opponent_pool_manifest_config,

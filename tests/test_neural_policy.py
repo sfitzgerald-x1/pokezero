@@ -556,6 +556,12 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(objective="bogus")
         with self.assertRaisesRegex(ValueError, "clip_epsilon"):
             TransformerTrainingConfig(objective="ppo", clip_epsilon=0.0)
+        with self.assertRaisesRegex(ValueError, "max_grad_norm"):
+            TransformerTrainingConfig(max_grad_norm=0.0)
+        with self.assertRaisesRegex(ValueError, "max_grad_norm"):
+            TransformerTrainingConfig(max_grad_norm=-1.0)
+        self.assertIsNone(TransformerTrainingConfig().max_grad_norm)
+        self.assertEqual(TransformerTrainingConfig(max_grad_norm=0.543).to_dict()["max_grad_norm"], 0.543)
         with self.assertRaisesRegex(ValueError, "objective='value-only'"):
             TransformerTrainingConfig(objective="value-only")
         with self.assertRaisesRegex(ValueError, "freeze_non_value_parameters"):
@@ -3605,6 +3611,58 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("benchmark", stdout.getvalue())
         self.assertIn("iterate", stdout.getvalue())
+
+    def test_train_transformer_policy_applies_max_grad_norm_clip(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="grad-clip",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+            real_clip = torch.nn.utils.clip_grad_norm_
+            observed: list[float] = []
+
+            def _spy(parameters, max_norm, *args, **kwargs):
+                observed.append(float(max_norm))
+                return real_clip(parameters, max_norm, *args, **kwargs)
+
+            with patch.object(torch.nn.utils, "clip_grad_norm_", side_effect=_spy):
+                train_transformer_policy(
+                    data_path,
+                    model_config=model_config,
+                    training_config=TransformerTrainingConfig(
+                        batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu", max_grad_norm=0.5
+                    ),
+                )
+            self.assertTrue(observed)
+            self.assertEqual(observed[0], 0.5)
+
+            # Without the knob, gradient clipping must not be invoked (preserved legacy behavior).
+            observed.clear()
+            with patch.object(torch.nn.utils, "clip_grad_norm_", side_effect=_spy):
+                train_transformer_policy(
+                    data_path,
+                    model_config=model_config,
+                    training_config=TransformerTrainingConfig(
+                        batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu"
+                    ),
+                )
+            self.assertEqual(observed, [])
 
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():

@@ -82,7 +82,7 @@ from .source_metadata import collect_source_metadata
 
 MIN_NEURAL_POST_ITERATION_BENCHMARK_MATCHUPS = 4
 FOUNDATION_MILESTONE_BENCHMARK_GAMES = 300
-NEURAL_ITERATE_EXPERIMENT_PRESETS = ("none", "foundation-arms-race")
+NEURAL_ITERATE_EXPERIMENT_PRESETS = ("none", "foundation-arms-race", "recipe-fidelity")
 FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
     "objective": "ppo",
     "mirror_match": True,
@@ -97,6 +97,93 @@ FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
     "entropy_coef": 0.01,
     "ppo_target_mode": "gae",
 }
+# MIT thesis PPO hyperparameter table (Table A.3, p.43) — the reference recipe knobs that our
+# config can express directly. learning_rate is the thesis constant base 10^-4.23; the thesis also
+# anneals it (see RECIPE_FIDELITY_UNSUPPORTED_KNOBS for what we cannot yet express faithfully).
+MIT_THESIS_REFERENCE_CONFIG: Mapping[str, float | int] = {
+    "entropy_coef": 0.0588,
+    "epochs": 7,
+    "discount": 0.9999,
+    "gae_lambda": 0.754,
+    "clip_epsilon": 0.0829,
+    "value_loss_weight": 0.4375,
+    "max_grad_norm": 0.5430,
+    "learning_rate": 5.9e-5,
+    "batch_size": 1024,
+}
+# The thesis ran standard temperature-1.0 sampling for self-play collection.
+MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE = 1.0
+# Knobs the thesis used that our per-iteration training loop cannot yet express faithfully. These
+# are reported explicitly so a "recipe-fidelity" run is never mistaken for fully on-recipe.
+#   - learning_rate_annealing: the thesis anneals LR by global training progress across ~150M
+#     steps (ℓ(x)=10^-4.23/(8x+1)^1.5) and credits it for a 55%->80% jump; our loop builds a fresh
+#     optimizer per iteration, so there is no global-step schedule to anneal against yet.
+#   - value_function_clipping: the thesis clips value updates (clip_range_vf=0.0184); our PPO value
+#     loss is an unclipped MSE.
+RECIPE_FIDELITY_UNSUPPORTED_KNOBS: Mapping[str, str] = {
+    "learning_rate_annealing": (
+        "thesis anneals LR by global training progress; our per-iteration optimizer reset has no "
+        "global-step schedule yet (scale-limited)."
+    ),
+    "value_function_clipping": (
+        "thesis clip_range_vf=0.0184; our PPO value loss is an unclipped MSE (off-recipe)."
+    ),
+}
+RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
+    # Loop shape: same arms-race self-play scaffolding (PPO + GAE, mirror self-play, latest-policy
+    # collector, held-out Pearson value selection, calibration, max-damage yardstick) ...
+    "objective": "ppo",
+    "mirror_match": True,
+    "collector_advancement_mode": "always",
+    # ... but thesis-faithful collection temperature (standard sampling) rather than 1.4.
+    "collection_temperature": MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE,
+    "historical_opponent_selection": "spread",
+    "evaluation_games": 200,
+    "value_calibration": True,
+    "value_selection": True,
+    "value_selection_metric": "pearson_correlation",
+    "value_selection_heldout_games": 32,
+    "ppo_target_mode": "gae",
+    # Thesis PPO hyperparameter table (the first-order recipe-fidelity knobs).
+    "entropy_coef": MIT_THESIS_REFERENCE_CONFIG["entropy_coef"],
+    "epochs": MIT_THESIS_REFERENCE_CONFIG["epochs"],
+    "discount": MIT_THESIS_REFERENCE_CONFIG["discount"],
+    "gae_lambda": MIT_THESIS_REFERENCE_CONFIG["gae_lambda"],
+    "clip_epsilon": MIT_THESIS_REFERENCE_CONFIG["clip_epsilon"],
+    "value_loss_weight": MIT_THESIS_REFERENCE_CONFIG["value_loss_weight"],
+    "max_grad_norm": MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"],
+    "learning_rate": MIT_THESIS_REFERENCE_CONFIG["learning_rate"],
+    "batch_size": MIT_THESIS_REFERENCE_CONFIG["batch_size"],
+}
+_ITERATE_EXPERIMENT_PRESET_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
+    "foundation-arms-race": FOUNDATION_ARMS_RACE_PRESET_DEFAULTS,
+    "recipe-fidelity": RECIPE_FIDELITY_PRESET_DEFAULTS,
+}
+# Loop-shape knobs applied regardless of objective; PPO hyperparameters applied only for objective=ppo.
+_ITERATE_PRESET_LOOP_SHAPE_KEYS = (
+    "objective",
+    "mirror_match",
+    "collector_advancement_mode",
+    "collection_temperature",
+    "historical_opponent_selection",
+    "evaluation_games",
+    "value_calibration",
+    "value_selection",
+    "value_selection_metric",
+    "value_selection_heldout_games",
+)
+_ITERATE_PRESET_PPO_KEYS = (
+    "entropy_coef",
+    "ppo_target_mode",
+    "epochs",
+    "discount",
+    "gae_lambda",
+    "clip_epsilon",
+    "value_loss_weight",
+    "max_grad_norm",
+    "learning_rate",
+    "batch_size",
+)
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
 NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_summary.v1"
 NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v1"
@@ -290,6 +377,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="PPO advantage/value-target source: discounted returns or recorded-value GAE.",
     )
     train.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+    train.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=None,
+        help="Optional global gradient-norm clip applied before each optimizer step (thesis recipe: 0.5430).",
+    )
     train.add_argument(
         "--freeze-non-value-parameters",
         action="store_true",
@@ -627,7 +720,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="none",
         help=(
             "Optional experiment preset. 'foundation-arms-race' fills the current WS-A CPU PPO "
-            "arms-race recipe unless a specific option is explicitly supplied."
+            "arms-race recipe; 'recipe-fidelity' additionally aligns the PPO hyperparameters to "
+            "the MIT thesis reference table (entropy 0.0588, 7 epochs, gamma 0.9999, GAE lambda, "
+            "clip/value coefficients, grad-norm clip, batch size, base LR). Either preset only "
+            "fills options not explicitly supplied on the command line."
         ),
     )
     iterate.add_argument("--games-per-iteration", type=int, required=True, help="Rollout games collected before each train step.")
@@ -836,6 +932,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="PPO advantage/value-target source: discounted returns or recorded-value GAE.",
     )
     iterate.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+    iterate.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=None,
+        help="Optional global gradient-norm clip applied before each optimizer step (thesis recipe: 0.5430).",
+    )
     iterate.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     iterate.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     iterate.add_argument(
@@ -1104,6 +1206,15 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         default=None,
         help="Override the foundation preset's rollout-collector advancement mode.",
     )
+    parser.add_argument(
+        "--recipe-fidelity",
+        action="store_true",
+        help=(
+            "Use the recipe-fidelity experiment preset instead of foundation-arms-race: aligns the "
+            "PPO hyperparameters to the MIT thesis reference table (entropy 0.0588, 7 epochs, "
+            "gamma 0.9999, GAE lambda, clip/value coefficients, grad-norm clip, batch size, base LR)."
+        ),
+    )
     parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
     parser.add_argument("--resume", action="store_true", help="Resume an existing neural foundation run directory.")
     if include_summary_path:
@@ -1275,6 +1386,7 @@ def _train(args: argparse.Namespace) -> int:
         normalize_advantage=not args.no_normalize_advantage,
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
+        max_grad_norm=args.max_grad_norm,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
     )
     if initial_training_result is not None:
@@ -2308,6 +2420,7 @@ def _iterate(args: argparse.Namespace) -> int:
         normalize_advantage=not args.no_normalize_advantage,
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
+        max_grad_norm=args.max_grad_norm,
     )
     iterate_model_config_kwargs = dict(
         policy_id=args.policy_id,
@@ -2409,39 +2522,20 @@ def _iterate(args: argparse.Namespace) -> int:
 def _apply_iterate_experiment_preset(args: argparse.Namespace) -> None:
     if args.experiment_preset == "none":
         return
-    if args.experiment_preset != "foundation-arms-race":
+    defaults = _ITERATE_EXPERIMENT_PRESET_DEFAULTS.get(args.experiment_preset)
+    if defaults is None:
         raise ValueError(f"unsupported neural iterate experiment preset: {args.experiment_preset!r}.")
 
-    _set_preset_default(args, "objective", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["objective"])
-    _set_preset_default(args, "mirror_match", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["mirror_match"])
-    _set_preset_default(
-        args,
-        "collector_advancement_mode",
-        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collector_advancement_mode"],
-    )
-    _set_preset_default(args, "collection_temperature", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["collection_temperature"])
-    _set_preset_default(
-        args,
-        "historical_opponent_selection",
-        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["historical_opponent_selection"],
-    )
-    _set_preset_default(args, "evaluation_games", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"])
-    _set_preset_default(args, "value_calibration", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_calibration"])
-    _set_preset_default(args, "value_selection", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection"])
-    _set_preset_default(
-        args,
-        "value_selection_metric",
-        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_metric"],
-    )
-    _set_preset_default(
-        args,
-        "value_selection_heldout_games",
-        FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"],
-    )
+    for name in _ITERATE_PRESET_LOOP_SHAPE_KEYS:
+        if name in defaults:
+            _set_preset_default(args, name, defaults[name])
 
+    # PPO hyperparameters only apply when the resolved objective is PPO, so a user who overrides
+    # --objective back to behavior-cloning is not silently handed a PPO-only knob set.
     if args.objective == "ppo":
-        _set_preset_default(args, "entropy_coef", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["entropy_coef"])
-        _set_preset_default(args, "ppo_target_mode", FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["ppo_target_mode"])
+        for name in _ITERATE_PRESET_PPO_KEYS:
+            if name in defaults:
+                _set_preset_default(args, name, defaults[name])
 
     explicit_options = getattr(args, "_explicit_cli_options", frozenset())
     benchmark_references = list(args.benchmark_reference_policy or ())
@@ -2469,7 +2563,7 @@ def _foundation_plan(args: argparse.Namespace) -> int:
         print(json.dumps(recipe, indent=2, sort_keys=True))
         return 0
     print("neural_foundation_plan:")
-    print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
+    print(f"purpose: CPU foundation PPO run using the {recipe['experiment_preset']} preset")
     print(f"profile: {recipe['profile']}")
     print(f"variant: {recipe['variant']}")
     print(f"run_dir: {recipe['run_dir']}")
@@ -2501,7 +2595,7 @@ def _foundation_run(args: argparse.Namespace) -> int:
     }
     _write_json(summary_path, summary)
     print("neural_foundation_run:")
-    print("purpose: CPU foundation PPO arms-race run using the foundation-arms-race preset")
+    print(f"purpose: CPU foundation PPO run using the {recipe['experiment_preset']} preset")
     print(f"summary: {summary_path}")
     print(recipe["command"]["shell"], flush=True)
     try:
@@ -3590,7 +3684,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "--initial-policy",
         str(args.initial_policy),
         "--experiment-preset",
-        "foundation-arms-race",
+        str(resolved["experiment_preset"]),
         "--epochs",
         str(resolved["epochs"]),
         "--seed-start",
@@ -3635,7 +3729,12 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "manifest_path": str(args.run_dir / "manifest.json"),
         "showdown_root": str(args.showdown_root),
         "initial_policy": str(args.initial_policy),
-        "experiment_preset": "foundation-arms-race",
+        "experiment_preset": str(resolved["experiment_preset"]),
+        "recipe_fidelity": bool(resolved["recipe_fidelity"]),
+        "recipe_fidelity_reference": dict(MIT_THESIS_REFERENCE_CONFIG) if resolved["recipe_fidelity"] else None,
+        "recipe_fidelity_unsupported_knobs": (
+            dict(RECIPE_FIDELITY_UNSUPPORTED_KNOBS) if resolved["recipe_fidelity"] else None
+        ),
         "effective_config_source": "nested neural manifest invocation_config after neural iterate applies the preset",
         "resolved_options": resolved,
         "command": {
@@ -3666,12 +3765,18 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         if args.opponent_policy is not None
         else variant["opponent_policies"]
     )
+    recipe_fidelity = bool(getattr(args, "recipe_fidelity", False))
+    # Recipe-fidelity runs default to the thesis epoch count; the preset would set it, but the
+    # wrapper always emits --epochs explicitly, so derive the default here to stay consistent.
+    default_epochs = int(MIT_THESIS_REFERENCE_CONFIG["epochs"]) if recipe_fidelity else profile["epochs"]
     resolved = {
         "iterations": _foundation_option(args.iterations, profile["iterations"]),
         "games_per_iteration": _foundation_option(args.games_per_iteration, profile["games_per_iteration"]),
         "workers": _foundation_option(args.workers, profile["workers"]),
         "evaluation_games": _foundation_option(args.evaluation_games, profile["evaluation_games"]),
-        "epochs": _foundation_option(args.epochs, profile["epochs"]),
+        "epochs": _foundation_option(args.epochs, default_epochs),
+        "recipe_fidelity": recipe_fidelity,
+        "experiment_preset": "recipe-fidelity" if recipe_fidelity else "foundation-arms-race",
         "max_batches": _foundation_max_batches(args.max_batches, profile["max_batches"]),
         "value_selection_heldout_games": _foundation_option(
             args.value_selection_heldout_games,
@@ -3748,9 +3853,11 @@ def _foundation_teacher_cut_allowed_initial_policy_forms() -> list[str]:
 
 def _foundation_experiment_contract(args: argparse.Namespace, resolved: Mapping[str, Any]) -> dict[str, Any]:
     teacher_cut = bool(resolved.get("teacher_cut"))
+    recipe_fidelity = bool(resolved.get("recipe_fidelity"))
     contract: dict[str, Any] = {
         "name": "teacher-cut" if teacher_cut else "foundation-arms-race",
         "teacher_cut": teacher_cut,
+        "recipe_fidelity": recipe_fidelity,
     }
     if not teacher_cut:
         return contract
@@ -3800,6 +3907,132 @@ def _validate_foundation_run_paths(run_dir: Path, *, summary_path: Path, resume:
         raise ValueError(f"run directory already exists: {run_dir}; use --resume or choose a fresh --run-dir.")
 
 
+def _recipe_knob_aligned(value: Any, reference: float | int) -> bool:
+    if value is None:
+        return False
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(numeric):
+        return False
+    # Tight tolerance on purpose: the thesis distinguishes near-identical values (e.g. gamma
+    # 0.9999 vs undiscounted 1.0), so only float-representation noise should be absorbed.
+    return math.isclose(numeric, float(reference), rel_tol=1e-6, abs_tol=1e-9)
+
+
+def recipe_fidelity_audit(
+    training_config: Mapping[str, Any] | None,
+    *,
+    collection_temperature: Any = None,
+) -> dict[str, Any]:
+    """Compare an actual training config against the MIT thesis reference recipe.
+
+    This makes "is this run actually recipe-fidelity, or just named that way?" answerable from
+    concrete numbers. It checks the knobs our config can express (Table A.3), reports which
+    diverge, and always lists the knobs the codebase cannot yet express faithfully so an aligned
+    verdict is never read as fully on-recipe.
+    """
+    config = training_config or {}
+    knobs: dict[str, Any] = {}
+    off_recipe: list[str] = []
+
+    objective = config.get("objective")
+    objective_ok = objective == "ppo"
+    knobs["objective"] = {"value": objective, "reference": "ppo", "aligned": objective_ok}
+    if not objective_ok:
+        off_recipe.append("objective")
+
+    target_mode = config.get("ppo_target_mode")
+    target_ok = target_mode == "gae"
+    knobs["ppo_target_mode"] = {"value": target_mode, "reference": "gae", "aligned": target_ok}
+    if not target_ok:
+        off_recipe.append("ppo_target_mode")
+
+    for name, reference in MIT_THESIS_REFERENCE_CONFIG.items():
+        value = config.get(name)
+        aligned = _recipe_knob_aligned(value, reference)
+        knobs[name] = {"value": value, "reference": reference, "aligned": aligned}
+        if not aligned:
+            off_recipe.append(name)
+
+    temperature_aligned = _recipe_knob_aligned(
+        collection_temperature, MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE
+    )
+    knobs["collection_temperature"] = {
+        "value": collection_temperature,
+        "reference": MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE,
+        "aligned": temperature_aligned,
+    }
+    if not temperature_aligned:
+        off_recipe.append("collection_temperature")
+
+    aligned = not off_recipe
+    return {
+        "reference": "mit_thesis_table_a3",
+        "aligned": aligned,
+        "knobs": knobs,
+        "off_recipe": off_recipe,
+        "unsupported_knobs": dict(RECIPE_FIDELITY_UNSUPPORTED_KNOBS),
+        "fully_on_recipe": False,
+        "note": (
+            "aligned=true means the expressible Table A.3 knobs match; fully_on_recipe is always "
+            "false because learning-rate annealing and value-function clipping are not yet expressible "
+            "(see unsupported_knobs), and recipe scale (~3M battles) is separate from config fidelity."
+        ),
+    }
+
+
+def _iteration_training_config(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    training = _optional_mapping(iteration.get("training"))
+    if not training:
+        return None
+    config = _optional_mapping(training.get("config"))
+    return config or None
+
+
+def _latest_invocation_config(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    configs = tuple(_optional_mapping(config) for config in _sequence(manifest.get("invocation_configs", ())))
+    for config in reversed(configs):
+        if config:
+            return config
+    return None
+
+
+def _manifest_configured_training_config(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    invocation = _latest_invocation_config(manifest)
+    if invocation is not None:
+        config = _optional_mapping(invocation.get("training_config"))
+        if config:
+            return config
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        return None
+    return _iteration_training_config(iterations[-1])
+
+
+def _manifest_collection_temperature(manifest: Mapping[str, Any]) -> Any:
+    invocation = _latest_invocation_config(manifest)
+    if invocation is not None and "collection_temperature" in invocation:
+        return invocation.get("collection_temperature")
+    return None
+
+
+def _manifest_recipe_fidelity_audit(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        return None
+    training_config = _manifest_configured_training_config(manifest)
+    if training_config is None:
+        return None
+    audit = recipe_fidelity_audit(
+        training_config,
+        collection_temperature=_manifest_collection_temperature(manifest),
+    )
+    audit["iteration"] = int(iterations[-1].get("iteration", 0))
+    return audit
+
+
 def _foundation_run_derived_report(run_dir: Path, stdout: str) -> dict[str, Any]:
     manifest, source, error = _foundation_manifest_from_run(run_dir, stdout)
     if manifest is None:
@@ -3809,6 +4042,7 @@ def _foundation_run_derived_report(run_dir: Path, stdout: str) -> dict[str, Any]
             "manifest_error": error,
             "latest_checkpoint_path": None,
             "foundation_readiness": None,
+            "recipe_fidelity": None,
         }
     iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
     return {
@@ -3818,6 +4052,7 @@ def _foundation_run_derived_report(run_dir: Path, stdout: str) -> dict[str, Any]
         "latest_checkpoint_path": manifest.get("latest_checkpoint_path"),
         "latest_iteration": int(iterations[-1].get("iteration", 0)) if iterations else None,
         "foundation_readiness": _foundation_readiness_report(iterations),
+        "recipe_fidelity": _manifest_recipe_fidelity_audit(manifest),
     }
 
 
@@ -3994,6 +4229,32 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
         )
     _print_benchmark_opponent_curves(iterations)
     _print_foundation_readiness(iterations)
+    _print_recipe_fidelity(manifest)
+
+
+def _print_recipe_fidelity(manifest: Mapping[str, Any]) -> None:
+    audit = _manifest_recipe_fidelity_audit(manifest)
+    print("")
+    print("recipe_fidelity:")
+    if audit is None:
+        print("- training_config_unavailable")
+        return
+    print("note: config-fidelity vs the MIT thesis Table A.3; scale (~3M battles) is tracked separately.")
+    print(
+        f"- aligned: {_format_bool(audit.get('aligned'))} "
+        f"(latest iteration {_format_manifest_value(audit.get('iteration'))})"
+    )
+    knobs = _optional_mapping(audit.get("knobs"))
+    for name in sorted(knobs):
+        knob = _optional_mapping(knobs[name])
+        flag = "ok" if knob.get("aligned") is True else "OFF"
+        print(
+            f"  [{flag:>3}] {name}: {_format_manifest_value(knob.get('value'))} "
+            f"(ref {_format_manifest_value(knob.get('reference'))})"
+        )
+    unsupported = _optional_mapping(audit.get("unsupported_knobs"))
+    if unsupported:
+        print(f"- unsupported (off-recipe by construction): {', '.join(sorted(unsupported))}")
 
 
 def _final_epoch_metrics(iteration: Mapping[str, Any]) -> Mapping[str, Any] | None:

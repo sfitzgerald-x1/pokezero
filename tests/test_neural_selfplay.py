@@ -28,7 +28,16 @@ from pokezero.neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from pokezero.neural_cli import _explicit_cli_options, _print_iterate_summary, main as neural_cli_main
+from pokezero.neural_cli import (
+    MIT_THESIS_REFERENCE_CONFIG,
+    RECIPE_FIDELITY_PRESET_DEFAULTS,
+    RECIPE_FIDELITY_UNSUPPORTED_KNOBS,
+    _explicit_cli_options,
+    _manifest_recipe_fidelity_audit,
+    _print_iterate_summary,
+    main as neural_cli_main,
+    recipe_fidelity_audit,
+)
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION, load_promotion_registry
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure
@@ -391,6 +400,178 @@ class NeuralSelfPlayTest(unittest.TestCase):
             kwargs["value_selection_config"],
             NeuralValueSelectionConfig(metric="mae", heldout_games_per_iteration=4),
         )
+
+    def test_neural_cli_iterate_recipe_fidelity_preset_aligns_ppo_hyperparameters(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "2",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--experiment-preset",
+                        "recipe-fidelity",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        config = kwargs["training_config"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(kwargs["experiment_preset"], "recipe-fidelity")
+        self.assertEqual(config.objective, "ppo")
+        self.assertEqual(config.ppo_target_mode, "gae")
+        self.assertEqual(config.entropy_coef, MIT_THESIS_REFERENCE_CONFIG["entropy_coef"])
+        self.assertEqual(config.epochs, MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertEqual(config.discount, MIT_THESIS_REFERENCE_CONFIG["discount"])
+        self.assertEqual(config.gae_lambda, MIT_THESIS_REFERENCE_CONFIG["gae_lambda"])
+        self.assertEqual(config.clip_epsilon, MIT_THESIS_REFERENCE_CONFIG["clip_epsilon"])
+        self.assertEqual(config.value_loss_weight, MIT_THESIS_REFERENCE_CONFIG["value_loss_weight"])
+        self.assertEqual(config.max_grad_norm, MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"])
+        self.assertEqual(config.learning_rate, MIT_THESIS_REFERENCE_CONFIG["learning_rate"])
+        self.assertEqual(config.batch_size, MIT_THESIS_REFERENCE_CONFIG["batch_size"])
+        self.assertEqual(kwargs["collection_temperature"], 1.0)
+        # The audit over the resolved config must report fully aligned.
+        audit = recipe_fidelity_audit(config.to_dict(), collection_temperature=kwargs["collection_temperature"])
+        self.assertTrue(audit["aligned"])
+        self.assertEqual(audit["off_recipe"], [])
+
+    def test_neural_cli_iterate_recipe_fidelity_preset_respects_explicit_overrides(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--experiment-preset",
+                        "recipe-fidelity",
+                        "--epochs",
+                        "2",
+                        "--entropy-coef",
+                        "0.01",
+                        "--collection-temp=1.4",
+                        "--max-grad-norm",
+                        "0.25",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        config = kwargs["training_config"]
+        self.assertEqual(exit_code, 0)
+        # Explicit overrides win over the preset; the rest stays thesis-aligned.
+        self.assertEqual(config.epochs, 2)
+        self.assertEqual(config.entropy_coef, 0.01)
+        self.assertEqual(kwargs["collection_temperature"], 1.4)
+        self.assertEqual(config.discount, MIT_THESIS_REFERENCE_CONFIG["discount"])
+        self.assertEqual(config.max_grad_norm, 0.25)
+
+    def test_neural_cli_iterate_recipe_fidelity_preset_skips_ppo_knobs_for_behavior_cloning(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "1",
+                        "--games-per-iteration",
+                        "8",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--experiment-preset",
+                        "recipe-fidelity",
+                        "--obj",
+                        "behavior-cloning",
+                    ]
+                )
+
+        kwargs = run.call_args.kwargs
+        config = kwargs["training_config"]
+        self.assertEqual(exit_code, 0)
+        # A user who reverts to behavior-cloning must not inherit PPO-only thesis knobs.
+        self.assertEqual(config.objective, "behavior-cloning")
+        self.assertEqual(config.entropy_coef, 0.0)
+        self.assertEqual(config.epochs, 1)
+        self.assertIsNone(config.max_grad_norm)
+        self.assertEqual(config.discount, 1.0)
+
+    def test_recipe_fidelity_audit_reports_off_recipe_and_unsupported_knobs(self) -> None:
+        # The legacy teacher-cut defaults are materially off-recipe.
+        off = recipe_fidelity_audit(
+            {"objective": "ppo", "ppo_target_mode": "returns", "entropy_coef": 0.0, "epochs": 1, "discount": 1.0},
+            collection_temperature=1.4,
+        )
+        self.assertFalse(off["aligned"])
+        self.assertIn("entropy_coef", off["off_recipe"])
+        self.assertIn("ppo_target_mode", off["off_recipe"])
+        self.assertIn("collection_temperature", off["off_recipe"])
+        # Undiscounted (1.0) must not be confused with the thesis near-1 gamma (0.9999).
+        self.assertIn("discount", off["off_recipe"])
+        self.assertFalse(off["knobs"]["discount"]["aligned"])
+        # The unsupported knobs are always surfaced, and a config-aligned run is never fully on-recipe.
+        aligned = recipe_fidelity_audit(
+            dict(RECIPE_FIDELITY_PRESET_DEFAULTS), collection_temperature=1.0
+        )
+        self.assertTrue(aligned["aligned"])
+        self.assertFalse(aligned["fully_on_recipe"])
+        self.assertEqual(set(aligned["unsupported_knobs"]), set(RECIPE_FIDELITY_UNSUPPORTED_KNOBS))
+
+    def test_manifest_recipe_fidelity_audit_uses_configured_run_config(self) -> None:
+        manifest = {
+            "invocation_configs": [
+                {
+                    "collection_temperature": 1.0,
+                    "training_config": {
+                        "objective": "ppo",
+                        "ppo_target_mode": "gae",
+                        **{name: value for name, value in MIT_THESIS_REFERENCE_CONFIG.items()},
+                    },
+                }
+            ],
+            "iterations": [
+                {
+                    "iteration": 3,
+                    "training": {
+                        "config": {
+                            "objective": "ppo",
+                            "ppo_target_mode": "gae",
+                            **{name: value for name, value in MIT_THESIS_REFERENCE_CONFIG.items()},
+                            # Value-selection training results may store the selected epoch here.
+                            # Recipe-fidelity auditing must judge the configured run, not this
+                            # selected-checkpoint truncation.
+                            "epochs": 2,
+                        }
+                    },
+                }
+            ],
+        }
+        audit = _manifest_recipe_fidelity_audit(manifest)
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit["iteration"], 3)
+        self.assertTrue(audit["aligned"])
+        self.assertIsNone(_manifest_recipe_fidelity_audit({"iterations": []}))
 
     def test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
@@ -2520,6 +2701,48 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertNotIn("--opponent-action-loss-weight", argv)
         self.assertNotIn("--temporal-aggregator", argv)
         self.assertIn("--json", argv)
+
+    def test_neural_cli_foundation_plan_recipe_fidelity_uses_recipe_preset(self) -> None:
+        source = neural_report_source_metadata(branch="scott/foundation", head="abc123", dirty=False)
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=source),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-recipe",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--recipe-fidelity",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["experiment_preset"], "recipe-fidelity")
+        self.assertTrue(recipe["resolved_options"]["recipe_fidelity"])
+        self.assertEqual(recipe["resolved_options"]["experiment_preset"], "recipe-fidelity")
+        # The wrapper emits the thesis epoch count so the explicit --epochs matches the preset.
+        self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertIn("recipe-fidelity", argv)
+        self.assertNotIn("foundation-arms-race", argv)
+        idx = argv.index("--epochs")
+        self.assertEqual(argv[idx + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
+        # The plan records the reference table so a recipe-fidelity claim is auditable.
+        self.assertEqual(recipe["recipe_fidelity_reference"], dict(MIT_THESIS_REFERENCE_CONFIG))
+        self.assertEqual(
+            set(recipe["recipe_fidelity_unsupported_knobs"]),
+            set(RECIPE_FIDELITY_UNSUPPORTED_KNOBS),
+        )
+        self.assertTrue(recipe["experiment_contract"]["recipe_fidelity"])
 
     def test_neural_cli_foundation_teacher_cut_variant_records_contract(self) -> None:
         with (
