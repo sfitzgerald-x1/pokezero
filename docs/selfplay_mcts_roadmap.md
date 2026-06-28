@@ -461,7 +461,9 @@ Near-term priority order:
    rising signal under the teacher-cut recipe. Continue from the latest checkpoint for the next
    50k-100k chunk rather than restarting from random; if using a fresh run directory, use
    `--continue-from` or explicitly set `--learning-rate-schedule-completed-games` so LR progress is
-   auditable.
+   auditable. The LR denominator must also move to the **new global game total** for the continuation
+   (`prior completed games + new requested games`); reusing the prior 50k denominator would run the
+   whole continuation at the annealed LR floor and is rejected by the CLI.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete

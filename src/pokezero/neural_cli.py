@@ -4500,6 +4500,15 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         and int(resolved["learning_rate_schedule_completed_games"]) < 0
     ):
         raise ValueError("learning-rate-schedule-completed-games must be non-negative.")
+    if (
+        resolved["learning_rate_schedule_total_games"] is not None
+        and resolved["learning_rate_schedule_completed_games"] is not None
+        and int(resolved["learning_rate_schedule_completed_games"]) >= int(resolved["learning_rate_schedule_total_games"])
+    ):
+        raise ValueError(
+            "learning-rate-schedule-completed-games must be less than "
+            "learning-rate-schedule-total-games; when continuing a run, set the total to the new global game total."
+        )
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
     if resolved["value_ranking_loss_weight"] is not None and float(resolved["value_ranking_loss_weight"]) < 0.0:

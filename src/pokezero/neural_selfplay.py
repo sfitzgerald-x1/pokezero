@@ -1857,6 +1857,12 @@ def _training_config_for_iteration_learning_rate_schedule(
         if training_config.learning_rate_schedule_total_games is not None
         else completed_games_offset + (total_scheduled_iterations * games_per_iteration)
     )
+    if completed_games_offset >= total_scheduled_games:
+        raise ValueError(
+            "completed_games_offset must be less than the learning-rate schedule total games; "
+            f"got offset={completed_games_offset} total={total_scheduled_games}. "
+            "Increase learning_rate_schedule_total_games to the new global total when continuing a run."
+        )
     completed_games_before = completed_games_offset + ((iteration - 1) * games_per_iteration)
     completed_games_after = completed_games_offset + (iteration * games_per_iteration)
     return replace(
