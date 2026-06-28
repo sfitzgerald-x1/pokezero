@@ -1374,7 +1374,10 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         "--training-cache-chunk-games",
         type=int,
         default=None,
-        help="Flush compact training cache chunks every N collected games in the nested neural iterate command.",
+        help=(
+            "Flush compact training cache chunks every N collected games in the nested neural iterate command. "
+            "Requires --training-cache-root."
+        ),
     )
     parser.add_argument(
         "--max-cache-gb",
@@ -4209,6 +4212,8 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     if resolved["training_cache_chunk_games"] is not None and int(resolved["training_cache_chunk_games"]) <= 0:
         raise ValueError("training-cache-chunk-games must be positive.")
     _cache_gb_to_bytes(float(resolved["max_cache_gb"]))
+    if resolved["training_cache_chunk_games"] is not None and resolved["training_cache_root"] is None:
+        raise ValueError("--training-cache-chunk-games requires --training-cache-root.")
     if not resolved["write_rollout_jsonl"] and resolved["training_cache_root"] is None:
         raise ValueError("--omit-rollout-jsonl requires --training-cache-root.")
     opponent_policy_values = _sequence_or_empty(resolved["opponent_policies"])
