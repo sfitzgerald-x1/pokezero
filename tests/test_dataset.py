@@ -642,6 +642,35 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual([batch.step_metadata for batch in cached_batches], [({}, {}, {}, {}), ({}, {}, {}, {}), ({},)])
         self.assertEqual(consumed, list(cache_paths))
 
+    def test_deferred_training_cache_batches_trim_sliced_row_tables(self) -> None:
+        self._require_numpy()
+        config = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            jsonl_paths = tuple(temp_path / f"rollouts-{index}.jsonl" for index in range(2))
+            cache_paths = tuple(temp_path / f"cache-{index}" for index in range(2))
+            for path in jsonl_paths:
+                with path.open("w", encoding="utf-8") as handle:
+                    write_rollout_record(handle, rollout_record())
+            for jsonl_path, cache_path in zip(jsonl_paths, cache_paths, strict=True):
+                write_training_cache_from_rollouts(jsonl_path, cache_path, config=config)
+
+            cached_batches = list(
+                iter_training_batches(
+                    cache_paths,
+                    batch_size=4,
+                    config=config,
+                    defer_cache_window_expansion=True,
+                )
+            )
+
+        self.assertEqual([batch.batch_size for batch in cached_batches], [4, 2])
+        self.assertEqual([batch.row_categorical_ids.shape[0] for batch in cached_batches], [4, 2])
+        self.assertEqual(_tolist(cached_batches[0].window_row_indices), [[0], [1], [2], [3]])
+        self.assertEqual(_tolist(cached_batches[1].window_row_indices), [[0], [1]])
+        self.assertEqual(_tolist(cached_batches[0].row_categorical_ids[:, 0, 0]), [5, 50, 6, 5])
+        self.assertEqual(_tolist(cached_batches[1].row_categorical_ids[:, 0, 0]), [50, 6])
+
     def test_training_cache_round_trips_gae_ppo_training_targets(self) -> None:
         self._require_numpy()
         trajectory = BattleTrajectory(battle_id="gae-cache", format_id="gen3randombattle", seed=5)
@@ -794,12 +823,25 @@ class DatasetTest(unittest.TestCase):
                     config=TrajectoryDatasetConfig(window_size=1),
                 )
             )
+            row_batch = next(
+                iter_training_batches(
+                    (dense_cache, compact_cache),
+                    batch_size=2,
+                    config=TrajectoryDatasetConfig(window_size=1),
+                    defer_cache_window_expansion=True,
+                )
+            )
 
         self.assertEqual(dense_metadata["categorical_storage"]["stored_feature_count"], 4)
         self.assertEqual(compact_metadata["categorical_storage"]["stored_feature_count"], 2)
         self.assertEqual(batch.categorical_ids.shape[-1], 4)
         self.assertEqual(_tolist(batch.categorical_ids)[0][0][0], [1, 2, 3, 4])
         self.assertEqual(_tolist(batch.categorical_ids)[1][0][0], [5, 6, 0, 0])
+        self.assertEqual(row_batch.categorical_ids, ())
+        self.assertEqual(row_batch.row_categorical_ids.shape[-1], 4)
+        self.assertEqual(_tolist(row_batch.row_categorical_ids)[0][0], [1, 2, 3, 4])
+        self.assertEqual(_tolist(row_batch.row_categorical_ids)[1][0], [5, 6, 0, 0])
+        self.assertEqual(_tolist(row_batch.window_row_indices), [[0], [1]])
 
     def test_training_cache_write_rejects_root_storage_cap_before_output_creation(self) -> None:
         self._require_numpy()

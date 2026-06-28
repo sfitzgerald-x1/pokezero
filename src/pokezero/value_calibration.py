@@ -12,6 +12,7 @@ from .dataset import TrajectoryDatasetConfig, iter_training_batches
 from .neural_policy import (
     TransformerTrainingResult,
     ValueCalibrationTransform,
+    model_forward_from_training_tensors,
     require_torch,
     training_batch_to_torch,
 )
@@ -148,15 +149,14 @@ def evaluate_value_calibration(
     slice_totals = _ValueCalibrationSliceTotals(bin_count=bins)
     try:
         with torch_module.no_grad():
-            for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
+            for batch in iter_training_batches(
+                paths,
+                batch_size=batch_size,
+                config=dataset_config,
+                defer_cache_window_expansion=True,
+            ):
                 tensors = training_batch_to_torch(batch, device=device)
-                output = model(
-                    categorical_ids=tensors["categorical_ids"],
-                    numeric_features=tensors["numeric_features"],
-                    token_type_ids=tensors["token_type_ids"],
-                    attention_mask=tensors["attention_mask"],
-                    history_mask=tensors["history_mask"],
-                )
+                output = model_forward_from_training_tensors(model, tensors)
                 transform = getattr(training_result, "value_calibration_transform", None)
                 predictions = tuple(
                     _apply_value_calibration_transform(float(value), transform)
@@ -201,15 +201,14 @@ def fit_value_calibration_transform(
     isotonic_totals = _IsotonicFitTotals()
     try:
         with torch_module.no_grad():
-            for batch in iter_training_batches(paths, batch_size=batch_size, config=dataset_config):
+            for batch in iter_training_batches(
+                paths,
+                batch_size=batch_size,
+                config=dataset_config,
+                defer_cache_window_expansion=True,
+            ):
                 tensors = training_batch_to_torch(batch, device=device)
-                output = model(
-                    categorical_ids=tensors["categorical_ids"],
-                    numeric_features=tensors["numeric_features"],
-                    token_type_ids=tensors["token_type_ids"],
-                    attention_mask=tensors["attention_mask"],
-                    history_mask=tensors["history_mask"],
-                )
+                output = model_forward_from_training_tensors(model, tensors)
                 predictions = tuple(float(value) for value in output.value.detach().cpu().tolist())
                 returns = tuple(float(value) for value in tensors["returns"].detach().cpu().tolist())
                 if method == "isotonic":

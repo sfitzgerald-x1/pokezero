@@ -518,32 +518,71 @@ if nn is not None:  # pragma: no cover - optional dependency path.
         def forward(
             self,
             *,
-            categorical_ids: Any,
-            numeric_features: Any,
-            token_type_ids: Any,
-            attention_mask: Any,
+            categorical_ids: Any | None = None,
+            numeric_features: Any | None = None,
+            token_type_ids: Any | None = None,
+            attention_mask: Any | None = None,
             history_mask: Any,
+            row_categorical_ids: Any | None = None,
+            row_numeric_features: Any | None = None,
+            row_token_type_ids: Any | None = None,
+            row_attention_mask: Any | None = None,
+            window_row_indices: Any | None = None,
         ) -> TransformerPolicyOutput:
-            _validate_tensor_shapes(categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask, self.config)
-            batch_size, window_size, token_count, _ = categorical_ids.shape
-            clipped_categories = categorical_ids.long().clamp(min=0, max=self.config.categorical_vocab_size - 1)
-            category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
-            token_embeddings = self.token_type_embedding(
-                token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
-            )
-            numeric_embeddings = self.numeric_projection(numeric_features.float())
-            history_positions = torch.arange(window_size, device=categorical_ids.device)
+            if window_row_indices is None:
+                if (
+                    categorical_ids is None
+                    or numeric_features is None
+                    or token_type_ids is None
+                    or attention_mask is None
+                ):
+                    raise ValueError("expanded observation tensors are required when window_row_indices is absent.")
+                _validate_tensor_shapes(categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask, self.config)
+                batch_size, window_size, token_count, _ = categorical_ids.shape
+                x = self._embed_expanded_inputs(
+                    categorical_ids=categorical_ids,
+                    numeric_features=numeric_features,
+                    token_type_ids=token_type_ids,
+                )
+                resolved_attention_mask = attention_mask
+            else:
+                if (
+                    row_categorical_ids is None
+                    or row_numeric_features is None
+                    or row_token_type_ids is None
+                    or row_attention_mask is None
+                ):
+                    raise ValueError("row observation tensors are required when window_row_indices is set.")
+                _validate_row_indexed_tensor_shapes(
+                    row_categorical_ids,
+                    row_numeric_features,
+                    row_token_type_ids,
+                    row_attention_mask,
+                    window_row_indices,
+                    history_mask,
+                    self.config,
+                )
+                batch_size, window_size = history_mask.shape
+                token_count = self.config.token_count
+                row_embeddings = self._embed_expanded_inputs(
+                    categorical_ids=row_categorical_ids.unsqueeze(1),
+                    numeric_features=row_numeric_features.unsqueeze(1),
+                    token_type_ids=row_token_type_ids.unsqueeze(1),
+                ).squeeze(1)
+                x = row_embeddings[window_row_indices.long()]
+                resolved_attention_mask = row_attention_mask[window_row_indices.long()]
+            history_positions = torch.arange(window_size, device=x.device)
             history_embeddings = self.history_position_embedding(history_positions).view(1, window_size, 1, -1)
-            x = category_embeddings + token_embeddings + numeric_embeddings + history_embeddings
+            x = x + history_embeddings
             x = x.view(batch_size, window_size * token_count, self.config.embedding_dim)
-            valid_tokens = (attention_mask.bool() & history_mask.bool().unsqueeze(-1)).view(batch_size, window_size * token_count)
+            valid_tokens = (resolved_attention_mask.bool() & history_mask.bool().unsqueeze(-1)).view(batch_size, window_size * token_count)
             if self.encoder is None:
                 encoded = x
             else:
                 encoded = self.encoder(x, src_key_padding_mask=~valid_tokens)
             pooled = self._pool_encoded_history(
                 encoded=encoded,
-                attention_mask=attention_mask.bool(),
+                attention_mask=resolved_attention_mask.bool(),
                 history_mask=history_mask.bool(),
             )
             latest_action_start = ((window_size - 1) * token_count) + ACTION_CANDIDATE_TOKEN_OFFSET
@@ -558,6 +597,21 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                 value=value,
                 opponent_action_logits=self.opponent_action_head(pooled),
             )
+
+        def _embed_expanded_inputs(
+            self,
+            *,
+            categorical_ids: Any,
+            numeric_features: Any,
+            token_type_ids: Any,
+        ) -> Any:
+            clipped_categories = categorical_ids.long().clamp(min=0, max=self.config.categorical_vocab_size - 1)
+            category_embeddings = self.category_embedding(clipped_categories).sum(dim=3)
+            token_embeddings = self.token_type_embedding(
+                token_type_ids.clamp(min=0, max=self.config.token_type_vocab_size - 1).long()
+            )
+            numeric_embeddings = self.numeric_projection(numeric_features.float())
+            return category_embeddings + token_embeddings + numeric_embeddings
 
         def _pool_encoded_history(self, *, encoded: Any, attention_mask: Any, history_mask: Any) -> Any:
             batch_size, window_size = history_mask.shape
@@ -601,11 +655,7 @@ else:
 def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = None) -> dict[str, Any]:
     torch_module = require_torch()
     tensor = torch_module.as_tensor
-    tensors = {
-        "categorical_ids": tensor(batch.categorical_ids, dtype=torch_module.long, device=device),
-        "numeric_features": tensor(batch.numeric_features, dtype=torch_module.float32, device=device),
-        "token_type_ids": tensor(batch.token_type_ids, dtype=torch_module.long, device=device),
-        "attention_mask": tensor(batch.attention_mask, dtype=torch_module.bool, device=device),
+    tensors: dict[str, Any] = {
         "history_mask": tensor(batch.history_mask, dtype=torch_module.bool, device=device),
         "legal_action_mask": tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
         "action_indices": tensor(batch.action_indices, dtype=torch_module.long, device=device),
@@ -619,7 +669,45 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "action_probabilities": tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
         "action_probability_mask": tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
     }
+    if batch.window_row_indices is not None:
+        tensors.update(
+            {
+                "row_categorical_ids": tensor(batch.row_categorical_ids, dtype=torch_module.long, device=device),
+                "row_numeric_features": tensor(batch.row_numeric_features, dtype=torch_module.float32, device=device),
+                "row_token_type_ids": tensor(batch.row_token_type_ids, dtype=torch_module.long, device=device),
+                "row_attention_mask": tensor(batch.row_attention_mask, dtype=torch_module.bool, device=device),
+                "window_row_indices": tensor(batch.window_row_indices, dtype=torch_module.long, device=device),
+            }
+        )
+    else:
+        tensors.update(
+            {
+                "categorical_ids": tensor(batch.categorical_ids, dtype=torch_module.long, device=device),
+                "numeric_features": tensor(batch.numeric_features, dtype=torch_module.float32, device=device),
+                "token_type_ids": tensor(batch.token_type_ids, dtype=torch_module.long, device=device),
+                "attention_mask": tensor(batch.attention_mask, dtype=torch_module.bool, device=device),
+            }
+        )
     return tensors
+
+
+def model_forward_from_training_tensors(model: Any, tensors: Mapping[str, Any]) -> TransformerPolicyOutput:
+    if "window_row_indices" in tensors:
+        return model(
+            row_categorical_ids=tensors["row_categorical_ids"],
+            row_numeric_features=tensors["row_numeric_features"],
+            row_token_type_ids=tensors["row_token_type_ids"],
+            row_attention_mask=tensors["row_attention_mask"],
+            window_row_indices=tensors["window_row_indices"],
+            history_mask=tensors["history_mask"],
+        )
+    return model(
+        categorical_ids=tensors["categorical_ids"],
+        numeric_features=tensors["numeric_features"],
+        token_type_ids=tensors["token_type_ids"],
+        attention_mask=tensors["attention_mask"],
+        history_mask=tensors["history_mask"],
+    )
 
 
 def observation_window_to_torch(
@@ -959,17 +1047,12 @@ def train_transformer_policy(
                 batch_size=resolved_training_config.batch_size,
                 config=dataset_config,
                 consumed_cache_callback=cache_callback_for_epoch,
+                defer_cache_window_expansion=True,
             ),
             start=1,
         ):
             tensors = training_batch_to_torch(batch, device=device)
-            output = model(
-                categorical_ids=tensors["categorical_ids"],
-                numeric_features=tensors["numeric_features"],
-                token_type_ids=tensors["token_type_ids"],
-                attention_mask=tensors["attention_mask"],
-                history_mask=tensors["history_mask"],
-            )
+            output = model_forward_from_training_tensors(model, tensors)
             loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -1500,6 +1583,38 @@ def _validate_tensor_shapes(
         raise ValueError("attention_mask shape does not match TransformerPolicyConfig.")
     if tuple(history_mask.shape[1:]) != (config.window_size,):
         raise ValueError("history_mask shape does not match TransformerPolicyConfig.")
+
+
+def _validate_row_indexed_tensor_shapes(
+    row_categorical_ids: Any,
+    row_numeric_features: Any,
+    row_token_type_ids: Any,
+    row_attention_mask: Any,
+    window_row_indices: Any,
+    history_mask: Any,
+    config: TransformerPolicyConfig,
+) -> None:
+    categorical_shape = tuple(row_categorical_ids.shape[1:])
+    if (
+        len(categorical_shape) != 2
+        or categorical_shape[0] != config.token_count
+        or categorical_shape[1] <= 0
+        or categorical_shape[1] > config.categorical_feature_count
+    ):
+        raise ValueError("row_categorical_ids shape does not match TransformerPolicyConfig.")
+    row_count = int(row_categorical_ids.shape[0])
+    if tuple(row_numeric_features.shape) != (row_count, config.token_count, config.numeric_feature_count):
+        raise ValueError("row_numeric_features shape does not match TransformerPolicyConfig.")
+    if tuple(row_token_type_ids.shape) != (row_count, config.token_count):
+        raise ValueError("row_token_type_ids shape does not match TransformerPolicyConfig.")
+    if tuple(row_attention_mask.shape) != (row_count, config.token_count):
+        raise ValueError("row_attention_mask shape does not match TransformerPolicyConfig.")
+    if tuple(window_row_indices.shape[1:]) != (config.window_size,):
+        raise ValueError("window_row_indices shape does not match TransformerPolicyConfig.")
+    if tuple(history_mask.shape) != tuple(window_row_indices.shape):
+        raise ValueError("history_mask shape must match window_row_indices.")
+    if int(window_row_indices.min().item()) < 0 or int(window_row_indices.max().item()) >= row_count:
+        raise ValueError("window_row_indices contains an out-of-range row reference.")
 
 
 def _masked_mean(values: Any, mask: Any) -> Any:
