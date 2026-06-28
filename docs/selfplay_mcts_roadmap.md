@@ -339,6 +339,8 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   raw rollout omission, post-train chunk deletion, and the same controls exposed through
   `neural foundation-plan/run`. This makes mid-scale foundation runs practical without changing the
   PPO contract or writing deployment-specific assumptions into the public repo.
+  The foundation wrapper also has a `midscale` profile (`5 × 10,000` games) for the 50k
+  recipe-faithful rising-curve gate before any full multimillion-battle spend.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
   random/simple/max-damage baselines.
 - **Neural self-play report yardstick curves** (`neural_cli report`) — text reports include
@@ -426,7 +428,8 @@ Near-term priority order:
    **cheap mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
    means stop and fix the recipe, **not** buy more battles. Throughput is no longer the constraint;
-   recipe fidelity and a confirmed rising curve are.
+   recipe fidelity and a confirmed rising curve are. Use `neural foundation-run --profile midscale
+   --recipe-fidelity` as the standard 50k public wrapper shape for that gate.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete

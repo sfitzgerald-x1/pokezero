@@ -231,6 +231,15 @@ NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
         "max_batches": None,
         "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
     },
+    "midscale": {
+        "iterations": 5,
+        "games_per_iteration": 10_000,
+        "workers": 128,
+        "evaluation_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"]),
+        "epochs": 1,
+        "max_batches": None,
+        "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
+    },
 }
 NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
     "baseline": {
@@ -1300,7 +1309,10 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         "--profile",
         choices=profile_choices,
         default="smoke",
-        help="Foundation run size profile. smoke is cheap plumbing; pilot matches the current 3x256 CPU recipe.",
+        help=(
+            "Foundation run size profile. smoke is cheap plumbing; pilot matches the current "
+            "3x256 CPU recipe; midscale is the 5x10k rising-curve gate before larger runs."
+        ),
     )
     parser.add_argument(
         "--variant",
