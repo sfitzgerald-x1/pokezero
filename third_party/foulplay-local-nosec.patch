@@ -1,0 +1,55 @@
+diff --git a/fp/websocket_client.py b/fp/websocket_client.py
+index d49b726..815c640 100644
+--- a/fp/websocket_client.py
++++ b/fp/websocket_client.py
+@@ -92,7 +92,14 @@ class PSWebsocketClient:
+ 
+         guest_login = self.password is None
+ 
+-        if guest_login:
++        import os as _os
++
++        if guest_login and _os.environ.get("FOULPLAY_LOCAL_NOSEC"):
++            # Local --no-security Showdown server: skip the hosted login server and
++            # claim the name with an empty assertion (same as a guest /trn).
++            response_json = None
++            assertion = ""
++        elif guest_login:
+             response = requests.post(
+                 self.login_uri,
+                 data={
+@@ -101,6 +108,12 @@ class PSWebsocketClient:
+                     "challstr": "|".join([client_id, challstr]),
+                 },
+             )
++            if response.status_code != 200:
++                logger.error(
++                    "Could not get assertion\nDetails:\n{}".format(response.content)
++                )
++                raise LoginError("Could not get assertion")
++            assertion = response.text
+         else:
+             response = requests.post(
+                 self.login_uri,
+@@ -110,16 +123,11 @@ class PSWebsocketClient:
+                     "challstr": "|".join([client_id, challstr]),
+                 },
+             )
+-
+-        if response.status_code != 200:
+-            logger.error(
+-                "Could not get assertion\nDetails:\n{}".format(response.content)
+-            )
+-            raise LoginError("Could not get assertion")
+-
+-        if guest_login:
+-            assertion = response.text
+-        else:
++            if response.status_code != 200:
++                logger.error(
++                    "Could not get assertion\nDetails:\n{}".format(response.content)
++                )
++                raise LoginError("Could not get assertion")
+             response_json = json.loads(response.text[1:])
+             if "actionsuccess" not in response_json:
+                 logger.error("Login Unsuccessful: {}".format(response_json))
