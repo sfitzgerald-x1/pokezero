@@ -3562,6 +3562,46 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertNotIn("--evaluation-games", argv)
         self.assertNotIn("--value-selection-heldout-games", argv)
 
+    def test_neural_cli_foundation_midscale_recipe_plan_uses_50k_gate_profile(self) -> None:
+        with (
+            patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-midscale",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--recipe-fidelity",
+                    "--json",
+                ]
+            )
+
+        recipe = json.loads(stdout.getvalue())
+        argv = recipe["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(recipe["profile"], "midscale")
+        self.assertEqual(recipe["experiment_preset"], "recipe-fidelity")
+        self.assertEqual(recipe["resolved_options"]["iterations"], 5)
+        self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 10_000)
+        self.assertEqual(recipe["resolved_options"]["workers"], 128)
+        self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertEqual(argv[argv.index("--iterations") + 1], "5")
+        self.assertEqual(argv[argv.index("--games-per-iteration") + 1], "10000")
+        self.assertEqual(argv[argv.index("--workers") + 1], "128")
+        self.assertEqual(argv[argv.index("--epochs") + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
+        self.assertNotIn("--evaluation-games", argv)
+        self.assertNotIn("--value-selection-heldout-games", argv)
+        self.assertNotIn("--max-batches", argv)
+
     def test_neural_cli_foundation_run_writes_summary_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
