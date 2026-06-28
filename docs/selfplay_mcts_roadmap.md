@@ -410,7 +410,7 @@ Near-term priority order:
    recipe-fidelity` (and `neural foundation-plan/run --recipe-fidelity`, usable with the teacher-cut
    variant). It bundles the expressible Table A.3 knobs (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
+   5.9e-5, MIT thesis LR annealing over a configurable game-progress denominator, standard collection
    temperature), records them in the manifest/run summary, and a
    `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
    on-recipe rather than just named so. **Missing recipe components (from the paper — not yet
@@ -418,7 +418,11 @@ Near-term priority order:
    - **Value-function clipping** (`clip_range_vf`) — second-order; close opportunistically.
 
    The remaining unsupported knob is surfaced in the audit's `unsupported_knobs` so a run is never
-   silently mis-labelled on-recipe. Config fidelity is otherwise independent of scale (item 2).
+   silently mis-labelled on-recipe. For full-budget runs, the default denominator should remain the
+   recipe-scale budget; for cheap 50k-100k midscale reads, set `--learning-rate-schedule-total-games`
+   to the read's own total game count so the annealing curve exercises an `x: 0 -> 1` sweep instead
+   of barely moving over the first few percent of a 3M-game schedule. Config fidelity is otherwise
+   independent of scale (item 2).
 2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
    a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
    the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
@@ -429,12 +433,14 @@ Near-term priority order:
    mid-scale read is **minutes**. Remaining WS-B work is closing the full collect→train→promote loop
    (the central trainer must keep pace, or it becomes the new bottleneck) plus the single-box
    equivalence test.
-   A first 20k-game fast PPO/cache checkpoint is not a candidate to scale: its 300-game-per-orientation
-   read versus `max-damage` scored **10/600** (`1.67%`), with one tie and zero capped games. Treat
-   that as negative evidence for the specific fast 20k setting and a reminder that throughput/storage
-   plumbing is solved before learning quality is solved; it is not evidence against a recipe-faithful
-   mid-scale run because a single fast 20k-game setting is neither recipe-faithful nor a rising
-   net-alone curve experiment.
+   A first 20k-game fast PPO/cache checkpoint is not a candidate to scale: the 20k compact-cache
+   training job consumed about 21 GiB of active cache, deleted the cache after training, saved a
+   sub-megabyte checkpoint, and completed the one-epoch CPU-fast train in about nine minutes. Its
+   300-game-per-orientation read versus `max-damage` scored **11/600** (`1.83%`), with one capped
+   game and zero ties. Treat that as negative evidence for the specific fast 20k setting and a
+   reminder that throughput/storage plumbing is solved before learning quality is solved; it is not
+   evidence against a recipe-faithful mid-scale run because a single fast 20k-game setting is neither
+   recipe-faithful nor a rising net-alone curve experiment.
    **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on a
    **cheap mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
