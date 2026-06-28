@@ -562,6 +562,15 @@ if nn is not None:  # pragma: no cover - optional dependency path.
                     history_mask,
                     self.config,
                 )
+                if self.encoder is None and self.temporal_gru is None:
+                    return self._forward_zero_layer_row_indexed(
+                        row_categorical_ids=row_categorical_ids,
+                        row_numeric_features=row_numeric_features,
+                        row_token_type_ids=row_token_type_ids,
+                        row_attention_mask=row_attention_mask,
+                        window_row_indices=window_row_indices,
+                        history_mask=history_mask,
+                    )
                 batch_size, window_size = history_mask.shape
                 token_count = self.config.token_count
                 row_embeddings = self._embed_expanded_inputs(
@@ -590,6 +599,56 @@ if nn is not None:  # pragma: no cover - optional dependency path.
             if self.encoder is None:
                 pooled_actions = pooled.unsqueeze(1).expand(batch_size, ACTION_COUNT, self.config.embedding_dim)
                 action_tokens = torch.cat((action_tokens, pooled_actions), dim=-1)
+            raw_value = self.value_head(pooled).squeeze(-1)
+            value = torch.tanh(raw_value) if self.config.value_activation == "tanh" else raw_value
+            return TransformerPolicyOutput(
+                policy_logits=self.policy_head(action_tokens).squeeze(-1),
+                value=value,
+                opponent_action_logits=self.opponent_action_head(pooled),
+            )
+
+        def _forward_zero_layer_row_indexed(
+            self,
+            *,
+            row_categorical_ids: Any,
+            row_numeric_features: Any,
+            row_token_type_ids: Any,
+            row_attention_mask: Any,
+            window_row_indices: Any,
+            history_mask: Any,
+        ) -> TransformerPolicyOutput:
+            batch_size, window_size = history_mask.shape
+            embedding_dim = self.config.embedding_dim
+            row_embeddings = self._embed_expanded_inputs(
+                categorical_ids=row_categorical_ids.unsqueeze(1),
+                numeric_features=row_numeric_features.unsqueeze(1),
+                token_type_ids=row_token_type_ids.unsqueeze(1),
+            ).squeeze(1)
+            row_attention = row_attention_mask.bool()
+            row_token_weights = row_attention.float().unsqueeze(-1)
+            row_token_sums = (row_embeddings * row_token_weights).sum(dim=1)
+            row_token_counts = row_attention.float().sum(dim=1)
+            row_indices = window_row_indices.long()
+            gathered_sums = row_token_sums[row_indices]
+            gathered_counts = row_token_counts[row_indices]
+            history_positions = torch.arange(window_size, device=row_embeddings.device)
+            history_embeddings = self.history_position_embedding(history_positions)
+            history_weights = history_mask.float()
+            pooled_sum = (
+                (gathered_sums + (history_embeddings.view(1, window_size, embedding_dim) * gathered_counts.unsqueeze(-1)))
+                * history_weights.unsqueeze(-1)
+            ).sum(dim=1)
+            pooled_count = (gathered_counts * history_weights).sum(dim=1).clamp(min=1.0).unsqueeze(-1)
+            pooled = pooled_sum / pooled_count
+            latest_row_indices = row_indices[:, window_size - 1]
+            action_tokens = row_embeddings[
+                latest_row_indices,
+                ACTION_CANDIDATE_TOKEN_OFFSET : ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_COUNT,
+                :,
+            ]
+            action_tokens = action_tokens + history_embeddings[window_size - 1].view(1, 1, embedding_dim)
+            pooled_actions = pooled.unsqueeze(1).expand(batch_size, ACTION_COUNT, embedding_dim)
+            action_tokens = torch.cat((action_tokens, pooled_actions), dim=-1)
             raw_value = self.value_head(pooled).squeeze(-1)
             value = torch.tanh(raw_value) if self.config.value_activation == "tanh" else raw_value
             return TransformerPolicyOutput(

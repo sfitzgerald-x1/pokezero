@@ -305,6 +305,111 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertTrue(torch.allclose(row_output.value, dense_output.value))
         self.assertTrue(torch.allclose(row_output.opponent_action_logits, dense_output.opponent_action_logits))
 
+    def test_zero_layer_row_indexed_forward_matches_dense_expansion(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="row-indexed-zero-layer-cache",
+            category_vocab=tuple(f"token-{index}" for index in range(16)),
+            category_oov_buckets=1,
+            window_size=4,
+            categorical_feature_count=4,
+            numeric_feature_count=2,
+            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            embedding_dim=8,
+            transformer_layers=0,
+            attention_heads=1,
+            feedforward_dim=8,
+            dropout=0.0,
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        row_categorical_ids = torch.zeros((3, config.token_count, 2), dtype=torch.long)
+        row_categorical_ids[0, :, 0] = 2
+        row_categorical_ids[0, :, 1] = 3
+        row_categorical_ids[1, :, 0] = 4
+        row_categorical_ids[1, :, 1] = 5
+        row_categorical_ids[2, :, 0] = 6
+        row_numeric_features = torch.ones((3, config.token_count, config.numeric_feature_count))
+        row_numeric_features[1] = 2.0
+        row_numeric_features[2] = 3.0
+        row_token_type_ids = torch.zeros((3, config.token_count), dtype=torch.long)
+        row_token_type_ids[2] = 1
+        row_attention_mask = torch.ones((3, config.token_count), dtype=torch.bool)
+        row_attention_mask[1, 0] = False
+        row_attention_mask[2, 1:3] = False
+        window_row_indices = torch.tensor([[0, 1, 0, 2], [1, 2, 0, 1], [2, 0, 1, 2]], dtype=torch.long)
+        dense_categories = row_categorical_ids[window_row_indices]
+        dense_numeric = row_numeric_features[window_row_indices]
+        dense_token_types = row_token_type_ids[window_row_indices]
+        dense_attention = row_attention_mask[window_row_indices]
+        history_mask = torch.tensor(
+            [[False, True, True, True], [True, False, True, True], [True, True, True, False]],
+            dtype=torch.bool,
+        )
+
+        dense_output = model(
+            categorical_ids=dense_categories,
+            numeric_features=dense_numeric,
+            token_type_ids=dense_token_types,
+            attention_mask=dense_attention,
+            history_mask=history_mask,
+        )
+        row_output = model(
+            row_categorical_ids=row_categorical_ids,
+            row_numeric_features=row_numeric_features,
+            row_token_type_ids=row_token_type_ids,
+            row_attention_mask=row_attention_mask,
+            window_row_indices=window_row_indices,
+            history_mask=history_mask,
+        )
+
+        self.assertTrue(torch.allclose(row_output.policy_logits, dense_output.policy_logits, atol=1e-6))
+        self.assertTrue(torch.allclose(row_output.value, dense_output.value, atol=1e-6))
+        self.assertTrue(torch.allclose(row_output.opponent_action_logits, dense_output.opponent_action_logits, atol=1e-6))
+        model.zero_grad(set_to_none=True)
+        dense_output = model(
+            categorical_ids=dense_categories,
+            numeric_features=dense_numeric,
+            token_type_ids=dense_token_types,
+            attention_mask=dense_attention,
+            history_mask=history_mask,
+        )
+        dense_loss = (
+            dense_output.policy_logits.sum()
+            + dense_output.value.sum()
+            + dense_output.opponent_action_logits.sum()
+        )
+        dense_loss.backward()
+        dense_grads = {
+            name: parameter.grad.detach().clone() if parameter.grad is not None else None
+            for name, parameter in model.named_parameters()
+        }
+        model.zero_grad(set_to_none=True)
+        row_output = model(
+            row_categorical_ids=row_categorical_ids,
+            row_numeric_features=row_numeric_features,
+            row_token_type_ids=row_token_type_ids,
+            row_attention_mask=row_attention_mask,
+            window_row_indices=window_row_indices,
+            history_mask=history_mask,
+        )
+        row_loss = row_output.policy_logits.sum() + row_output.value.sum() + row_output.opponent_action_logits.sum()
+        row_loss.backward()
+        row_grads = {
+            name: parameter.grad.detach().clone() if parameter.grad is not None else None
+            for name, parameter in model.named_parameters()
+        }
+        self.assertEqual(dense_grads.keys(), row_grads.keys())
+        for name, dense_grad in dense_grads.items():
+            row_grad = row_grads[name]
+            if dense_grad is None or row_grad is None:
+                self.assertIsNone(dense_grad, name)
+                self.assertIsNone(row_grad, name)
+            else:
+                self.assertTrue(torch.allclose(row_grad, dense_grad, atol=1e-5), name)
+
     def test_evaluate_transformer_observation_value_uses_configured_history_window(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")
