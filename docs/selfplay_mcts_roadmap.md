@@ -420,7 +420,8 @@ Near-term priority order:
    read versus `max-damage` scored **10/600** (`1.67%`), with one tie and zero capped games. Treat
    that as negative evidence for the specific fast 20k setting and a reminder that throughput/storage
    plumbing is solved before learning quality is solved; it is not evidence against a recipe-faithful
-   mid-scale run because the result was not enough to show a rising net-alone curve.
+   mid-scale run because a single fast 20k-game setting is neither recipe-faithful nor a rising
+   net-alone curve experiment.
    **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on a
    **cheap mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
