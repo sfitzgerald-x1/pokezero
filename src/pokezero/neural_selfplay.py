@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from .collection import (
@@ -197,6 +198,9 @@ class NeuralSelfPlayIterationResult:
     metrics: CollectionMetrics
     value_selection_metrics: CollectionMetrics | None
     training: TransformerTrainingResult
+    training_elapsed_seconds: float
+    training_input_bytes: int | None = None
+    checkpoint_bytes: int | None = None
     benchmark: BenchmarkReport | None = None
     advancement: NeuralAdvancementDecision | None = None
     promotion: "PromotionRecordResult | None" = None
@@ -249,6 +253,9 @@ class NeuralSelfPlayIterationResult:
             "training_cache_paths": [str(path) for path in self.training_cache_paths],
             "training_cache_deleted_after_train": self.training_cache_deleted_after_train,
             "training_cache_deleted_bytes": self.training_cache_deleted_bytes,
+            "training_input_bytes": self.training_input_bytes,
+            "training_elapsed_seconds": self.training_elapsed_seconds,
+            "checkpoint_bytes": self.checkpoint_bytes,
             "seed_start": self.seed_start,
             "worker_count": self.worker_count,
             "collection_metrics": self.metrics.to_dict(),
@@ -522,6 +529,7 @@ def run_neural_selfplay_iterations(
         first_iteration = 1
         next_seed_start = seed_start
         next_evaluation_seed_start = evaluation_seed_start
+    training_input_path_byte_sizes: dict[Path, int | None] = {}
     if current_model is not None:
         # Fail fast on a warm-start/resume embedding mismatch (e.g. resuming a compact
         # randbat-dex run without re-passing the flag) before collecting any rollouts.
@@ -705,6 +713,11 @@ def run_neural_selfplay_iterations(
                 games_per_iteration=games_per_iteration,
                 total_scheduled_iterations=first_iteration + iterations - 1,
             )
+            training_input_bytes = _paths_byte_size_best_effort(
+                training_input_paths,
+                known_sizes=training_input_path_byte_sizes,
+            )
+            training_started = perf_counter()
             if value_selection_config is None:
                 model, training = train_transformer_policy(
                     training_input_paths,
@@ -724,7 +737,9 @@ def run_neural_selfplay_iterations(
                     data_note=selection_data_note,
                     artifact_path=iteration_dir / "value-selection.json",
                 )
+            training_elapsed_seconds = perf_counter() - training_started
             save_transformer_checkpoint(checkpoint_path, model, result=training)
+            checkpoint_bytes = checkpoint_path.stat().st_size if checkpoint_path.exists() else None
             value_calibration = _evaluate_iteration_value_calibration(
                 model=model,
                 training=training,
@@ -804,6 +819,9 @@ def run_neural_selfplay_iterations(
                 metrics=metrics,
                 value_selection_metrics=value_selection_metrics,
                 training=training,
+                training_elapsed_seconds=training_elapsed_seconds,
+                training_input_bytes=training_input_bytes,
+                checkpoint_bytes=checkpoint_bytes,
                 benchmark=benchmark,
                 advancement=advancement,
                 opponent_pool_config=opponent_pool_manifest_config,
@@ -937,6 +955,37 @@ def _training_input_paths_for_objective(
     if objective == "ppo":
         return iteration_training_rollout_paths
     return training_rollout_history
+
+
+def _paths_byte_size_best_effort(
+    paths: Iterable[Path],
+    *,
+    known_sizes: dict[Path, int | None] | None = None,
+) -> int | None:
+    total = 0
+    for path in paths:
+        if known_sizes is not None and path not in known_sizes:
+            known_sizes[path] = _path_byte_size_best_effort(path)
+        byte_size = known_sizes[path] if known_sizes is not None else _path_byte_size_best_effort(path)
+        if byte_size is None:
+            return None
+        total += byte_size
+    return total
+
+
+def _path_byte_size_best_effort(path: Path) -> int | None:
+    try:
+        if path.is_file() or path.is_symlink():
+            return path.stat().st_size
+        if path.is_dir():
+            total = 0
+            for child in path.rglob("*"):
+                if child.is_file() or child.is_symlink():
+                    total += child.stat().st_size
+            return total
+    except OSError:
+        return None
+    return None
 
 
 def _dataset_config_from_training_config(config: TransformerTrainingConfig) -> TrajectoryDatasetConfig:
