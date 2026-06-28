@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
-from pokezero.neural_cli import _training_cache_lifecycle, main as neural_cli_main
+from pokezero.neural_cli import _input_data_paths_byte_size, _training_cache_lifecycle, main as neural_cli_main
 from pokezero.neural_policy import (
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
@@ -1360,6 +1360,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with patch("pokezero.neural_cli.is_training_cache_path", return_value=True):
             with self.assertRaisesRegex(ValueError, "cannot exceed 50"):
                 _training_cache_lifecycle(args)
+
+    def test_neural_cli_input_data_paths_byte_size_counts_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first = temp_path / "first.jsonl"
+            second = temp_path / "second.jsonl"
+            first.write_bytes(b"abcd")
+            second.write_bytes(b"ef")
+
+            self.assertEqual(_input_data_paths_byte_size([first, second]), 6)
 
     def test_neural_cli_training_cache_lifecycle_rejects_delete_with_overlapping_value_data(self) -> None:
         args = SimpleNamespace(
@@ -3169,6 +3179,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertEqual(summary["schema_version"], "pokezero.neural_train_summary.v1")
             self.assertEqual(summary["checkpoint_path"], str(checkpoint_path))
             self.assertEqual(summary["checkpoint_bytes"], len(b"checkpoint"))
+            self.assertIsNone(summary["input_data_bytes"])
             self.assertEqual(summary["model"]["transformer_layers"], 2)
             self.assertEqual(summary["training_config"]["epochs"], 1)
             self.assertEqual(summary["final_metrics"]["policy_accuracy"], 0.75)

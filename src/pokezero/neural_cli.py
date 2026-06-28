@@ -1629,6 +1629,7 @@ def _train(args: argparse.Namespace) -> int:
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
     cache_lifecycle = _training_cache_lifecycle(args)
+    input_data_bytes = _input_data_paths_byte_size(args.data)
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -1807,6 +1808,7 @@ def _train(args: argparse.Namespace) -> int:
             command_started_at=command_started_at,
             elapsed_seconds=time.perf_counter() - command_started,
             train_elapsed_seconds=train_elapsed_seconds,
+            input_data_bytes=input_data_bytes,
             value_selection_payload=value_selection_payload,
         )
         _write_json(args.summary_out, payload)
@@ -1824,6 +1826,7 @@ def _train_summary_payload(
     command_started_at: datetime,
     elapsed_seconds: float,
     train_elapsed_seconds: float,
+    input_data_bytes: int | None,
     value_selection_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     checkpoint_bytes = args.out.stat().st_size if args.out.exists() else None
@@ -1836,6 +1839,7 @@ def _train_summary_payload(
         "elapsed_seconds": elapsed_seconds,
         "train_elapsed_seconds": train_elapsed_seconds,
         "data_paths": [str(path) for path in args.data],
+        "input_data_bytes": input_data_bytes,
         "checkpoint_path": str(args.out),
         "checkpoint_bytes": checkpoint_bytes,
         "model": {
@@ -1856,6 +1860,25 @@ def _train_summary_payload(
         "value_selection": value_selection_payload,
         "training_cache": cache_lifecycle.to_summary(),
     }
+
+
+def _input_data_paths_byte_size(paths: Sequence[Path]) -> int | None:
+    total = 0
+    for path in paths:
+        try:
+            if is_training_cache_path(path):
+                total += training_cache_paths_byte_size([path])
+            elif path.is_file() or path.is_symlink():
+                total += path.stat().st_size
+            elif path.is_dir():
+                for child in path.rglob("*"):
+                    if child.is_file() or child.is_symlink():
+                        total += child.stat().st_size
+            else:
+                return None
+        except OSError:
+            return None
+    return total
 
 
 @dataclass
