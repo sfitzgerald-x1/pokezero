@@ -375,7 +375,7 @@ teacher opponents, and imitation terms ran successfully and reached `0.2825` ver
 a 400-game yardstick row. It is tempting to read that as "self-play cannot rise beyond the teacher
 ceiling," but that conclusion is unsupported: the run was **3 iterations × 256 games = 768 battles
 (~0.026% of the recipe's ~3M-battle budget) with materially off-recipe hyperparameters** — zero
-exploration entropy, a single epoch, no learning-rate annealing (see
+exploration entropy, a single epoch, and pre-annealing constant LR (see
 [`mit_thesis_reference_config.md`](mit_thesis_reference_config.md)). The thesis net needed ~1 day /
 40M steps just to reach 80% vs a heuristic baseline. So this run validates the teacher-cut *plumbing*
 and gives an early-training datapoint; it says nothing about whether the loop can clear the ceiling.
@@ -387,23 +387,20 @@ Near-term priority order:
 1. **Recipe-fidelity pass on the PPO config.** Align the teacher-cut/foundation training knobs to the
    thesis reference (`entropy_coef`≈0.0588, `n_epochs`≈7, annealed LR, `gamma`≈0.9999, `gae_lambda`,
    clip ranges, value coef, batch size) — see the gap table in the reference doc. Several of these
-   (exploration entropy, epochs, LR annealing) are first-order and currently set to no-op values.
+   (exploration entropy, epochs, LR annealing) were first-order gaps in the earlier teacher-cut pilot.
    **Status:** the config-fidelity half now exists as `neural iterate --experiment-preset
    recipe-fidelity` (and `neural foundation-plan/run --recipe-fidelity`, usable with the teacher-cut
    variant). It bundles the expressible Table A.3 knobs (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, standard collection temperature), records them in the manifest/run summary, and a
+   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
+   temperature), records them in the manifest/run summary, and a
    `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
    on-recipe rather than just named so. **Missing recipe components (from the paper — not yet
    implemented):**
-   - **LR annealing** — no global-step schedule under the per-iteration optimizer reset. This is
-     **first-order**: the thesis credits annealing alone for ~55% → 80% vs its heuristic baseline, so
-     a scaled run without it may under-deliver at *any* battle count. **Must be closed before the
-     recipe-scale run** (see item 2 guardrail).
    - **Value-function clipping** (`clip_range_vf`) — second-order; close opportunistically.
 
-   Both are surfaced in the audit's `unsupported_knobs` so a run is never silently mis-labelled
-   on-recipe. Config fidelity is otherwise independent of scale (item 2).
+   The remaining unsupported knob is surfaced in the audit's `unsupported_knobs` so a run is never
+   silently mis-labelled on-recipe. Config fidelity is otherwise independent of scale (item 2).
 2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
    a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
    the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
@@ -414,12 +411,11 @@ Near-term priority order:
    mid-scale read is **minutes**. Remaining WS-B work is closing the full collect→train→promote loop
    (the central trainer must keep pace, or it becomes the new bottleneck) plus the single-box
    equivalence test.
-   **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on both:
-   (a) **closing LR annealing** (the first-order missing recipe component, item 1); and (b) a **cheap
-   mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose net-alone
-   curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve means stop
-   and fix the recipe, **not** buy more battles. Throughput is no longer the constraint; recipe
-   fidelity and a confirmed rising curve are.
+   **Guardrail — do NOT spend the full multimillion budget yet.** Gate the recipe-scale run on a
+   **cheap mid-scale recipe-faithful run (~50–100k battles — minutes at current throughput) whose
+   net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
+   means stop and fix the recipe, **not** buy more battles. Throughput is no longer the constraint;
+   recipe fidelity and a confirmed rising curve are.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete
@@ -512,11 +508,12 @@ Steps:
    wrapper's `--recipe-fidelity` flag), reuses that same arms-race scaffolding but overrides the PPO
    hyperparameters to the MIT thesis Table A.3 values (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, standard collection temperature 1.0). It is the config-fidelity half of near-term
+   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
+   temperature 1.0). It is the config-fidelity half of near-term
    priority #1. A `recipe_fidelity` audit (printed by `neural report`, embedded in foundation run
    summaries, and computed by `recipe_fidelity_audit()`) compares the *actual* resolved config
-   against the reference table so a run is verifiable as recipe-fidelity, and always flags the two
-   knobs we cannot yet express — LR annealing and value-function clipping — under `unsupported_knobs`.
+   against the reference table so a run is verifiable as recipe-fidelity, and flags the remaining
+   unexpressed value-function clipping knob under `unsupported_knobs`.
    The highest-priority WS-A question is now explicit: can self-play break the scripted-teacher
    ceiling at all? The `teacher-cut` foundation variant is the clean experiment contract for that
    question. It permits a one-shot learned checkpoint as the initial collector, then removes fixed
@@ -662,8 +659,8 @@ days. Collection is the CPU bottleneck; fan it out.
 4M battles/day), so the ~3M-battle budget is now ~hours. The remaining WS-B work is closing the full
 **collect→train→promote loop with the central trainer keeping pace** (else it becomes the new
 bottleneck), plus the single-box **equivalence test** (acceptance below). Note: throughput being
-solved does **not** unlock the full multimillion run — that is gated by the WS-A guardrail (close LR
-annealing + confirm a *rising* mid-scale net-alone curve) before spending the budget.
+solved does **not** unlock the full multimillion run — that is gated by the WS-A guardrail
+(confirm a *rising* mid-scale recipe-faithful net-alone curve) before spending the budget.
 
 Steps:
 1. **Collection/train split:** make collectors emit rollout JSONL to shared storage keyed by

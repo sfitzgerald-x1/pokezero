@@ -24,6 +24,7 @@ from .collection import (
 )
 from .env import PokeZeroEnv
 from .neural_policy import (
+    CONSTANT_LEARNING_RATE_SCHEDULE,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     TransformerTrainingResult,
@@ -614,18 +615,24 @@ def run_neural_selfplay_iterations(
                     if value_selection_config.scope == "iteration"
                     else tuple(training_rollout_history)
                 )
+            iteration_training_config = _training_config_for_iteration_learning_rate_schedule(
+                training_config,
+                iteration=iteration,
+                games_per_iteration=games_per_iteration,
+                total_scheduled_iterations=first_iteration + iterations - 1,
+            )
             if value_selection_config is None:
                 model, training = train_transformer_policy(
                     training_input_paths,
                     model_config=iteration_model_config,
-                    training_config=training_config,
+                    training_config=iteration_training_config,
                     initial_model=current_model,
                 )
             else:
                 model, training, value_selection = _train_with_iteration_value_selection(
                     paths=training_input_paths,
                     model_config=iteration_model_config,
-                    training_config=training_config,
+                    training_config=iteration_training_config,
                     initial_model=current_model,
                     selection_paths=selection_paths or (),
                     config=value_selection_config,
@@ -1624,6 +1631,35 @@ def _training_result_to_dict(result: TransformerTrainingResult) -> dict[str, Any
     if result.value_calibration_transform is not None:
         payload["value_calibration_transform"] = result.value_calibration_transform.to_dict()
     return payload
+
+
+def _training_config_for_iteration_learning_rate_schedule(
+    training_config: TransformerTrainingConfig,
+    *,
+    iteration: int,
+    games_per_iteration: int,
+    total_scheduled_iterations: int,
+) -> TransformerTrainingConfig:
+    if training_config.learning_rate_schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
+        return training_config
+    if iteration <= 0:
+        raise ValueError("iteration must be positive.")
+    if games_per_iteration <= 0:
+        raise ValueError("games_per_iteration must be positive.")
+    if training_config.learning_rate_schedule_total_games is None and total_scheduled_iterations < iteration:
+        raise ValueError("total_scheduled_iterations must include the current iteration.")
+    total_scheduled_games = (
+        training_config.learning_rate_schedule_total_games
+        if training_config.learning_rate_schedule_total_games is not None
+        else total_scheduled_iterations * games_per_iteration
+    )
+    completed_games_before = (iteration - 1) * games_per_iteration
+    completed_games_after = iteration * games_per_iteration
+    return replace(
+        training_config,
+        learning_rate_progress_start=min(1.0, completed_games_before / total_scheduled_games),
+        learning_rate_progress_end=min(1.0, completed_games_after / total_scheduled_games),
+    )
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
