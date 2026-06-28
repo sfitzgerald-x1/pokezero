@@ -347,6 +347,9 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   Standalone `neural train` can write a compact train summary artifact with end-to-end elapsed time,
   train-call elapsed time, input data size, checkpoint size, final metrics, and cache lifecycle bytes;
   use that artifact rather than external logs when judging the 20k-games-under-10-minutes training gate.
+  In-process neural self-play iteration manifests also record training elapsed time, training input
+  bytes, checkpoint bytes, and cache deletion bytes so foundation runs can be judged without scraping
+  process logs.
   The foundation wrapper also has a `midscale` profile (`5 × 10,000` games) for the 50k
   recipe-faithful rising-curve gate before any full multimillion-battle spend.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs

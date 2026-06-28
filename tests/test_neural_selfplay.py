@@ -911,6 +911,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(manifest["training_cache_paths"], expected_paths)
         self.assertEqual(manifest["training_rollout_paths"], expected_paths)
         self.assertEqual(manifest["training_input_paths"], expected_paths)
+        self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
+        self.assertGreater(manifest["training_input_bytes"], 0)
+        self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
         self.assertFalse(manifest["training_cache_deleted_after_train"])
 
     def test_run_neural_selfplay_iterations_deletes_cache_chunks_after_ppo_train_by_default(self) -> None:
@@ -949,6 +952,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertTrue(all(not path.exists() for path in trained_cache_paths))
             self.assertTrue(manifest["training_cache_deleted_after_train"])
             self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
+            self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
+            self.assertGreater(manifest["training_input_bytes"], 0)
+            self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
             self.assertEqual(manifest["training_cache_paths"], [str(path) for path in trained_cache_paths])
 
     def test_run_neural_selfplay_iterations_rejects_omit_rollout_jsonl_without_cache_root(self) -> None:
