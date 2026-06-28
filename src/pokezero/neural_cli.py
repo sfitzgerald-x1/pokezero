@@ -569,6 +569,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--epsilon", type=float, default=0.0, help="Random legal exploration rate during benchmark.")
     benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
+    benchmark.add_argument(
+        "--summary-out",
+        type=Path,
+        default=None,
+        help="Optional JSON path where the benchmark report is persisted for later audit.",
+    )
     benchmark.set_defaults(func=_benchmark)
 
     root_puct_play = subparsers.add_parser(
@@ -2203,8 +2209,12 @@ def _benchmark(args: argparse.Namespace) -> int:
             ),
         ),
     )
+    payload = report.to_dict()
+    if args.summary_out is not None:
+        _write_json(args.summary_out, payload)
+        print(f"benchmark_summary: {args.summary_out}", file=sys.stderr)
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_benchmark_report(report)
     return 0
