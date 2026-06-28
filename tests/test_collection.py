@@ -309,8 +309,7 @@ class CollectionTest(unittest.TestCase):
                     rollout_config=RolloutConfig(max_decision_rounds=5),
                     dataset_config=TrajectoryDatasetConfig(window_size=2),
                     seed_start=10,
-            )
-
+                )
             batches = list(iter_training_batches(output_path, batch_size=2, config=TrajectoryDatasetConfig(window_size=2)))
 
             self.assertEqual(metrics.games, 2)
@@ -321,6 +320,26 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(cache.record_count, 2)
             self.assertEqual(cache.example_count, 4)
             self.assertEqual([batch.batch_size for batch in batches], [2, 2])
+
+    def test_collect_training_cache_rejects_storage_cap(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "cache"
+
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                collect_training_cache(
+                    output_path=output_path,
+                    games=1,
+                    env_factory=OneTurnEnv,
+                    policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    dataset_config=TrajectoryDatasetConfig(window_size=2),
+                    seed_start=10,
+                    max_cache_root_bytes=1,
+                    cache_root=Path(temp_dir),
+                )
+
+            self.assertFalse(output_path.exists())
 
     def test_reusable_env_pool_reuses_per_thread_and_closes(self) -> None:
         instances: list[OneTurnEnv] = []
@@ -976,6 +995,8 @@ class CollectionTest(unittest.TestCase):
                         "3",
                         "--discount",
                         "0.9",
+                        "--max-cache-gb",
+                        "50",
                         "--ppo-target-mode",
                         "gae",
                         "--gae-lambda",
@@ -993,6 +1014,8 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(kwargs["dataset_config"].discount, 0.9)
         self.assertEqual(kwargs["dataset_config"].ppo_target_mode, "gae")
         self.assertEqual(kwargs["dataset_config"].gae_lambda, 0.7)
+        self.assertEqual(kwargs["max_cache_root_bytes"], 50 * 1024 * 1024 * 1024)
+        self.assertEqual(kwargs["cache_root"], Path("runs"))
         self.assertIn("training_cache: runs/cache", stdout.getvalue())
         self.assertIn("training_cache_examples: 4", stdout.getvalue())
 

@@ -622,6 +622,18 @@ class DatasetTest(unittest.TestCase):
         self.assertIn(TRAINING_CACHE_SCHEMA_VERSION, metadata)
         self.assertIn('"discount": 0.5', metadata)
 
+    def test_training_cache_write_rejects_root_storage_cap_before_output_creation(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                builder.write(cache_path, max_cache_root_bytes=1, cache_root=temp_dir)
+
+            self.assertFalse(cache_path.exists())
+
     def test_training_cache_rejects_mismatched_dataset_config(self) -> None:
         self._require_numpy()
         with tempfile.TemporaryDirectory() as temp_dir:

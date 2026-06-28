@@ -278,6 +278,8 @@ def collect_training_cache(
     dataset_config: "TrajectoryDatasetConfig",
     seed_start: int = 1,
     overwrite: bool = False,
+    max_cache_root_bytes: int | None = None,
+    cache_root: Path | None = None,
 ) -> tuple[CollectionMetrics, "TrainingCacheSummary"]:
     """Collect rollouts and persist compact training examples instead of raw JSONL."""
 
@@ -301,7 +303,12 @@ def collect_training_cache(
             )
             accumulator.add(record)
             builder.add_record(record)
-        summary = builder.write(output_path, overwrite=overwrite)
+        summary = builder.write(
+            output_path,
+            overwrite=overwrite,
+            max_cache_root_bytes=max_cache_root_bytes,
+            cache_root=cache_root,
+        )
     finally:
         close = getattr(env, "close", None)
         if callable(close):

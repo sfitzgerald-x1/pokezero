@@ -1217,6 +1217,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "--out",
                         "cache",
                         "--overwrite",
+                        "--max-cache-gb",
+                        "50",
                         "--window-size",
                         "3",
                         "--discount",
@@ -1237,6 +1239,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["config"].discount, 0.9)
         self.assertEqual(kwargs["config"].ppo_target_mode, "gae")
         self.assertEqual(kwargs["config"].gae_lambda, 0.7)
+        self.assertEqual(kwargs["max_cache_root_bytes"], 50 * 1024 * 1024 * 1024)
+        self.assertEqual(kwargs["cache_root"], Path("."))
         self.assertIn("training_cache_examples: 8", stdout.getvalue())
 
     def test_neural_cli_training_cache_lifecycle_rejects_oversized_active_cache(self) -> None:
@@ -1269,6 +1273,18 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             callback(Path("cache-a"))
 
         delete_cache.assert_called_once_with(Path("cache-a"))
+
+    def test_neural_cli_training_cache_lifecycle_rejects_delete_with_overlapping_value_data(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("cache-root/cache-a")],
+            max_cache_gb=None,
+            delete_cache_after_read=True,
+            value_calibration_data=None,
+            value_selection_data=[Path("cache-root/cache-a/heldout")],
+        )
+        with patch("pokezero.neural_cli.is_training_cache_path", return_value=True):
+            with self.assertRaisesRegex(ValueError, "delete-cache-after-read"):
+                _training_cache_lifecycle_callback(args)
 
     def test_neural_cli_benchmark_reports_missing_torch_extra(self) -> None:
         if torch_available():

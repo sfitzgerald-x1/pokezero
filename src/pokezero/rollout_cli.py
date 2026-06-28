@@ -57,6 +57,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     collect_cache.add_argument("--p2-policy", default="random-legal", help=f"Policy for p2. {policy_help}")
     collect_cache.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
     collect_cache.add_argument("--overwrite", action="store_true", help="Replace an existing training cache directory.")
+    collect_cache.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=None,
+        help=(
+            "Reject the write if existing caches under the output parent plus the new cache "
+            "would exceed this many GiB."
+        ),
+    )
     _add_dataset_config_arguments(collect_cache)
     collect_cache.set_defaults(func=_collect_training_cache)
 
@@ -181,6 +190,8 @@ def _collect_training_cache(args: argparse.Namespace) -> int:
         dataset_config=_dataset_config_from_args(args),
         seed_start=args.seed_start,
         overwrite=args.overwrite,
+        max_cache_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        cache_root=args.out.parent,
     )
     _print_metrics(metrics.to_dict())
     print(f"training_cache: {cache.path}")
@@ -319,6 +330,14 @@ def _dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConf
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
     )
+
+
+def _cache_gb_to_bytes(value: float | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0:
+        raise ValueError("--max-cache-gb must be positive.")
+    return int(value * 1024 * 1024 * 1024)
 
 
 def print_benchmark_report(report: BenchmarkReport) -> None:

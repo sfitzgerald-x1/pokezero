@@ -482,6 +482,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cache_data.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files.")
     cache_data.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
     cache_data.add_argument("--overwrite", action="store_true", help="Replace an existing training cache directory.")
+    cache_data.add_argument(
+        "--max-cache-gb",
+        type=float,
+        default=None,
+        help=(
+            "Reject the write if existing caches under the output parent plus the new cache "
+            "would exceed this many GiB."
+        ),
+    )
     _add_training_dataset_arguments(cache_data)
     cache_data.set_defaults(func=_cache_data)
 
@@ -1382,6 +1391,8 @@ def _cache_data(args: argparse.Namespace) -> int:
         args.out,
         config=_training_dataset_config_from_args(args),
         overwrite=args.overwrite,
+        max_cache_root_bytes=_cache_gb_to_bytes(args.max_cache_gb),
+        cache_root=args.out.parent,
     )
     print(f"training_cache: {summary.path}")
     print(f"training_cache_records: {summary.record_count}")
@@ -1568,9 +1579,8 @@ def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Pa
     if any(not is_training_cache_path(path) for path in args.data):
         raise ValueError("--max-cache-gb and --delete-cache-after-read require training cache directories.")
     if args.max_cache_gb is not None:
-        if args.max_cache_gb <= 0:
-            raise ValueError("--max-cache-gb must be positive.")
-        max_bytes = int(args.max_cache_gb * 1024 * 1024 * 1024)
+        max_bytes = _cache_gb_to_bytes(args.max_cache_gb)
+        assert max_bytes is not None
         cache_bytes = training_cache_paths_byte_size(args.data)
         print(f"training_cache_footprint_bytes: {cache_bytes}")
         print(f"training_cache_footprint_limit_bytes: {max_bytes}")
@@ -1581,6 +1591,12 @@ def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Pa
             )
     if not args.delete_cache_after_read:
         return None
+    deleted_paths = tuple(Path(path) for path in args.data)
+    for name in ("value_calibration_data", "value_selection_data"):
+        for path in tuple(getattr(args, name, None) or ()):
+            if any(_paths_overlap(path, deleted_path) for deleted_path in deleted_paths):
+                flag = "--value-calibration-data" if name == "value_calibration_data" else "--value-selection-data"
+                raise ValueError(f"--delete-cache-after-read cannot be used when {flag} overlaps training cache data.")
 
     def delete_consumed_cache(path: Path) -> None:
         byte_size = training_cache_paths_byte_size([path])
@@ -1588,6 +1604,24 @@ def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Pa
         print(f"deleted_training_cache: {path} bytes={byte_size}")
 
     return delete_consumed_cache
+
+
+def _cache_gb_to_bytes(value: float | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0:
+        raise ValueError("--max-cache-gb must be positive.")
+    return int(value * 1024 * 1024 * 1024)
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    resolved_left = Path(left).expanduser().resolve(strict=False)
+    resolved_right = Path(right).expanduser().resolve(strict=False)
+    return (
+        resolved_left == resolved_right
+        or resolved_left in resolved_right.parents
+        or resolved_right in resolved_left.parents
+    )
 
 
 def _add_training_dataset_arguments(parser: argparse.ArgumentParser) -> None:

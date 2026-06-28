@@ -278,7 +278,14 @@ class TrainingCacheBuilder:
             self._terminal_capped.append(example.terminal_capped)
         self._record_count += 1
 
-    def write(self, path: PathInput, *, overwrite: bool = False) -> TrainingCacheSummary:
+    def write(
+        self,
+        path: PathInput,
+        *,
+        overwrite: bool = False,
+        max_cache_root_bytes: int | None = None,
+        cache_root: PathInput | None = None,
+    ) -> TrainingCacheSummary:
         if self.example_count == 0:
             raise ValueError("training cache cannot be written with zero examples.")
         numpy = _require_numpy()
@@ -286,9 +293,20 @@ class TrainingCacheBuilder:
         if output_path.exists() and not overwrite:
             raise FileExistsError(f"training cache already exists: {output_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        arrays = self._arrays(numpy)
+        if max_cache_root_bytes is not None:
+            if max_cache_root_bytes <= 0:
+                raise ValueError("max_cache_root_bytes must be positive.")
+            root = Path(cache_root) if cache_root is not None else output_path.parent
+            current_bytes = _directory_byte_size(root) if root.exists() else 0
+            estimated_bytes = _estimated_training_cache_byte_size(arrays)
+            if current_bytes + estimated_bytes > max_cache_root_bytes:
+                raise ValueError(
+                    f"training cache write would exceed storage cap: existing={current_bytes} bytes "
+                    f"estimated_new={estimated_bytes} bytes limit={max_cache_root_bytes} bytes."
+                )
         temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
         try:
-            arrays = self._arrays(numpy)
             for name, value in arrays.items():
                 numpy.save(temp_path / f"{name}.npy", value, allow_pickle=False)
             metadata = {
@@ -446,12 +464,19 @@ def write_training_cache_from_rollouts(
     *,
     config: TrajectoryDatasetConfig | None = None,
     overwrite: bool = False,
+    max_cache_root_bytes: int | None = None,
+    cache_root: PathInput | None = None,
 ) -> TrainingCacheSummary:
     builder = TrainingCacheBuilder(config=config)
     for path in _normalize_paths(paths):
         for record in iter_rollout_records(path):
             builder.add_record(record)
-    return builder.write(output_path, overwrite=overwrite)
+    return builder.write(
+        output_path,
+        overwrite=overwrite,
+        max_cache_root_bytes=max_cache_root_bytes,
+        cache_root=cache_root,
+    )
 
 
 def is_training_cache_path(path: PathInput) -> bool:
@@ -886,6 +911,13 @@ def _owned_array(value: Any) -> Any:
 
 def _directory_byte_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _estimated_training_cache_byte_size(arrays: Mapping[str, Any]) -> int:
+    array_bytes = sum(int(getattr(value, "nbytes", 0)) for value in arrays.values())
+    # NPY headers and metadata are small, but overestimate so write-time caps fail before
+    # the active cache root can cross the requested storage ceiling.
+    return array_bytes + max(16 * 1024 * 1024, array_bytes // 100)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
