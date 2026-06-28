@@ -26,5 +26,20 @@ foul-play is an opponent bot, not a library. To run it as an eval opponent:
 This is an **eval/sparring opponent only — never a training teacher.** Cloning it would relocate the
 imitation ceiling to a higher floor and abandon the learn-from-scratch goal.
 
+### Build + run the benchmark
+```sh
+# one-time: build foul-play's gen3 engine + venv (needs rustup/cargo + uv)
+scripts/setup_foulplay_eval.sh
+
+# run N games: our checkpoint vs foul-play on a local --no-security Showdown server
+POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown \
+  scripts/benchmark_vs_foulplay.sh runs/<...>/transformer-policy.pt 50 1000
+```
+`setup` applies `foulplay-local-nosec.patch` — a small env-gated change so foul-play claims its
+name with an empty assertion against a local `--no-security` server (it otherwise fetches a guest
+assertion from the hosted login server, which is invalid for a local server's challstr). The patch
+lives inside foul-play's tree (GPL); pokezero only ships the `.patch` and the arms-length runner.
+Smoke-validated: ran two `gen3randombattle` games end-to-end (foul-play set prediction working).
+
 ### Updating the pin
 Bump the pinned commit in a dedicated PR: `git submodule update --remote third_party/foul-play`.
