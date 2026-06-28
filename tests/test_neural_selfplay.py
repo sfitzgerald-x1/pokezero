@@ -3205,7 +3205,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
             ("--attention-heads", "0", "attention-heads must be positive"),
             ("--feedforward-dim", "0", "feedforward-dim must be positive"),
             ("--dropout", "1.0", "dropout must be >= 0 and < 1"),
-            ("--category-oov-buckets", "-1", "category-oov-buckets must be non-negative"),
+            ("--category-oov-buckets", "0", "category-oov-buckets must be positive"),
         )
         for flag, value, message in cases:
             with self.subTest(flag=flag):
@@ -3224,6 +3224,23 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
                 self.assertEqual(exit_code, 1)
                 self.assertIn(message, stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_incompatible_embedding_heads(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-invalid-architecture",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--embedding-dim",
+                    "65",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("embedding-dim must be divisible by attention-heads", stderr.getvalue())
 
     def test_neural_cli_foundation_plan_rejects_cache_chunk_games_without_cache_root(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:

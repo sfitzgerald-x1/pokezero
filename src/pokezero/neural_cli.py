@@ -4278,8 +4278,12 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("feedforward-dim must be positive.")
     if resolved["dropout"] is not None and not 0.0 <= float(resolved["dropout"]) < 1.0:
         raise ValueError("dropout must be >= 0 and < 1.")
-    if resolved["category_oov_buckets"] is not None and int(resolved["category_oov_buckets"]) < 0:
-        raise ValueError("category-oov-buckets must be non-negative.")
+    if resolved["category_oov_buckets"] is not None and int(resolved["category_oov_buckets"]) <= 0:
+        raise ValueError("category-oov-buckets must be positive.")
+    effective_embedding_dim = int(resolved["embedding_dim"] if resolved["embedding_dim"] is not None else 128)
+    effective_attention_heads = int(resolved["attention_heads"] if resolved["attention_heads"] is not None else 4)
+    if effective_embedding_dim % effective_attention_heads != 0:
+        raise ValueError("embedding-dim must be divisible by attention-heads.")
     if (
         resolved["collector_advancement_mode"] is not None
         and resolved["collector_advancement_mode"] not in COLLECTOR_ADVANCEMENT_MODES
