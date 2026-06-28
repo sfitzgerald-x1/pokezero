@@ -433,9 +433,10 @@ Near-term priority order:
    mid-scale read is **minutes**. Remaining WS-B work is closing the full collect→train→promote loop
    (the central trainer must keep pace, or it becomes the new bottleneck) plus the single-box
    equivalence test.
-   A first 20k-game fast PPO/cache checkpoint is not a candidate to scale: the 20k compact-cache
-   training job consumed about 21 GiB of active cache, deleted the cache after training, saved a
-   sub-megabyte checkpoint, and completed the one-epoch CPU-fast train in about nine minutes. Its
+   A first 20k-game fast PPO/cache checkpoint is not a candidate to scale: job logs reported that
+   the 20k compact-cache training job consumed about 21 GiB of active cache, deleted the cache after
+   training, saved a sub-megabyte checkpoint, and completed the one-epoch CPU-fast train in about
+   nine minutes. Its
    300-game-per-orientation read versus `max-damage` scored **11/600** (`1.83%`), with one capped
    game and zero ties. Treat that as negative evidence for the specific fast 20k setting and a
    reminder that throughput/storage plumbing is solved before learning quality is solved; it is not
@@ -539,8 +540,8 @@ Steps:
    wrapper's `--recipe-fidelity` flag), reuses that same arms-race scaffolding but overrides the PPO
    hyperparameters to the MIT thesis Table A.3 values (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
    lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing over a 3,000,000-game denominator, standard collection
-   temperature 1.0). It is the config-fidelity half of near-term
+   5.9e-5, MIT thesis LR annealing over a configurable game-progress denominator, standard
+   collection temperature 1.0). It is the config-fidelity half of near-term
    priority #1. A `recipe_fidelity` audit (printed by `neural report`, embedded in foundation run
    summaries, and computed by `recipe_fidelity_audit()`) compares the *actual* resolved config
    against the reference table so a run is verifiable as recipe-fidelity, and flags the remaining
