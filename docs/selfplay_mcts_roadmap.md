@@ -339,6 +339,10 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   raw rollout omission, post-train chunk deletion, and the same controls exposed through
   `neural foundation-plan/run`. This makes mid-scale foundation runs practical without changing the
   PPO contract or writing deployment-specific assumptions into the public repo.
+  Fresh continuation runs can now pass an LR schedule completed-games offset directly through
+  `neural iterate`, and `neural foundation-plan/run --continue-from` resolves a prior foundation or
+  neural self-play run into the latest learned initial policy plus that completed-games offset. This
+  prevents the next chunk after a 50k read from silently behaving like a cold LR restart.
   Multi-worker self-play collection keeps deterministic record ordering while bounding in-flight
   game futures, so large recipe chunks do not queue the entire game range in memory before writing.
   The foundation wrapper also exposes the nested neural architecture knobs, including `--layers 0`
@@ -448,7 +452,16 @@ Near-term priority order:
    means stop and fix the recipe, **not** buy more battles. Throughput is no longer the constraint;
    recipe fidelity and a confirmed rising curve are. Use `neural foundation-run --profile midscale
    --recipe-fidelity --learning-rate-schedule-total-games 50000` as the standard 50k public wrapper
-   shape for that gate.
+   shape for that gate. A recipe-faithful 50k fast-batch read has now produced a monotonic
+   net-alone curve against the tracked yardsticks: `max-damage` rose
+   `7.25% -> 10.25% -> 15.00% -> 17.25% -> 22.00%`, `simple-legal` rose
+   `36.25% -> 53.00% -> 57.75% -> 64.25% -> 69.75%`, and `random-legal` rose
+   `66.25% -> 77.50% -> 82.25% -> 89.75% -> 90.25%` over five 10k-game
+   iterations. The result is still far below the teacher ceiling, but it is the first credible
+   rising signal under the teacher-cut recipe. Continue from the latest checkpoint for the next
+   50k-100k chunk rather than restarting from random; if using a fresh run directory, use
+   `--continue-from` or explicitly set `--learning-rate-schedule-completed-games` so LR progress is
+   auditable.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete
