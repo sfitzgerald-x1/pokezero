@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 import json
@@ -683,29 +683,31 @@ def _collect_selfplay_records(
     max_workers = min(worker_count, games)
     try:
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pokezero-selfplay") as executor:
-            results = _bounded_ordered_map(
-                executor,
-                lambda game_index: _run_selfplay_game_record(
-                    game_index=game_index,
-                    seed_start=seed_start,
-                    env_provider=env_pool.get,
-                    rollout_config=rollout_config,
-                    current_policy_spec=current_policy_spec,
-                    opponent_specs=opponent_specs,
-                    policy_factories=policy_factories,
+            with closing(
+                _bounded_ordered_map(
+                    executor,
+                    lambda game_index: _run_selfplay_game_record(
+                        game_index=game_index,
+                        seed_start=seed_start,
+                        env_provider=env_pool.get,
+                        rollout_config=rollout_config,
+                        current_policy_spec=current_policy_spec,
+                        opponent_specs=opponent_specs,
+                        policy_factories=policy_factories,
+                    ),
+                    range(games),
+                    buffersize=max_workers * 2,
                 ),
-                range(games),
-                buffersize=max_workers * 2,
-            )
-            _write_selfplay_game_results(
-                handle=handle,
-                training_handle=training_handle,
-                training_cache_writer=training_cache_writer,
-                metrics_accumulator=metrics_accumulator,
-                results=results,
-                total_results=games,
-                rss_recorder=rss_recorder,
-            )
+            ) as results:
+                _write_selfplay_game_results(
+                    handle=handle,
+                    training_handle=training_handle,
+                    training_cache_writer=training_cache_writer,
+                    metrics_accumulator=metrics_accumulator,
+                    results=results,
+                    total_results=games,
+                    rss_recorder=rss_recorder,
+                )
     finally:
         env_pool.close_all()
 

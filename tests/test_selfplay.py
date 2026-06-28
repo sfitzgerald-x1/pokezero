@@ -146,6 +146,36 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(list(results), [2, 3, 4])
         self.assertEqual(executor.submitted, [0, 1, 2, 3, 4])
 
+    def test_bounded_ordered_map_cancels_pending_futures_on_close(self) -> None:
+        class FakeFuture:
+            def __init__(self, value: int) -> None:
+                self._value = value
+                self.cancelled = False
+
+            def result(self) -> int:
+                return self._value
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        class FakeExecutor:
+            def __init__(self) -> None:
+                self.futures: list[FakeFuture] = []
+
+            def submit(self, fn, value: int) -> FakeFuture:
+                future = FakeFuture(fn(value))
+                self.futures.append(future)
+                return future
+
+        executor = FakeExecutor()
+        results = _bounded_ordered_map(executor, lambda value: value, range(4), buffersize=3)
+
+        self.assertEqual(next(results), 0)
+        results.close()
+
+        self.assertFalse(executor.futures[0].cancelled)
+        self.assertEqual([future.cancelled for future in executor.futures[1:]], [True, True])
+
     def test_bounded_ordered_map_rejects_non_positive_buffer(self) -> None:
         with self.assertRaisesRegex(ValueError, "buffersize must be positive"):
             list(_bounded_ordered_map(SimpleNamespace(submit=None), lambda value: value, [1], buffersize=0))
