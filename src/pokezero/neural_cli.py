@@ -79,6 +79,7 @@ from .neural_selfplay import (
     NeuralValueCalibrationConfig,
     NeuralValueSelectionConfig,
     _mapping,
+    _policy_from_spec_for_evaluation,
     _sequence,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
@@ -2216,7 +2217,7 @@ def _benchmark(args: argparse.Namespace) -> int:
     covered_ids = {str(policy_id), "random-legal", "simple-legal"}
     for reference_spec in tuple(args.benchmark_reference_policy or ()):
         resolved_reference_spec = policy_spec_with_showdown_root(reference_spec, policy_showdown_root)
-        reference_policy = policy_from_spec(resolved_reference_spec)
+        reference_policy = _policy_from_spec_for_evaluation(resolved_reference_spec, device=args.device)
         reference_id = str(reference_policy.policy_id)
         if reference_id in covered_ids:
             continue
@@ -2225,7 +2226,7 @@ def _benchmark(args: argparse.Namespace) -> int:
         matchups.append(
             BenchmarkMatchup(
                 f"{reference_id} vs {policy_id}",
-                policy_from_spec(resolved_reference_spec),
+                _policy_from_spec_for_evaluation(resolved_reference_spec, device=args.device),
                 checkpoint_policy,
             )
         )
