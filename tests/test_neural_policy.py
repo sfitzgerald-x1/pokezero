@@ -1538,6 +1538,45 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
 
+    def test_neural_cli_benchmark_writes_summary_out(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {
+                    "schema_version": "fixture.benchmark.v1",
+                    "total_games": 8,
+                    "matchups": [{"label": "neural-smoke vs max-damage"}],
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "nested" / "benchmark-summary.json"
+            stdout = io.StringIO()
+            with (
+                patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+                patch("pokezero.neural_cli.benchmark_rollouts", return_value=FakeReport()),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "benchmark",
+                        "--checkpoint",
+                        "checkpoint.pt",
+                        "--games",
+                        "2",
+                        "--summary-out",
+                        str(summary_path),
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(summary_path.read_text()), FakeReport().to_dict())
+            self.assertIn(f"benchmark_summary: {summary_path}", stdout.getvalue())
+            printed_payload = "\n".join(stdout.getvalue().splitlines()[1:])
+            self.assertEqual(json.loads(printed_payload), FakeReport().to_dict())
+
     def test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")
