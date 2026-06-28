@@ -26,6 +26,7 @@ from pokezero.neural_selfplay import (
     NeuralValueCalibrationConfig,
     NeuralValueSelectionConfig,
     _promoted_checkpoint_specs,
+    _paths_byte_size_best_effort,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
@@ -912,7 +913,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(manifest["training_rollout_paths"], expected_paths)
         self.assertEqual(manifest["training_input_paths"], expected_paths)
         self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
-        self.assertGreater(manifest["training_input_bytes"], 0)
+        self.assertEqual(manifest["training_input_bytes"], 6)
         self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
         self.assertFalse(manifest["training_cache_deleted_after_train"])
 
@@ -953,9 +954,21 @@ class NeuralSelfPlayTest(unittest.TestCase):
             self.assertTrue(manifest["training_cache_deleted_after_train"])
             self.assertGreater(manifest["training_cache_deleted_bytes"], 0)
             self.assertGreaterEqual(manifest["training_elapsed_seconds"], 0.0)
-            self.assertGreater(manifest["training_input_bytes"], 0)
+            self.assertEqual(manifest["training_input_bytes"], 4)
             self.assertEqual(manifest["checkpoint_bytes"], len("checkpoint"))
             self.assertEqual(manifest["training_cache_paths"], [str(path) for path in trained_cache_paths])
+
+    def test_neural_selfplay_paths_byte_size_reuses_known_sizes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "input.jsonl"
+            path.write_bytes(b"abcd")
+            known_sizes: dict[Path, int | None] = {}
+
+            self.assertEqual(_paths_byte_size_best_effort((path,), known_sizes=known_sizes), 4)
+            path.write_bytes(b"abcdef")
+
+            self.assertEqual(_paths_byte_size_best_effort((path,), known_sizes=known_sizes), 4)
+            self.assertEqual(known_sizes[path], 4)
 
     def test_run_neural_selfplay_iterations_rejects_omit_rollout_jsonl_without_cache_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

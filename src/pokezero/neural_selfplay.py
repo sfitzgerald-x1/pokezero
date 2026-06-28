@@ -529,6 +529,7 @@ def run_neural_selfplay_iterations(
         first_iteration = 1
         next_seed_start = seed_start
         next_evaluation_seed_start = evaluation_seed_start
+    training_input_path_byte_sizes: dict[Path, int | None] = {}
     if current_model is not None:
         # Fail fast on a warm-start/resume embedding mismatch (e.g. resuming a compact
         # randbat-dex run without re-passing the flag) before collecting any rollouts.
@@ -712,7 +713,10 @@ def run_neural_selfplay_iterations(
                 games_per_iteration=games_per_iteration,
                 total_scheduled_iterations=first_iteration + iterations - 1,
             )
-            training_input_bytes = _paths_byte_size_best_effort(training_input_paths)
+            training_input_bytes = _paths_byte_size_best_effort(
+                training_input_paths,
+                known_sizes=training_input_path_byte_sizes,
+            )
             training_started = perf_counter()
             if value_selection_config is None:
                 model, training = train_transformer_policy(
@@ -953,21 +957,35 @@ def _training_input_paths_for_objective(
     return training_rollout_history
 
 
-def _paths_byte_size_best_effort(paths: Iterable[Path]) -> int | None:
+def _paths_byte_size_best_effort(
+    paths: Iterable[Path],
+    *,
+    known_sizes: dict[Path, int | None] | None = None,
+) -> int | None:
     total = 0
     for path in paths:
-        try:
-            if path.is_file() or path.is_symlink():
-                total += path.stat().st_size
-            elif path.is_dir():
-                for child in path.rglob("*"):
-                    if child.is_file() or child.is_symlink():
-                        total += child.stat().st_size
-            else:
-                return None
-        except OSError:
+        if known_sizes is not None and path not in known_sizes:
+            known_sizes[path] = _path_byte_size_best_effort(path)
+        byte_size = known_sizes[path] if known_sizes is not None else _path_byte_size_best_effort(path)
+        if byte_size is None:
             return None
+        total += byte_size
     return total
+
+
+def _path_byte_size_best_effort(path: Path) -> int | None:
+    try:
+        if path.is_file() or path.is_symlink():
+            return path.stat().st_size
+        if path.is_dir():
+            total = 0
+            for child in path.rglob("*"):
+                if child.is_file() or child.is_symlink():
+                    total += child.stat().st_size
+            return total
+    except OSError:
+        return None
+    return None
 
 
 def _dataset_config_from_training_config(config: TransformerTrainingConfig) -> TrajectoryDatasetConfig:
