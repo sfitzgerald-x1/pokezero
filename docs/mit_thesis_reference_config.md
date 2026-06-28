@@ -111,8 +111,8 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 | **training scale** | **~3,000,000 battles** | **768 battles** | **unchanged (scale is orthogonal to config)** | **~3,900× under-budget — the dominant gap.** Config fidelity does not change scale; the preset only aligns *knobs*. |
 | `entropy_coef` | **0.0588** | **0.0** | **0.0588 ✅** | **was no exploration pressure at all** — now aligned |
 | `n_epochs` | **7** | **1** | **7 ✅** | now aligned |
-| `learning_rate` (base) | 10^−4.23 ≈ **5.9e-5** | 3e-4 | **5.9e-5 ✅** | base LR aligned; **annealing still missing — see below** |
-| `learning_rate` annealing | **annealed** (massive impact) | constant | **constant ❌ (unsupported)** | per-iteration optimizer reset has no global-step schedule yet — listed in `unsupported_knobs` |
+| `learning_rate` (base) | 10^−4.23 ≈ **5.9e-5** | 3e-4 | **5.9e-5 ✅** | base LR aligned |
+| `learning_rate` annealing | **annealed** (massive impact) | constant | **`mit-thesis` ✅** | implemented as global-progress windows per self-play iteration: `ℓ(x)=10^−4.23/(8x+1)^1.5` |
 | `gamma` | 0.9999 | 1.0 | **0.9999 ✅** | now aligned (audit uses a tight tolerance so 1.0 is never read as 0.9999) |
 | `gae_lambda` | 0.754 | 0.95 | **0.754 ✅** (with `ppo_target_mode=gae`) | now aligned |
 | `clip_range` | 0.0829 | 0.2 (`clip_epsilon`) | **0.0829 ✅** | now aligned |
@@ -130,7 +130,8 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 `--recipe-fidelity` flag, usable with the `teacher-cut` variant) bundles the thesis Table A.3 knobs
 that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discount=0.9999`,
 `gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`, `value_loss_weight=0.4375`,
-`max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `batch_size=1024`, plus standard `collection_temperature=1.0`.
+`max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
+`batch_size=1024`, plus standard `collection_temperature=1.0`.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.
@@ -145,10 +146,6 @@ plus an `unsupported_knobs` list.
 
 **What remains off-recipe / scale-limited (intentionally surfaced, not hidden):**
 
-- **Learning-rate annealing** — the thesis anneals LR by *global* training progress across ~150M
-  steps (`ℓ(x)=10^−4.23/(8x+1)^1.5`) and credits it for a 55%→80% jump. Our self-play loop builds a
-  fresh optimizer per iteration, so there is no global-step schedule to anneal against yet. The
-  preset sets the thesis *base* LR but runs it constant. Reported under `unsupported_knobs`.
 - **Value-function clipping** (`clip_range_vf=0.0184`) — our PPO value loss is an unclipped MSE.
   Reported under `unsupported_knobs`.
 - **Training scale (~3M battles)** — config fidelity is independent of scale. The preset changes
@@ -159,8 +156,8 @@ plus an `unsupported_knobs` list.
 ### What this means
 
 1. **The teacher-cut 0.2825 is not a plateau or a ceiling signal.** It is ~0.026% of the recipe's
-   training budget, run with materially off-recipe hyperparameters (zero entropy, single epoch, no
-   LR annealing). No conclusion about whether self-play "works" can be drawn from it.
+   training budget, run with materially off-recipe hyperparameters (zero entropy, single epoch, and
+   pre-annealing constant LR). No conclusion about whether self-play "works" can be drawn from it.
 2. **The de-risked load-bearing work is the *training* half at recipe fidelity + scale**, not
    test-time search. The thesis's net-alone was already strong; search was a topper. Aligning
    hyperparameters and reaching a meaningful fraction of ~3M battles must come before reading any

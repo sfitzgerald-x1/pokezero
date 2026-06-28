@@ -14,6 +14,7 @@ from pokezero.env import TerminalState
 from pokezero.neural_cli import _training_cache_lifecycle, main as neural_cli_main
 from pokezero.neural_policy import (
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
+    MIT_THESIS_LEARNING_RATE_SCHEDULE,
     NEURAL_INSTALL_MESSAGE,
     EntityTokenTransformerPolicy,
     TorchUnavailableError,
@@ -35,6 +36,7 @@ from pokezero.neural_policy import (
     train_transformer_policy,
     training_batch_to_torch,
     _greedy_action_index,
+    learning_rate_for_progress,
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
@@ -596,8 +598,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(max_grad_norm=0.0)
         with self.assertRaisesRegex(ValueError, "max_grad_norm"):
             TransformerTrainingConfig(max_grad_norm=-1.0)
+        with self.assertRaisesRegex(ValueError, "learning_rate_schedule"):
+            TransformerTrainingConfig(learning_rate_schedule="bogus")
+        with self.assertRaisesRegex(ValueError, "learning_rate_progress_start"):
+            TransformerTrainingConfig(learning_rate_progress_start=-0.1)
+        with self.assertRaisesRegex(ValueError, "learning_rate_progress_end"):
+            TransformerTrainingConfig(learning_rate_progress_end=1.1)
+        with self.assertRaisesRegex(ValueError, "learning_rate_progress_end"):
+            TransformerTrainingConfig(learning_rate_progress_start=0.5, learning_rate_progress_end=0.25)
         self.assertIsNone(TransformerTrainingConfig().max_grad_norm)
         self.assertEqual(TransformerTrainingConfig(max_grad_norm=0.543).to_dict()["max_grad_norm"], 0.543)
+        self.assertEqual(
+            TransformerTrainingConfig(learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE).learning_rate_schedule,
+            "mit-thesis",
+        )
         with self.assertRaisesRegex(ValueError, "objective='value-only'"):
             TransformerTrainingConfig(objective="value-only")
         with self.assertRaisesRegex(ValueError, "freeze_non_value_parameters"):
@@ -1051,6 +1065,32 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertAlmostEqual(metrics.ppo_ratio_mean, 1.0)
         self.assertAlmostEqual(metrics.ppo_clip_fraction, 1.0 / 3.0)
         self.assertAlmostEqual(metrics.ppo_entropy, 1.5)
+
+    def test_mit_thesis_learning_rate_schedule_uses_global_progress_curve(self) -> None:
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=5.9e-5,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.0,
+            ),
+            5.9e-5,
+        )
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=5.9e-5,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.5,
+            ),
+            5.9e-5 / (5.0**1.5),
+        )
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=5.9e-5,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=1.0,
+            ),
+            5.9e-5 / (9.0**1.5),
+        )
 
     def test_ppo_epoch_metrics_reports_zero_valid_coverage(self) -> None:
         from pokezero.neural_policy import _TorchMetricTotals
@@ -3884,6 +3924,54 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("benchmark", stdout.getvalue())
         self.assertIn("iterate", stdout.getvalue())
+
+    def test_train_transformer_policy_records_annealed_epoch_learning_rates(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="lr-schedule",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+
+            model, result = train_transformer_policy(
+                data_path,
+                model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2,
+                    epochs=3,
+                    learning_rate=5.9e-5,
+                    learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                    learning_rate_progress_start=0.0,
+                    learning_rate_progress_end=1.0,
+                    window_size=2,
+                    max_batches=1,
+                    device="cpu",
+                ),
+            )
+            save_transformer_checkpoint(checkpoint_path, model, result=result)
+            _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+
+        learning_rates = [metrics.learning_rate for metrics in restored.epochs]
+        self.assertEqual(len(learning_rates), 3)
+        self.assertAlmostEqual(learning_rates[0], 5.9e-5)
+        self.assertAlmostEqual(learning_rates[1], 5.9e-5 / (5.0**1.5))
+        self.assertAlmostEqual(learning_rates[2], 5.9e-5 / (9.0**1.5))
+        self.assertEqual(restored.training_config.learning_rate_schedule, MIT_THESIS_LEARNING_RATE_SCHEDULE)
 
     def test_train_transformer_policy_applies_max_grad_norm_clip(self) -> None:
         if not torch_available():

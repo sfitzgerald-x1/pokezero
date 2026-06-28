@@ -32,7 +32,10 @@ from .dataset import (
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .neural_policy import (
+    CONSTANT_LEARNING_RATE_SCHEDULE,
     DEFAULT_CATEGORY_OOV_BUCKETS,
+    LEARNING_RATE_SCHEDULES,
+    MIT_THESIS_LEARNING_RATE_SCHEDULE,
     TransformerPolicyConfig,
     TransformerSoftmaxPolicy,
     TransformerTrainingConfig,
@@ -107,8 +110,8 @@ FOUNDATION_ARMS_RACE_PRESET_DEFAULTS: Mapping[str, Any] = {
     "ppo_target_mode": "gae",
 }
 # MIT thesis PPO hyperparameter table (Table A.3, p.43) — the reference recipe knobs that our
-# config can express directly. learning_rate is the thesis constant base 10^-4.23; the thesis also
-# anneals it (see RECIPE_FIDELITY_UNSUPPORTED_KNOBS for what we cannot yet express faithfully).
+# config can express directly. learning_rate is the thesis base 10^-4.23; the schedule below
+# applies the thesis global-progress annealing curve.
 MIT_THESIS_REFERENCE_CONFIG: Mapping[str, float | int] = {
     "entropy_coef": 0.0588,
     "epochs": 7,
@@ -120,20 +123,14 @@ MIT_THESIS_REFERENCE_CONFIG: Mapping[str, float | int] = {
     "learning_rate": 5.9e-5,
     "batch_size": 1024,
 }
+MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE = MIT_THESIS_LEARNING_RATE_SCHEDULE
 # The thesis ran standard temperature-1.0 sampling for self-play collection.
 MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE = 1.0
 # Knobs the thesis used that our per-iteration training loop cannot yet express faithfully. These
 # are reported explicitly so a "recipe-fidelity" run is never mistaken for fully on-recipe.
-#   - learning_rate_annealing: the thesis anneals LR by global training progress across ~150M
-#     steps (ℓ(x)=10^-4.23/(8x+1)^1.5) and credits it for a 55%->80% jump; our loop builds a fresh
-#     optimizer per iteration, so there is no global-step schedule to anneal against yet.
 #   - value_function_clipping: the thesis clips value updates (clip_range_vf=0.0184); our PPO value
 #     loss is an unclipped MSE.
 RECIPE_FIDELITY_UNSUPPORTED_KNOBS: Mapping[str, str] = {
-    "learning_rate_annealing": (
-        "thesis anneals LR by global training progress; our per-iteration optimizer reset has no "
-        "global-step schedule yet (scale-limited)."
-    ),
     "value_function_clipping": (
         "thesis clip_range_vf=0.0184; our PPO value loss is an unclipped MSE (off-recipe)."
     ),
@@ -162,8 +159,17 @@ RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
     "value_loss_weight": MIT_THESIS_REFERENCE_CONFIG["value_loss_weight"],
     "max_grad_norm": MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"],
     "learning_rate": MIT_THESIS_REFERENCE_CONFIG["learning_rate"],
+    "learning_rate_schedule": MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE,
     "batch_size": MIT_THESIS_REFERENCE_CONFIG["batch_size"],
 }
+
+
+def recipe_fidelity_reference_config() -> dict[str, Any]:
+    payload: dict[str, Any] = dict(MIT_THESIS_REFERENCE_CONFIG)
+    payload["learning_rate_schedule"] = MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE
+    return payload
+
+
 _ITERATE_EXPERIMENT_PRESET_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     "foundation-arms-race": FOUNDATION_ARMS_RACE_PRESET_DEFAULTS,
     "recipe-fidelity": RECIPE_FIDELITY_PRESET_DEFAULTS,
@@ -191,6 +197,7 @@ _ITERATE_PRESET_PPO_KEYS = (
     "value_loss_weight",
     "max_grad_norm",
     "learning_rate",
+    "learning_rate_schedule",
     "batch_size",
 )
 NEURAL_FOUNDATION_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_plan.v1"
@@ -333,6 +340,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     train.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
+    train.add_argument(
+        "--learning-rate-schedule",
+        choices=LEARNING_RATE_SCHEDULES,
+        default=CONSTANT_LEARNING_RATE_SCHEDULE,
+        help="Learning-rate schedule. 'mit-thesis' applies base_lr/(8x+1)^1.5 over the supplied progress window.",
+    )
+    train.add_argument(
+        "--learning-rate-progress-start",
+        type=float,
+        default=0.0,
+        help="Global training progress at the start of this standalone train call, in [0, 1].",
+    )
+    train.add_argument(
+        "--learning-rate-progress-end",
+        type=float,
+        default=0.0,
+        help="Global training progress at the end of this standalone train call, in [0, 1].",
+    )
     train.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     train.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -773,7 +798,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Optional experiment preset. 'foundation-arms-race' fills the current WS-A CPU PPO "
             "arms-race recipe; 'recipe-fidelity' additionally aligns the PPO hyperparameters to "
             "the MIT thesis reference table (entropy 0.0588, 7 epochs, gamma 0.9999, GAE lambda, "
-            "clip/value coefficients, grad-norm clip, batch size, base LR). Either preset only "
+            "clip/value coefficients, grad-norm clip, batch size, base LR, LR annealing). Either preset only "
             "fills options not explicitly supplied on the command line."
         ),
     )
@@ -904,6 +929,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
     iterate.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     iterate.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
+    iterate.add_argument(
+        "--learning-rate-schedule",
+        choices=LEARNING_RATE_SCHEDULES,
+        default=CONSTANT_LEARNING_RATE_SCHEDULE,
+        help=(
+            "Learning-rate schedule. 'mit-thesis' applies base_lr/(8x+1)^1.5 using self-play "
+            "run progress; each iteration's fresh optimizer receives its own progress window."
+        ),
+    )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -1263,7 +1297,7 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help=(
             "Use the recipe-fidelity experiment preset instead of foundation-arms-race: aligns the "
             "PPO hyperparameters to the MIT thesis reference table (entropy 0.0588, 7 epochs, "
-            "gamma 0.9999, GAE lambda, clip/value coefficients, grad-norm clip, batch size, base LR)."
+            "gamma 0.9999, GAE lambda, clip/value coefficients, grad-norm clip, batch size, base LR, LR annealing)."
         ),
     )
     parser.add_argument("--device", default=None, help="Torch device for the underlying neural iterate command.")
@@ -1431,6 +1465,9 @@ def _train(args: argparse.Namespace) -> int:
         batch_size=args.batch_size,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
+        learning_rate_schedule=args.learning_rate_schedule,
+        learning_rate_progress_start=args.learning_rate_progress_start,
+        learning_rate_progress_end=args.learning_rate_progress_end,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
@@ -2619,6 +2656,7 @@ def _iterate(args: argparse.Namespace) -> int:
         batch_size=args.batch_size,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
+        learning_rate_schedule=args.learning_rate_schedule,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
@@ -3953,7 +3991,7 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         "initial_policy": str(args.initial_policy),
         "experiment_preset": str(resolved["experiment_preset"]),
         "recipe_fidelity": bool(resolved["recipe_fidelity"]),
-        "recipe_fidelity_reference": dict(MIT_THESIS_REFERENCE_CONFIG) if resolved["recipe_fidelity"] else None,
+        "recipe_fidelity_reference": recipe_fidelity_reference_config() if resolved["recipe_fidelity"] else None,
         "recipe_fidelity_unsupported_knobs": (
             dict(RECIPE_FIDELITY_UNSUPPORTED_KNOBS) if resolved["recipe_fidelity"] else None
         ),
@@ -4171,6 +4209,16 @@ def recipe_fidelity_audit(
     if not target_ok:
         off_recipe.append("ppo_target_mode")
 
+    schedule = config.get("learning_rate_schedule")
+    schedule_ok = schedule == MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE
+    knobs["learning_rate_schedule"] = {
+        "value": schedule,
+        "reference": MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE,
+        "aligned": schedule_ok,
+    }
+    if not schedule_ok:
+        off_recipe.append("learning_rate_schedule")
+
     for name, reference in MIT_THESIS_REFERENCE_CONFIG.items():
         value = config.get(name)
         aligned = _recipe_knob_aligned(value, reference)
@@ -4199,8 +4247,8 @@ def recipe_fidelity_audit(
         "fully_on_recipe": False,
         "note": (
             "aligned=true means the expressible Table A.3 knobs match; fully_on_recipe is always "
-            "false because learning-rate annealing and value-function clipping are not yet expressible "
-            "(see unsupported_knobs), and recipe scale (~3M battles) is separate from config fidelity."
+            "false because value-function clipping is not yet expressible (see unsupported_knobs), "
+            "and recipe scale (~3M battles) is separate from config fidelity."
         ),
     }
 

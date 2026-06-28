@@ -37,6 +37,9 @@ NEURAL_POLICY_SCHEMA_VERSION = "pokezero.neural_policy.v0"
 NEURAL_TRAINING_SCHEMA_VERSION = "pokezero.neural_training.v0"
 NEURAL_INSTALL_MESSAGE = "PyTorch is required for neural policy support. Install with `pip install -e .[neural]`."
 DEFAULT_TOKEN_TYPE_VOCAB_SIZE = 16
+CONSTANT_LEARNING_RATE_SCHEDULE = "constant"
+MIT_THESIS_LEARNING_RATE_SCHEDULE = "mit-thesis"
+LEARNING_RATE_SCHEDULES = (CONSTANT_LEARNING_RATE_SCHEDULE, MIT_THESIS_LEARNING_RATE_SCHEDULE)
 # Small safety net for graceful degradation only. Gen 3 randbats are a closed universe and
 # the lean encoding drops every dynamic/unactionable string (HP text, usernames, winner,
 # free-form event payloads), so in practice nothing actionable should reach the OOV block;
@@ -226,6 +229,9 @@ class TransformerTrainingConfig:
     batch_size: int = 64
     epochs: int = 1
     learning_rate: float = 3e-4
+    learning_rate_schedule: str = CONSTANT_LEARNING_RATE_SCHEDULE
+    learning_rate_progress_start: float = 0.0
+    learning_rate_progress_end: float = 0.0
     weight_decay: float = 0.0
     window_size: int = 4
     discount: float = 1.0
@@ -284,6 +290,18 @@ class TransformerTrainingConfig:
             raise ValueError("epochs must be positive.")
         if self.learning_rate <= 0.0:
             raise ValueError("learning_rate must be positive.")
+        if self.learning_rate_schedule not in LEARNING_RATE_SCHEDULES:
+            raise ValueError(f"learning_rate_schedule must be one of: {', '.join(LEARNING_RATE_SCHEDULES)}.")
+        if not math.isfinite(self.learning_rate_progress_start):
+            raise ValueError("learning_rate_progress_start must be finite.")
+        if not math.isfinite(self.learning_rate_progress_end):
+            raise ValueError("learning_rate_progress_end must be finite.")
+        if not 0.0 <= self.learning_rate_progress_start <= 1.0:
+            raise ValueError("learning_rate_progress_start must be between 0 and 1.")
+        if not 0.0 <= self.learning_rate_progress_end <= 1.0:
+            raise ValueError("learning_rate_progress_end must be between 0 and 1.")
+        if self.learning_rate_progress_end < self.learning_rate_progress_start:
+            raise ValueError("learning_rate_progress_end must be greater than or equal to learning_rate_progress_start.")
         if self.weight_decay < 0.0:
             raise ValueError("weight_decay must be non-negative.")
         if self.window_size <= 0:
@@ -330,6 +348,7 @@ class TransformerEpochMetrics:
     loss: float
     policy_loss: float
     policy_accuracy: float
+    learning_rate: float | None = None
     value_loss: float | None = None
     value_ranking_loss: float | None = None
     value_ranking_pairs: int | None = None
@@ -923,6 +942,8 @@ def train_transformer_policy(
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
+        epoch_learning_rate = _learning_rate_for_epoch(resolved_training_config, epoch)
+        _set_optimizer_learning_rate(optimizer, epoch_learning_rate)
         totals = _TorchMetricTotals()
         cache_callback_for_epoch = (
             consumed_cache_callback
@@ -960,7 +981,7 @@ def train_transformer_policy(
                 break
         if totals.examples == 0:
             raise ValueError("training data produced no examples.")
-        epoch_metrics.append(totals.to_epoch_metrics(epoch))
+        epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate))
         if epoch_callback is not None:
             epoch_callback(
                 model,
@@ -1063,6 +1084,7 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_ratio_mean=_optional_float(metrics.get("ppo_ratio_mean")),
                 ppo_clip_fraction=_optional_float(metrics.get("ppo_clip_fraction")),
                 ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
+                learning_rate=_optional_float(metrics.get("learning_rate")),
             )
             for metrics in payload.get("epochs", ())
         ),
@@ -1136,7 +1158,7 @@ class _TorchMetricTotals:
             self.ppo_clip_count += int(pieces["ppo_clip_count"])
             self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
 
-    def to_epoch_metrics(self, epoch: int) -> TransformerEpochMetrics:
+    def to_epoch_metrics(self, epoch: int, *, learning_rate: float | None = None) -> TransformerEpochMetrics:
         ppo_advantage_mean = None
         ppo_advantage_std = None
         ppo_ratio_mean = None
@@ -1158,6 +1180,7 @@ class _TorchMetricTotals:
             loss=self.loss / self.examples,
             policy_loss=self.policy_loss / self.examples,
             policy_accuracy=self.policy_correct / self.examples,
+            learning_rate=learning_rate,
             value_loss=self.value_loss / self.examples,
             value_ranking_loss=(
                 self.value_ranking_loss / self.value_ranking_pairs if self.value_ranking_pairs else None
@@ -1177,6 +1200,40 @@ class _TorchMetricTotals:
             ppo_clip_fraction=ppo_clip_fraction,
             ppo_entropy=ppo_entropy,
         )
+
+
+def learning_rate_for_progress(*, base_learning_rate: float, schedule: str, progress: float) -> float:
+    if base_learning_rate <= 0.0 or not math.isfinite(base_learning_rate):
+        raise ValueError("base_learning_rate must be positive and finite.")
+    if schedule not in LEARNING_RATE_SCHEDULES:
+        raise ValueError(f"learning_rate_schedule must be one of: {', '.join(LEARNING_RATE_SCHEDULES)}.")
+    if not math.isfinite(progress) or not 0.0 <= progress <= 1.0:
+        raise ValueError("learning rate progress must be finite and between 0 and 1.")
+    if schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
+        return float(base_learning_rate)
+    return float(base_learning_rate) / (((8.0 * float(progress)) + 1.0) ** 1.5)
+
+
+def _learning_rate_for_epoch(config: TransformerTrainingConfig, epoch: int) -> float:
+    if epoch < 1 or epoch > config.epochs:
+        raise ValueError("epoch is outside the configured training range.")
+    if config.epochs == 1:
+        progress = config.learning_rate_progress_start
+    else:
+        fraction = (epoch - 1) / (config.epochs - 1)
+        progress = config.learning_rate_progress_start + (
+            (config.learning_rate_progress_end - config.learning_rate_progress_start) * fraction
+        )
+    return learning_rate_for_progress(
+        base_learning_rate=config.learning_rate,
+        schedule=config.learning_rate_schedule,
+        progress=progress,
+    )
+
+
+def _set_optimizer_learning_rate(optimizer: Any, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
 
 
 def _opponent_loss_terms(output: TransformerPolicyOutput, tensors: Mapping[str, Any], config: TransformerTrainingConfig):
