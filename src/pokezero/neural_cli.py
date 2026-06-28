@@ -1613,7 +1613,7 @@ def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecyc
     if not any(cache_flags):
         return _TrainingCacheLifecycle()
     if not all(cache_flags):
-        raise ValueError("--max-cache-gb and --delete-cache-after-read require training cache directories.")
+        raise ValueError("training cache directories cannot be mixed with rollout JSONL paths.")
 
     max_bytes = _cache_gb_to_bytes(getattr(args, "max_cache_gb", None))
     cache_root = _common_cache_root(tuple(Path(path) for path in args.data))

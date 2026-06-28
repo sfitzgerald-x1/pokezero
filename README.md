@@ -62,6 +62,7 @@ python -m pokezero.rollout_cli collect-training-cache --games 1000 \
 # Repeat cache-001, cache-002, ... until the current chunk is ready, then train/delete it
 # before collecting the next chunk. Keep each shard small enough that collection memory stays
 # bounded; the default 50GiB cap is the on-disk guardrail for the active cache root.
+# The active-root cap counts all files under that root, so keep checkpoints/raw JSONL outside it.
 
 python -m pokezero.neural_cli train --data runs/cache-chunk-000/cache-* \
   --out runs/policy.pt --objective ppo --showdown-root /path/to/pokemon-showdown \

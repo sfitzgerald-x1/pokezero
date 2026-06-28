@@ -16,6 +16,7 @@ from pokezero.dataset import (
     iter_training_cache_batches,
     iter_training_batches,
     iter_training_examples,
+    training_cache_root_byte_size,
     training_cache_paths_byte_size,
     training_batch_from_examples,
     write_training_cache_from_rollouts,
@@ -610,6 +611,36 @@ class DatasetTest(unittest.TestCase):
             self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
             self.assertEqual(_batch_payload(explicit_cached_batches), _batch_payload(raw_batches))
 
+    def test_training_cache_round_trips_gae_ppo_training_targets(self) -> None:
+        self._require_numpy()
+        trajectory = BattleTrajectory(battle_id="gae-cache", format_id="gen3randombattle", seed=5)
+        trajectory.append(step(player_id="p1", turn_index=0, value=5, reward=0.0, value_estimate=0.25))
+        trajectory.append(step(player_id="p2", turn_index=0, value=50, reward=0.0, value_estimate=-0.25))
+        trajectory.append(step(player_id="p1", turn_index=1, value=6, reward=0.0, value_estimate=0.5))
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+        record = RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "neural", "p2": "fixed"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        config = TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=1.0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+
+            write_training_cache_from_rollouts(path, cache_path, config=config)
+            raw_batches = list(iter_training_batches(path, batch_size=2, config=config))
+            cached_batches = list(iter_training_batches(cache_path, batch_size=2, config=config))
+
+            self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
+
     def test_training_cache_builder_writes_schema_metadata(self) -> None:
         self._require_numpy()
         builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1, discount=0.5))
@@ -633,6 +664,30 @@ class DatasetTest(unittest.TestCase):
                 builder.write(cache_path, max_cache_root_bytes=1, cache_root=temp_dir)
 
             self.assertFalse(cache_path.exists())
+
+    def test_training_cache_write_root_cap_counts_existing_sibling_cache_bytes(self) -> None:
+        self._require_numpy()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_root = Path(temp_dir) / "cache-root"
+            first_cache = cache_root / "cache-000"
+            second_cache = cache_root / "cache-001"
+            cache_root.mkdir()
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(path, first_cache, config=TrajectoryDatasetConfig(window_size=1))
+            existing_bytes = training_cache_root_byte_size(cache_root)
+
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                write_training_cache_from_rollouts(
+                    path,
+                    second_cache,
+                    config=TrajectoryDatasetConfig(window_size=1),
+                    max_cache_root_bytes=existing_bytes + 1,
+                    cache_root=cache_root,
+                )
+
+            self.assertFalse(second_cache.exists())
 
     def test_training_cache_rejects_categorical_ids_outside_compact_range_before_cast(self) -> None:
         self._require_numpy()
@@ -755,11 +810,19 @@ def _batch_payload(batches) -> list[dict]:
             "history_mask": _tolist(batch.history_mask),
             "legal_action_mask": _tolist(batch.legal_action_mask),
             "action_indices": _tolist(batch.action_indices),
+            "rewards": _tolist(batch.rewards),
             "returns": _tolist(batch.returns),
+            "ppo_advantages": _tolist(batch.ppo_advantages),
+            "ppo_advantage_mask": _tolist(batch.ppo_advantage_mask),
+            "ppo_value_targets": _tolist(batch.ppo_value_targets),
+            "ppo_value_target_mask": _tolist(batch.ppo_value_target_mask),
             "opponent_action_indices": _tolist(batch.opponent_action_indices),
             "opponent_action_mask": _tolist(batch.opponent_action_mask),
             "action_probabilities": _tolist(batch.action_probabilities),
             "action_probability_mask": _tolist(batch.action_probability_mask),
+            "seeds": _tolist(batch.seeds),
+            "turn_indices": _tolist(batch.turn_indices),
+            "terminal_capped": _tolist(batch.terminal_capped),
         }
         for batch in batches
     ]
