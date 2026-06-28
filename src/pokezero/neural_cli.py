@@ -568,6 +568,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--sample", action="store_true", help="Sample from the checkpoint policy distribution instead of greedy selection.")
     benchmark.add_argument("--epsilon", type=float, default=0.0, help="Random legal exploration rate during benchmark.")
     benchmark.add_argument("--temperature", type=float, default=1.0, help="Softmax sampling temperature.")
+    benchmark.add_argument(
+        "--benchmark-reference-policy",
+        action="append",
+        default=None,
+        help=(
+            "Additional eval-only or fixed reference policy spec benchmarked against the checkpoint "
+            "in both seats, e.g. max-damage. May be repeated."
+        ),
+    )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     benchmark.add_argument(
         "--summary-out",
@@ -2181,33 +2190,51 @@ def _benchmark(args: argparse.Namespace) -> int:
         device=args.device,
     )
     policy_id = checkpoint_policy.policy_id
+    policy_showdown_root = env_config.resolved_showdown_root()
+    matchups = [
+        BenchmarkMatchup(
+            f"{policy_id} vs random-legal",
+            checkpoint_policy,
+            RandomLegalPolicy(),
+        ),
+        BenchmarkMatchup(
+            f"random-legal vs {policy_id}",
+            RandomLegalPolicy(),
+            checkpoint_policy,
+        ),
+        BenchmarkMatchup(
+            f"{policy_id} vs simple-legal",
+            checkpoint_policy,
+            SimpleLegalPolicy(),
+        ),
+        BenchmarkMatchup(
+            f"simple-legal vs {policy_id}",
+            SimpleLegalPolicy(),
+            checkpoint_policy,
+        ),
+    ]
+    covered_ids = {str(policy_id), "random-legal", "simple-legal"}
+    for reference_spec in tuple(args.benchmark_reference_policy or ()):
+        resolved_reference_spec = policy_spec_with_showdown_root(reference_spec, policy_showdown_root)
+        reference_policy = policy_from_spec(resolved_reference_spec)
+        reference_id = str(reference_policy.policy_id)
+        if reference_id in covered_ids:
+            continue
+        covered_ids.add(reference_id)
+        matchups.append(BenchmarkMatchup(f"{policy_id} vs {reference_id}", checkpoint_policy, reference_policy))
+        matchups.append(
+            BenchmarkMatchup(
+                f"{reference_id} vs {policy_id}",
+                policy_from_spec(resolved_reference_spec),
+                checkpoint_policy,
+            )
+        )
     report = benchmark_rollouts(
         games=args.games,
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=rollout_config,
         seed_start=args.seed_start,
-        matchups=(
-            BenchmarkMatchup(
-                f"{policy_id} vs random-legal",
-                checkpoint_policy,
-                RandomLegalPolicy(),
-            ),
-            BenchmarkMatchup(
-                f"random-legal vs {policy_id}",
-                RandomLegalPolicy(),
-                checkpoint_policy,
-            ),
-            BenchmarkMatchup(
-                f"{policy_id} vs simple-legal",
-                checkpoint_policy,
-                SimpleLegalPolicy(),
-            ),
-            BenchmarkMatchup(
-                f"simple-legal vs {policy_id}",
-                SimpleLegalPolicy(),
-                checkpoint_policy,
-            ),
-        ),
+        matchups=tuple(matchups),
     )
     payload = report.to_dict()
     if args.summary_out is not None:
