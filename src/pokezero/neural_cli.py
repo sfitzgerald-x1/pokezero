@@ -209,6 +209,7 @@ NEURAL_FOUNDATION_RUN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_run_s
 NEURAL_FOUNDATION_COMPARE_SCHEMA_VERSION = "pokezero.neural_foundation_compare.v1"
 NEURAL_FOUNDATION_VALUE_TUNE_PLAN_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_plan.v1"
 NEURAL_FOUNDATION_VALUE_TUNE_SUMMARY_SCHEMA_VERSION = "pokezero.neural_foundation_value_tune_summary.v1"
+NEURAL_TRAIN_SUMMARY_SCHEMA_VERSION = "pokezero.neural_train_summary.v1"
 FOUNDATION_COMPARE_CANDIDATE_SOURCES = ("latest", "latest-accepted", "best-max-damage")
 FOUNDATION_TEACHER_CUT_ALLOWED_INITIAL_POLICY_NAMES = frozenset({"random-legal"})
 FOUNDATION_TEACHER_CUT_LEARNED_INITIAL_PREFIXES = ("linear:", "neural:")
@@ -318,6 +319,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL or training caches.")
     train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files or training cache directories.")
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
+    train.add_argument(
+        "--summary-out",
+        type=Path,
+        default=None,
+        help="Optional JSON summary path for train timing, checkpoint size, metrics, and cache lifecycle evidence.",
+    )
     train.add_argument(
         "--max-cache-gb",
         type=float,
@@ -1613,6 +1620,8 @@ def _cache_data(args: argparse.Namespace) -> int:
 
 
 def _train(args: argparse.Namespace) -> int:
+    command_started_at = datetime.now(timezone.utc)
+    command_started = time.perf_counter()
     # Surface the missing-neural-extra message before any file I/O (vocab building reads data).
     require_torch()
     if args.value_calibration_out is not None and not args.value_calibration_data:
@@ -1620,6 +1629,7 @@ def _train(args: argparse.Namespace) -> int:
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
     cache_lifecycle = _training_cache_lifecycle(args)
+    input_data_bytes = _input_data_paths_byte_size(args.data) if args.summary_out is not None else None
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -1709,6 +1719,7 @@ def _train(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     value_selection_payload = None
+    train_started = time.perf_counter()
     if args.value_selection_data:
         model, result, value_selection_payload = _train_with_value_selection(
             paths=args.data,
@@ -1732,6 +1743,7 @@ def _train(args: argparse.Namespace) -> int:
             initial_model=initial_model,
             **train_kwargs,
         )
+    train_elapsed_seconds = time.perf_counter() - train_started
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
         line = (
@@ -1786,13 +1798,98 @@ def _train(args: argparse.Namespace) -> int:
             print("")
             print_value_calibration_report(value_calibration)
     cache_lifecycle.finalize_after_checkpoint()
+    if args.summary_out is not None:
+        payload = _train_summary_payload(
+            args=args,
+            model_config=model_config,
+            training_config=training_config,
+            result=result,
+            cache_lifecycle=cache_lifecycle,
+            command_started_at=command_started_at,
+            elapsed_seconds=time.perf_counter() - command_started,
+            train_elapsed_seconds=train_elapsed_seconds,
+            input_data_bytes=input_data_bytes,
+            value_selection_payload=value_selection_payload,
+        )
+        _write_json(args.summary_out, payload)
+        print(f"train_summary: {args.summary_out}")
     return 0
+
+
+def _train_summary_payload(
+    *,
+    args: argparse.Namespace,
+    model_config: TransformerPolicyConfig,
+    training_config: TransformerTrainingConfig,
+    result: TransformerTrainingResult,
+    cache_lifecycle: "_TrainingCacheLifecycle",
+    command_started_at: datetime,
+    elapsed_seconds: float,
+    train_elapsed_seconds: float,
+    input_data_bytes: int | None,
+    value_selection_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    checkpoint_bytes = args.out.stat().st_size if args.out.exists() else None
+    final_metrics = result.final_metrics
+    return {
+        "schema_version": NEURAL_TRAIN_SUMMARY_SCHEMA_VERSION,
+        "source": collect_source_metadata(),
+        "started_at": command_started_at.isoformat().replace("+00:00", "Z"),
+        "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "elapsed_seconds": elapsed_seconds,
+        "train_elapsed_seconds": train_elapsed_seconds,
+        "data_paths": [str(path) for path in args.data],
+        "input_data_bytes": input_data_bytes,
+        "checkpoint_path": str(args.out),
+        "checkpoint_bytes": checkpoint_bytes,
+        "model": {
+            "policy_id": model_config.policy_id,
+            "window_size": model_config.window_size,
+            "embedding_dim": model_config.embedding_dim,
+            "transformer_layers": model_config.transformer_layers,
+            "attention_heads": model_config.attention_heads,
+            "feedforward_dim": model_config.feedforward_dim,
+            "dropout": model_config.dropout,
+            "temporal_aggregator": model_config.temporal_aggregator,
+            "categorical_vocab_size": model_config.categorical_vocab_size,
+            "category_oov_buckets": model_config.category_oov_buckets,
+        },
+        "training_config": training_config.to_dict(),
+        "epochs": [metrics.to_dict() for metrics in result.epochs],
+        "final_metrics": final_metrics.to_dict(),
+        "value_selection": value_selection_payload,
+        "training_cache": cache_lifecycle.to_summary(),
+    }
+
+
+def _input_data_paths_byte_size(paths: Sequence[Path]) -> int | None:
+    total = 0
+    for path in paths:
+        try:
+            if is_training_cache_path(path):
+                total += training_cache_paths_byte_size([path])
+            elif path.is_file() or path.is_symlink():
+                total += path.stat().st_size
+            elif path.is_dir():
+                for child in path.rglob("*"):
+                    if child.is_file() or child.is_symlink():
+                        total += child.stat().st_size
+            else:
+                return None
+        except OSError:
+            return None
+    return total
 
 
 @dataclass
 class _TrainingCacheLifecycle:
     delete_after_checkpoint: bool = False
+    cache_root: Path | None = None
+    cache_footprint_bytes: int | None = None
+    cache_footprint_limit_bytes: int | None = None
     consumed_paths: list[Path] = field(default_factory=list)
+    deleted_paths: list[Path] = field(default_factory=list)
+    deleted_bytes: int = 0
 
     @property
     def consumed_cache_callback(self) -> Callable[[Path], None] | None:
@@ -1809,7 +1906,20 @@ class _TrainingCacheLifecycle:
         for path in self.consumed_paths:
             byte_size = training_cache_paths_byte_size([path])
             delete_training_cache_path(path)
+            self.deleted_paths.append(path)
+            self.deleted_bytes += byte_size
             print(f"deleted_training_cache: {path} bytes={byte_size}")
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            "root": str(self.cache_root) if self.cache_root is not None else None,
+            "footprint_bytes": self.cache_footprint_bytes,
+            "footprint_limit_bytes": self.cache_footprint_limit_bytes,
+            "delete_after_checkpoint": self.delete_after_checkpoint,
+            "consumed_paths": [str(path) for path in self.consumed_paths],
+            "deleted_paths": [str(path) for path in self.deleted_paths],
+            "deleted_bytes": self.deleted_bytes,
+        }
 
 
 def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecycle:
@@ -1833,14 +1943,23 @@ def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecyc
 
     delete_after_read = bool(getattr(args, "delete_cache_after_read", True))
     if not delete_after_read:
-        return _TrainingCacheLifecycle()
+        return _TrainingCacheLifecycle(
+            cache_root=cache_root,
+            cache_footprint_bytes=cache_bytes,
+            cache_footprint_limit_bytes=max_bytes,
+        )
     deleted_paths = tuple(Path(path) for path in args.data)
     for name in ("value_calibration_data", "value_selection_data"):
         for path in tuple(getattr(args, name, None) or ()):
             if any(_paths_overlap(path, deleted_path) for deleted_path in deleted_paths):
                 flag = "--value-calibration-data" if name == "value_calibration_data" else "--value-selection-data"
                 raise ValueError(f"--delete-cache-after-read cannot be used when {flag} overlaps training cache data.")
-    return _TrainingCacheLifecycle(delete_after_checkpoint=True)
+    return _TrainingCacheLifecycle(
+        delete_after_checkpoint=True,
+        cache_root=cache_root,
+        cache_footprint_bytes=cache_bytes,
+        cache_footprint_limit_bytes=max_bytes,
+    )
 
 
 def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Path], None] | None:

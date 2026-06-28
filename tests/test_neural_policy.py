@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
-from pokezero.neural_cli import _training_cache_lifecycle, main as neural_cli_main
+from pokezero.neural_cli import _input_data_paths_byte_size, _training_cache_lifecycle, main as neural_cli_main
 from pokezero.neural_policy import (
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
@@ -1317,6 +1317,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             lifecycle.finalize_after_checkpoint()
 
         delete_cache.assert_called_once_with(Path("cache-a"))
+        self.assertEqual(lifecycle.to_summary()["consumed_paths"], ["cache-a"])
+        self.assertEqual(lifecycle.to_summary()["deleted_paths"], ["cache-a"])
+        self.assertEqual(lifecycle.to_summary()["deleted_bytes"], 1234)
 
     def test_neural_cli_training_cache_lifecycle_defaults_to_delete_for_cache_inputs(self) -> None:
         args = SimpleNamespace(
@@ -1330,6 +1333,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             lifecycle = _training_cache_lifecycle(args)
 
         self.assertIsNotNone(lifecycle.consumed_cache_callback)
+        self.assertEqual(lifecycle.to_summary()["footprint_bytes"], 1234)
+        self.assertEqual(lifecycle.to_summary()["footprint_limit_bytes"], 50 * 1024 * 1024 * 1024)
 
     def test_neural_cli_training_cache_lifecycle_keep_cache_disables_delete_callback(self) -> None:
         args = SimpleNamespace(
@@ -1344,6 +1349,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             lifecycle = _training_cache_lifecycle(args)
 
         self.assertIsNone(lifecycle.consumed_cache_callback)
+        self.assertFalse(lifecycle.to_summary()["delete_after_checkpoint"])
 
     def test_neural_cli_training_cache_lifecycle_rejects_caps_above_project_limit(self) -> None:
         args = SimpleNamespace(
@@ -1354,6 +1360,36 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         with patch("pokezero.neural_cli.is_training_cache_path", return_value=True):
             with self.assertRaisesRegex(ValueError, "cannot exceed 50"):
                 _training_cache_lifecycle(args)
+
+    def test_neural_cli_input_data_paths_byte_size_counts_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            first = temp_path / "first.jsonl"
+            second = temp_path / "second.jsonl"
+            first.write_bytes(b"abcd")
+            second.write_bytes(b"ef")
+
+            self.assertEqual(_input_data_paths_byte_size([first, second]), 6)
+
+    def test_neural_cli_input_data_paths_byte_size_counts_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            nested = temp_path / "nested"
+            nested.mkdir()
+            (temp_path / "first.bin").write_bytes(b"abcd")
+            (nested / "second.bin").write_bytes(b"efg")
+
+            self.assertEqual(_input_data_paths_byte_size([temp_path]), 7)
+
+    def test_neural_cli_input_data_paths_byte_size_uses_cache_sizer(self) -> None:
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch("pokezero.neural_cli.training_cache_paths_byte_size", return_value=1234) as cache_size,
+        ):
+            size = _input_data_paths_byte_size([Path("cache-a")])
+
+        self.assertEqual(size, 1234)
+        cache_size.assert_called_once_with([Path("cache-a")])
 
     def test_neural_cli_training_cache_lifecycle_rejects_delete_with_overlapping_value_data(self) -> None:
         args = SimpleNamespace(
@@ -3087,6 +3123,89 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(events, ["train", "consume:cache-a", "save", "finalize"])
+
+    def test_neural_cli_train_writes_summary_out(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checkpoint_path = temp_path / "checkpoint.pt"
+            summary_path = temp_path / "train-summary.json"
+            events: list[str] = []
+
+            class FakeLifecycle:
+                consumed_cache_callback = None
+
+                def finalize_after_checkpoint(self) -> None:
+                    events.append("finalize")
+
+                def to_summary(self) -> dict[str, object]:
+                    return {
+                        "root": "cache-root",
+                        "footprint_bytes": 2048,
+                        "footprint_limit_bytes": 50 * 1024 * 1024 * 1024,
+                        "delete_after_checkpoint": True,
+                        "consumed_paths": ["cache-a"],
+                        "deleted_paths": ["cache-a"],
+                        "deleted_bytes": 2048,
+                    }
+
+            def fake_train(paths, *, model_config, training_config, initial_model=None, consumed_cache_callback=None):
+                events.append("train")
+                return object(), TransformerTrainingResult(
+                    model_config=model_config,
+                    training_config=training_config,
+                    epochs=(
+                        TransformerEpochMetrics(
+                            epoch=1,
+                            examples=4,
+                            loss=0.25,
+                            policy_loss=0.2,
+                            policy_accuracy=0.75,
+                        ),
+                    ),
+                )
+
+            def fake_save(path, *args, **kwargs) -> None:
+                events.append("save")
+                Path(path).write_bytes(b"checkpoint")
+
+            with (
+                patch("pokezero.neural_cli._training_cache_lifecycle", return_value=FakeLifecycle()),
+                patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train),
+                patch("pokezero.neural_cli.save_transformer_checkpoint", side_effect=fake_save),
+                patch("pokezero.neural_cli.collect_source_metadata", return_value={"available": False}),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "train",
+                        "--data",
+                        "cache-a",
+                        "--out",
+                        str(checkpoint_path),
+                        "--summary-out",
+                        str(summary_path),
+                        "--showdown-root",
+                        "/tmp/showdown",
+                    ]
+                )
+
+            summary = json.loads(summary_path.read_text())
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(events, ["train", "save", "finalize"])
+            self.assertIn(f"train_summary: {summary_path}", stdout.getvalue())
+            self.assertEqual(summary["schema_version"], "pokezero.neural_train_summary.v1")
+            self.assertEqual(summary["checkpoint_path"], str(checkpoint_path))
+            self.assertEqual(summary["checkpoint_bytes"], len(b"checkpoint"))
+            self.assertIsNone(summary["input_data_bytes"])
+            self.assertEqual(summary["model"]["transformer_layers"], 2)
+            self.assertEqual(summary["training_config"]["epochs"], 1)
+            self.assertEqual(summary["final_metrics"]["policy_accuracy"], 0.75)
+            self.assertEqual(summary["training_cache"]["deleted_bytes"], 2048)
+            self.assertGreaterEqual(summary["elapsed_seconds"], summary["train_elapsed_seconds"])
+            self.assertGreaterEqual(summary["train_elapsed_seconds"], 0.0)
 
     def test_neural_cli_train_does_not_finalize_cache_lifecycle_when_checkpoint_save_fails(self) -> None:
         if not torch_available():
