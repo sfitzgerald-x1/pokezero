@@ -151,16 +151,18 @@ class TrainingBatch:
     turn_indices: tuple[int, ...]
     terminal_capped: tuple[bool, ...]
     step_metadata: tuple[Mapping[str, Any], ...]
+    row_categorical_ids: Any | None = None
+    row_numeric_features: Any | None = None
+    row_token_type_ids: Any | None = None
+    row_attention_mask: Any | None = None
+    window_row_indices: Any | None = None
 
     def __post_init__(self) -> None:
         batch_size = len(self.action_indices)
         if batch_size == 0:
             raise ValueError("TrainingBatch must contain at least one example.")
+        row_indexed = self.window_row_indices is not None
         for name, values in (
-            ("categorical_ids", self.categorical_ids),
-            ("numeric_features", self.numeric_features),
-            ("token_type_ids", self.token_type_ids),
-            ("attention_mask", self.attention_mask),
             ("history_mask", self.history_mask),
             ("legal_action_mask", self.legal_action_mask),
             ("rewards", self.rewards),
@@ -183,6 +185,26 @@ class TrainingBatch:
         ):
             if len(values) != batch_size:
                 raise ValueError(f"{name} must contain {batch_size} values.")
+        if row_indexed:
+            for name, values in (
+                ("row_categorical_ids", self.row_categorical_ids),
+                ("row_numeric_features", self.row_numeric_features),
+                ("row_token_type_ids", self.row_token_type_ids),
+                ("row_attention_mask", self.row_attention_mask),
+            ):
+                if values is None:
+                    raise ValueError(f"{name} is required when window_row_indices is set.")
+            if len(self.window_row_indices) != batch_size:
+                raise ValueError(f"window_row_indices must contain {batch_size} values.")
+        else:
+            for name, values in (
+                ("categorical_ids", self.categorical_ids),
+                ("numeric_features", self.numeric_features),
+                ("token_type_ids", self.token_type_ids),
+                ("attention_mask", self.attention_mask),
+            ):
+                if len(values) != batch_size:
+                    raise ValueError(f"{name} must contain {batch_size} values.")
 
     @property
     def batch_size(self) -> int:
@@ -452,6 +474,7 @@ def iter_training_batches(
     batch_size: int,
     config: TrajectoryDatasetConfig | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
+    defer_cache_window_expansion: bool = False,
 ) -> Iterator[TrainingBatch]:
     normalized_paths = _normalize_paths(paths)
     cache_flags = tuple(is_training_cache_path(path) for path in normalized_paths)
@@ -463,6 +486,7 @@ def iter_training_batches(
             batch_size=batch_size,
             config=config,
             consumed_cache_callback=consumed_cache_callback,
+            defer_window_expansion=defer_cache_window_expansion,
         )
         return
     if consumed_cache_callback is not None:
@@ -500,11 +524,17 @@ def _iter_coalesced_training_cache_batches(
     batch_size: int,
     config: TrajectoryDatasetConfig | None,
     consumed_cache_callback: Callable[[Path], None] | None,
+    defer_window_expansion: bool,
 ) -> Iterator[TrainingBatch]:
     pending: list[TrainingBatch] = []
     pending_size = 0
     for path in paths:
-        for batch in iter_training_cache_batches(path, batch_size=batch_size, config=config):
+        for batch in iter_training_cache_batches(
+            path,
+            batch_size=batch_size,
+            config=config,
+            defer_window_expansion=defer_window_expansion,
+        ):
             remainder: TrainingBatch | None = batch
             while remainder is not None:
                 available = batch_size - pending_size
@@ -531,6 +561,8 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         raise ValueError("cannot combine zero training batches.")
     if len(batches) == 1:
         return batches[0]
+    if any(batch.window_row_indices is not None for batch in batches):
+        return _combine_row_indexed_training_batches(batches)
     return TrainingBatch(
         categorical_ids=_concat_categorical_batch_field(tuple(batch.categorical_ids for batch in batches)),
         numeric_features=_concat_batch_field(tuple(batch.numeric_features for batch in batches)),
@@ -556,6 +588,50 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         turn_indices=_concat_batch_field(tuple(batch.turn_indices for batch in batches)),
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
+    )
+
+
+def _combine_row_indexed_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch:
+    if not all(batch.window_row_indices is not None for batch in batches):
+        raise ValueError("cannot combine row-indexed and expanded training batches.")
+    row_offsets: list[int] = []
+    next_offset = 0
+    for batch in batches:
+        row_offsets.append(next_offset)
+        next_offset += len(batch.row_categorical_ids)
+    adjusted_window_indices = []
+    for batch, offset in zip(batches, row_offsets, strict=True):
+        adjusted_window_indices.append(batch.window_row_indices + offset)
+    return TrainingBatch(
+        categorical_ids=(),
+        numeric_features=(),
+        token_type_ids=(),
+        attention_mask=(),
+        history_mask=_concat_batch_field(tuple(batch.history_mask for batch in batches)),
+        legal_action_mask=_concat_batch_field(tuple(batch.legal_action_mask for batch in batches)),
+        action_indices=_concat_batch_field(tuple(batch.action_indices for batch in batches)),
+        rewards=_concat_batch_field(tuple(batch.rewards for batch in batches)),
+        returns=_concat_batch_field(tuple(batch.returns for batch in batches)),
+        ppo_advantages=_concat_batch_field(tuple(batch.ppo_advantages for batch in batches)),
+        ppo_advantage_mask=_concat_batch_field(tuple(batch.ppo_advantage_mask for batch in batches)),
+        ppo_value_targets=_concat_batch_field(tuple(batch.ppo_value_targets for batch in batches)),
+        ppo_value_target_mask=_concat_batch_field(tuple(batch.ppo_value_target_mask for batch in batches)),
+        opponent_action_indices=_concat_batch_field(tuple(batch.opponent_action_indices for batch in batches)),
+        opponent_action_mask=_concat_batch_field(tuple(batch.opponent_action_mask for batch in batches)),
+        action_probabilities=_concat_batch_field(tuple(batch.action_probabilities for batch in batches)),
+        action_probability_mask=_concat_batch_field(tuple(batch.action_probability_mask for batch in batches)),
+        battle_ids=_concat_batch_field(tuple(batch.battle_ids for batch in batches)),
+        seeds=_concat_batch_field(tuple(batch.seeds for batch in batches)),
+        format_ids=_concat_batch_field(tuple(batch.format_ids for batch in batches)),
+        player_ids=_concat_batch_field(tuple(batch.player_ids for batch in batches)),
+        turn_indices=_concat_batch_field(tuple(batch.turn_indices for batch in batches)),
+        terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
+        step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
+        row_categorical_ids=_concat_categorical_batch_field(tuple(batch.row_categorical_ids for batch in batches)),
+        row_numeric_features=_concat_batch_field(tuple(batch.row_numeric_features for batch in batches)),
+        row_token_type_ids=_concat_batch_field(tuple(batch.row_token_type_ids for batch in batches)),
+        row_attention_mask=_concat_batch_field(tuple(batch.row_attention_mask for batch in batches)),
+        window_row_indices=_concat_batch_field(tuple(adjusted_window_indices)),
     )
 
 
@@ -599,6 +675,22 @@ def _concat_batch_field(values: Sequence[Any]) -> Any:
 def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> TrainingBatch:
     if start < 0 or stop < start or stop > batch.batch_size:
         raise ValueError("invalid training batch slice.")
+    row_categorical_ids = batch.row_categorical_ids
+    row_numeric_features = batch.row_numeric_features
+    row_token_type_ids = batch.row_token_type_ids
+    row_attention_mask = batch.row_attention_mask
+    window_row_indices = None
+    if batch.window_row_indices is not None:
+        numpy = _require_numpy()
+        sliced_window_indices = _slice_batch_field(batch.window_row_indices, start, stop)
+        unique_row_indices, inverse_indices = numpy.unique(sliced_window_indices, return_inverse=True)
+        window_row_indices = _owned_array(
+            inverse_indices.reshape(sliced_window_indices.shape).astype(sliced_window_indices.dtype, copy=False)
+        )
+        row_categorical_ids = _owned_array(batch.row_categorical_ids[unique_row_indices])
+        row_numeric_features = _owned_array(batch.row_numeric_features[unique_row_indices])
+        row_token_type_ids = _owned_array(batch.row_token_type_ids[unique_row_indices])
+        row_attention_mask = _owned_array(batch.row_attention_mask[unique_row_indices])
     return TrainingBatch(
         categorical_ids=_slice_batch_field(batch.categorical_ids, start, stop),
         numeric_features=_slice_batch_field(batch.numeric_features, start, stop),
@@ -624,6 +716,11 @@ def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Traini
         turn_indices=_slice_batch_field(batch.turn_indices, start, stop),
         terminal_capped=_slice_batch_field(batch.terminal_capped, start, stop),
         step_metadata=_slice_batch_field(batch.step_metadata, start, stop),
+        row_categorical_ids=row_categorical_ids,
+        row_numeric_features=row_numeric_features,
+        row_token_type_ids=row_token_type_ids,
+        row_attention_mask=row_attention_mask,
+        window_row_indices=window_row_indices,
     )
 
 
@@ -705,6 +802,7 @@ def iter_training_cache_batches(
     *,
     batch_size: int,
     config: TrajectoryDatasetConfig | None = None,
+    defer_window_expansion: bool = False,
 ) -> Iterator[TrainingBatch]:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
@@ -721,6 +819,41 @@ def iter_training_cache_batches(
         example_slice = slice(start, stop)
         window_indices = _owned_array(arrays["window_indices"][example_slice])
         batch_len = stop - start
+        if defer_window_expansion:
+            unique_row_indices, inverse_indices = numpy.unique(window_indices, return_inverse=True)
+            window_row_indices = _owned_array(inverse_indices.reshape(window_indices.shape).astype(numpy.uint32, copy=False))
+            yield TrainingBatch(
+                categorical_ids=(),
+                numeric_features=(),
+                token_type_ids=(),
+                attention_mask=(),
+                history_mask=_owned_array(window_indices != 0),
+                legal_action_mask=_owned_array(arrays["legal_action_mask"][example_slice]),
+                action_indices=_owned_array(arrays["action_indices"][example_slice]),
+                rewards=_owned_array(arrays["rewards"][example_slice]),
+                returns=_owned_array(arrays["returns"][example_slice]),
+                ppo_advantages=_owned_array(arrays["ppo_advantages"][example_slice]),
+                ppo_advantage_mask=_owned_array(arrays["ppo_advantage_mask"][example_slice]),
+                ppo_value_targets=_owned_array(arrays["ppo_value_targets"][example_slice]),
+                ppo_value_target_mask=_owned_array(arrays["ppo_value_target_mask"][example_slice]),
+                opponent_action_indices=_owned_array(arrays["opponent_action_indices"][example_slice]),
+                opponent_action_mask=_owned_array(arrays["opponent_action_mask"][example_slice]),
+                action_probabilities=_owned_array(arrays["action_probabilities"][example_slice]),
+                action_probability_mask=_owned_array(arrays["action_probability_mask"][example_slice]),
+                battle_ids=tuple("" for _ in range(batch_len)),
+                seeds=_owned_array(arrays["seeds"][example_slice]),
+                format_ids=tuple("" for _ in range(batch_len)),
+                player_ids=tuple("" for _ in range(batch_len)),
+                turn_indices=_owned_array(arrays["turn_indices"][example_slice]),
+                terminal_capped=_owned_array(arrays["terminal_capped"][example_slice]),
+                step_metadata=tuple({} for _ in range(batch_len)),
+                row_categorical_ids=_owned_array(arrays["categorical_ids"][unique_row_indices]),
+                row_numeric_features=_owned_array(arrays["numeric_features"][unique_row_indices]),
+                row_token_type_ids=_owned_array(arrays["token_type_ids"][unique_row_indices]),
+                row_attention_mask=_owned_array(arrays["attention_mask"][unique_row_indices]),
+                window_row_indices=window_row_indices,
+            )
+            continue
         yield TrainingBatch(
             categorical_ids=_owned_array(arrays["categorical_ids"][window_indices]),
             numeric_features=_owned_array(arrays["numeric_features"][window_indices]),

@@ -9,7 +9,9 @@ from typing import Any
 import unittest
 from unittest.mock import patch
 
+from pokezero import neural_policy as neural_policy_module
 from pokezero.collection import RolloutRecord, write_rollout_record
+from pokezero.dataset import TrajectoryDatasetConfig, write_training_cache_from_rollouts
 from pokezero.env import TerminalState
 from pokezero.neural_cli import _input_data_paths_byte_size, _training_cache_lifecycle, main as neural_cli_main
 from pokezero.neural_policy import (
@@ -244,6 +246,64 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertTrue(torch.allclose(compact_output.policy_logits, dense_output.policy_logits))
         self.assertTrue(torch.allclose(compact_output.value, dense_output.value))
         self.assertTrue(torch.allclose(compact_output.opponent_action_logits, dense_output.opponent_action_logits))
+
+    def test_transformer_forward_accepts_row_indexed_training_cache_windows(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="row-indexed-cache",
+            category_vocab=tuple(f"token-{index}" for index in range(16)),
+            category_oov_buckets=1,
+            window_size=4,
+            categorical_feature_count=4,
+            numeric_feature_count=2,
+            token_count=DEFAULT_REPLAY_OBSERVATION_SPEC.token_count,
+            embedding_dim=8,
+            transformer_layers=1,
+            attention_heads=1,
+            feedforward_dim=16,
+            dropout=0.0,
+        )
+        model = EntityTokenTransformerPolicy(config)
+        model.eval()
+        row_categorical_ids = torch.zeros((2, config.token_count, 2), dtype=torch.long)
+        row_categorical_ids[0, :, 0] = 2
+        row_categorical_ids[0, :, 1] = 3
+        row_categorical_ids[1, :, 0] = 4
+        row_categorical_ids[1, :, 1] = 5
+        row_numeric_features = torch.ones((2, config.token_count, config.numeric_feature_count))
+        row_numeric_features[1] = 2.0
+        row_token_type_ids = torch.zeros((2, config.token_count), dtype=torch.long)
+        row_attention_mask = torch.ones((2, config.token_count), dtype=torch.bool)
+        row_attention_mask[1, 0] = False
+        window_row_indices = torch.tensor([[0, 1, 0, 1]], dtype=torch.long)
+        dense_categories = row_categorical_ids[window_row_indices]
+        dense_numeric = row_numeric_features[window_row_indices]
+        dense_token_types = row_token_type_ids[window_row_indices]
+        dense_attention = row_attention_mask[window_row_indices]
+        history_mask = torch.ones((1, config.window_size), dtype=torch.bool)
+
+        with torch.no_grad():
+            dense_output = model(
+                categorical_ids=dense_categories,
+                numeric_features=dense_numeric,
+                token_type_ids=dense_token_types,
+                attention_mask=dense_attention,
+                history_mask=history_mask,
+            )
+            row_output = model(
+                row_categorical_ids=row_categorical_ids,
+                row_numeric_features=row_numeric_features,
+                row_token_type_ids=row_token_type_ids,
+                row_attention_mask=row_attention_mask,
+                window_row_indices=window_row_indices,
+                history_mask=history_mask,
+            )
+
+        self.assertTrue(torch.allclose(row_output.policy_logits, dense_output.policy_logits))
+        self.assertTrue(torch.allclose(row_output.value, dense_output.value))
+        self.assertTrue(torch.allclose(row_output.opponent_action_logits, dense_output.opponent_action_logits))
 
     def test_evaluate_transformer_observation_value_uses_configured_history_window(self) -> None:
         if not torch_available():
@@ -4354,6 +4414,51 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(policy.policy_id, "neural-smoke")
         self.assertEqual(len(opponent_priors), 9)
         self.assertAlmostEqual(sum(opponent_priors), 1.0, places=6)
+
+    def test_train_transformer_policy_accepts_cache_backed_row_indexed_batches(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            write_training_cache_from_rollouts(data_path, cache_path, config=TrajectoryDatasetConfig(window_size=2))
+            observed_row_indexed_batches: list[bool] = []
+            original_forward = neural_policy_module.model_forward_from_training_tensors
+
+            def _spy_forward(model, tensors):
+                observed_row_indexed_batches.append("window_row_indices" in tensors)
+                return original_forward(model, tensors)
+
+            with patch("pokezero.neural_policy.model_forward_from_training_tensors", side_effect=_spy_forward):
+                _, result = train_transformer_policy(
+                    cache_path,
+                    model_config=TransformerPolicyConfig.compact_category(
+                        category_vocab=tuple(range(1, 17)),
+                        category_oov_buckets=4,
+                        policy_id="cache-row-indexed-train",
+                        window_size=2,
+                        token_type_vocab_size=8,
+                        categorical_feature_count=1,
+                        numeric_feature_count=1,
+                        embedding_dim=16,
+                        transformer_layers=1,
+                        attention_heads=4,
+                        feedforward_dim=32,
+                        dropout=0.0,
+                    ),
+                    training_config=TransformerTrainingConfig(
+                        batch_size=2,
+                        epochs=1,
+                        window_size=2,
+                        max_batches=1,
+                        device="cpu",
+                    ),
+                )
+
+        self.assertEqual(result.final_metrics.examples, 2)
+        self.assertEqual(observed_row_indexed_batches, [True])
 
     def test_checkpoint_round_trips_ppo_diagnostic_metrics(self) -> None:
         if not torch_available():
