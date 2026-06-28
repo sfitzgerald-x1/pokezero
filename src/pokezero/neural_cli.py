@@ -1334,6 +1334,15 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
     parser.add_argument("--epochs", type=int, default=None, help="Override profile training epochs per iteration.")
     parser.add_argument("--max-batches", type=int, default=None, help="Override profile max batches per epoch. Use -1 for no cap.")
     parser.add_argument(
+        "--learning-rate-schedule-total-games",
+        type=int,
+        default=None,
+        help=(
+            "Override the nested neural iterate LR schedule denominator. Use this for midscale "
+            "recipe-fidelity reads that should anneal over the read's own total game count."
+        ),
+    )
+    parser.add_argument(
         "--value-selection-heldout-games",
         type=int,
         default=None,
@@ -4251,6 +4260,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
     if resolved["max_batches"] is not None:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
+    if resolved["learning_rate_schedule_total_games"] is not None:
+        argv.extend(["--learning-rate-schedule-total-games", str(resolved["learning_rate_schedule_total_games"])])
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
     if resolved["value_ranking_loss_weight"] is not None:
@@ -4350,6 +4361,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "recipe_fidelity": recipe_fidelity,
         "experiment_preset": "recipe-fidelity" if recipe_fidelity else "foundation-arms-race",
         "max_batches": _foundation_max_batches(args.max_batches, profile["max_batches"]),
+        "learning_rate_schedule_total_games": args.learning_rate_schedule_total_games,
         "value_selection_heldout_games": _foundation_option(
             args.value_selection_heldout_games,
             profile["value_selection_heldout_games"],
@@ -4379,6 +4391,11 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"{name.replace('_', '-')} must be positive.")
     if int(resolved["value_selection_heldout_games"] or 0) < 0:
         raise ValueError("value-selection-heldout-games must be non-negative.")
+    if (
+        resolved["learning_rate_schedule_total_games"] is not None
+        and int(resolved["learning_rate_schedule_total_games"]) <= 0
+    ):
+        raise ValueError("learning-rate-schedule-total-games must be positive.")
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
     if resolved["value_ranking_loss_weight"] is not None and float(resolved["value_ranking_loss_weight"]) < 0.0:

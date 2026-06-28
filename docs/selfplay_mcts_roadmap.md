@@ -447,7 +447,8 @@ Near-term priority order:
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
    means stop and fix the recipe, **not** buy more battles. Throughput is no longer the constraint;
    recipe fidelity and a confirmed rising curve are. Use `neural foundation-run --profile midscale
-   --recipe-fidelity` as the standard 50k public wrapper shape for that gate.
+   --recipe-fidelity --learning-rate-schedule-total-games 50000` as the standard 50k public wrapper
+   shape for that gate.
 3. **Only judge "can self-play clear the ceiling" after (1)+(2).** Treat sub-300-game rows and any
    pre-fidelity/pre-scale run as wiring checks, not strength evidence; 300+ games is the default floor.
 4. **Phase 2 — value head + inference-time MCTS.** Improve value-head ranking/calibration to a concrete

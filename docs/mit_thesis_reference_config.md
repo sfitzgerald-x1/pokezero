@@ -131,8 +131,10 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discount=0.9999`,
 `gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`, `value_loss_weight=0.4375`,
 `max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
-`learning_rate_schedule_total_games=3_000_000`, `batch_size=1024`, plus standard
-`collection_temperature=1.0`.
+`learning_rate_schedule_total_games=3_000_000` by default, `batch_size=1024`, plus standard
+`collection_temperature=1.0`. For cheap midscale reads, the foundation wrapper can override
+`learning_rate_schedule_total_games` to the read's own total game count so the annealing schedule
+actually sweeps the full progress range during the read.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.

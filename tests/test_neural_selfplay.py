@@ -3210,12 +3210,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIsNone(recipe["resolved_options"]["feedforward_dim"])
         self.assertIsNone(recipe["resolved_options"]["dropout"])
         self.assertIsNone(recipe["resolved_options"]["category_oov_buckets"])
+        self.assertIsNone(recipe["resolved_options"]["learning_rate_schedule_total_games"])
         self.assertNotIn("--embedding-dim", argv)
         self.assertNotIn("--layers", argv)
         self.assertNotIn("--attention-heads", argv)
         self.assertNotIn("--feedforward-dim", argv)
         self.assertNotIn("--dropout", argv)
         self.assertNotIn("--category-oov-buckets", argv)
+        self.assertNotIn("--learning-rate-schedule-total-games", argv)
 
     def test_neural_cli_foundation_plan_rejects_invalid_architecture_controls(self) -> None:
         cases = (
@@ -3260,6 +3262,23 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("embedding-dim must be divisible by attention-heads", stderr.getvalue())
+
+    def test_neural_cli_foundation_plan_rejects_invalid_lr_schedule_total_games(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-invalid-lr-denominator",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--learning-rate-schedule-total-games",
+                    "0",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("learning-rate-schedule-total-games must be positive", stderr.getvalue())
 
     def test_neural_cli_foundation_plan_rejects_cache_chunk_games_without_cache_root(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
@@ -3729,6 +3748,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "--initial-policy",
                     "random-legal",
                     "--recipe-fidelity",
+                    "--learning-rate-schedule-total-games",
+                    "50000",
                     "--json",
                 ]
             )
@@ -3742,10 +3763,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 10_000)
         self.assertEqual(recipe["resolved_options"]["workers"], 128)
         self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_total_games"], 50_000)
         self.assertEqual(argv[argv.index("--iterations") + 1], "5")
         self.assertEqual(argv[argv.index("--games-per-iteration") + 1], "10000")
         self.assertEqual(argv[argv.index("--workers") + 1], "128")
         self.assertEqual(argv[argv.index("--epochs") + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
+        self.assertEqual(argv[argv.index("--learning-rate-schedule-total-games") + 1], "50000")
         self.assertNotIn("--evaluation-games", argv)
         self.assertNotIn("--value-selection-heldout-games", argv)
         self.assertNotIn("--max-batches", argv)
