@@ -134,7 +134,9 @@ that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discou
 `learning_rate_schedule_total_games=3_000_000` by default, `batch_size=1024`, plus standard
 `collection_temperature=1.0`. For cheap midscale reads, the foundation wrapper can override
 `learning_rate_schedule_total_games` to the read's own total game count so the annealing schedule
-actually sweeps the full progress range during the read.
+actually sweeps the full progress range during the read. It can also override `batch_size` for
+CPU-throughput probes; doing so is intentionally recorded as an explicit off-recipe batch-size
+choice rather than hidden behind the `recipe-fidelity` label.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.
