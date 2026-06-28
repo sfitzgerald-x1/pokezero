@@ -1348,6 +1348,16 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
     parser.add_argument("--workers", type=int, default=None, help="Override profile rollout workers.")
     parser.add_argument("--evaluation-games", type=int, default=None, help="Override profile benchmark games per matchup.")
     parser.add_argument("--epochs", type=int, default=None, help="Override profile training epochs per iteration.")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Override the nested neural iterate training batch size. Recipe-fidelity defaults to "
+            "1024; larger CPU-throughput reads should pass this explicitly so the off-recipe "
+            "batch size is visible in the generated plan and audit."
+        ),
+    )
     parser.add_argument("--max-batches", type=int, default=None, help="Override profile max batches per epoch. Use -1 for no cap.")
     parser.add_argument(
         "--learning-rate-schedule-total-games",
@@ -4296,6 +4306,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         argv.extend(["--evaluation-games", str(resolved["evaluation_games"])])
     if args.profile == "smoke" or "value_selection_heldout_games" in explicit_options:
         argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
+    if resolved["batch_size"] is not None:
+        argv.extend(["--batch-size", str(resolved["batch_size"])])
     if resolved["max_batches"] is not None:
         argv.extend(["--max-batches", str(resolved["max_batches"])])
     if resolved["learning_rate_schedule_total_games"] is not None:
@@ -4396,6 +4408,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "workers": _foundation_option(args.workers, profile["workers"]),
         "evaluation_games": _foundation_option(args.evaluation_games, profile["evaluation_games"]),
         "epochs": _foundation_option(args.epochs, default_epochs),
+        "batch_size": args.batch_size,
         "recipe_fidelity": recipe_fidelity,
         "experiment_preset": "recipe-fidelity" if recipe_fidelity else "foundation-arms-race",
         "max_batches": _foundation_max_batches(args.max_batches, profile["max_batches"]),
@@ -4427,6 +4440,8 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
             raise ValueError(f"{name.replace('_', '-')} must be positive.")
+    if resolved["batch_size"] is not None and int(resolved["batch_size"]) <= 0:
+        raise ValueError("batch-size must be positive.")
     if int(resolved["value_selection_heldout_games"] or 0) < 0:
         raise ValueError("value-selection-heldout-games must be non-negative.")
     if (

@@ -4436,6 +4436,54 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("requires enough --evaluation-games", stderr.getvalue())
 
+    def test_neural_cli_foundation_plan_threads_batch_size_override(self) -> None:
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "run",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--recipe-fidelity",
+                    "--batch-size",
+                    "8192",
+                    "--json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        argv = payload["command"]["argv"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["resolved_options"]["batch_size"], 8192)
+        self.assertIn("--batch-size", argv)
+        self.assertEqual(argv[argv.index("--batch-size") + 1], "8192")
+
+    def test_neural_cli_foundation_plan_rejects_nonpositive_batch_size(self) -> None:
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "run",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--batch-size",
+                    "0",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("batch-size must be positive", stderr.getvalue())
+
     def test_neural_cli_help_lists_benchmark_command(self) -> None:
         stdout = io.StringIO()
 
