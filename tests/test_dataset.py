@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -682,6 +683,123 @@ class DatasetTest(unittest.TestCase):
 
         self.assertIn(TRAINING_CACHE_SCHEMA_VERSION, metadata)
         self.assertIn('"discount": 0.5', metadata)
+
+    def test_training_cache_compacts_zero_padded_categorical_features(self) -> None:
+        self._require_numpy()
+
+        spec = ObservationSpec(categorical_feature_count=4, numeric_feature_count=1)
+
+        def wide_observation(value: int) -> PokeZeroObservationV0:
+            return PokeZeroObservationV0(
+                categorical_ids=tuple((0, value, 0, value + 1) for _ in range(spec.token_count)),
+                numeric_features=tuple((float(value),) for _ in range(spec.token_count)),
+                token_type_ids=tuple(0 for _ in range(spec.token_count)),
+                attention_mask=tuple(True for _ in range(spec.token_count)),
+                legal_action_mask=MASK,
+            )
+
+        trajectory = BattleTrajectory(battle_id="compact-cache", format_id="gen3randombattle", seed=7)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=wide_observation(5),
+                legal_action_mask=MASK,
+                action_index=0,
+                reward=0.0,
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=1))
+        record = RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "test"},
+            decision_round_count=1,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+
+            write_training_cache_from_rollouts(path, cache_path, config=TrajectoryDatasetConfig(window_size=1))
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+            cached_batch = next(iter_training_batches(cache_path, batch_size=1, config=TrajectoryDatasetConfig(window_size=1)))
+
+        self.assertEqual(metadata["categorical_storage"]["mode"], "compact-nonzero")
+        self.assertEqual(metadata["categorical_storage"]["original_feature_count"], 4)
+        self.assertEqual(metadata["categorical_storage"]["stored_feature_count"], 2)
+        self.assertEqual(cached_batch.categorical_ids.shape[-1], 2)
+        self.assertEqual(_tolist(cached_batch.categorical_ids)[0][0][0], [5, 6])
+
+    def test_training_cache_coalesces_mixed_categorical_widths(self) -> None:
+        self._require_numpy()
+
+        spec = ObservationSpec(categorical_feature_count=4, numeric_feature_count=1)
+
+        def record_with_categories(battle_id: str, categories: tuple[int, int, int, int]) -> RolloutRecord:
+            observation_payload = PokeZeroObservationV0(
+                categorical_ids=tuple(categories for _ in range(spec.token_count)),
+                numeric_features=tuple((1.0,) for _ in range(spec.token_count)),
+                token_type_ids=tuple(0 for _ in range(spec.token_count)),
+                attention_mask=tuple(True for _ in range(spec.token_count)),
+                legal_action_mask=MASK,
+            )
+            trajectory = BattleTrajectory(battle_id=battle_id, format_id="gen3randombattle", seed=7)
+            trajectory.append(
+                TrajectoryStep(
+                    player_id="p1",
+                    turn_index=0,
+                    observation=observation_payload,
+                    legal_action_mask=MASK,
+                    action_index=0,
+                    reward=0.0,
+                )
+            )
+            trajectory.record_terminal(TerminalState(winner="p1", turn_count=1))
+            return RolloutRecord(
+                battle_id=trajectory.battle_id,
+                seed=trajectory.seed,
+                format_id=trajectory.format_id,
+                policy_ids={"p1": "test"},
+                decision_round_count=1,
+                elapsed_seconds=0.1,
+                terminal=trajectory.terminal,
+                trajectory=trajectory,
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dense_jsonl = temp_path / "dense.jsonl"
+            compact_jsonl = temp_path / "compact.jsonl"
+            dense_cache = temp_path / "dense-cache"
+            compact_cache = temp_path / "compact-cache"
+            with dense_jsonl.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record_with_categories("dense", (1, 2, 3, 4)))
+            with compact_jsonl.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record_with_categories("compact", (0, 5, 0, 6)))
+
+            write_training_cache_from_rollouts(dense_jsonl, dense_cache, config=TrajectoryDatasetConfig(window_size=1))
+            write_training_cache_from_rollouts(compact_jsonl, compact_cache, config=TrajectoryDatasetConfig(window_size=1))
+            dense_metadata = json.loads((dense_cache / "metadata.json").read_text(encoding="utf-8"))
+            compact_metadata = json.loads((compact_cache / "metadata.json").read_text(encoding="utf-8"))
+            batch = next(
+                iter_training_batches(
+                    (dense_cache, compact_cache),
+                    batch_size=2,
+                    config=TrajectoryDatasetConfig(window_size=1),
+                )
+            )
+
+        self.assertEqual(dense_metadata["categorical_storage"]["stored_feature_count"], 4)
+        self.assertEqual(compact_metadata["categorical_storage"]["stored_feature_count"], 2)
+        self.assertEqual(batch.categorical_ids.shape[-1], 4)
+        self.assertEqual(_tolist(batch.categorical_ids)[0][0][0], [1, 2, 3, 4])
+        self.assertEqual(_tolist(batch.categorical_ids)[1][0][0], [5, 6, 0, 0])
 
     def test_training_cache_write_rejects_root_storage_cap_before_output_creation(self) -> None:
         self._require_numpy()
