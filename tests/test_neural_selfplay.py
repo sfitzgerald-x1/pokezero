@@ -628,6 +628,112 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertTrue(audit["aligned"])
         self.assertIsNone(_manifest_recipe_fidelity_audit({"iterations": []}))
 
+    def test_recipe_fidelity_audit_keeps_bare_schedule_denominator_strict(self) -> None:
+        config = dict(RECIPE_FIDELITY_PRESET_DEFAULTS)
+        config["learning_rate_schedule_total_games"] = 500_800
+
+        audit = recipe_fidelity_audit(config, collection_temperature=1.0)
+
+        self.assertFalse(audit["aligned"])
+        self.assertIn("learning_rate_schedule_total_games", audit["off_recipe"])
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
+            MIT_THESIS_REFERENCE_TRAINING_GAMES,
+        )
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
+            "mit_thesis_training_budget",
+        )
+
+    def test_manifest_recipe_fidelity_audit_accepts_scheduled_run_lr_sweep(self) -> None:
+        config = dict(RECIPE_FIDELITY_PRESET_DEFAULTS)
+        config["learning_rate_schedule_total_games"] = "500800"
+        manifest = {
+            "invocation_configs": [
+                {
+                    "iterations_requested": 313,
+                    "games_per_iteration": 1600,
+                    "learning_rate_schedule_completed_games": 0,
+                    "collection_temperature": 1.0,
+                    "training_config": config,
+                }
+            ],
+            "iterations": [{"iteration": 13, "training": {"config": config}}],
+        }
+
+        audit = _manifest_recipe_fidelity_audit(manifest)
+
+        self.assertIsNotNone(audit)
+        self.assertTrue(audit["aligned"])
+        self.assertNotIn("learning_rate_schedule_total_games", audit["off_recipe"])
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
+            500_800,
+        )
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
+            "scheduled_run_full_sweep",
+        )
+
+    def test_manifest_recipe_fidelity_audit_rejects_partial_scheduled_lr_sweep(self) -> None:
+        config = dict(RECIPE_FIDELITY_PRESET_DEFAULTS)
+        config["learning_rate_schedule_total_games"] = 600_000
+        manifest = {
+            "invocation_configs": [
+                {
+                    "iterations_requested": 313,
+                    "games_per_iteration": 1600,
+                    "learning_rate_schedule_completed_games": 0,
+                    "collection_temperature": 1.0,
+                    "training_config": config,
+                }
+            ],
+            "iterations": [{"iteration": 13, "training": {"config": config}}],
+        }
+
+        audit = _manifest_recipe_fidelity_audit(manifest)
+
+        self.assertIsNotNone(audit)
+        self.assertFalse(audit["aligned"])
+        self.assertIn("learning_rate_schedule_total_games", audit["off_recipe"])
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
+            MIT_THESIS_REFERENCE_TRAINING_GAMES,
+        )
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
+            "mit_thesis_training_budget",
+        )
+
+    def test_manifest_recipe_fidelity_audit_accepts_resumed_scheduled_lr_sweep(self) -> None:
+        config = dict(RECIPE_FIDELITY_PRESET_DEFAULTS)
+        config["learning_rate_schedule_total_games"] = 600_800
+        manifest = {
+            "invocation_configs": [
+                {
+                    "iterations_requested": 313,
+                    "games_per_iteration": 1600,
+                    "learning_rate_schedule_completed_games": 100_000,
+                    "collection_temperature": 1.0,
+                    "training_config": config,
+                }
+            ],
+            "iterations": [{"iteration": 20, "training": {"config": config}}],
+        }
+
+        audit = _manifest_recipe_fidelity_audit(manifest)
+
+        self.assertIsNotNone(audit)
+        self.assertTrue(audit["aligned"])
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
+            600_800,
+        )
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
+            "scheduled_run_full_sweep",
+        )
+
     def test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
         with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
