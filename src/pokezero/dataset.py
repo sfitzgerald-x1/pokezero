@@ -137,6 +137,8 @@ class TrainingBatch:
     action_indices: tuple[int, ...]
     rewards: tuple[float, ...]
     returns: tuple[float, ...]
+    value_estimates: tuple[float, ...]
+    value_estimate_mask: tuple[bool, ...]
     ppo_advantages: tuple[float, ...]
     ppo_advantage_mask: tuple[bool, ...]
     ppo_value_targets: tuple[float, ...]
@@ -168,6 +170,8 @@ class TrainingBatch:
             ("legal_action_mask", self.legal_action_mask),
             ("rewards", self.rewards),
             ("returns", self.returns),
+            ("value_estimates", self.value_estimates),
+            ("value_estimate_mask", self.value_estimate_mask),
             ("ppo_advantages", self.ppo_advantages),
             ("ppo_advantage_mask", self.ppo_advantage_mask),
             ("ppo_value_targets", self.ppo_value_targets),
@@ -252,6 +256,8 @@ class TrainingCacheBuilder:
         self._action_indices: list[int] = []
         self._rewards: list[float] = []
         self._returns: list[float] = []
+        self._value_estimates: list[float] = []
+        self._value_estimate_masks: list[bool] = []
         self._ppo_advantages: list[float] = []
         self._ppo_advantage_masks: list[bool] = []
         self._ppo_value_targets: list[float] = []
@@ -290,6 +296,8 @@ class TrainingCacheBuilder:
             self._action_indices.append(example.action_index)
             self._rewards.append(example.reward)
             self._returns.append(example.return_value)
+            self._value_estimates.append(_optional_float(example.value_estimate))
+            self._value_estimate_masks.append(example.value_estimate is not None)
             self._ppo_advantages.append(_optional_float(example.ppo_advantage))
             self._ppo_advantage_masks.append(example.ppo_advantage is not None)
             self._ppo_value_targets.append(_optional_float(example.ppo_value_target))
@@ -397,6 +405,8 @@ class TrainingCacheBuilder:
             "action_indices": numpy.asarray(self._action_indices, dtype=numpy.int16),
             "rewards": numpy.asarray(self._rewards, dtype=numpy.float32),
             "returns": numpy.asarray(self._returns, dtype=numpy.float32),
+            "value_estimates": numpy.asarray(self._value_estimates, dtype=numpy.float32),
+            "value_estimate_mask": numpy.asarray(self._value_estimate_masks, dtype=numpy.bool_),
             "ppo_advantages": numpy.asarray(self._ppo_advantages, dtype=numpy.float32),
             "ppo_advantage_mask": numpy.asarray(self._ppo_advantage_masks, dtype=numpy.bool_),
             "ppo_value_targets": numpy.asarray(self._ppo_value_targets, dtype=numpy.float32),
@@ -574,6 +584,8 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         action_indices=_concat_batch_field(tuple(batch.action_indices for batch in batches)),
         rewards=_concat_batch_field(tuple(batch.rewards for batch in batches)),
         returns=_concat_batch_field(tuple(batch.returns for batch in batches)),
+        value_estimates=_concat_batch_field(tuple(batch.value_estimates for batch in batches)),
+        value_estimate_mask=_concat_batch_field(tuple(batch.value_estimate_mask for batch in batches)),
         ppo_advantages=_concat_batch_field(tuple(batch.ppo_advantages for batch in batches)),
         ppo_advantage_mask=_concat_batch_field(tuple(batch.ppo_advantage_mask for batch in batches)),
         ppo_value_targets=_concat_batch_field(tuple(batch.ppo_value_targets for batch in batches)),
@@ -613,6 +625,8 @@ def _combine_row_indexed_training_batches(batches: Sequence[TrainingBatch]) -> T
         action_indices=_concat_batch_field(tuple(batch.action_indices for batch in batches)),
         rewards=_concat_batch_field(tuple(batch.rewards for batch in batches)),
         returns=_concat_batch_field(tuple(batch.returns for batch in batches)),
+        value_estimates=_concat_batch_field(tuple(batch.value_estimates for batch in batches)),
+        value_estimate_mask=_concat_batch_field(tuple(batch.value_estimate_mask for batch in batches)),
         ppo_advantages=_concat_batch_field(tuple(batch.ppo_advantages for batch in batches)),
         ppo_advantage_mask=_concat_batch_field(tuple(batch.ppo_advantage_mask for batch in batches)),
         ppo_value_targets=_concat_batch_field(tuple(batch.ppo_value_targets for batch in batches)),
@@ -702,6 +716,8 @@ def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Traini
         action_indices=_slice_batch_field(batch.action_indices, start, stop),
         rewards=_slice_batch_field(batch.rewards, start, stop),
         returns=_slice_batch_field(batch.returns, start, stop),
+        value_estimates=_slice_batch_field(batch.value_estimates, start, stop),
+        value_estimate_mask=_slice_batch_field(batch.value_estimate_mask, start, stop),
         ppo_advantages=_slice_batch_field(batch.ppo_advantages, start, stop),
         ppo_advantage_mask=_slice_batch_field(batch.ppo_advantage_mask, start, stop),
         ppo_value_targets=_slice_batch_field(batch.ppo_value_targets, start, stop),
@@ -833,6 +849,8 @@ def iter_training_cache_batches(
                 action_indices=_owned_array(arrays["action_indices"][example_slice]),
                 rewards=_owned_array(arrays["rewards"][example_slice]),
                 returns=_owned_array(arrays["returns"][example_slice]),
+                value_estimates=_owned_array(arrays["value_estimates"][example_slice]),
+                value_estimate_mask=_owned_array(arrays["value_estimate_mask"][example_slice]),
                 ppo_advantages=_owned_array(arrays["ppo_advantages"][example_slice]),
                 ppo_advantage_mask=_owned_array(arrays["ppo_advantage_mask"][example_slice]),
                 ppo_value_targets=_owned_array(arrays["ppo_value_targets"][example_slice]),
@@ -865,6 +883,8 @@ def iter_training_cache_batches(
             action_indices=_owned_array(arrays["action_indices"][example_slice]),
             rewards=_owned_array(arrays["rewards"][example_slice]),
             returns=_owned_array(arrays["returns"][example_slice]),
+            value_estimates=_owned_array(arrays["value_estimates"][example_slice]),
+            value_estimate_mask=_owned_array(arrays["value_estimate_mask"][example_slice]),
             ppo_advantages=_owned_array(arrays["ppo_advantages"][example_slice]),
             ppo_advantage_mask=_owned_array(arrays["ppo_advantage_mask"][example_slice]),
             ppo_value_targets=_owned_array(arrays["ppo_value_targets"][example_slice]),
@@ -901,6 +921,8 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         action_indices=tuple(example.action_index for example in examples),
         rewards=tuple(example.reward for example in examples),
         returns=tuple(example.return_value for example in examples),
+        value_estimates=tuple(_optional_float(example.value_estimate) for example in examples),
+        value_estimate_mask=tuple(example.value_estimate is not None for example in examples),
         ppo_advantages=tuple(_optional_float(example.ppo_advantage) for example in examples),
         ppo_advantage_mask=tuple(example.ppo_advantage is not None for example in examples),
         ppo_value_targets=tuple(_optional_float(example.ppo_value_target) for example in examples),
@@ -1221,6 +1243,8 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
         "action_indices",
         "rewards",
         "returns",
+        "value_estimates",
+        "value_estimate_mask",
         "ppo_advantages",
         "ppo_advantage_mask",
         "ppo_value_targets",
@@ -1233,7 +1257,23 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
         "turn_indices",
         "terminal_capped",
     )
-    return {name: numpy.load(path / f"{name}.npy", mmap_mode="c") for name in names}
+    arrays = {}
+    for name in names:
+        array_path = path / f"{name}.npy"
+        if array_path.exists():
+            arrays[name] = numpy.load(array_path, mmap_mode="c")
+    missing_required = [
+        name
+        for name in names
+        if name not in arrays and name not in {"value_estimates", "value_estimate_mask"}
+    ]
+    if missing_required:
+        raise FileNotFoundError(f"training cache is missing required arrays: {missing_required}")
+    if "value_estimates" not in arrays:
+        arrays["value_estimates"] = numpy.zeros_like(arrays["returns"], dtype=numpy.float32)
+    if "value_estimate_mask" not in arrays:
+        arrays["value_estimate_mask"] = numpy.zeros_like(arrays["returns"], dtype=numpy.bool_)
+    return arrays
 
 
 def _owned_array(value: Any) -> Any:
@@ -1276,4 +1316,3 @@ def _optional_action_index(value: int | None) -> int:
 
 def _optional_float(value: float | None) -> float:
     return 0.0 if value is None else float(value)
-

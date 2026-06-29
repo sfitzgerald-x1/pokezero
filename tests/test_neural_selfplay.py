@@ -440,6 +440,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(config.discount, MIT_THESIS_REFERENCE_CONFIG["discount"])
         self.assertEqual(config.gae_lambda, MIT_THESIS_REFERENCE_CONFIG["gae_lambda"])
         self.assertEqual(config.clip_epsilon, MIT_THESIS_REFERENCE_CONFIG["clip_epsilon"])
+        self.assertEqual(config.value_clip_range, MIT_THESIS_REFERENCE_CONFIG["value_clip_range"])
         self.assertEqual(config.value_loss_weight, MIT_THESIS_REFERENCE_CONFIG["value_loss_weight"])
         self.assertEqual(config.max_grad_norm, MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"])
         self.assertEqual(config.learning_rate, MIT_THESIS_REFERENCE_CONFIG["learning_rate"])
@@ -559,11 +560,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(config.entropy_coef, 0.0)
         self.assertEqual(config.epochs, 1)
         self.assertIsNone(config.max_grad_norm)
+        self.assertIsNone(config.value_clip_range)
         self.assertEqual(config.discount, 1.0)
         self.assertEqual(config.learning_rate_schedule, "constant")
         self.assertIsNone(config.learning_rate_schedule_total_games)
 
-    def test_recipe_fidelity_audit_reports_off_recipe_and_unsupported_knobs(self) -> None:
+    def test_recipe_fidelity_audit_reports_off_recipe_and_full_config_alignment(self) -> None:
         # The legacy teacher-cut defaults are materially off-recipe.
         off = recipe_fidelity_audit(
             {"objective": "ppo", "ppo_target_mode": "returns", "entropy_coef": 0.0, "epochs": 1, "discount": 1.0},
@@ -578,14 +580,14 @@ class NeuralSelfPlayTest(unittest.TestCase):
         # Undiscounted (1.0) must not be confused with the thesis near-1 gamma (0.9999).
         self.assertIn("discount", off["off_recipe"])
         self.assertFalse(off["knobs"]["discount"]["aligned"])
-        # The unsupported knobs are always surfaced, and a config-aligned run is never fully on-recipe.
+        # The configured PPO knobs can now be fully aligned; scale/cadence/architecture are tracked separately.
         aligned = recipe_fidelity_audit(
             dict(RECIPE_FIDELITY_PRESET_DEFAULTS), collection_temperature=1.0
         )
         self.assertTrue(aligned["aligned"])
-        self.assertFalse(aligned["fully_on_recipe"])
+        self.assertTrue(aligned["fully_on_recipe"])
         self.assertEqual(set(aligned["unsupported_knobs"]), set(RECIPE_FIDELITY_UNSUPPORTED_KNOBS))
-        self.assertEqual(set(aligned["unsupported_knobs"]), {"value_function_clipping"})
+        self.assertEqual(aligned["unsupported_knobs"], {})
 
     def test_manifest_recipe_fidelity_audit_uses_configured_run_config(self) -> None:
         manifest = {

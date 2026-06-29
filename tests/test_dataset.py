@@ -81,6 +81,7 @@ def rollout_record() -> RolloutRecord:
             reward=1.0,
             opponent_action_index=1,
             action_probability=0.5,
+            value_estimate=0.125,
         )
     )
     trajectory.append(step(player_id="p2", turn_index=0, value=50, reward=-1.0))
@@ -563,6 +564,8 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(batch.opponent_action_mask, (True, False))
         self.assertEqual(batch.action_probabilities, (0.5, 0.0))
         self.assertEqual(batch.action_probability_mask, (True, False))
+        self.assertEqual(batch.value_estimates, (0.125, 0.0))
+        self.assertEqual(batch.value_estimate_mask, (True, False))
         self.assertEqual(batch.ppo_advantages, (0.0, 0.0))
         self.assertEqual(batch.ppo_advantage_mask, (False, False))
         self.assertEqual(batch.ppo_value_targets, (0.0, 0.0))
@@ -700,6 +703,33 @@ class DatasetTest(unittest.TestCase):
             cached_batches = list(iter_training_batches(cache_path, batch_size=2, config=config))
 
             self.assertEqual(_batch_payload(cached_batches), _batch_payload(raw_batches))
+
+    def test_training_cache_reader_defaults_missing_value_estimate_arrays(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            builder.write(cache_path)
+            (cache_path / "value_estimates.npy").unlink()
+            (cache_path / "value_estimate_mask.npy").unlink()
+
+            batches = list(iter_training_cache_batches(cache_path, batch_size=2))
+
+        self.assertEqual(_tolist(batches[0].value_estimates), [0.0, 0.0])
+        self.assertEqual(_tolist(batches[0].value_estimate_mask), [False, False])
+
+    def test_training_cache_reader_reports_missing_required_array(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            builder.write(cache_path)
+            (cache_path / "returns.npy").unlink()
+
+            with self.assertRaisesRegex(FileNotFoundError, "returns"):
+                list(iter_training_cache_batches(cache_path, batch_size=2))
 
     def test_training_cache_builder_writes_schema_metadata(self) -> None:
         self._require_numpy()
@@ -1002,6 +1032,8 @@ def _batch_payload(batches) -> list[dict]:
             "action_indices": _tolist(batch.action_indices),
             "rewards": _tolist(batch.rewards),
             "returns": _tolist(batch.returns),
+            "value_estimates": _tolist(batch.value_estimates),
+            "value_estimate_mask": _tolist(batch.value_estimate_mask),
             "ppo_advantages": _tolist(batch.ppo_advantages),
             "ppo_advantage_mask": _tolist(batch.ppo_advantage_mask),
             "ppo_value_targets": _tolist(batch.ppo_value_targets),

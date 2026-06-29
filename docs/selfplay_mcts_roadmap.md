@@ -413,20 +413,15 @@ Near-term priority order:
    **Status:** the config-fidelity half now exists as `neural iterate --experiment-preset
    recipe-fidelity` (and `neural foundation-plan/run --recipe-fidelity`, usable with the teacher-cut
    variant). It bundles the expressible Table A.3 knobs (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
-   lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing over a configurable game-progress denominator, standard collection
-   temperature), records them in the manifest/run summary, and a
+   lambda 0.754, policy clip 0.0829, value-function clip 0.0184, value coef 0.4375, new
+   `--max-grad-norm` 0.5430, batch 1024, base LR 5.9e-5, MIT thesis LR annealing over a configurable
+   game-progress denominator, standard collection temperature), records them in the manifest/run summary, and a
    `recipe_fidelity` audit (`neural report`, foundation summaries) verifies a run is actually
-   on-recipe rather than just named so. **Missing recipe components (from the paper — not yet
-   implemented):**
-   - **Value-function clipping** (`clip_range_vf`) — second-order; close opportunistically.
-
-   The remaining unsupported knob is surfaced in the audit's `unsupported_knobs` so a run is never
-   silently mis-labelled on-recipe. For full-budget runs, the default denominator should remain the
+   config-aligned rather than just named so. For full-budget runs, the default denominator should remain the
    recipe-scale budget; for cheap 50k-100k midscale reads, set `--learning-rate-schedule-total-games`
    to the read's own total game count so the annealing curve exercises an `x: 0 -> 1` sweep instead
    of barely moving over the first few percent of a 3M-game schedule. Config fidelity is otherwise
-   independent of scale (item 2).
+   independent of scale and update cadence (items 2 and 3).
 2. **Scale the training half toward the recipe budget.** Drive battles from ~10³ toward ~10⁶, tracking
    a net-alone strength curve against a stable smooth baseline (a SimpleHeuristics-style bot), the way
    the thesis validated every 20k steps. This is precisely where distributed collection (WS-B) becomes
@@ -555,13 +550,12 @@ Steps:
    A second preset, `neural iterate --experiment-preset recipe-fidelity` (and the foundation
    wrapper's `--recipe-fidelity` flag), reuses that same arms-race scaffolding but overrides the PPO
    hyperparameters to the MIT thesis Table A.3 values (entropy 0.0588, 7 epochs, gamma 0.9999, GAE
-   lambda 0.754, clip 0.0829, value coef 0.4375, new `--max-grad-norm` 0.5430, batch 1024, base LR
-   5.9e-5, MIT thesis LR annealing over a configurable game-progress denominator, standard
+   lambda 0.754, policy clip 0.0829, value-function clip 0.0184, value coef 0.4375, new
+   `--max-grad-norm` 0.5430, batch 1024, base LR 5.9e-5, MIT thesis LR annealing over a configurable game-progress denominator, standard
    collection temperature 1.0). It is the config-fidelity half of near-term
    priority #1. A `recipe_fidelity` audit (printed by `neural report`, embedded in foundation run
    summaries, and computed by `recipe_fidelity_audit()`) compares the *actual* resolved config
-   against the reference table so a run is verifiable as recipe-fidelity, and flags the remaining
-   unexpressed value-function clipping knob under `unsupported_knobs`.
+   against the reference table so a run is verifiable as recipe-fidelity.
    The highest-priority WS-A question is now explicit: can self-play break the scripted-teacher
    ceiling at all? The `teacher-cut` foundation variant is the clean experiment contract for that
    question. It permits a one-shot learned checkpoint as the initial collector, then removes fixed

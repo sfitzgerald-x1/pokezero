@@ -243,6 +243,7 @@ class TransformerTrainingConfig:
     turn_penalty_after: int | None = None
     turn_penalty: float = 0.0
     value_loss_weight: float = 0.25
+    value_clip_range: float | None = None
     value_ranking_loss_weight: float = 0.0
     value_ranking_margin: float = 0.0
     opponent_action_loss_weight: float = 0.1
@@ -326,6 +327,8 @@ class TransformerTrainingConfig:
             raise ValueError("turn_penalty_after must be set when turn_penalty is positive.")
         if self.value_loss_weight < 0.0:
             raise ValueError("value_loss_weight must be non-negative.")
+        if self.value_clip_range is not None and self.value_clip_range <= 0.0:
+            raise ValueError("value_clip_range must be positive when set.")
         if self.value_ranking_loss_weight < 0.0:
             raise ValueError("value_ranking_loss_weight must be non-negative.")
         if self.value_ranking_margin < 0.0:
@@ -368,6 +371,8 @@ class TransformerEpochMetrics:
     ppo_advantage_std: float | None = None
     ppo_ratio_mean: float | None = None
     ppo_clip_fraction: float | None = None
+    ppo_value_clip_eligible_examples: int | None = None
+    ppo_value_clip_fraction: float | None = None
     ppo_entropy: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -720,6 +725,8 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "legal_action_mask": tensor(batch.legal_action_mask, dtype=torch_module.bool, device=device),
         "action_indices": tensor(batch.action_indices, dtype=torch_module.long, device=device),
         "returns": tensor(batch.returns, dtype=torch_module.float32, device=device),
+        "value_estimates": tensor(batch.value_estimates, dtype=torch_module.float32, device=device),
+        "value_estimate_mask": tensor(batch.value_estimate_mask, dtype=torch_module.bool, device=device),
         "ppo_advantages": tensor(batch.ppo_advantages, dtype=torch_module.float32, device=device),
         "ppo_advantage_mask": tensor(batch.ppo_advantage_mask, dtype=torch_module.bool, device=device),
         "ppo_value_targets": tensor(batch.ppo_value_targets, dtype=torch_module.float32, device=device),
@@ -1229,6 +1236,8 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_advantage_std=_optional_float(metrics.get("ppo_advantage_std")),
                 ppo_ratio_mean=_optional_float(metrics.get("ppo_ratio_mean")),
                 ppo_clip_fraction=_optional_float(metrics.get("ppo_clip_fraction")),
+                ppo_value_clip_eligible_examples=_optional_int(metrics.get("ppo_value_clip_eligible_examples")),
+                ppo_value_clip_fraction=_optional_float(metrics.get("ppo_value_clip_fraction")),
                 ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
                 learning_rate=_optional_float(metrics.get("learning_rate")),
             )
@@ -1267,6 +1276,8 @@ class _TorchMetricTotals:
     ppo_advantage_square_sum: float = 0.0
     ppo_ratio_sum: float = 0.0
     ppo_clip_count: int = 0
+    ppo_value_clip_eligible_examples: int = 0
+    ppo_value_clip_count: int = 0
     ppo_entropy_sum: float = 0.0
 
     def add(self, batch_size: int, pieces: Mapping[str, float | int]) -> None:
@@ -1303,13 +1314,20 @@ class _TorchMetricTotals:
             self.ppo_ratio_sum += float(pieces["ppo_ratio_sum"])
             self.ppo_clip_count += int(pieces["ppo_clip_count"])
             self.ppo_entropy_sum += float(pieces["ppo_entropy_sum"])
+        self.ppo_value_clip_eligible_examples += int(pieces.get("ppo_value_clip_eligible_examples", 0))
+        self.ppo_value_clip_count += int(pieces.get("ppo_value_clip_count", 0))
 
     def to_epoch_metrics(self, epoch: int, *, learning_rate: float | None = None) -> TransformerEpochMetrics:
         ppo_advantage_mean = None
         ppo_advantage_std = None
         ppo_ratio_mean = None
         ppo_clip_fraction = None
+        ppo_value_clip_fraction = None
         ppo_entropy = None
+        if self.ppo_value_clip_eligible_examples:
+            ppo_value_clip_fraction = (
+                self.ppo_value_clip_count / self.ppo_value_clip_eligible_examples
+            )
         if self.ppo_valid_examples:
             ppo_advantage_mean = self.ppo_advantage_sum / self.ppo_valid_examples
             ppo_advantage_variance = max(
@@ -1344,6 +1362,10 @@ class _TorchMetricTotals:
             ppo_advantage_std=ppo_advantage_std,
             ppo_ratio_mean=ppo_ratio_mean,
             ppo_clip_fraction=ppo_clip_fraction,
+            ppo_value_clip_eligible_examples=(
+                self.ppo_value_clip_eligible_examples if self.ppo_objective_examples else None
+            ),
+            ppo_value_clip_fraction=ppo_value_clip_fraction,
             ppo_entropy=ppo_entropy,
         )
 
@@ -1401,7 +1423,12 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_targets = _value_targets(tensors)
-    value_loss = functional.mse_loss(output.value, value_targets)
+    value_loss, ppo_value_clip_eligible_examples, ppo_value_clip_count = _value_loss_terms(
+        output.value,
+        value_targets,
+        tensors,
+        config,
+    )
     value_ranking_loss, value_ranking_loss_value, value_ranking_pairs = _value_ranking_loss_terms(
         output.value,
         value_targets,
@@ -1528,6 +1555,8 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "ppo_advantage_square_sum": ppo_advantage_square_sum,
         "ppo_ratio_sum": ppo_ratio_sum,
         "ppo_clip_count": ppo_clip_count,
+        "ppo_value_clip_eligible_examples": ppo_value_clip_eligible_examples,
+        "ppo_value_clip_count": ppo_value_clip_count,
         "ppo_entropy_sum": ppo_entropy_sum,
     }
 
@@ -1541,6 +1570,45 @@ def _value_targets(tensors: Mapping[str, Any]):
         tensors["ppo_value_targets"],
         tensors["returns"],
     )
+
+
+def _value_loss_terms(
+    values: Any,
+    targets: Any,
+    tensors: Mapping[str, Any],
+    config: TransformerTrainingConfig,
+) -> tuple[Any, int, int]:
+    torch_module = require_torch()
+    functional = torch_module.nn.functional
+    unclipped_loss = functional.mse_loss(values, targets, reduction="none")
+    if config.objective != "ppo" or config.value_clip_range is None:
+        return unclipped_loss.mean(), 0, 0
+    if "value_estimates" not in tensors or "value_estimate_mask" not in tensors:
+        return unclipped_loss.mean(), 0, 0
+    # PPO value clipping assumes rollout V_old, current V_new, and value targets are all
+    # in the raw value-head space. Do not feed calibrated values into this path.
+    old_values = tensors["value_estimates"]
+    old_value_mask = tensors["value_estimate_mask"]
+    eligible_examples = int(old_value_mask.sum().detach().item())
+    if not eligible_examples:
+        return unclipped_loss.mean(), 0, 0
+    clipped_values = old_values + (values - old_values).clamp(
+        -float(config.value_clip_range),
+        float(config.value_clip_range),
+    )
+    value_clip_count = int(
+        (
+            old_value_mask
+            & ((values - old_values).abs() > float(config.value_clip_range))
+        ).sum().detach().item()
+    )
+    clipped_loss = (clipped_values - targets) ** 2
+    per_example_loss = torch_module.where(
+        old_value_mask,
+        torch_module.maximum(unclipped_loss, clipped_loss),
+        unclipped_loss,
+    )
+    return per_example_loss.mean(), eligible_examples, value_clip_count
 
 
 def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, float, int]:

@@ -783,6 +783,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(batch_size=0)
         with self.assertRaisesRegex(ValueError, "value_loss_weight"):
             TransformerTrainingConfig(value_loss_weight=-0.1)
+        with self.assertRaisesRegex(ValueError, "value_clip_range"):
+            TransformerTrainingConfig(value_clip_range=0.0)
+        with self.assertRaisesRegex(ValueError, "value_clip_range"):
+            TransformerTrainingConfig(value_clip_range=-0.1)
         with self.assertRaisesRegex(ValueError, "opponent_action_loss_weight"):
             TransformerTrainingConfig(opponent_action_loss_weight=-0.1)
         with self.assertRaisesRegex(ValueError, "switch_action_loss_weight"):
@@ -827,6 +831,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(learning_rate_progress_start=0.5, learning_rate_progress_end=0.25)
         self.assertIsNone(TransformerTrainingConfig().max_grad_norm)
         self.assertEqual(TransformerTrainingConfig(max_grad_norm=0.543).to_dict()["max_grad_norm"], 0.543)
+        self.assertEqual(TransformerTrainingConfig(value_clip_range=0.0184).to_dict()["value_clip_range"], 0.0184)
         self.assertEqual(
             TransformerTrainingConfig(learning_rate_schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE).learning_rate_schedule,
             "mit-thesis",
@@ -924,6 +929,49 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["value_loss"], ((0.4**2) + 1.0) / 2.0, places=5)
         self.assertAlmostEqual(metrics["ppo_advantage_sum"], 1.25, places=5)
         self.assertAlmostEqual(metrics["ppo_advantage_square_sum"], (0.25**2) + 1.0, places=5)
+
+    def test_ppo_value_loss_uses_recorded_value_clip_range(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        output = TransformerPolicyOutput(
+            policy_logits=torch.zeros(2, 9),
+            value=torch.tensor([0.9, 0.9]),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.ones(2),
+            "value_estimates": torch.tensor([0.0, 0.0]),
+            "value_estimate_mask": torch.tensor([True, False]),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+
+        _, metrics = _transformer_loss(
+            output,
+            tensors,
+            TransformerTrainingConfig(
+                objective="ppo",
+                value_clip_range=0.1,
+                normalize_advantage=False,
+                entropy_coef=0.0,
+                opponent_action_loss_weight=0.0,
+            ),
+        )
+
+        # First row uses V_old=0.0 and clip range 0.1, so the clipped prediction is 0.1
+        # and max(unclipped=0.01, clipped=0.81) is used. Second row has no recorded old
+        # value and falls back to the normal 0.01 MSE.
+        self.assertAlmostEqual(metrics["value_loss"], (0.81 + 0.01) / 2.0, places=5)
+        self.assertEqual(metrics["ppo_value_clip_eligible_examples"], 1)
+        self.assertEqual(metrics["ppo_value_clip_count"], 1)
 
     def test_reward_weighted_objective_ignores_non_positive_returns(self) -> None:
         if not torch_available():
@@ -3434,6 +3482,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "gae",
                         "--gae-lambda",
                         "0.8",
+                        "--value-clip-range",
+                        "0.0184",
                         "--value-calibration-data",
                         "calibration-rollouts.jsonl",
                         "--value-calibration-out",
@@ -3457,6 +3507,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(train.call_args.kwargs["training_config"].objective, "ppo")
         self.assertEqual(train.call_args.kwargs["training_config"].ppo_target_mode, "gae")
         self.assertEqual(train.call_args.kwargs["training_config"].gae_lambda, 0.8)
+        self.assertEqual(train.call_args.kwargs["training_config"].value_clip_range, 0.0184)
         self.assertEqual(save.call_args.args[0], checkpoint_path)
         self.assertEqual(evaluate.call_args.kwargs["paths"], [Path("calibration-rollouts.jsonl")])
         self.assertEqual(evaluate.call_args.kwargs["batch_size"], 9)
@@ -4089,6 +4140,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "gae",
                     "--gae-lambda",
                     "0.8",
+                    "--value-clip-range",
+                    "0.0184",
                     "--policy-id",
                     "entity-cli",
                     "--promotion-registry",
@@ -4154,6 +4207,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["training_config"].objective, "ppo")
         self.assertEqual(kwargs["training_config"].ppo_target_mode, "gae")
         self.assertEqual(kwargs["training_config"].gae_lambda, 0.8)
+        self.assertEqual(kwargs["training_config"].value_clip_range, 0.0184)
         self.assertEqual(kwargs["model_config"].policy_id, "entity-cli")
         self.assertEqual(kwargs["promotion_registry_path"], Path("promotions.json"))
         self.assertEqual(kwargs["required_promoted_opponent_pool_size"], 2)
@@ -4783,6 +4837,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         ppo_advantage_std=0.5,
                         ppo_ratio_mean=1.1,
                         ppo_clip_fraction=0.125,
+                        ppo_value_clip_eligible_examples=6,
+                        ppo_value_clip_fraction=0.5,
                         ppo_entropy=1.7,
                     ),
                 ),
@@ -4798,6 +4854,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(restored_metrics.ppo_advantage_std, 0.5)
         self.assertEqual(restored_metrics.ppo_ratio_mean, 1.1)
         self.assertEqual(restored_metrics.ppo_clip_fraction, 0.125)
+        self.assertEqual(restored_metrics.ppo_value_clip_eligible_examples, 6)
+        self.assertEqual(restored_metrics.ppo_value_clip_fraction, 0.5)
         self.assertEqual(restored_metrics.ppo_entropy, 1.7)
         self.assertIsNotNone(restored.value_calibration_transform)
         self.assertEqual(restored.value_calibration_transform.scale, 1.5)

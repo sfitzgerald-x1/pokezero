@@ -116,7 +116,7 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 | `gamma` | 0.9999 | 1.0 | **0.9999 ✅** | now aligned (audit uses a tight tolerance so 1.0 is never read as 0.9999) |
 | `gae_lambda` | 0.754 | 0.95 | **0.754 ✅** (with `ppo_target_mode=gae`) | now aligned |
 | `clip_range` | 0.0829 | 0.2 (`clip_epsilon`) | **0.0829 ✅** | now aligned |
-| `clip_range_vf` | 0.0184 | (none) | **(none) ❌ (unsupported)** | our PPO value loss is an unclipped MSE — listed in `unsupported_knobs` |
+| `clip_range_vf` | 0.0184 | (none) | **0.0184 ✅** (`value_clip_range`) | now aligned; uses recorded rollout value estimates as `V_old` |
 | `value_coef` | 0.4375 | 0.25 (`value_loss_weight`) | **0.4375 ✅** | now aligned |
 | `max_grad_norm` | 0.5430 | (none) | **0.5430 ✅** (new `--max-grad-norm` knob) | now aligned |
 | `batch_size` | 1024 | 64 | **1024 ✅** | now aligned |
@@ -129,8 +129,9 @@ The `default` column is what an unconfigured `neural iterate` / teacher-cut run 
 `neural iterate --experiment-preset recipe-fidelity` (and the foundation wrapper's
 `--recipe-fidelity` flag, usable with the `teacher-cut` variant) bundles the thesis Table A.3 knobs
 that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discount=0.9999`,
-`gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`, `value_loss_weight=0.4375`,
-`max_grad_norm=0.5430`, `learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
+`gae_lambda=0.754` (with `ppo_target_mode=gae`), `clip_epsilon=0.0829`,
+`value_clip_range=0.0184`, `value_loss_weight=0.4375`, `max_grad_norm=0.5430`,
+`learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
 `learning_rate_schedule_total_games=3_000_000` by default, `batch_size=1024`, plus standard
 `collection_temperature=1.0`. For cheap midscale reads, the foundation wrapper can override
 `learning_rate_schedule_total_games` to the read's own total game count so the annealing schedule
@@ -146,15 +147,15 @@ only fills options not explicitly passed on the command line, so existing comman
 `recipe_fidelity:` block, `neural foundation-run` summaries carry a `recipe_fidelity` audit, and
 `recipe_fidelity_audit()` compares the *actual* resolved config against the reference table — so a
 run is verifiable as recipe-fidelity rather than merely labeled that way. The audit reports
-`aligned=true` only when the expressible knobs match, and **always** reports `fully_on_recipe=false`
-plus an `unsupported_knobs` list.
+`aligned=true` only when the configured Table A.3 knobs match, and reports
+`fully_on_recipe=true` only when no currently unsupported config knobs remain.
 
 **What remains off-recipe / scale-limited (intentionally surfaced, not hidden):**
 
-- **Value-function clipping** (`clip_range_vf=0.0184`) — our PPO value loss is an unclipped MSE.
-  Reported under `unsupported_knobs`.
 - **Training scale (~3M battles)** — config fidelity is independent of scale. The preset changes
   *knobs*, not battle count; reaching recipe scale is WS-B.
+- **Update cadence** — the thesis used smaller, more continuous PPO updates; our current
+  collect-then-train iterations are coarser.
 - **Validation opponent / architecture** — still max-damage (not SimpleHeuristics) and an
   entity-token transformer (not the thesis MLP).
 
