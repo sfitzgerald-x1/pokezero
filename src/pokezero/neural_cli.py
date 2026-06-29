@@ -119,6 +119,7 @@ MIT_THESIS_REFERENCE_CONFIG: Mapping[str, float | int] = {
     "discount": 0.9999,
     "gae_lambda": 0.754,
     "clip_epsilon": 0.0829,
+    "value_clip_range": 0.0184,
     "value_loss_weight": 0.4375,
     "max_grad_norm": 0.5430,
     "learning_rate": 5.9e-5,
@@ -128,15 +129,9 @@ MIT_THESIS_REFERENCE_LEARNING_RATE_SCHEDULE = MIT_THESIS_LEARNING_RATE_SCHEDULE
 MIT_THESIS_REFERENCE_TRAINING_GAMES = 3_000_000
 # The thesis ran standard temperature-1.0 sampling for self-play collection.
 MIT_THESIS_REFERENCE_COLLECTION_TEMPERATURE = 1.0
-# Knobs the thesis used that our per-iteration training loop cannot yet express faithfully. These
-# are reported explicitly so a "recipe-fidelity" run is never mistaken for fully on-recipe.
-#   - value_function_clipping: the thesis clips value updates (clip_range_vf=0.0184); our PPO value
-#     loss is an unclipped MSE.
-RECIPE_FIDELITY_UNSUPPORTED_KNOBS: Mapping[str, str] = {
-    "value_function_clipping": (
-        "thesis clip_range_vf=0.0184; our PPO value loss is an unclipped MSE (off-recipe)."
-    ),
-}
+# Knobs the thesis used that our per-iteration training loop cannot yet express faithfully. Keep
+# this structure in the plan/audit payload so future gaps are surfaced explicitly.
+RECIPE_FIDELITY_UNSUPPORTED_KNOBS: Mapping[str, str] = {}
 RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
     # Loop shape: same arms-race self-play scaffolding (PPO + GAE, mirror self-play, latest-policy
     # collector, held-out Pearson value selection, calibration, max-damage yardstick) ...
@@ -158,6 +153,7 @@ RECIPE_FIDELITY_PRESET_DEFAULTS: Mapping[str, Any] = {
     "discount": MIT_THESIS_REFERENCE_CONFIG["discount"],
     "gae_lambda": MIT_THESIS_REFERENCE_CONFIG["gae_lambda"],
     "clip_epsilon": MIT_THESIS_REFERENCE_CONFIG["clip_epsilon"],
+    "value_clip_range": MIT_THESIS_REFERENCE_CONFIG["value_clip_range"],
     "value_loss_weight": MIT_THESIS_REFERENCE_CONFIG["value_loss_weight"],
     "max_grad_norm": MIT_THESIS_REFERENCE_CONFIG["max_grad_norm"],
     "learning_rate": MIT_THESIS_REFERENCE_CONFIG["learning_rate"],
@@ -198,6 +194,7 @@ _ITERATE_PRESET_PPO_KEYS = (
     "discount",
     "gae_lambda",
     "clip_epsilon",
+    "value_clip_range",
     "value_loss_weight",
     "max_grad_norm",
     "learning_rate",
@@ -414,6 +411,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
     )
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
+    train.add_argument(
+        "--value-clip-range",
+        type=float,
+        default=None,
+        help="Optional PPO value-function update clip range, using recorded rollout values as V_old.",
+    )
     train.add_argument(
         "--value-ranking-loss-weight",
         type=float,
@@ -1080,6 +1083,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     iterate.add_argument(
+        "--value-clip-range",
+        type=float,
+        default=None,
+        help="Optional PPO value-function update clip range, using recorded rollout values as V_old.",
+    )
+    iterate.add_argument(
         "--value-ranking-loss-weight",
         type=float,
         default=0.0,
@@ -1424,6 +1433,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         help="Override the pairwise value-ranking margin for the nested neural iterate command.",
     )
     parser.add_argument(
+        "--value-clip-range",
+        type=float,
+        default=None,
+        help="Override the nested neural iterate PPO value-function clip range.",
+    )
+    parser.add_argument(
         "--opponent-policy",
         action="append",
         default=None,
@@ -1718,6 +1733,7 @@ def _train(args: argparse.Namespace) -> int:
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
+        value_clip_range=args.value_clip_range,
         value_ranking_loss_weight=args.value_ranking_loss_weight,
         value_ranking_margin=args.value_ranking_margin,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
@@ -3039,6 +3055,7 @@ def _iterate(args: argparse.Namespace) -> int:
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
+        value_clip_range=args.value_clip_range,
         value_ranking_loss_weight=args.value_ranking_loss_weight,
         value_ranking_margin=args.value_ranking_margin,
         opponent_action_loss_weight=args.opponent_action_loss_weight,
@@ -4351,6 +4368,8 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         )
     if resolved["opponent_action_loss_weight"] is not None:
         argv.extend(["--opponent-action-loss-weight", str(resolved["opponent_action_loss_weight"])])
+    if resolved["value_clip_range"] is not None:
+        argv.extend(["--value-clip-range", str(resolved["value_clip_range"])])
     if resolved["value_ranking_loss_weight"] is not None:
         argv.extend(["--value-ranking-loss-weight", str(resolved["value_ranking_loss_weight"])])
     if resolved["value_ranking_margin"] is not None:
@@ -4464,6 +4483,7 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
             profile["value_selection_heldout_games"],
         ),
         "opponent_action_loss_weight": opponent_action_loss_weight,
+        "value_clip_range": args.value_clip_range,
         "value_ranking_loss_weight": args.value_ranking_loss_weight,
         "value_ranking_margin": args.value_ranking_margin,
         "temporal_aggregator": temporal_aggregator,
@@ -4524,6 +4544,8 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         )
     if resolved["opponent_action_loss_weight"] is not None and float(resolved["opponent_action_loss_weight"]) < 0.0:
         raise ValueError("opponent-action-loss-weight must be non-negative.")
+    if resolved["value_clip_range"] is not None and float(resolved["value_clip_range"]) <= 0.0:
+        raise ValueError("value-clip-range must be positive.")
     if resolved["value_ranking_loss_weight"] is not None and float(resolved["value_ranking_loss_weight"]) < 0.0:
         raise ValueError("value-ranking-loss-weight must be non-negative.")
     if resolved["value_ranking_margin"] is not None and float(resolved["value_ranking_margin"]) < 0.0:
@@ -4855,17 +4877,18 @@ def recipe_fidelity_audit(
         off_recipe.append("collection_temperature")
 
     aligned = not off_recipe
+    unsupported_knobs = dict(RECIPE_FIDELITY_UNSUPPORTED_KNOBS)
     return {
         "reference": "mit_thesis_table_a3",
         "aligned": aligned,
         "knobs": knobs,
         "off_recipe": off_recipe,
-        "unsupported_knobs": dict(RECIPE_FIDELITY_UNSUPPORTED_KNOBS),
-        "fully_on_recipe": False,
+        "unsupported_knobs": unsupported_knobs,
+        "fully_on_recipe": aligned and not unsupported_knobs,
         "note": (
-            "aligned=true means the expressible Table A.3 knobs match; fully_on_recipe is always "
-            "false because value-function clipping is not yet expressible (see unsupported_knobs), "
-            "and recipe scale (~3M battles) is separate from config fidelity."
+            "aligned=true means the configured Table A.3 PPO knobs match; fully_on_recipe is true "
+            "only when no currently unsupported config knobs remain. Recipe scale (~3M battles), "
+            "update cadence, and architecture are tracked separately from this config audit."
         ),
     }
 
