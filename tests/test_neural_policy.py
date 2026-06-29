@@ -34,6 +34,7 @@ from pokezero.neural_policy import (
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
+    load_transformer_policy,
     require_torch,
     resolve_torch_device,
     save_transformer_checkpoint,
@@ -1583,6 +1584,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_load_transformer_policy_resolves_default_device_before_checkpoint_load(self) -> None:
+        fake_policy = object()
+        with (
+            patch("pokezero.neural_policy.resolve_torch_device", return_value="cpu") as resolve_device,
+            patch("pokezero.neural_policy.load_transformer_checkpoint", return_value=("model", "result")) as load,
+            patch("pokezero.neural_policy.TransformerSoftmaxPolicy", return_value=fake_policy) as policy,
+        ):
+            restored = load_transformer_policy(Path("checkpoint.pt"), device=None)
+
+        self.assertIs(restored, fake_policy)
+        resolve_device.assert_called_once_with(None)
+        load.assert_called_once_with(Path("checkpoint.pt"), map_location="cpu")
+        self.assertEqual(policy.call_args.kwargs["device"], "cpu")
 
     def test_resolve_torch_device_matches_training_default(self) -> None:
         if not torch_available():

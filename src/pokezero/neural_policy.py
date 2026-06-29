@@ -1080,7 +1080,8 @@ def load_transformer_policy(
     family_gated_selection: bool = False,
     device: str | Any | None = None,
 ) -> TransformerSoftmaxPolicy:
-    model, result = load_transformer_checkpoint(path, map_location=device)
+    resolved_device = resolve_torch_device(device)
+    model, result = load_transformer_checkpoint(path, map_location=resolved_device)
     return TransformerSoftmaxPolicy(
         model=model,
         result=result,
@@ -1088,7 +1089,7 @@ def load_transformer_policy(
         exploration_epsilon=exploration_epsilon,
         sampling_temperature=sampling_temperature,
         family_gated_selection=family_gated_selection,
-        device=device,
+        device=resolved_device,
     )
 
 
