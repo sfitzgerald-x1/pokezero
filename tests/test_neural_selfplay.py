@@ -206,6 +206,36 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(run.call_args.kwargs["collector_advancement_mode"], "yardstick-gate")
 
+    def test_neural_cli_iterate_wires_evaluation_interval_games(self) -> None:
+        fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+            with patch("sys.stdout", new_callable=io.StringIO):
+                exit_code = neural_cli_main(
+                    [
+                        "iterate",
+                        "--run-dir",
+                        "run",
+                        "--iterations",
+                        "2",
+                        "--games-per-iteration",
+                        "4",
+                        "--showdown-root",
+                        "/tmp/showdown",
+                        "--initial-policy",
+                        "random-legal",
+                        "--evaluation-games",
+                        "300",
+                        "--evaluation-interval-games",
+                        "8",
+                        "--collector-advancement-mode",
+                        "always",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_args.kwargs["evaluation_games"], 300)
+        self.assertEqual(run.call_args.kwargs["evaluation_interval_games"], 8)
+
     def test_neural_cli_iterate_rejects_always_advance_with_auto_promote(self) -> None:
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
             exit_code = neural_cli_main(
@@ -728,6 +758,49 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(
             audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
             600_800,
+        )
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
+            "scheduled_run_full_sweep",
+        )
+
+    def test_manifest_recipe_fidelity_audit_accepts_same_dir_resume_collected_game_total(self) -> None:
+        config = dict(RECIPE_FIDELITY_PRESET_DEFAULTS)
+        config["learning_rate_schedule_total_games"] = 51_200
+        manifest = {
+            "invocation_configs": [
+                {
+                    "iterations_requested": 20,
+                    "games_per_iteration": 1600,
+                    "learning_rate_schedule_completed_games": 0,
+                    "collection_temperature": 1.0,
+                    "training_config": config,
+                },
+                {
+                    "iterations_requested": 12,
+                    "games_per_iteration": 1600,
+                    "learning_rate_schedule_completed_games": 0,
+                    "collection_temperature": 1.0,
+                    "training_config": config,
+                },
+            ],
+            "iterations": [
+                {
+                    "iteration": index + 1,
+                    "collection_metrics": {"games": 1600},
+                    "training": {"config": config},
+                }
+                for index in range(32)
+            ],
+        }
+
+        audit = _manifest_recipe_fidelity_audit(manifest)
+
+        self.assertIsNotNone(audit)
+        self.assertTrue(audit["aligned"])
+        self.assertEqual(
+            audit["knobs"]["learning_rate_schedule_total_games"]["reference"],
+            51_200,
         )
         self.assertEqual(
             audit["knobs"]["learning_rate_schedule_total_games"]["reference_basis"],
@@ -2174,6 +2247,66 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(run_manifest["current_policy_spec"], first_manifest["checkpoint_policy_spec"])
         self.assertIsNone(run_manifest["latest_accepted_checkpoint_path"])
 
+    def test_run_neural_selfplay_iterations_interval_benchmarks_only_on_milestones(self) -> None:
+        captured_benchmarks: list[dict] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+
+            with patched_neural_selfplay_dependencies(captured_benchmarks=captured_benchmarks):
+                run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=3,
+                    games_per_iteration=4,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                    fixed_opponent_policy_specs=("random-legal",),
+                    evaluation_games=2,
+                    evaluation_interval_games=8,
+                    evaluation_seed_start=50,
+                    collector_advancement_mode="always",
+                )
+
+            first_manifest = json.loads((run_dir / "iteration-0001" / "manifest.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((run_dir / "iteration-0002" / "manifest.json").read_text(encoding="utf-8"))
+            third_manifest = json.loads((run_dir / "iteration-0003" / "manifest.json").read_text(encoding="utf-8"))
+            run_manifest = load_neural_selfplay_run_manifest(run_dir)
+
+        self.assertEqual(len(captured_benchmarks), 2)
+        self.assertEqual(captured_benchmarks[0]["games"], 2)
+        self.assertEqual(captured_benchmarks[0]["seed_start"], 50)
+        self.assertEqual(captured_benchmarks[1]["seed_start"], 52)
+        self.assertIsNone(first_manifest["benchmark"])
+        self.assertIsNotNone(second_manifest["benchmark"])
+        self.assertIsNotNone(third_manifest["benchmark"])
+        self.assertTrue(first_manifest["advancement"]["advance_collector"])
+        self.assertEqual(first_manifest["advancement"]["reason"], "collector_advancement_mode_always")
+        self.assertTrue(second_manifest["advancement"]["advance_collector"])
+        self.assertEqual(second_manifest["advancement"]["reason"], "beat_incumbent")
+        self.assertTrue(third_manifest["advancement"]["advance_collector"])
+        self.assertEqual(third_manifest["advancement"]["reason"], "beat_incumbent")
+        self.assertEqual(run_manifest["invocation_configs"][-1]["evaluation_interval_games"], 8)
+        self.assertEqual(run_manifest["current_policy_spec"], third_manifest["checkpoint_policy_spec"])
+
+    def test_run_neural_selfplay_iterations_rejects_interval_skips_for_gated_advancement(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "collector_advancement_mode='always'"):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=2,
+                        games_per_iteration=4,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=4, epochs=1, batch_size=2),
+                        fixed_opponent_policy_specs=("random-legal",),
+                        evaluation_games=2,
+                        evaluation_interval_games=8,
+                    )
+
     def test_run_neural_selfplay_iterations_yardstick_gate_retains_best_collector(self) -> None:
         collected = []
 
@@ -3258,10 +3391,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(recipe["resolved_options"]["experiment_preset"], "recipe-fidelity")
         # The wrapper emits the thesis epoch count so the explicit --epochs matches the preset.
         self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
+        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_total_games"], 16)
         self.assertIn("recipe-fidelity", argv)
         self.assertNotIn("foundation-arms-race", argv)
         idx = argv.index("--epochs")
         self.assertEqual(argv[idx + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
+        self.assertEqual(argv[argv.index("--learning-rate-schedule-total-games") + 1], "16")
         # The plan records the reference table so a recipe-fidelity claim is auditable.
         self.assertEqual(recipe["recipe_fidelity_reference"], recipe_fidelity_reference_config())
         self.assertEqual(
@@ -3941,7 +4076,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertNotIn("--evaluation-games", argv)
         self.assertNotIn("--value-selection-heldout-games", argv)
 
-    def test_neural_cli_foundation_midscale_recipe_plan_uses_50k_gate_profile(self) -> None:
+    def test_neural_cli_foundation_midscale_recipe_plan_uses_1600_game_update_cadence(self) -> None:
         with (
             patch("pokezero.neural_cli.collect_source_metadata", return_value=neural_report_source_metadata()),
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
@@ -3960,8 +4095,6 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "--initial-policy",
                     "random-legal",
                     "--recipe-fidelity",
-                    "--learning-rate-schedule-total-games",
-                    "50000",
                     "--json",
                 ]
             )
@@ -3971,17 +4104,20 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(recipe["profile"], "midscale")
         self.assertEqual(recipe["experiment_preset"], "recipe-fidelity")
-        self.assertEqual(recipe["resolved_options"]["iterations"], 5)
-        self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 10_000)
+        self.assertEqual(recipe["resolved_options"]["iterations"], 32)
+        self.assertEqual(recipe["resolved_options"]["games_per_iteration"], 1_600)
         self.assertEqual(recipe["resolved_options"]["workers"], 128)
+        self.assertEqual(recipe["resolved_options"]["evaluation_games"], 300)
+        self.assertEqual(recipe["resolved_options"]["evaluation_interval_games"], 10_000)
         self.assertEqual(recipe["resolved_options"]["epochs"], MIT_THESIS_REFERENCE_CONFIG["epochs"])
-        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_total_games"], 50_000)
-        self.assertEqual(argv[argv.index("--iterations") + 1], "5")
-        self.assertEqual(argv[argv.index("--games-per-iteration") + 1], "10000")
+        self.assertEqual(recipe["resolved_options"]["learning_rate_schedule_total_games"], 51_200)
+        self.assertEqual(argv[argv.index("--iterations") + 1], "32")
+        self.assertEqual(argv[argv.index("--games-per-iteration") + 1], "1600")
         self.assertEqual(argv[argv.index("--workers") + 1], "128")
+        self.assertEqual(argv[argv.index("--evaluation-games") + 1], "300")
+        self.assertEqual(argv[argv.index("--evaluation-interval-games") + 1], "10000")
         self.assertEqual(argv[argv.index("--epochs") + 1], str(MIT_THESIS_REFERENCE_CONFIG["epochs"]))
-        self.assertEqual(argv[argv.index("--learning-rate-schedule-total-games") + 1], "50000")
-        self.assertNotIn("--evaluation-games", argv)
+        self.assertEqual(argv[argv.index("--learning-rate-schedule-total-games") + 1], "51200")
         self.assertNotIn("--value-selection-heldout-games", argv)
         self.assertNotIn("--max-batches", argv)
 
@@ -4005,7 +4141,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     "random-legal",
                     "--recipe-fidelity",
                     "--learning-rate-schedule-total-games",
-                    "50000",
+                    "51200",
                     "--json",
                 ]
             )
@@ -4020,7 +4156,34 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(args.command, "iterate")
         self.assertEqual(args.experiment_preset, "recipe-fidelity")
-        self.assertEqual(args.learning_rate_schedule_total_games, 50_000)
+        self.assertEqual(args.learning_rate_schedule_total_games, 51_200)
+        self.assertEqual(args.evaluation_games, 300)
+        self.assertEqual(args.evaluation_interval_games, 10_000)
+
+    def test_neural_cli_foundation_plan_rejects_interval_skips_for_gated_advancement(self) -> None:
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            exit_code = neural_cli_main(
+                [
+                    "foundation-plan",
+                    "--run-dir",
+                    "runs/foundation-midscale",
+                    "--showdown-root",
+                    "/tmp/showdown",
+                    "--profile",
+                    "midscale",
+                    "--variant",
+                    "teacher-cut",
+                    "--initial-policy",
+                    "random-legal",
+                    "--recipe-fidelity",
+                    "--collector-advancement-mode",
+                    "incumbent-gate",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("collector-advancement-mode is 'always'", stderr.getvalue())
 
     def test_neural_cli_foundation_plan_continue_from_resolves_checkpoint_and_lr_offset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -354,8 +354,11 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
   In-process neural self-play iteration manifests also record training elapsed time, training input
   bytes, checkpoint bytes, and cache deletion bytes so foundation runs can be judged without scraping
   process logs.
-  The foundation wrapper also has a `midscale` profile (`5 × 10,000` games) for the 50k
-  recipe-faithful rising-curve gate before any full multimillion-battle spend.
+  The foundation wrapper also has a `midscale` profile (`32 × 1,600` games, 51,200 total)
+  for the ~50k recipe-faithful rising-curve gate before any full multimillion-battle spend.
+  It keeps PPO updates near the target cadence while running full benchmark reads only as
+  10k-game milestones are crossed, plus a final read so the last checkpoint is not left
+  unevaluated.
 - **Benchmark harness** (`collection.benchmark_rollouts`, `neural_cli benchmark`) — vs
   random/simple/max-damage baselines.
 - **Neural self-play report yardstick curves** (`neural_cli report`) — text reports include
@@ -446,8 +449,11 @@ Near-term priority order:
    net-alone curve actually *rises*** vs the smooth baseline. A flat recipe-faithful mid-scale curve
    means stop and fix the recipe, **not** buy more battles. Throughput is no longer the constraint;
    recipe fidelity and a confirmed rising curve are. Use `neural foundation-run --profile midscale
-   --recipe-fidelity --learning-rate-schedule-total-games 50000` as the standard 50k public wrapper
-   shape for that gate. A recipe-faithful 50k fast-batch read has now produced a monotonic
+   --recipe-fidelity` as the standard public wrapper shape for that gate. The wrapper defaults the
+   LR schedule denominator to the scheduled run total (51,200 games for midscale), trains with
+   1,600-game PPO updates, and records 300-game benchmark reads only as each 10k-game milestone is
+   crossed, plus a final read if the last update does not cross a new milestone. A recipe-faithful
+   50k fast-batch read has now produced a monotonic
    net-alone curve against the tracked yardsticks: `max-damage` rose
    `7.25% -> 10.25% -> 15.00% -> 17.25% -> 22.00%`, `simple-legal` rose
    `36.25% -> 53.00% -> 57.75% -> 64.25% -> 69.75%`, and `random-legal` rose

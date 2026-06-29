@@ -133,14 +133,14 @@ that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discou
 `value_clip_range=0.0184`, `value_loss_weight=0.4375`, `max_grad_norm=0.5430`,
 `learning_rate=5.9e-5`, `learning_rate_schedule=mit-thesis`,
 `learning_rate_schedule_total_games=3_000_000` by default, `batch_size=1024`, plus standard
-`collection_temperature=1.0`. For cheap midscale reads, the foundation wrapper can override
-`learning_rate_schedule_total_games` to the read's own total game count so the annealing schedule
-actually sweeps the full progress range during the read. It can also override `batch_size` for
-CPU-throughput probes; doing so is intentionally recorded as an explicit off-recipe batch-size
-choice rather than hidden behind the `recipe-fidelity` label. Reports keep the thesis's 3M-game
-annealing denominator as the default reference, but manifest-derived audits also accept a deliberate
-scheduled-run full sweep when `learning_rate_schedule_total_games` exactly equals completed games
-plus the requested run games.
+`collection_temperature=1.0`. The foundation wrapper defaults recipe-fidelity profile runs to the
+scheduled run's own total game count so cheap midscale reads exercise the full annealing curve
+instead of barely moving against the 3M-game denominator; explicit overrides still win. It can also
+override `batch_size` for CPU-throughput probes; doing so is intentionally recorded as an explicit
+off-recipe batch-size choice rather than hidden behind the `recipe-fidelity` label. Reports keep the
+thesis's 3M-game annealing denominator as the default reference, but manifest-derived audits also
+accept a deliberate scheduled-run full sweep when `learning_rate_schedule_total_games` exactly
+equals completed games plus the requested run games.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.

@@ -384,6 +384,7 @@ def run_neural_selfplay_iterations(
     max_historical_opponents: int = 3,
     historical_opponent_selection: str = "recent",
     evaluation_games: int = 0,
+    evaluation_interval_games: int | None = None,
     evaluation_seed_start: int = 1_000_000,
     worker_count: int = 1,
     promotion_registry_path: Path | None = None,
@@ -416,6 +417,8 @@ def run_neural_selfplay_iterations(
         raise ValueError(f"historical_opponent_selection must be one of: {choices}.")
     if evaluation_games < 0:
         raise ValueError("evaluation_games must be non-negative.")
+    if evaluation_interval_games is not None and evaluation_interval_games <= 0:
+        raise ValueError("evaluation_interval_games must be positive when set.")
     if required_promoted_opponent_pool_size is not None and required_promoted_opponent_pool_size < 0:
         raise ValueError("required_promoted_opponent_pool_size must be non-negative.")
     if iterations > 1 and evaluation_games <= 0:
@@ -432,6 +435,15 @@ def run_neural_selfplay_iterations(
         raise ValueError(f"collector_advancement_mode must be one of: {choices}.")
     if collector_advancement_mode != "incumbent-gate" and auto_promotion_config is not None:
         raise ValueError(f"collector_advancement_mode={collector_advancement_mode!r} cannot be combined with auto promotion.")
+    if (
+        evaluation_interval_games is not None
+        and evaluation_interval_games > games_per_iteration
+        and collector_advancement_mode != "always"
+    ):
+        raise ValueError(
+            "evaluation_interval_games can skip iteration benchmarks only when "
+            "collector_advancement_mode='always'."
+        )
     if training_cache_chunk_games is not None and training_cache_chunk_games <= 0:
         raise ValueError("training_cache_chunk_games must be positive when set.")
     if not write_rollout_jsonl and training_cache_root is None:
@@ -572,6 +584,7 @@ def run_neural_selfplay_iterations(
         "first_iteration_seed_start": next_seed_start,
         "initial_policy_spec": initial_policy_spec,
         "evaluation_games": evaluation_games,
+        "evaluation_interval_games": evaluation_interval_games,
         "evaluation_seed_start": evaluation_seed_start,
         "first_iteration_evaluation_seed_start": next_evaluation_seed_start,
         "worker_count": worker_count,
@@ -604,6 +617,7 @@ def run_neural_selfplay_iterations(
         ),
     }
     results: list[NeuralSelfPlayIterationResult] = []
+    next_benchmark_seed_start = next_evaluation_seed_start
     tensorboard_logger = (
         _TensorBoardLogger(tensorboard_log_dir) if tensorboard_log_dir is not None else None
     )
@@ -769,7 +783,15 @@ def run_neural_selfplay_iterations(
                     delete_training_cache_path(path)
                 training_cache_deleted = True
             benchmark = None
-            if evaluation_games:
+            should_benchmark = _should_benchmark_iteration(
+                iteration=iteration,
+                games_per_iteration=games_per_iteration,
+                completed_games_offset=learning_rate_schedule_completed_games,
+                evaluation_games=evaluation_games,
+                evaluation_interval_games=evaluation_interval_games,
+                final_iteration=first_iteration + iterations - 1,
+            )
+            if should_benchmark:
                 benchmark_incumbent_policy_spec = _benchmark_incumbent_policy_spec(
                     fallback_policy_spec=current_policy_spec,
                     promotion_config=auto_promotion_config,
@@ -780,10 +802,11 @@ def run_neural_selfplay_iterations(
                     env_factory=env_factory,
                     rollout_config=rollout_config,
                     games=evaluation_games,
-                    seed_start=next_evaluation_seed_start + (offset * evaluation_games),
+                    seed_start=next_benchmark_seed_start,
                     device=training_config.device,
                     benchmark_reference_policy_specs=benchmark_references,
                 )
+                next_benchmark_seed_start += evaluation_games
             if auto_promotion_config is None:
                 advancement = _advancement_decision(
                     benchmark=benchmark,
@@ -969,6 +992,26 @@ def _training_input_paths_for_objective(
     if objective == "ppo":
         return iteration_training_rollout_paths
     return training_rollout_history
+
+
+def _should_benchmark_iteration(
+    *,
+    iteration: int,
+    games_per_iteration: int,
+    completed_games_offset: int,
+    evaluation_games: int,
+    evaluation_interval_games: int | None,
+    final_iteration: int | None = None,
+) -> bool:
+    if evaluation_games <= 0:
+        return False
+    if evaluation_interval_games is None:
+        return True
+    if final_iteration is not None and iteration == final_iteration:
+        return True
+    completed_before = completed_games_offset + ((iteration - 1) * games_per_iteration)
+    completed_after = completed_games_offset + (iteration * games_per_iteration)
+    return completed_before // evaluation_interval_games < completed_after // evaluation_interval_games
 
 
 def _paths_byte_size_best_effort(
