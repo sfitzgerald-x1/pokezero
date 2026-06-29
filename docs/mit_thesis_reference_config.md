@@ -137,7 +137,10 @@ that our config can express directly: `entropy_coef=0.0588`, `epochs=7`, `discou
 `learning_rate_schedule_total_games` to the read's own total game count so the annealing schedule
 actually sweeps the full progress range during the read. It can also override `batch_size` for
 CPU-throughput probes; doing so is intentionally recorded as an explicit off-recipe batch-size
-choice rather than hidden behind the `recipe-fidelity` label.
+choice rather than hidden behind the `recipe-fidelity` label. Reports keep the thesis's 3M-game
+annealing denominator as the default reference, but manifest-derived audits also accept a deliberate
+scheduled-run full sweep when `learning_rate_schedule_total_games` exactly equals completed games
+plus the requested run games.
 It reuses the arms-race self-play scaffolding (PPO+GAE, mirror self-play, latest-policy collector,
 held-out Pearson value selection + calibration, max-damage yardstick). Like the arms-race preset, it
 only fills options not explicitly passed on the command line, so existing commands are unchanged.

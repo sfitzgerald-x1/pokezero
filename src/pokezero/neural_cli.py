@@ -4814,6 +4814,8 @@ def recipe_fidelity_audit(
     training_config: Mapping[str, Any] | None,
     *,
     collection_temperature: Any = None,
+    learning_rate_schedule_total_games_reference: int = MIT_THESIS_REFERENCE_TRAINING_GAMES,
+    learning_rate_schedule_total_games_reference_basis: str = "mit_thesis_training_budget",
 ) -> dict[str, Any]:
     """Compare an actual training config against the MIT thesis reference recipe.
 
@@ -4849,10 +4851,13 @@ def recipe_fidelity_audit(
         off_recipe.append("learning_rate_schedule")
 
     schedule_total_games = config.get("learning_rate_schedule_total_games")
-    schedule_total_games_ok = schedule_total_games == MIT_THESIS_REFERENCE_TRAINING_GAMES
+    schedule_total_games_ok = _recipe_knob_aligned(
+        schedule_total_games, learning_rate_schedule_total_games_reference
+    )
     knobs["learning_rate_schedule_total_games"] = {
         "value": schedule_total_games,
-        "reference": MIT_THESIS_REFERENCE_TRAINING_GAMES,
+        "reference": learning_rate_schedule_total_games_reference,
+        "reference_basis": learning_rate_schedule_total_games_reference_basis,
         "aligned": schedule_total_games_ok,
     }
     if not schedule_total_games_ok:
@@ -4928,6 +4933,29 @@ def _manifest_collection_temperature(manifest: Mapping[str, Any]) -> Any:
     return None
 
 
+def _manifest_learning_rate_schedule_total_games_reference(manifest: Mapping[str, Any]) -> tuple[int, str]:
+    invocation = _latest_invocation_config(manifest)
+    if invocation is None:
+        return MIT_THESIS_REFERENCE_TRAINING_GAMES, "mit_thesis_training_budget"
+    try:
+        iterations = int(invocation.get("iterations_requested"))
+        games_per_iteration = int(invocation.get("games_per_iteration"))
+        completed_games = int(invocation.get("learning_rate_schedule_completed_games") or 0)
+    except (TypeError, ValueError):
+        return MIT_THESIS_REFERENCE_TRAINING_GAMES, "mit_thesis_training_budget"
+    scheduled_total_games = completed_games + (iterations * games_per_iteration)
+    if scheduled_total_games <= 0:
+        return MIT_THESIS_REFERENCE_TRAINING_GAMES, "mit_thesis_training_budget"
+    training_config = _manifest_configured_training_config(manifest) or {}
+    try:
+        configured_total_games = int(training_config.get("learning_rate_schedule_total_games"))
+    except (TypeError, ValueError):
+        configured_total_games = None
+    if configured_total_games == scheduled_total_games and scheduled_total_games != MIT_THESIS_REFERENCE_TRAINING_GAMES:
+        return scheduled_total_games, "scheduled_run_full_sweep"
+    return MIT_THESIS_REFERENCE_TRAINING_GAMES, "mit_thesis_training_budget"
+
+
 def _manifest_recipe_fidelity_audit(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
     iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
     if not iterations:
@@ -4935,9 +4963,12 @@ def _manifest_recipe_fidelity_audit(manifest: Mapping[str, Any]) -> dict[str, An
     training_config = _manifest_configured_training_config(manifest)
     if training_config is None:
         return None
+    schedule_reference, schedule_reference_basis = _manifest_learning_rate_schedule_total_games_reference(manifest)
     audit = recipe_fidelity_audit(
         training_config,
         collection_temperature=_manifest_collection_temperature(manifest),
+        learning_rate_schedule_total_games_reference=schedule_reference,
+        learning_rate_schedule_total_games_reference_basis=schedule_reference_basis,
     )
     audit["iteration"] = int(iterations[-1].get("iteration", 0))
     return audit
@@ -5158,9 +5189,12 @@ def _print_recipe_fidelity(manifest: Mapping[str, Any]) -> None:
     for name in sorted(knobs):
         knob = _optional_mapping(knobs[name])
         flag = "ok" if knob.get("aligned") is True else "OFF"
+        reference_suffix = ""
+        if knob.get("reference_basis"):
+            reference_suffix = f"; basis {_format_manifest_value(knob.get('reference_basis'))}"
         print(
             f"  [{flag:>3}] {name}: {_format_manifest_value(knob.get('value'))} "
-            f"(ref {_format_manifest_value(knob.get('reference'))})"
+            f"(ref {_format_manifest_value(knob.get('reference'))}{reference_suffix})"
         )
     unsupported = _optional_mapping(audit.get("unsupported_knobs"))
     if unsupported:
