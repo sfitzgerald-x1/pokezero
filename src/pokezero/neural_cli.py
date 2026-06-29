@@ -217,6 +217,7 @@ NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
         "games_per_iteration": 8,
         "workers": 2,
         "evaluation_games": 8,
+        "evaluation_interval_games": None,
         "epochs": 1,
         "max_batches": 2,
         "value_selection_heldout_games": 4,
@@ -226,15 +227,17 @@ NEURAL_FOUNDATION_PROFILES: Mapping[str, Mapping[str, int | None]] = {
         "games_per_iteration": 256,
         "workers": 16,
         "evaluation_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"]),
+        "evaluation_interval_games": None,
         "epochs": 1,
         "max_batches": None,
         "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
     },
     "midscale": {
-        "iterations": 5,
-        "games_per_iteration": 10_000,
+        "iterations": 32,
+        "games_per_iteration": 1_600,
         "workers": 128,
-        "evaluation_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["evaluation_games"]),
+        "evaluation_games": FOUNDATION_MILESTONE_BENCHMARK_GAMES,
+        "evaluation_interval_games": 10_000,
         "epochs": 1,
         "max_batches": None,
         "value_selection_heldout_games": int(FOUNDATION_ARMS_RACE_PRESET_DEFAULTS["value_selection_heldout_games"]),
@@ -1021,6 +1024,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0,
         help="Benchmark games per matchup after each train step. Required to be positive for multi-iteration runs.",
     )
+    iterate.add_argument(
+        "--evaluation-interval-games",
+        type=int,
+        default=None,
+        help=(
+            "Only run full benchmarks on iterations that cross this many collected self-play games. "
+            "Use with collector advancement mode 'always' for milestone evals without per-iteration eval cost."
+        ),
+    )
     iterate.add_argument("--evaluation-seed-start", type=int, default=1_000_000, help="First deterministic benchmark seed.")
     iterate.add_argument("--epochs", type=int, default=1, help="Training epochs per iteration.")
     iterate.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
@@ -1363,7 +1375,7 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
         default="smoke",
         help=(
             "Foundation run size profile. smoke is cheap plumbing; pilot matches the current "
-            "3x256 CPU recipe; midscale is the 5x10k rising-curve gate before larger runs."
+            "3x256 CPU recipe; midscale is a ~50k rising-curve gate with 1.6k PPO updates."
         ),
     )
     parser.add_argument(
@@ -1376,6 +1388,12 @@ def _add_foundation_arguments(parser: argparse.ArgumentParser, *, include_summar
     parser.add_argument("--games-per-iteration", type=int, default=None, help="Override profile games per iteration.")
     parser.add_argument("--workers", type=int, default=None, help="Override profile rollout workers.")
     parser.add_argument("--evaluation-games", type=int, default=None, help="Override profile benchmark games per matchup.")
+    parser.add_argument(
+        "--evaluation-interval-games",
+        type=int,
+        default=None,
+        help="Override profile benchmark interval in collected self-play games.",
+    )
     parser.add_argument("--epochs", type=int, default=None, help="Override profile training epochs per iteration.")
     parser.add_argument(
         "--batch-size",
@@ -3149,6 +3167,7 @@ def _iterate(args: argparse.Namespace) -> int:
         max_historical_opponents=args.max_historical_opponents,
         historical_opponent_selection=args.historical_opponent_selection,
         evaluation_games=args.evaluation_games,
+        evaluation_interval_games=args.evaluation_interval_games,
         evaluation_seed_start=args.evaluation_seed_start,
         worker_count=args.workers,
         promotion_registry_path=args.promotion_registry,
@@ -4349,8 +4368,10 @@ def _foundation_recipe(args: argparse.Namespace) -> dict[str, Any]:
         str(args.evaluation_seed_start),
         "--json",
     ]
-    if args.profile == "smoke" or "evaluation_games" in explicit_options:
+    if args.profile == "smoke" or "evaluation_games" in explicit_options or resolved["evaluation_interval_games"] is not None:
         argv.extend(["--evaluation-games", str(resolved["evaluation_games"])])
+    if resolved["evaluation_interval_games"] is not None:
+        argv.extend(["--evaluation-interval-games", str(resolved["evaluation_interval_games"])])
     if args.profile == "smoke" or "value_selection_heldout_games" in explicit_options:
         argv.extend(["--value-selection-heldout-games", str(resolved["value_selection_heldout_games"])])
     if resolved["batch_size"] is not None:
@@ -4469,6 +4490,10 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "games_per_iteration": _foundation_option(args.games_per_iteration, profile["games_per_iteration"]),
         "workers": _foundation_option(args.workers, profile["workers"]),
         "evaluation_games": _foundation_option(args.evaluation_games, profile["evaluation_games"]),
+        "evaluation_interval_games": _foundation_option(
+            args.evaluation_interval_games,
+            profile["evaluation_interval_games"],
+        ),
         "epochs": _foundation_option(args.epochs, default_epochs),
         "batch_size": args.batch_size,
         "initial_policy": initial_policy,
@@ -4503,9 +4528,24 @@ def _foundation_resolved_options(args: argparse.Namespace) -> dict[str, Any]:
         "delete_cache_after_read": bool(args.delete_cache_after_read),
         "write_rollout_jsonl": bool(args.write_rollout_jsonl),
     }
+    if recipe_fidelity and resolved["learning_rate_schedule_total_games"] is None:
+        completed_games = int(learning_rate_schedule_completed_games or 0)
+        requested_games = int(resolved["iterations"]) * int(resolved["games_per_iteration"])
+        resolved["learning_rate_schedule_total_games"] = completed_games + requested_games
     for name in ("iterations", "games_per_iteration", "workers", "evaluation_games", "epochs"):
         if int(resolved[name] or 0) <= 0:
             raise ValueError(f"{name.replace('_', '-')} must be positive.")
+    if resolved["evaluation_interval_games"] is not None and int(resolved["evaluation_interval_games"]) <= 0:
+        raise ValueError("evaluation-interval-games must be positive.")
+    if (
+        resolved["evaluation_interval_games"] is not None
+        and int(resolved["evaluation_interval_games"]) > int(resolved["games_per_iteration"])
+        and resolved["collector_advancement_mode"] not in (None, "always")
+    ):
+        raise ValueError(
+            "evaluation-interval-games can skip iteration benchmarks only when "
+            "collector-advancement-mode is 'always'."
+        )
     if resolved["batch_size"] is not None and int(resolved["batch_size"]) <= 0:
         raise ValueError("batch-size must be positive.")
     if int(resolved["value_selection_heldout_games"] or 0) < 0:
@@ -4951,9 +4991,35 @@ def _manifest_learning_rate_schedule_total_games_reference(manifest: Mapping[str
         configured_total_games = int(training_config.get("learning_rate_schedule_total_games"))
     except (TypeError, ValueError):
         configured_total_games = None
-    if configured_total_games == scheduled_total_games and scheduled_total_games != MIT_THESIS_REFERENCE_TRAINING_GAMES:
-        return scheduled_total_games, "scheduled_run_full_sweep"
+    scheduled_total_candidates = {scheduled_total_games}
+    collected_games = _manifest_collected_training_games(manifest)
+    if collected_games is not None:
+        scheduled_total_candidates.add(completed_games + collected_games)
+    if (
+        configured_total_games in scheduled_total_candidates
+        and configured_total_games != MIT_THESIS_REFERENCE_TRAINING_GAMES
+    ):
+        return configured_total_games, "scheduled_run_full_sweep"
     return MIT_THESIS_REFERENCE_TRAINING_GAMES, "mit_thesis_training_budget"
+
+
+def _manifest_collected_training_games(manifest: Mapping[str, Any]) -> int | None:
+    iterations = tuple(_mapping(iteration) for iteration in _sequence(manifest.get("iterations", ())))
+    if not iterations:
+        return None
+    total = 0
+    for iteration in iterations:
+        metrics = _optional_mapping(iteration.get("collection_metrics"))
+        if not metrics or "games" not in metrics:
+            return None
+        try:
+            games = int(metrics["games"])
+        except (TypeError, ValueError):
+            return None
+        if games < 0:
+            return None
+        total += games
+    return total
 
 
 def _manifest_recipe_fidelity_audit(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
