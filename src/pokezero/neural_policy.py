@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 import json
 import math
+import os
 from os import PathLike
 from pathlib import Path
 import random
@@ -47,6 +48,9 @@ LEARNING_RATE_SCHEDULES = (CONSTANT_LEARNING_RATE_SCHEDULE, MIT_THESIS_LEARNING_
 # the spy audit found zero uncovered bounded categories. Sized for collision comfort, not as
 # a real feature (was 4096, which dominated the embedding table with ~524K dead params).
 DEFAULT_CATEGORY_OOV_BUCKETS = 16
+TORCH_NUM_THREADS_ENV = "POKEZERO_TORCH_NUM_THREADS"
+TORCH_NUM_INTEROP_THREADS_ENV = "POKEZERO_TORCH_NUM_INTEROP_THREADS"
+_TORCH_THREAD_ENV_APPLIED = False
 
 
 def collect_categorical_ids(
@@ -474,9 +478,42 @@ def torch_available() -> bool:
     return torch is not None and nn is not None
 
 
+def _positive_int_env(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer when set.") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer when set.")
+    return value
+
+
+def _apply_torch_thread_env(torch_module: Any) -> None:
+    global _TORCH_THREAD_ENV_APPLIED
+    if _TORCH_THREAD_ENV_APPLIED:
+        return
+
+    num_threads = _positive_int_env(TORCH_NUM_THREADS_ENV)
+    num_interop_threads = _positive_int_env(TORCH_NUM_INTEROP_THREADS_ENV)
+    if num_threads is not None:
+        torch_module.set_num_threads(num_threads)
+    if num_interop_threads is not None:
+        try:
+            torch_module.set_num_interop_threads(num_interop_threads)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{TORCH_NUM_INTEROP_THREADS_ENV} must be applied before torch inter-op parallel work starts."
+            ) from exc
+    _TORCH_THREAD_ENV_APPLIED = True
+
+
 def require_torch() -> Any:
     if torch is None or nn is None:
         raise TorchUnavailableError(NEURAL_INSTALL_MESSAGE)
+    _apply_torch_thread_env(torch)
     return torch
 
 
