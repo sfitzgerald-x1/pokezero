@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .collection import RolloutRecord, iter_rollout_records
+from .padding import zeros_like as _zeros_like
 from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
@@ -1276,12 +1277,3 @@ def _optional_action_index(value: int | None) -> int:
 def _optional_float(value: float | None) -> float:
     return 0.0 if value is None else float(value)
 
-
-def _zeros_like(value: Any) -> Any:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return 0
-    if isinstance(value, float):
-        return 0.0
-    return tuple(_zeros_like(item) for item in value)

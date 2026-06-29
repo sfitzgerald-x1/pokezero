@@ -14,6 +14,7 @@ from pokezero.linear_cli import main as linear_cli_main
 from pokezero.linear_policy import (
     LINEAR_FEATURE_SCHEMA_VERSION,
     LINEAR_POLICY_SCHEMA_VERSION,
+    LEGACY_LINEAR_FEATURE_FINGERPRINTS,
     LinearPolicyModel,
     LinearSoftmaxPolicy,
     LinearTrainingConfig,
@@ -282,6 +283,14 @@ class LinearPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported linear feature fingerprint"):
             LinearPolicyModel.from_dict(payload)
 
+    def test_linear_checkpoint_accepts_legacy_zero_padding_fingerprint(self) -> None:
+        payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
+        payload["feature_fingerprint"] = LEGACY_LINEAR_FEATURE_FINGERPRINTS[0]
+
+        restored = LinearPolicyModel.from_dict(payload)
+
+        self.assertEqual(restored.feature_fingerprint, LEGACY_LINEAR_FEATURE_FINGERPRINTS[0])
+
     def test_linear_checkpoint_rejects_stale_policy_schema_version(self) -> None:
         payload = LinearPolicyModel.initialized(feature_count=8, window_size=1).to_dict()
         payload["schema_version"] = "pokezero.linear_policy.v1"
@@ -297,7 +306,14 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(payload["observation_schema_version"], OBSERVATION_SCHEMA_VERSION)
         self.assertIn("features_from_window", payload["sources"])
         self.assertIn("def features_from_window", payload["sources"]["features_from_window"])
-        self.assertRegex(linear_feature_fingerprint(), r"^[0-9a-f]{64}$")
+        self.assertIn("_shape_of", payload["padding_sources"])
+        self.assertIn("def _shape_of", payload["padding_sources"]["_shape_of"])
+        self.assertIn("_zeros_from_shape", payload["padding_sources"])
+        self.assertIn("def _zeros_from_shape", payload["padding_sources"]["_zeros_from_shape"])
+        self.assertEqual(
+            linear_feature_fingerprint(),
+            "53a4b9608ddb3c7f092e173af1f5350b03e5984b683a43db7932bb2322c21fc7",
+        )
 
     def test_linear_feature_fingerprint_changes_when_extractor_source_changes(self) -> None:
         original = linear_feature_fingerprint()

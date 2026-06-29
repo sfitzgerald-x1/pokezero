@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
+from .padding import zeros_like as _zeros_like
 from .policy import PolicyDecision, legal_action_indices
 from .showdown import (
     ACTION_CANDIDATE_TOKEN_OFFSET,
@@ -1740,16 +1741,6 @@ def _observation_player_key(observation: PokeZeroObservationV0) -> str:
     if observation.perspective is None:
         return "default"
     return observation.perspective.player_id or observation.perspective.showdown_slot
-
-
-def _zeros_like(value: Any) -> Any:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return 0
-    if isinstance(value, float):
-        return 0.0
-    return tuple(_zeros_like(item) for item in value)
 
 
 def resolve_torch_device(device: str | Any | None = None) -> str | Any:

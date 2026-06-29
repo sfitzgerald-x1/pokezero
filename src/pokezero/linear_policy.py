@@ -17,11 +17,18 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
 from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_examples
 from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
+from . import padding as _padding
+from .padding import zeros_like as _zeros_like
 from .policy import PolicyDecision, legal_action_indices
 
 LINEAR_POLICY_SCHEMA_VERSION = "pokezero.linear_policy.v4"
 LINEAR_FEATURE_SCHEMA_VERSION = "pokezero.linear_features.v2"
 LINEAR_FEATURE_FINGERPRINT_VERSION = "pokezero.linear_feature_fingerprint.v1"
+LEGACY_LINEAR_FEATURE_FINGERPRINTS = (
+    # Recursive zero-padding helper used before cached observation padding. The feature
+    # values are identical, so old linear artifacts remain load-compatible.
+    "7da4fbdd70569026ded205142d3eda2be61f5fc62b7f81a7a76f7f3fbfb7e395",
+)
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 ALL_ACTIONS_LEGAL_MASK = tuple(True for _ in range(ACTION_COUNT))
 _LINEAR_FEATURE_SOURCE_NAMES = (
@@ -47,6 +54,10 @@ def linear_feature_fingerprint() -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _supported_linear_feature_fingerprints() -> set[str]:
+    return {linear_feature_fingerprint(), *LEGACY_LINEAR_FEATURE_FINGERPRINTS}
+
+
 def _linear_feature_fingerprint_payload() -> dict[str, Any]:
     return {
         "fingerprint_version": LINEAR_FEATURE_FINGERPRINT_VERSION,
@@ -57,6 +68,11 @@ def _linear_feature_fingerprint_payload() -> dict[str, Any]:
         "sources": {
             name: _callable_fingerprint_source(globals()[name])
             for name in _LINEAR_FEATURE_SOURCE_NAMES
+        },
+        "padding_sources": {
+            "zeros_like": _callable_fingerprint_source(_padding.zeros_like),
+            "_shape_of": _callable_fingerprint_source(_padding._shape_of),
+            "_zeros_from_shape": _callable_fingerprint_source(_padding._zeros_from_shape),
         },
     }
 
@@ -89,7 +105,7 @@ class LinearPolicyModel:
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.feature_schema_version != LINEAR_FEATURE_SCHEMA_VERSION:
             raise ValueError(f"Unsupported linear feature schema version: {self.feature_schema_version!r}.")
-        if self.feature_fingerprint != linear_feature_fingerprint():
+        if self.feature_fingerprint not in _supported_linear_feature_fingerprints():
             raise ValueError(f"Unsupported linear feature fingerprint: {self.feature_fingerprint!r}.")
         if self.feature_count <= 1:
             raise ValueError("feature_count must be greater than 1.")
@@ -830,13 +846,3 @@ def _sequence(value: Any) -> tuple[Any, ...]:
     if isinstance(value, list | tuple):
         return tuple(value)
     return tuple(value)
-
-
-def _zeros_like(value: Any) -> Any:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return 0
-    if isinstance(value, float):
-        return 0.0
-    return tuple(_zeros_like(item) for item in value)
