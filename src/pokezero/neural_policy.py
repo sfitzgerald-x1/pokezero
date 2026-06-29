@@ -498,6 +498,9 @@ def _apply_torch_thread_env(torch_module: Any) -> None:
 
     num_threads = _positive_int_env(TORCH_NUM_THREADS_ENV)
     num_interop_threads = _positive_int_env(TORCH_NUM_INTEROP_THREADS_ENV)
+    # PyTorch only allows the inter-op thread pool to be configured before parallel work
+    # starts. These env vars are therefore a process-start contract: set them before the
+    # first neural entry point calls require_torch().
     if num_threads is not None:
         torch_module.set_num_threads(num_threads)
     if num_interop_threads is not None:

@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 from typing import Any
@@ -1554,6 +1556,33 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "POKEZERO_TORCH_NUM_INTEROP_THREADS"):
                 require_torch()
+
+    def test_require_torch_applies_thread_env_to_real_torch_in_fresh_process(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        script = "\n".join(
+            [
+                "from pokezero.neural_policy import require_torch",
+                "torch = require_torch()",
+                "assert torch.get_num_threads() == 1, torch.get_num_threads()",
+                "assert torch.get_num_interop_threads() == 1, torch.get_num_interop_threads()",
+            ]
+        )
+        env = {
+            **os.environ,
+            "POKEZERO_TORCH_NUM_THREADS": "1",
+            "POKEZERO_TORCH_NUM_INTEROP_THREADS": "1",
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_resolve_torch_device_matches_training_default(self) -> None:
         if not torch_available():
