@@ -2,7 +2,10 @@ import contextlib
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import tempfile
 from typing import Any
@@ -1476,6 +1479,110 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.skipTest("PyTorch is installed in this environment.")
         with self.assertRaisesRegex(TorchUnavailableError, "pip install -e"):
             TransformerSoftmaxPolicy(model=object(), result=None)  # type: ignore[arg-type]
+
+    def test_require_torch_applies_thread_env_once(self) -> None:
+        class FakeTorch:
+            def __init__(self) -> None:
+                self.num_threads: list[int] = []
+                self.num_interop_threads: list[int] = []
+
+            def set_num_threads(self, value: int) -> None:
+                self.num_threads.append(value)
+
+            def set_num_interop_threads(self, value: int) -> None:
+                self.num_interop_threads.append(value)
+
+        fake_torch = FakeTorch()
+        with (
+            patch.object(neural_policy_module, "torch", fake_torch),
+            patch.object(neural_policy_module, "nn", object()),
+            patch.object(neural_policy_module, "_TORCH_THREAD_ENV_APPLIED", False),
+            patch.dict(
+                os.environ,
+                {
+                    "POKEZERO_TORCH_NUM_THREADS": "2",
+                    "POKEZERO_TORCH_NUM_INTEROP_THREADS": "3",
+                },
+            ),
+        ):
+            self.assertIs(require_torch(), fake_torch)
+            self.assertIs(require_torch(), fake_torch)
+
+        self.assertEqual(fake_torch.num_threads, [2])
+        self.assertEqual(fake_torch.num_interop_threads, [3])
+
+    def test_require_torch_rejects_invalid_thread_env(self) -> None:
+        class FakeTorch:
+            def set_num_threads(self, value: int) -> None:
+                raise AssertionError("invalid env should fail before applying torch threads")
+
+            def set_num_interop_threads(self, value: int) -> None:
+                raise AssertionError("invalid env should fail before applying torch threads")
+
+        with (
+            patch.object(neural_policy_module, "torch", FakeTorch()),
+            patch.object(neural_policy_module, "nn", object()),
+            patch.object(neural_policy_module, "_TORCH_THREAD_ENV_APPLIED", False),
+            patch.dict(
+                os.environ,
+                {
+                    "POKEZERO_TORCH_NUM_THREADS": "0",
+                    "POKEZERO_TORCH_NUM_INTEROP_THREADS": "",
+                },
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "POKEZERO_TORCH_NUM_THREADS"):
+                require_torch()
+
+    def test_require_torch_reports_late_interop_thread_application(self) -> None:
+        class FakeTorch:
+            def set_num_threads(self, value: int) -> None:
+                pass
+
+            def set_num_interop_threads(self, value: int) -> None:
+                raise RuntimeError("cannot set number of interop threads after parallel work")
+
+        with (
+            patch.object(neural_policy_module, "torch", FakeTorch()),
+            patch.object(neural_policy_module, "nn", object()),
+            patch.object(neural_policy_module, "_TORCH_THREAD_ENV_APPLIED", False),
+            patch.dict(
+                os.environ,
+                {
+                    "POKEZERO_TORCH_NUM_THREADS": "",
+                    "POKEZERO_TORCH_NUM_INTEROP_THREADS": "1",
+                },
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "POKEZERO_TORCH_NUM_INTEROP_THREADS"):
+                require_torch()
+
+    def test_require_torch_applies_thread_env_to_real_torch_in_fresh_process(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        script = "\n".join(
+            [
+                "from pokezero.neural_policy import require_torch",
+                "torch = require_torch()",
+                "assert torch.get_num_threads() == 1, torch.get_num_threads()",
+                "assert torch.get_num_interop_threads() == 1, torch.get_num_interop_threads()",
+            ]
+        )
+        env = {
+            **os.environ,
+            "POKEZERO_TORCH_NUM_THREADS": "1",
+            "POKEZERO_TORCH_NUM_INTEROP_THREADS": "1",
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_resolve_torch_device_matches_training_default(self) -> None:
         if not torch_available():
