@@ -106,33 +106,32 @@ from this run: the recipe has produced useful strength against a simpler fixed o
 
 ## Readout
 
-The 500k readout is constructive for the current recipe. The clearest signal is the max-damage
-curve: it improved materially across the run and was still around the low 50s in the late
+The 500k readout is constructive for the current recipe. The clearest leading signal is the
+max-damage curve: it improved materially across the run and was still around the low 50s in the late
 lower-fidelity standard reads. That is evidence that the policy learned useful strength against a
-simpler fixed opponent. This is not a recipe rejection while the max-damage curve remains
-non-collapsed; whether it resumes a clear climb at larger scale is the next readout question.
+simpler fixed opponent. This is not a recipe rejection while max-damage remains non-collapsed; it is
+the reason to continue the recipe-faithful run and look for a clearer large-scale trend.
 
 The high-fidelity foul-play series remains in the low single digits through 500k games, but that is
-expected at this stage. Foul-play is a much stronger, higher-quality bot than max-damage, so it is
-reasonable for it to beat PokeZero until the model reaches a much higher level of play. The useful
-question is whether foul-play starts to move once the max-damage curve has climbed further; progress
-against foul-play may be delayed and nonlinear rather than gradual from the beginning. A future
-foul-play jump would be more credible if it follows either a further max-damage climb or sustained
-non-collapsed fixed-opponent strength at larger scale than if it is treated as a required early
-signal.
+not surprising at this stage. Foul-play is a much stronger, higher-quality bot than max-damage, so it
+is expected to beat PokeZero until the policy reaches a substantially higher level of play. The
+working expectation is that foul-play progress may be delayed and nonlinear: the score may stay low
+for a long time and then move once the model crosses a practical competence threshold. Because the
+max-damage curve is still the healthier near-term signal, low early foul-play scores should be
+treated as a high-bar lagging readout rather than evidence that the recipe is already exhausted.
 
 The MIT thesis recipe used a much larger training scale, so the right next readout is PokeZero's
 scheduled continuation toward 1M rather than treating the 500k foul-play score as a rejection of the
-recipe. As long as max-damage remains a healthy non-collapsed signal, the working hypothesis is that
-the recipe is promising enough to keep scaling and should be evaluated at the larger 1M readout
-before changing recipes.
+recipe. As long as max-damage keeps holding or improving at larger scale, the working hypothesis is
+that the recipe remains promising. Foul-play should stay in the report because it is the higher
+quality bar, but the expected path is max-damage improvement first and foul-play movement later.
 
 Concrete follow-ups:
 
 - Continue the recipe-faithful run toward 1M games and track whether the max-damage curve keeps
-  climbing.
+  holding or climbing.
 - Keep recording high-fidelity foul-play milestones, but interpret them as a high-bar lagging signal
-  rather than the primary 500k recipe verdict.
+  that may move only after the policy reaches a stronger level of play.
 - Normalize or rerun the 400k over-complete partial artifact so plots do not mix clean and partial
   statuses.
 - Use max-damage holding or improving as the near-term evidence that the recipe remains viable,
