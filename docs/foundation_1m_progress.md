@@ -97,10 +97,11 @@ That broader upward drift against max-damage is the leading signal for this phas
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
 [`foundation_500k_results.md`](foundation_500k_results.md) for the anchor readout. The current
 evidence therefore supports continuing toward the 1M readout rather than treating the recipe as
-exhausted. The completed 600k, 650k, 750k, and 800k high-fidelity rows show the same rising
-max-damage shape: max-damage was 1,116 / 2,000 (55.8%) at 600k, 1,163 / 2,000 (58.1%) at 650k,
-1,193 / 2,000 (59.7%) at 750k, and 1,229 / 2,000 (61.5%) at 800k, while foul-play remained a harder
-downstream bar at 59 / 1,000 (5.9%), 45 / 1,000 (4.5%), 42 / 1,000 (4.2%), and
+exhausted. The completed 550k, 600k, 650k, 750k, and 800k high-fidelity rows show the same rising
+max-damage shape: max-damage was 1,091 / 2,000 (54.5%) at 550k, 1,116 / 2,000 (55.8%) at 600k,
+1,163 / 2,000 (58.1%) at 650k, 1,193 / 2,000 (59.7%) at 750k, and
+1,229 / 2,000 (61.5%) at 800k, while foul-play remained a harder downstream bar at
+37 / 1,000 (3.7%), 59 / 1,000 (5.9%), 45 / 1,000 (4.5%), 42 / 1,000 (4.2%), and
 47 / 1,000 (4.7%). The 600k high-fidelity max-damage row was below the co-located 600k scheduled
 read's 59.8%, so individual scheduled rows should still be treated as noisy. The later high-fidelity
 reads support the high-50s/low-60s max-damage trend, but the higher-fidelity reads remain the cleaner
