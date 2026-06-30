@@ -24,6 +24,7 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 520,000 | continuation iteration 12 | 397 / 400 (99.2%) | 370 / 400 (92.5%) | 200 / 400 (50.0%) | 3 / 100 (3.0%) |
 | 531,200 | continuation iteration 19 | 397 / 400 (99.2%) | 374 / 400 (93.5%) | 210 / 400 (52.5%) | 5 / 100 (5.0%) |
 | 540,800 | continuation iteration 25 | 393 / 400 (98.2%) | 367 / 400 (91.8%) | 212 / 400 (53.0%) | 6 / 100 (6.0%) |
+| 550,400 | continuation iteration 31 | 395 / 400 (98.8%) | 371 / 400 (92.8%) | 221 / 400 (55.2%) | 3 / 100 (3.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -40,6 +41,4 @@ the run crosses later 10k thresholds, and whether the higher-fidelity 50k reads 
 ## Next Updates
 
 - Add the next scheduled 10k read once the run crosses the next threshold.
-- At the first continuation 50k boundary, generate the current 10k trend plot and launch the
-  independent 1,000-game high-fidelity reads for random-legal, simple-legal, max-damage, and
-  foul-play.
+- Add the 550k independent high-fidelity reads once they complete.
