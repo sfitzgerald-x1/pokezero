@@ -75,26 +75,26 @@ with the checkpoint in the other seat, for 600 games total.
 
 ### Max-damage milestone progression
 
-These are the regular 600-game mirrored max-damage yardstick reads at the same nominal 50k
-milestones used by the foul-play table. They are lower fidelity than the 1,000-game foul-play reads,
-but they provide the clearest continuous fixed-opponent trend for the run.
+Rows marked `high-fidelity` are independent 2,000-game mirrored reads. Later 50k milestones did
+not yet have high-fidelity max-damage backfills recorded, so those rows use the regular 600-game
+mirrored yardstick and are labeled `standard`.
 
-| Training games | Iteration | Wins / games | Win rate |
-|---:|---:|---:|---:|
-| 50,000 | 32 | 195 / 600 | 32.5% |
-| 100,000 | 63 | 217 / 600 | 36.2% |
-| 150,000 | 94 | 223 / 600 | 37.2% |
-| 200,000 | 125 | 235 / 600 | 39.2% |
-| 250,000 | 157 | 269 / 600 | 44.8% |
-| 300,000 | 188 | 277 / 600 | 46.2% |
-| 350,000 | 219 | 303 / 600 | 50.5% |
-| 400,000 | 250 | 300 / 600 | 50.0% |
-| 450,000 | 282 | 320 / 600 | 53.3% |
-| 500,000 | 313 | 309 / 600 | 51.5% |
+| Training games | Iteration | Source | Wins / games | Win rate |
+|---:|---:|---|---:|---:|
+| 50,000 | 32 | high-fidelity | 627 / 2000 | 31.4% |
+| 100,000 | 63 | high-fidelity | 739 / 2000 | 37.0% |
+| 150,000 | 94 | high-fidelity | 789 / 2000 | 39.5% |
+| 200,000 | 125 | high-fidelity | 843 / 2000 | 42.2% |
+| 250,000 | 157 | high-fidelity | 859 / 2000 | 43.0% |
+| 300,000 | 188 | high-fidelity | 914 / 2000 | 45.7% |
+| 350,000 | 219 | standard | 303 / 600 | 50.5% |
+| 400,000 | 250 | standard | 300 / 600 | 50.0% |
+| 450,000 | 282 | standard | 320 / 600 | 53.3% |
+| 500,000 | 313 | standard | 309 / 600 | 51.5% |
 
 The max-damage curve improved materially through the first few hundred thousand games, then hovered
-around the low 50s by the final milestones. That is a stronger signal than the foul-play curve, but
-it is still short of the intended plateau-breaking bar.
+around the low 50s in the lower-fidelity late standard reads. That is a stronger signal than the
+foul-play curve, but it is still short of the intended plateau-breaking bar.
 
 ### Final standard yardstick snapshot
 
