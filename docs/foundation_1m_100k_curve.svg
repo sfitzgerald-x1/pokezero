@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620">
+<rect x="0" y="0" width="1280" height="620" fill="#fbfaf7"/>
+<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">Foundation curve at 100k intervals through 1M</text>
+<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">Combines 1.6k initialization, the 0-500k foundation run, and the 500k-1M continuation.</text>
+<line x1="92" y1="72" x2="92" y2="528" stroke="#555"/>
+<line x1="92" y1="528" x2="1020" y2="528" stroke="#555"/>
+<line x1="92" y1="528.00" x2="1020" y2="528.00" stroke="#e4dfd3"/>
+<text x="80" y="533.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">0%</text>
+<line x1="92" y1="414.00" x2="1020" y2="414.00" stroke="#e4dfd3"/>
+<text x="80" y="419.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">25%</text>
+<line x1="92" y1="300.00" x2="1020" y2="300.00" stroke="#e4dfd3"/>
+<text x="80" y="305.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">50%</text>
+<line x1="92" y1="186.00" x2="1020" y2="186.00" stroke="#e4dfd3"/>
+<text x="80" y="191.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">75%</text>
+<line x1="92" y1="72.00" x2="1020" y2="72.00" stroke="#e4dfd3"/>
+<text x="80" y="77.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">100%</text>
+<line x1="92.00" y1="72" x2="92.00" y2="528" stroke="#f0eadf"/>
+<text x="92.00" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">1k</text>
+<line x1="183.46" y1="72" x2="183.46" y2="528" stroke="#f0eadf"/>
+<text x="183.46" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">100k</text>
+<line x1="276.41" y1="72" x2="276.41" y2="528" stroke="#f0eadf"/>
+<text x="276.41" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">200k</text>
+<line x1="369.36" y1="72" x2="369.36" y2="528" stroke="#f0eadf"/>
+<text x="369.36" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">300k</text>
+<line x1="462.31" y1="72" x2="462.31" y2="528" stroke="#f0eadf"/>
+<text x="462.31" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">400k</text>
+<line x1="555.26" y1="72" x2="555.26" y2="528" stroke="#f0eadf"/>
+<text x="555.26" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">500k</text>
+<line x1="648.21" y1="72" x2="648.21" y2="528" stroke="#f0eadf"/>
+<text x="648.21" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">600k</text>
+<line x1="741.15" y1="72" x2="741.15" y2="528" stroke="#f0eadf"/>
+<text x="741.15" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">700k</text>
+<line x1="834.10" y1="72" x2="834.10" y2="528" stroke="#f0eadf"/>
+<text x="834.10" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">800k</text>
+<line x1="927.05" y1="72" x2="927.05" y2="528" stroke="#f0eadf"/>
+<text x="927.05" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">900k</text>
+<line x1="1020.00" y1="72" x2="1020.00" y2="528" stroke="#f0eadf"/>
+<text x="1020.00" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">1000k</text>
+<path d="M92.00,498.36 L183.46,363.08 L276.41,349.40 L369.36,317.48 L462.31,300.00 L555.26,293.16 L648.21,255.54 L741.15,253.26 L834.10,257.82 L927.05,256.68 L1020.00,243.00" fill="none" stroke="#1f77b4" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="498.36" r="4.5" fill="#1f77b4"/>
+<circle cx="183.46" cy="363.08" r="4.5" fill="#1f77b4"/>
+<circle cx="276.41" cy="349.40" r="4.5" fill="#1f77b4"/>
+<circle cx="369.36" cy="317.48" r="4.5" fill="#1f77b4"/>
+<circle cx="462.31" cy="300.00" r="4.5" fill="#1f77b4"/>
+<circle cx="555.26" cy="293.16" r="4.5" fill="#1f77b4"/>
+<circle cx="648.21" cy="255.54" r="4.5" fill="#1f77b4"/>
+<circle cx="741.15" cy="253.26" r="4.5" fill="#1f77b4"/>
+<circle cx="834.10" cy="257.82" r="4.5" fill="#1f77b4"/>
+<circle cx="927.05" cy="256.68" r="4.5" fill="#1f77b4"/>
+<circle cx="1020.00" cy="243.00" r="4.5" fill="#1f77b4"/>
+<line x1="1054" y1="96" x2="1088" y2="96" stroke="#1f77b4" stroke-width="4"/>
+<text x="1098" y="101" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Max-damage</text>
+<text x="1098" y="118" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 62.5% @ 1000k</text>
+<path d="M183.46,516.14 L276.41,513.86 L369.36,510.22 L462.31,512.69 L555.26,511.13 L648.21,514.32 L741.15,486.96 L834.10,523.44 L927.05,505.20 L1020.00,509.76" fill="none" stroke="#d62728" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="183.46" cy="516.14" r="4.5" fill="#d62728"/>
+<circle cx="276.41" cy="513.86" r="4.5" fill="#d62728"/>
+<circle cx="369.36" cy="510.22" r="4.5" fill="#d62728"/>
+<circle cx="462.31" cy="512.69" r="4.5" fill="#d62728"/>
+<circle cx="555.26" cy="511.13" r="4.5" fill="#d62728"/>
+<circle cx="648.21" cy="514.32" r="4.5" fill="#d62728"/>
+<circle cx="741.15" cy="486.96" r="4.5" fill="#d62728"/>
+<circle cx="834.10" cy="523.44" r="4.5" fill="#d62728"/>
+<circle cx="927.05" cy="505.20" r="4.5" fill="#d62728"/>
+<circle cx="1020.00" cy="509.76" r="4.5" fill="#d62728"/>
+<line x1="1054" y1="158" x2="1088" y2="158" stroke="#d62728" stroke-width="4"/>
+<text x="1098" y="163" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Foul-play</text>
+<text x="1098" y="180" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 4.0% @ 1000k</text>
+<path d="M92.00,366.12 L183.46,142.68 L276.41,131.28 L369.36,113.04 L462.31,106.20 L555.26,106.96 L648.21,111.90 L741.15,99.36 L834.10,99.36 L927.05,93.66 L1020.00,92.52" fill="none" stroke="#2ca02c" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="366.12" r="4.5" fill="#2ca02c"/>
+<circle cx="183.46" cy="142.68" r="4.5" fill="#2ca02c"/>
+<circle cx="276.41" cy="131.28" r="4.5" fill="#2ca02c"/>
+<circle cx="369.36" cy="113.04" r="4.5" fill="#2ca02c"/>
+<circle cx="462.31" cy="106.20" r="4.5" fill="#2ca02c"/>
+<circle cx="555.26" cy="106.96" r="4.5" fill="#2ca02c"/>
+<circle cx="648.21" cy="111.90" r="4.5" fill="#2ca02c"/>
+<circle cx="741.15" cy="99.36" r="4.5" fill="#2ca02c"/>
+<circle cx="834.10" cy="99.36" r="4.5" fill="#2ca02c"/>
+<circle cx="927.05" cy="93.66" r="4.5" fill="#2ca02c"/>
+<circle cx="1020.00" cy="92.52" r="4.5" fill="#2ca02c"/>
+<line x1="1054" y1="220" x2="1088" y2="220" stroke="#2ca02c" stroke-width="4"/>
+<text x="1098" y="225" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Simple-legal</text>
+<text x="1098" y="242" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 95.5% @ 1000k</text>
+<path d="M92.00,249.84 L183.46,84.92 L276.41,83.40 L369.36,78.84 L462.31,81.12 L555.26,78.08 L648.21,75.42 L741.15,74.28 L834.10,78.84 L927.05,74.28 L1020.00,77.70" fill="none" stroke="#9467bd" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="249.84" r="4.5" fill="#9467bd"/>
+<circle cx="183.46" cy="84.92" r="4.5" fill="#9467bd"/>
+<circle cx="276.41" cy="83.40" r="4.5" fill="#9467bd"/>
+<circle cx="369.36" cy="78.84" r="4.5" fill="#9467bd"/>
+<circle cx="462.31" cy="81.12" r="4.5" fill="#9467bd"/>
+<circle cx="555.26" cy="78.08" r="4.5" fill="#9467bd"/>
+<circle cx="648.21" cy="75.42" r="4.5" fill="#9467bd"/>
+<circle cx="741.15" cy="74.28" r="4.5" fill="#9467bd"/>
+<circle cx="834.10" cy="78.84" r="4.5" fill="#9467bd"/>
+<circle cx="927.05" cy="74.28" r="4.5" fill="#9467bd"/>
+<circle cx="1020.00" cy="77.70" r="4.5" fill="#9467bd"/>
+<line x1="1054" y1="282" x2="1088" y2="282" stroke="#9467bd" stroke-width="4"/>
+<text x="1098" y="287" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Random-legal</text>
+<text x="1098" y="304" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 98.8% @ 1000k</text>
+</svg>

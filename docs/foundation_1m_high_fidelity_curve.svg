@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620">
+<rect x="0" y="0" width="1280" height="620" fill="#fbfaf7"/>
+<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">Foundation continuation high-fidelity evals</text>
+<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">50k milestone reads: 2,000 mirrored games for standard opponents and 1,000 direct foul-play games.</text>
+<line x1="92" y1="72" x2="92" y2="528" stroke="#555"/>
+<line x1="92" y1="528" x2="1020" y2="528" stroke="#555"/>
+<line x1="92" y1="528.00" x2="1020" y2="528.00" stroke="#e4dfd3"/>
+<text x="80" y="533.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">0%</text>
+<line x1="92" y1="414.00" x2="1020" y2="414.00" stroke="#e4dfd3"/>
+<text x="80" y="419.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">25%</text>
+<line x1="92" y1="300.00" x2="1020" y2="300.00" stroke="#e4dfd3"/>
+<text x="80" y="305.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">50%</text>
+<line x1="92" y1="186.00" x2="1020" y2="186.00" stroke="#e4dfd3"/>
+<text x="80" y="191.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">75%</text>
+<line x1="92" y1="72.00" x2="1020" y2="72.00" stroke="#e4dfd3"/>
+<text x="80" y="77.00" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">100%</text>
+<line x1="92.00" y1="72" x2="92.00" y2="528" stroke="#f0eadf"/>
+<text x="92.00" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">550k</text>
+<line x1="195.11" y1="72" x2="195.11" y2="528" stroke="#f0eadf"/>
+<text x="195.11" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">600k</text>
+<line x1="298.22" y1="72" x2="298.22" y2="528" stroke="#f0eadf"/>
+<text x="298.22" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">650k</text>
+<line x1="401.33" y1="72" x2="401.33" y2="528" stroke="#f0eadf"/>
+<text x="401.33" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">700k</text>
+<line x1="504.44" y1="72" x2="504.44" y2="528" stroke="#f0eadf"/>
+<text x="504.44" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">750k</text>
+<line x1="607.56" y1="72" x2="607.56" y2="528" stroke="#f0eadf"/>
+<text x="607.56" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">800k</text>
+<line x1="710.67" y1="72" x2="710.67" y2="528" stroke="#f0eadf"/>
+<text x="710.67" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">850k</text>
+<line x1="813.78" y1="72" x2="813.78" y2="528" stroke="#f0eadf"/>
+<text x="813.78" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">900k</text>
+<line x1="916.89" y1="72" x2="916.89" y2="528" stroke="#f0eadf"/>
+<text x="916.89" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">950k</text>
+<line x1="1020.00" y1="72" x2="1020.00" y2="528" stroke="#f0eadf"/>
+<text x="1020.00" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">1000k</text>
+<path d="M92.00,279.25 L195.11,273.55 L298.22,262.84 L401.33,264.89 L504.44,256.00 L607.56,247.79 L710.67,246.19 L813.78,243.46 L916.89,240.26 L1020.00,244.14" fill="none" stroke="#1f77b4" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="279.25" r="4.5" fill="#1f77b4"/>
+<circle cx="195.11" cy="273.55" r="4.5" fill="#1f77b4"/>
+<circle cx="298.22" cy="262.84" r="4.5" fill="#1f77b4"/>
+<circle cx="401.33" cy="264.89" r="4.5" fill="#1f77b4"/>
+<circle cx="504.44" cy="256.00" r="4.5" fill="#1f77b4"/>
+<circle cx="607.56" cy="247.79" r="4.5" fill="#1f77b4"/>
+<circle cx="710.67" cy="246.19" r="4.5" fill="#1f77b4"/>
+<circle cx="813.78" cy="243.46" r="4.5" fill="#1f77b4"/>
+<circle cx="916.89" cy="240.26" r="4.5" fill="#1f77b4"/>
+<circle cx="1020.00" cy="244.14" r="4.5" fill="#1f77b4"/>
+<line x1="1054" y1="96" x2="1088" y2="96" stroke="#1f77b4" stroke-width="4"/>
+<text x="1098" y="101" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Max-damage</text>
+<text x="1098" y="118" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 62.3% @ 1000k</text>
+<path d="M92.00,511.13 L195.11,501.10 L298.22,507.48 L401.33,504.29 L504.44,508.85 L607.56,506.57 L710.67,508.39 L813.78,504.74 L916.89,505.20 L1020.00,502.46" fill="none" stroke="#d62728" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="511.13" r="4.5" fill="#d62728"/>
+<circle cx="195.11" cy="501.10" r="4.5" fill="#d62728"/>
+<circle cx="298.22" cy="507.48" r="4.5" fill="#d62728"/>
+<circle cx="401.33" cy="504.29" r="4.5" fill="#d62728"/>
+<circle cx="504.44" cy="508.85" r="4.5" fill="#d62728"/>
+<circle cx="607.56" cy="506.57" r="4.5" fill="#d62728"/>
+<circle cx="710.67" cy="508.39" r="4.5" fill="#d62728"/>
+<circle cx="813.78" cy="504.74" r="4.5" fill="#d62728"/>
+<circle cx="916.89" cy="505.20" r="4.5" fill="#d62728"/>
+<circle cx="1020.00" cy="502.46" r="4.5" fill="#d62728"/>
+<line x1="1054" y1="158" x2="1088" y2="158" stroke="#d62728" stroke-width="4"/>
+<text x="1098" y="163" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Foul-play</text>
+<text x="1098" y="180" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 5.6% @ 1000k</text>
+<path d="M92.00,101.18 L195.11,102.10 L298.22,98.90 L401.33,100.73 L504.44,95.03 L607.56,97.76 L710.67,97.31 L813.78,93.20 L916.89,96.17 L1020.00,94.57" fill="none" stroke="#2ca02c" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="101.18" r="4.5" fill="#2ca02c"/>
+<circle cx="195.11" cy="102.10" r="4.5" fill="#2ca02c"/>
+<circle cx="298.22" cy="98.90" r="4.5" fill="#2ca02c"/>
+<circle cx="401.33" cy="100.73" r="4.5" fill="#2ca02c"/>
+<circle cx="504.44" cy="95.03" r="4.5" fill="#2ca02c"/>
+<circle cx="607.56" cy="97.76" r="4.5" fill="#2ca02c"/>
+<circle cx="710.67" cy="97.31" r="4.5" fill="#2ca02c"/>
+<circle cx="813.78" cy="93.20" r="4.5" fill="#2ca02c"/>
+<circle cx="916.89" cy="96.17" r="4.5" fill="#2ca02c"/>
+<circle cx="1020.00" cy="94.57" r="4.5" fill="#2ca02c"/>
+<line x1="1054" y1="220" x2="1088" y2="220" stroke="#2ca02c" stroke-width="4"/>
+<text x="1098" y="225" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Simple-legal</text>
+<text x="1098" y="242" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 95.0% @ 1000k</text>
+<path d="M92.00,76.33 L195.11,77.70 L298.22,77.70 L401.33,77.02 L504.44,77.93 L607.56,76.79 L710.67,76.10 L813.78,75.88 L916.89,76.79 L1020.00,76.79" fill="none" stroke="#9467bd" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="92.00" cy="76.33" r="4.5" fill="#9467bd"/>
+<circle cx="195.11" cy="77.70" r="4.5" fill="#9467bd"/>
+<circle cx="298.22" cy="77.70" r="4.5" fill="#9467bd"/>
+<circle cx="401.33" cy="77.02" r="4.5" fill="#9467bd"/>
+<circle cx="504.44" cy="77.93" r="4.5" fill="#9467bd"/>
+<circle cx="607.56" cy="76.79" r="4.5" fill="#9467bd"/>
+<circle cx="710.67" cy="76.10" r="4.5" fill="#9467bd"/>
+<circle cx="813.78" cy="75.88" r="4.5" fill="#9467bd"/>
+<circle cx="916.89" cy="76.79" r="4.5" fill="#9467bd"/>
+<circle cx="1020.00" cy="76.79" r="4.5" fill="#9467bd"/>
+<line x1="1054" y1="282" x2="1088" y2="282" stroke="#9467bd" stroke-width="4"/>
+<text x="1098" y="287" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Random-legal</text>
+<text x="1098" y="304" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 99.0% @ 1000k</text>
+</svg>
