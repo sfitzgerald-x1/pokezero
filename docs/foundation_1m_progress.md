@@ -61,10 +61,10 @@ milestones are not mixed into the trend table.
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
 but non-collapsed. From 630k through 680k, scheduled max-damage reads held in the high 50s, ranging
 from 57.5% to 59.8%. The 690k scheduled row dipped back to 55.2%, similar to the earlier 610k row at
-55.8%, while still above the 620k low of 52.5%. The completed non-foul high-fidelity max-damage leg
-at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so treat the
-latest scheduled rows as constructive but still provisional until future complete high-fidelity rows
-corroborate the broader trend.
+55.8%, while still above the nearby 620k dip to 52.5%. The completed non-foul high-fidelity
+max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so
+treat the latest scheduled rows as constructive but still provisional until future complete
+high-fidelity rows corroborate the broader trend.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
