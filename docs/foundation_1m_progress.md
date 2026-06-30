@@ -32,6 +32,7 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 600,000 | continuation iteration 62 | 397 / 400 (99.2%) | 365 / 400 (91.2%) | 239 / 400 (59.8%) | 3 / 100 (3.0%) |
 | 611,200 | continuation iteration 69 | 396 / 400 (99.0%) | 370 / 400 (92.5%) | 223 / 400 (55.8%) | 2 / 100 (2.0%) |
 | 620,800 | continuation iteration 75 | 398 / 400 (99.5%) | 368 / 400 (92.0%) | 210 / 400 (52.5%) | 3 / 100 (3.0%) |
+| 630,400 | continuation iteration 81 | 395 / 400 (98.8%) | 375 / 400 (93.8%) | 230 / 400 (57.5%) | 4 / 100 (4.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -53,12 +54,12 @@ milestones are not mixed into the trend table.
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
 but non-collapsed around the low-to-mid 50s. The 600k scheduled 400-game row landed higher at 59.8%,
-then the 610k and 620k scheduled rows returned to 55.8% and 52.5%; the completed non-foul
-high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%). Treat the 600k spike as provisional
-until the full high-fidelity row completes. Foul-play remains a harder downstream benchmark with
-expected low early win rates. The next meaningful check is whether max-damage holds or improves as
-the run crosses later 10k thresholds, and whether complete higher-fidelity 50k reads show the same
-trend.
+then the 610k and 620k scheduled rows returned to 55.8% and 52.5%, before 630k moved back to 57.5%.
+The completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), so treat the
+600k/630k scheduled upticks as provisional until complete high-fidelity rows corroborate them.
+Foul-play remains a harder downstream benchmark with expected low early win rates. The next
+meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
+and whether complete higher-fidelity 50k reads show the same trend.
 
 ## Next Updates
 
