@@ -41,4 +41,5 @@ the run crosses later 10k thresholds, and whether the higher-fidelity 50k reads 
 ## Next Updates
 
 - Add the next scheduled 10k read once the run crosses the next threshold.
+- Include the refreshed 10k trajectory plot with the next public progress report.
 - Add the 550k independent high-fidelity reads once they complete.
