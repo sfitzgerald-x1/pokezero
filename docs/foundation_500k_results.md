@@ -107,9 +107,9 @@ the 500k checkpoint is not enough evidence to call the recipe exhausted.
 ## Readout
 
 The 500k readout is constructive for the current recipe. The clearest signal is the max-damage
-curve: it improved materially across the run and was still around the low 50s at the final
-milestones. That is evidence that the policy is still learning useful strength against a simpler
-fixed opponent, not evidence that the recipe has already exhausted itself.
+curve: it improved materially across the run and was still around the low 50s in the late
+lower-fidelity standard reads. That is evidence that the policy is still learning useful strength
+against a simpler fixed opponent, not evidence that the recipe has already exhausted itself.
 
 The high-fidelity foul-play series remains in the low single digits through 500k games, but that is
 expected at this stage. Foul-play is a much stronger, higher-quality bot than max-damage, so it is
@@ -117,10 +117,10 @@ reasonable for it to beat PokeZero until the model reaches a much higher level o
 question is whether foul-play starts to move once the max-damage curve has climbed further; progress
 against foul-play may be delayed and nonlinear rather than gradual from the beginning.
 
-The MIT thesis recipe used roughly 1M games before reporting meaningful progress, so the right next
-readout is the continuation toward 1M rather than treating the 500k foul-play score as a rejection of
-the recipe. As long as max-damage remains a healthy non-collapsed signal, the working hypothesis is
-that the recipe is still promising and should be evaluated at the larger scale.
+The MIT thesis recipe used a much larger training scale, so the right next readout is PokeZero's
+scheduled continuation toward 1M rather than treating the 500k foul-play score as a rejection of the
+recipe. As long as max-damage remains a healthy non-collapsed signal, the working hypothesis is that
+the recipe is still promising and should be evaluated at the larger scale.
 
 Concrete follow-ups:
 
