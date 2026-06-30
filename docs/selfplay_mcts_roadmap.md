@@ -34,9 +34,10 @@ the first-order levers, and no strength conclusion is meaningful until we are ru
 
 The first completed 500k-scale recipe-fidelity run is recorded in
 [`foundation_500k_results.md`](foundation_500k_results.md). Its high-fidelity foul-play reads are
-low single digits through 450k games, with the 500k read still pending at the time of that note.
-Treat that as evidence that the current recipe shape needs another change before simply scaling
-further.
+low single digits through 500k games, while max-damage remains a healthy non-collapsed signal.
+The continuation toward 1M games is tracked in
+[`foundation_1m_progress.md`](foundation_1m_progress.md); treat the fixed-opponent curves there as
+the current recipe readout before making another recipe change.
 
 ## Current assets (what already exists)
 
