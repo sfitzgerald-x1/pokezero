@@ -29,22 +29,36 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 571,200 | continuation iteration 44 | 393 / 400 (98.2%) | 369 / 400 (92.2%) | 215 / 400 (53.8%) | 5 / 100 (5.0%) |
 | 580,800 | continuation iteration 50 | 393 / 400 (98.2%) | 367 / 400 (91.8%) | 215 / 400 (53.8%) | 5 / 100 (5.0%) |
 | 590,400 | continuation iteration 56 | 396 / 400 (99.0%) | 379 / 400 (94.8%) | 209 / 400 (52.2%) | 1 / 100 (1.0%) |
+| 600,000 | continuation iteration 62 | 397 / 400 (99.2%) | 365 / 400 (91.2%) | 239 / 400 (59.8%) | 3 / 100 (3.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
 The foul-play anchor is a higher-fidelity 1,000-game read; continuation foul-play rows are the
 scheduled 100-game milestone reads.
 
+## High-Fidelity 50k Progress
+
+Continuation high-fidelity rows use independent **1,000-game-per-seat mirrored** reads for
+random/simple/max-damage, for 2,000 aggregate games per matchup, and an independent **1,000-game**
+foul-play read. Rows are added only once all four opponents have complete results, so partial
+milestones are not mixed into the trend table.
+
+| Total self-play games | Checkpoint | Random-legal | Simple-legal | Max-damage | Foul-play |
+|---:|---|---:|---:|---:|---:|
+| 550,400 | continuation iteration 31 | 1,981 / 2,000 (99.1%) | 1,872 / 2,000 (93.6%) | 1,091 / 2,000 (54.5%) | 37 / 1,000 (3.7%) |
+
 ## Current Readout
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
-but non-collapsed around the low-to-mid 50s, while foul-play remains a harder downstream benchmark
-with expected low early win rates. The next meaningful check is whether max-damage holds or improves
-as the run crosses later 10k thresholds, and whether the higher-fidelity 50k reads show the same
-trend.
+but non-collapsed around the low-to-mid 50s. The 600k scheduled 400-game row landed higher at 59.8%,
+but the completed non-foul high-fidelity max-damage leg at the same checkpoint is 1,116 / 2,000
+(55.8%), so treat the small-sample 600k uptick as provisional until the full high-fidelity row
+completes. Foul-play remains a harder downstream benchmark with expected low early win rates. The
+next meaningful check is whether max-damage holds or improves as the run crosses later 10k
+thresholds, and whether complete higher-fidelity 50k reads show the same trend.
 
 ## Next Updates
 
 - Add the next scheduled 10k read once the run crosses the next threshold.
 - Include the refreshed 10k trajectory plot with the next public progress report.
-- Add the 550k independent high-fidelity reads once they complete.
+- Add the 600k independent high-fidelity row once the foul-play leg completes.
