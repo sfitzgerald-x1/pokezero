@@ -52,6 +52,7 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 800,000 | continuation iteration 187 | 394 / 400 (98.5%) | 376 / 400 (94.0%) | 237 / 400 (59.2%) | 1 / 100 (1.0%) |
 | 811,200 | continuation iteration 194 | 395 / 400 (98.8%) | 380 / 400 (95.0%) | 251 / 400 (62.7%) | 4 / 100 (4.0%) |
 | 820,800 | continuation iteration 200 | 398 / 400 (99.5%) | 382 / 400 (95.5%) | 256 / 400 (64.0%) | 3 / 100 (3.0%) |
+| 830,400 | continuation iteration 206 | 393 / 400 (98.2%) | 379 / 400 (94.8%) | 242 / 400 (60.5%) | 6 / 100 (6.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -69,31 +70,32 @@ milestones are not mixed into the trend table.
 |---:|---|---:|---:|---:|---:|
 | 550,400 | continuation iteration 31 | 1,981 / 2,000 (99.1%) | 1,872 / 2,000 (93.6%) | 1,091 / 2,000 (54.5%) | 37 / 1,000 (3.7%) |
 | 750,400 | continuation iteration 156 | 1,974 / 2,000 (98.7%) | 1,899 / 2,000 (95.0%) | 1,193 / 2,000 (59.7%) | 42 / 1,000 (4.2%) |
+| 800,000 | continuation iteration 187 | 1,979 / 2,000 (99.0%) | 1,887 / 2,000 (94.3%) | 1,229 / 2,000 (61.5%) | 47 / 1,000 (4.7%) |
 
 ## Current Readout
 
 The continuation rows so far are constructive for the current recipe. Max-damage remains noisy, but
 it is not collapsed, and the scheduled readouts have moved from the low/mid-50s around the 500k
-anchor into a high-50s/low-60s band. From 630k through 820k, scheduled max-damage reads mostly held
+anchor into a high-50s/low-60s band. From 630k through 830k, scheduled max-damage reads mostly held
 in that band. The 690k scheduled row dipped back to 55.2%, similar to the earlier 610k row at 55.8%,
 but the 700k scheduled row rebounded to 60.2%, the 710k row held at 60.5%, and the 720k and 730k rows
 both held at 61.2%. The 740k row dipped to 58.0%, the 750k row held nearby at 57.8%, the 760k row
 rebounded to 60.2%, and the 770k scheduled row held near that rebound at 59.8%. The 780k scheduled
 row then reached 62.5%, the strongest scheduled max-damage read up to that point, before the 790k row
 returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row then reached 62.7%,
-and the 820k scheduled row reached 64.0%, the strongest scheduled max-damage read in the continuation
-so far.
+the 820k scheduled row reached 64.0%, the strongest scheduled max-damage read in the continuation so
+far, and the 830k row stayed in the low-60s at 60.5%.
 
 That broader upward drift against max-damage is the leading signal for this phase. The
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
 [`foundation_500k_results.md`](foundation_500k_results.md) for the anchor readout. The current
 evidence therefore supports continuing toward the 1M readout rather than treating the recipe as
-exhausted. The completed 750k high-fidelity row corroborates the same band: max-damage was
-1,193 / 2,000 (59.7%), while foul-play remained a harder downstream bar at 42 / 1,000 (4.2%). The
-earlier completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the
-co-located 600k scheduled row's 59.8%, so individual scheduled rows should still be treated as
-noisy, but the broader high-50s/low-60s max-damage trend is now supported by a complete
-higher-fidelity continuation row.
+exhausted. The completed 750k and 800k high-fidelity rows corroborate the same band: max-damage was
+1,193 / 2,000 (59.7%) at 750k and 1,229 / 2,000 (61.5%) at 800k, while foul-play remained a harder
+downstream bar at 42 / 1,000 (4.2%) and 47 / 1,000 (4.7%). The earlier completed non-foul
+high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled
+row's 59.8%, so individual scheduled rows should still be treated as noisy, but the broader
+high-50s/low-60s max-damage trend is now supported by completed higher-fidelity continuation rows.
 
 Foul-play remains the higher-quality benchmark because it is a stronger opponent than max-damage, and
 it is expected to beat PokeZero until the policy is substantially stronger. Low early foul-play scores
@@ -113,4 +115,3 @@ higher-fidelity 50k reads show the same trend while foul-play remains tracked fo
 - Add the 600k independent high-fidelity row once the foul-play leg completes.
 - Add the 650k independent high-fidelity row once all four opponents complete.
 - Add the 700k independent high-fidelity row once all four opponents complete.
-- Add the 800k independent high-fidelity row once all four opponents complete.
