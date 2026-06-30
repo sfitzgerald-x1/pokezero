@@ -49,6 +49,7 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 771,200 | continuation iteration 169 | 395 / 400 (98.8%) | 372 / 400 (93.0%) | 239 / 400 (59.8%) | 7 / 100 (7.0%) |
 | 780,800 | continuation iteration 175 | 398 / 400 (99.5%) | 377 / 400 (94.2%) | 250 / 400 (62.5%) | 3 / 100 (3.0%) |
 | 790,400 | continuation iteration 181 | 395 / 400 (98.8%) | 379 / 400 (94.8%) | 235 / 400 (58.8%) | 5 / 100 (5.0%) |
+| 800,000 | continuation iteration 187 | 394 / 400 (98.5%) | 376 / 400 (94.0%) | 237 / 400 (59.2%) | 1 / 100 (1.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -70,19 +71,19 @@ milestones are not mixed into the trend table.
 ## Current Readout
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
-but non-collapsed. From 630k through 790k, scheduled max-damage reads mostly held in the high 50s to
+but non-collapsed. From 630k through 800k, scheduled max-damage reads mostly held in the high 50s to
 low 60s. The 690k scheduled row dipped back to 55.2%, similar to the earlier 610k row at 55.8%, but
 the 700k scheduled row rebounded to 60.2%, the 710k row held at 60.5%, and the 720k and 730k rows
 both held at 61.2%. The 740k row dipped to 58.0%, which is below that 61.2% mark but still within
 the recent high-50s/low-60s scheduled band, the 750k row held nearby at 57.8%, the 760k row rebounded
 to 60.2%, and the 770k scheduled row held near that rebound at 59.8%. The 780k scheduled row then
 reached 62.5%, the strongest scheduled max-damage read in the continuation so far, before the 790k
-row returned to 58.8%. The completed 750k high-fidelity row now corroborates that band: max-damage
-was 1,193 / 2,000 (59.7%), while foul-play remained a harder downstream bar at 42 / 1,000 (4.2%).
-The earlier completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), below
-the co-located 600k scheduled row's 59.8%, so keep treating individual scheduled rows as noisy, but
-the broader high-50s/low-60s max-damage trend is now supported by a complete higher-fidelity
-continuation row.
+row returned to 58.8% and the 800k row held nearby at 59.2%. The completed 750k high-fidelity row
+now corroborates that band: max-damage was 1,193 / 2,000 (59.7%), while foul-play remained a harder
+downstream bar at 42 / 1,000 (4.2%). The earlier completed non-foul high-fidelity max-damage leg at
+600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so keep treating
+individual scheduled rows as noisy, but the broader high-50s/low-60s max-damage trend is now
+supported by a complete higher-fidelity continuation row.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
@@ -94,3 +95,4 @@ and whether complete higher-fidelity 50k reads show the same trend.
 - Add the 600k independent high-fidelity row once the foul-play leg completes.
 - Add the 650k independent high-fidelity row once all four opponents complete.
 - Add the 700k independent high-fidelity row once all four opponents complete.
+- Add the 800k independent high-fidelity row once all four opponents complete.
