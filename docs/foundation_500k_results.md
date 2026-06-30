@@ -93,8 +93,8 @@ mirrored yardstick and are labeled `standard`.
 
 The max-damage curve improved materially through the first few hundred thousand games and remained
 around the low 50s in the lower-fidelity late standard reads. That is the main actionable signal
-from this run: the recipe is still producing useful strength against a simpler fixed opponent, and
-the 500k checkpoint is not enough evidence to call the recipe exhausted.
+from this run: the recipe has produced useful strength against a simpler fixed opponent, and the
+500k checkpoint is not enough evidence to call the recipe exhausted.
 
 ### Final standard yardstick snapshot
 
@@ -108,8 +108,8 @@ the 500k checkpoint is not enough evidence to call the recipe exhausted.
 
 The 500k readout is constructive for the current recipe. The clearest signal is the max-damage
 curve: it improved materially across the run and was still around the low 50s in the late
-lower-fidelity standard reads. That is evidence that the policy is still learning useful strength
-against a simpler fixed opponent. This is not a recipe rejection while the max-damage curve remains
+lower-fidelity standard reads. That is evidence that the policy learned useful strength against a
+simpler fixed opponent. This is not a recipe rejection while the max-damage curve remains
 non-collapsed; whether it resumes a clear climb at larger scale is the next readout question.
 
 The high-fidelity foul-play series remains in the low single digits through 500k games, but that is
