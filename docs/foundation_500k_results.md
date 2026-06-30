@@ -116,8 +116,8 @@ The high-fidelity foul-play series is still in the low single digits through 450
 not surprising for this stage. Foul-play is a stronger, higher-quality opponent than max-damage, so
 it is expected to beat PokeZero until the policy reaches a meaningfully higher level of play. The
 working expectation is that foul-play progress may lag and then improve nonlinearly once the model
-crosses a stronger tactical threshold. As long as max-damage remains an improving signal, continuing
-toward 1M games is the right next test before declaring the recipe plateaued.
+crosses a stronger tactical threshold. As long as max-damage remains a healthy non-collapsed signal,
+continuing toward 1M games is the right next test before declaring the recipe plateaued.
 
 Concrete follow-ups:
 
