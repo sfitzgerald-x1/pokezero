@@ -119,6 +119,9 @@ working expectation is that foul-play progress may be delayed and nonlinear: the
 for a long time and then move once the model crosses a practical competence threshold. Because the
 max-damage curve is still the healthier near-term signal, low early foul-play scores should be
 treated as a high-bar lagging readout rather than evidence that the recipe is already exhausted.
+The inverse is also true: an isolated foul-play uptick should be corroborated by a further
+max-damage climb or sustained non-collapsed fixed-opponent strength before treating it as a durable
+breakthrough.
 
 The MIT thesis recipe used a much larger training scale, so the right next readout is PokeZero's
 scheduled continuation toward 1M rather than treating the 500k foul-play score as a rejection of the
