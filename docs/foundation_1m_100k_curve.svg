@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620">
 <rect x="0" y="0" width="1280" height="620" fill="#fbfaf7"/>
 <text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">Foundation curve at 100k intervals through 1M</text>
-<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">Combines 1.6k initialization, the 0-500k foundation run, and the 500k-1M continuation.</text>
+<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">Combines 1.6k initialization, documented 0-500k milestones, and the 500k-1M continuation.</text>
 <line x1="92" y1="72" x2="92" y2="528" stroke="#555"/>
 <line x1="92" y1="528" x2="1020" y2="528" stroke="#555"/>
 <line x1="92" y1="528.00" x2="1020" y2="528.00" stroke="#e4dfd3"/>
@@ -36,11 +36,11 @@
 <text x="927.05" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">900k</text>
 <line x1="1020.00" y1="72" x2="1020.00" y2="528" stroke="#f0eadf"/>
 <text x="1020.00" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#555">1000k</text>
-<path d="M92.00,498.36 L183.46,363.08 L276.41,349.40 L369.36,317.48 L462.31,300.00 L555.26,293.16 L648.21,255.54 L741.15,253.26 L834.10,257.82 L927.05,256.68 L1020.00,243.00" fill="none" stroke="#1f77b4" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M92.00,498.36 L183.46,359.51 L276.41,335.80 L369.36,319.61 L462.31,300.00 L555.26,293.16 L648.21,255.54 L741.15,253.26 L834.10,257.82 L927.05,256.68 L1020.00,243.00" fill="none" stroke="#1f77b4" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="92.00" cy="498.36" r="4.5" fill="#1f77b4"/>
-<circle cx="183.46" cy="363.08" r="4.5" fill="#1f77b4"/>
-<circle cx="276.41" cy="349.40" r="4.5" fill="#1f77b4"/>
-<circle cx="369.36" cy="317.48" r="4.5" fill="#1f77b4"/>
+<circle cx="183.46" cy="359.51" r="4.5" fill="#1f77b4"/>
+<circle cx="276.41" cy="335.80" r="4.5" fill="#1f77b4"/>
+<circle cx="369.36" cy="319.61" r="4.5" fill="#1f77b4"/>
 <circle cx="462.31" cy="300.00" r="4.5" fill="#1f77b4"/>
 <circle cx="555.26" cy="293.16" r="4.5" fill="#1f77b4"/>
 <circle cx="648.21" cy="255.54" r="4.5" fill="#1f77b4"/>

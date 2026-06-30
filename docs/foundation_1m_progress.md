@@ -18,9 +18,11 @@ This note records evaluation evidence only. It intentionally omits private opera
 ## Plot Artifacts
 
 The first plot summarizes the full foundation trajectory at coarse 100k intervals starting from the
-first 1,600-game checkpoint. The second plot shows the continuation's lower-fidelity scheduled 10k
-readouts; the table below preserves the exact data. The third plot shows the independent
-high-fidelity 50k milestone reads.
+first 1,600-game checkpoint. Its 0-500k max-damage segment uses the documented milestone values from
+[`foundation_500k_results.md`](foundation_500k_results.md); its 500k-1M segment uses the continuation
+readouts below. The second plot shows the continuation's lower-fidelity scheduled 10k readouts; the
+table below preserves the exact data. The third plot shows the independent high-fidelity 50k
+milestone reads.
 
 ![Foundation 100k-step curve](foundation_1m_100k_curve.svg)
 
@@ -133,7 +135,7 @@ The strongest signal is the sustained improvement against max-damage. The next r
 therefore be made from a larger-scale continuation or an explicit recipe-change experiment, not from
 the low absolute foul-play score alone.
 
-Known caveat: foul-play high-fidelity probes required retries around a third-party Rest/sleep
-state-tracking crash. The recorded win counts are completed games only, but abandoned crashed games
-are not neutral samples, so foul-play should be treated as useful directional evidence until that
-opponent crash is fixed.
+Known caveat: foul-play reads required retries around a third-party Rest/sleep state-tracking crash.
+The recorded win counts are completed games only, but abandoned crashed games are not neutral
+samples, so foul-play should be treated as useful directional evidence until that opponent crash is
+fixed.

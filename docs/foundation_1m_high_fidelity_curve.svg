@@ -47,7 +47,7 @@
 <circle cx="1020.00" cy="244.14" r="4.5" fill="#1f77b4"/>
 <line x1="1054" y1="96" x2="1088" y2="96" stroke="#1f77b4" stroke-width="4"/>
 <text x="1098" y="101" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#333">Max-damage</text>
-<text x="1098" y="118" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 62.3% @ 1000k</text>
+<text x="1098" y="118" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#666">latest 62.2% @ 1000k</text>
 <path d="M92.00,511.13 L195.11,501.10 L298.22,507.48 L401.33,504.29 L504.44,508.85 L607.56,506.57 L710.67,508.39 L813.78,504.74 L916.89,505.20 L1020.00,502.46" fill="none" stroke="#d62728" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="92.00" cy="511.13" r="4.5" fill="#d62728"/>
 <circle cx="195.11" cy="501.10" r="4.5" fill="#d62728"/>
