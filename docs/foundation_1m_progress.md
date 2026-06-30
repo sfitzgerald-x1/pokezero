@@ -63,6 +63,7 @@ milestones are not mixed into the trend table.
 | Total self-play games | Checkpoint | Random-legal | Simple-legal | Max-damage | Foul-play |
 |---:|---|---:|---:|---:|---:|
 | 550,400 | continuation iteration 31 | 1,981 / 2,000 (99.1%) | 1,872 / 2,000 (93.6%) | 1,091 / 2,000 (54.5%) | 37 / 1,000 (3.7%) |
+| 750,400 | continuation iteration 156 | 1,974 / 2,000 (98.7%) | 1,899 / 2,000 (95.0%) | 1,193 / 2,000 (59.7%) | 42 / 1,000 (4.2%) |
 
 ## Current Readout
 
@@ -73,10 +74,12 @@ the 700k scheduled row rebounded to 60.2%, the 710k row held at 60.5%, and the 7
 both held at 61.2%, the strongest scheduled max-damage read in the continuation so far. The 740k row
 dipped to 58.0%, which is below that high-water mark but still within the recent high-50s/low-60s
 scheduled band, the 750k row held nearby at 57.8%, the 760k row rebounded to 60.2%, and the 770k
-scheduled row held near that rebound at 59.8%. The completed non-foul high-fidelity max-damage leg
-at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so treat the
-latest scheduled rows as constructive but still provisional until future complete high-fidelity rows
-corroborate the broader trend.
+scheduled row held near that rebound at 59.8%. The completed 750k high-fidelity row now corroborates
+that band: max-damage was 1,193 / 2,000 (59.7%), while foul-play remained a harder downstream bar at
+42 / 1,000 (4.2%). The earlier completed non-foul high-fidelity max-damage leg at 600k is 1,116 /
+2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so keep treating individual
+scheduled rows as noisy, but the broader high-50s/low-60s max-damage trend is now supported by a
+complete higher-fidelity continuation row.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
@@ -87,4 +90,4 @@ and whether complete higher-fidelity 50k reads show the same trend.
 - Include the refreshed 10k trajectory plot with the next public progress report.
 - Add the 600k independent high-fidelity row once the foul-play leg completes.
 - Add the 650k independent high-fidelity row once all four opponents complete.
-- Add the 700k and 750k independent high-fidelity rows once all four opponents complete.
+- Add the 700k independent high-fidelity row once all four opponents complete.
