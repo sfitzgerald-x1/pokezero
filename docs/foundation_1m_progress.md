@@ -33,6 +33,8 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 611,200 | continuation iteration 69 | 396 / 400 (99.0%) | 370 / 400 (92.5%) | 223 / 400 (55.8%) | 2 / 100 (2.0%) |
 | 620,800 | continuation iteration 75 | 398 / 400 (99.5%) | 368 / 400 (92.0%) | 210 / 400 (52.5%) | 3 / 100 (3.0%) |
 | 630,400 | continuation iteration 81 | 395 / 400 (98.8%) | 375 / 400 (93.8%) | 230 / 400 (57.5%) | 4 / 100 (4.0%) |
+| 640,000 | continuation iteration 87 | 400 / 400 (100.0%) | 372 / 400 (93.0%) | 239 / 400 (59.8%) | 6 / 100 (6.0%) |
+| 651,200 | continuation iteration 94 | 394 / 400 (98.5%) | 380 / 400 (95.0%) | 233 / 400 (58.2%) | 3 / 100 (3.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -53,11 +55,11 @@ milestones are not mixed into the trend table.
 ## Current Readout
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
-but non-collapsed around the low-to-mid 50s. The 600k scheduled 400-game row landed higher at 59.8%,
-then the 610k and 620k scheduled rows returned to 55.8% and 52.5%, before 630k moved back to 57.5%.
-The completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), so treat the
-600k/630k scheduled upticks as provisional until future complete high-fidelity rows corroborate the
-broader trend.
+but non-collapsed and has held in the high 50s across the latest scheduled 400-game reads. The 600k
+and 640k scheduled rows landed at 59.8%, 630k landed at 57.5%, and 650k landed at 58.2%, while the
+610k/620k rows were lower at 55.8% and 52.5%. The completed non-foul high-fidelity max-damage leg at
+600k is 1,116 / 2,000 (55.8%), so treat the latest scheduled upticks as constructive but still
+provisional until future complete high-fidelity rows corroborate the broader trend.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
@@ -67,3 +69,4 @@ and whether complete higher-fidelity 50k reads show the same trend.
 - Add the next scheduled 10k read once the run crosses the next threshold.
 - Include the refreshed 10k trajectory plot with the next public progress report.
 - Add the 600k independent high-fidelity row once the foul-play leg completes.
+- Add the 650k independent high-fidelity row once all four opponents complete.
