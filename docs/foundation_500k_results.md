@@ -73,11 +73,33 @@ useful context because it ran regularly throughout the training job. Each row ag
 benchmark orientations for that opponent: 300 games with the checkpoint in one seat plus 300 games
 with the checkpoint in the other seat, for 600 games total.
 
+### Max-damage milestone progression
+
+These are the regular 600-game mirrored max-damage yardstick reads at the same nominal 50k
+milestones used by the foul-play table. They are lower fidelity than the 1,000-game foul-play reads,
+but they provide the clearest continuous fixed-opponent trend for the run.
+
+| Training games | Iteration | Wins / games | Win rate |
+|---:|---:|---:|---:|
+| 50,000 | 32 | 195 / 600 | 32.5% |
+| 100,000 | 63 | 217 / 600 | 36.2% |
+| 150,000 | 94 | 223 / 600 | 37.2% |
+| 200,000 | 125 | 235 / 600 | 39.2% |
+| 250,000 | 157 | 269 / 600 | 44.8% |
+| 300,000 | 188 | 277 / 600 | 46.2% |
+| 350,000 | 219 | 303 / 600 | 50.5% |
+| 400,000 | 250 | 300 / 600 | 50.0% |
+| 450,000 | 282 | 320 / 600 | 53.3% |
+| 500,000 | 313 | 309 / 600 | 51.5% |
+
+The max-damage curve improved materially through the first few hundred thousand games, then hovered
+around the low 50s by the final milestones. That is a stronger signal than the foul-play curve, but
+it is still short of the intended plateau-breaking bar.
+
+### Final standard yardstick snapshot
+
 | Milestone | Iteration | Opponent | Wins / games | Win rate |
 |---:|---:|---|---:|---:|
-| 490k | 307 | max-damage | 330 / 600 | 55.0% |
-| 490k | 307 | simple-legal | 560 / 600 | 93.3% |
-| 490k | 307 | random-legal | 590 / 600 | 98.3% |
 | 500k | 313 | max-damage | 309 / 600 | 51.5% |
 | 500k | 313 | simple-legal | 554 / 600 | 92.3% |
 | 500k | 313 | random-legal | 592 / 600 | 98.7% |
