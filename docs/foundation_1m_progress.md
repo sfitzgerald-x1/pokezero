@@ -94,7 +94,7 @@ the 820k scheduled row reached 64.0%, the 830k row stayed in the low-60s at 60.5
 matched that 64.0% mark. The 820k and 840k rows are the strongest scheduled max-damage reads in the
 continuation so far; the 851k row then dipped back to 58.5%, still inside the recent high-50s/low-60s
 range, the 861k row rebounded to 63.5%, the 870k row eased to 60.2%, still inside the band, and the
-880k row rebounded to 62.2%.
+880k row edged up to 62.2%.
 
 That broader upward drift against max-damage is the leading signal for this phase. The
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
