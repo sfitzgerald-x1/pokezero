@@ -109,18 +109,22 @@ the 500k checkpoint is not enough evidence to call the recipe exhausted.
 The 500k readout is constructive for the current recipe. The clearest signal is the max-damage
 curve: it improved materially across the run and was still around the low 50s in the late
 lower-fidelity standard reads. That is evidence that the policy is still learning useful strength
-against a simpler fixed opponent, not evidence that the recipe has already exhausted itself.
+against a simpler fixed opponent. This is not a recipe rejection or plateau verdict while the
+max-damage curve remains alive.
 
 The high-fidelity foul-play series remains in the low single digits through 500k games, but that is
 expected at this stage. Foul-play is a much stronger, higher-quality bot than max-damage, so it is
 reasonable for it to beat PokeZero until the model reaches a much higher level of play. The useful
 question is whether foul-play starts to move once the max-damage curve has climbed further; progress
-against foul-play may be delayed and nonlinear rather than gradual from the beginning.
+against foul-play may be delayed and nonlinear rather than gradual from the beginning. A future
+foul-play jump would be more credible if it follows continued max-damage improvement than if it is
+treated as a required early signal.
 
 The MIT thesis recipe used a much larger training scale, so the right next readout is PokeZero's
 scheduled continuation toward 1M rather than treating the 500k foul-play score as a rejection of the
 recipe. As long as max-damage remains a healthy non-collapsed signal, the working hypothesis is that
-the recipe is still promising and should be evaluated at the larger scale.
+the recipe is promising enough to keep scaling and should be evaluated at the larger 1M readout
+before changing recipes.
 
 Concrete follow-ups:
 
@@ -130,5 +134,7 @@ Concrete follow-ups:
   rather than the primary 500k recipe verdict.
 - Normalize or rerun the 400k over-complete partial artifact so plots do not mix clean and partial
   statuses.
+- Use continued max-damage progress as the near-term evidence that the recipe is still learning,
+  while watching foul-play for delayed nonlinear movement.
 - Keep the MIT recipe and UT Austin transformer/input paper as inspiration, but continue to verify
   PokeZero-specific assumptions with fixed-opponent curves.
