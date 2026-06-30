@@ -34,10 +34,11 @@ scheduled 100-game milestone reads.
 
 ## Current Readout
 
-The early continuation rows are consistent with the 500k interpretation: max-damage remains a
-healthy non-collapsed signal, while foul-play remains a harder downstream benchmark with expected
-low early win rates. The next meaningful check is whether max-damage continues to hold or improve as
-the run crosses later 10k thresholds, and whether the higher-fidelity 50k reads show the same trend.
+The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
+but non-collapsed around the low-to-mid 50s, while foul-play remains a harder downstream benchmark
+with expected low early win rates. The next meaningful check is whether max-damage holds or improves
+as the run crosses later 10k thresholds, and whether the higher-fidelity 50k reads show the same
+trend.
 
 ## Next Updates
 
