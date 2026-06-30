@@ -1,10 +1,12 @@
 # MIT thesis reference configuration & our current gap
 
 Source: Jett Wang, *"Winning at Pokémon Random Battles Using Reinforcement Learning"* (MIT EECS
-MEng, 2024). This is the de-risked recipe we are reproducing for Gen 3. Page references are to the
-thesis PDF. This document exists so that "are we even running the recipe?" is answerable from
-concrete numbers rather than memory — see [`selfplay_mcts_roadmap.md`](selfplay_mcts_roadmap.md) for
-how it feeds the plan.
+MEng, 2024), <https://dspace.mit.edu/handle/1721.1/153888>. This is the de-risked recipe we are
+reproducing for Gen 3. Page references are to the thesis PDF. This document exists so that "are we
+even running the recipe?" is answerable from concrete numbers rather than memory — see
+[`selfplay_mcts_roadmap.md`](selfplay_mcts_roadmap.md) for how it feeds the plan and
+[`foundation_500k_results.md`](foundation_500k_results.md) for the first completed 500k-scale
+recipe-fidelity read.
 
 ## The recipe shape (unambiguous, p.23)
 

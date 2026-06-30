@@ -32,6 +32,12 @@ baseline) — the PPO **training** half is the load-bearing phase, and MCTS is a
 LR, `entropy_coef` 0.0588, 7 epochs, `gamma` 0.9999). Recipe **fidelity and scale** are therefore
 the first-order levers, and no strength conclusion is meaningful until we are running near them.
 
+The first completed 500k-scale recipe-fidelity run is recorded in
+[`foundation_500k_results.md`](foundation_500k_results.md). Its high-fidelity foul-play reads are
+low single digits through 450k games, with the 500k read still pending at the time of that note.
+Treat that as evidence that the current recipe shape needs another change before simply scaling
+further.
+
 ## Current assets (what already exists)
 
 - **Warm-pooled sim** (`local_showdown.py`, `scripts/battle_bridge.mjs`): battle-id-keyed bridge,
@@ -885,7 +891,10 @@ does not rescue a value head that cannot rank leaves.
 - **Compute:** thesis hit rank 8 on ~3M battles / one GPU / ~80 CPU / 4 days — our budget target.
 
 ## References
-- MIT thesis (PPO self-play + test-time MCTS; rank 8 gen4) — the blueprint.
+- [MIT thesis](https://dspace.mit.edu/handle/1721.1/153888) (PPO self-play + test-time MCTS; rank
+  8 gen4) — the training recipe blueprint.
+- [UT Austin / Metamon paper](https://arxiv.org/abs/2504.04395) (first-person trajectories +
+  transformer policies) — input/sequence-model inspiration, not a dependency or training recipe.
 - Foul Play (DUCT + damage-roll grouping). Technical Machine (expectiminimax). *-Minimax / MCMS
   (best/worst/avg chance). metamon (offline-RL human-level). See `docs/max_damage_exploration_learnings.md`
   for the plateau analysis that motivates the search direction.
