@@ -59,12 +59,11 @@ iteration, which lands on the first 1,600-game update boundary at or after that 
 | 350,000 | 219 | complete | 27 / 1000 | 2.7% |
 | 400,000 | 250 | partial artifact | 34 / 1013 | 3.4% |
 | 450,000 | 282 | complete | 37 / 1000 | 3.7% |
-| 500,000 | 313 | pending | - | - |
+| 500,000 | 313 | complete | 37 / 1000 | 3.7% |
 
 The 400k read completed more than the requested 1,000 games, but the older foul-play runner wrote it
 as `partial-result.json`. Treat the 34/1013 row as useful directional evidence, but normalize or
-rerun it before using it as a clean plotted point. The 500k high-fidelity read was not yet recorded
-when this doc was written.
+rerun it before using it as a clean plotted point.
 
 ## Standard yardstick context
 
@@ -92,9 +91,10 @@ mirrored yardstick and are labeled `standard`.
 | 450,000 | 282 | standard | 320 / 600 | 53.3% |
 | 500,000 | 313 | standard | 309 / 600 | 51.5% |
 
-The max-damage curve improved materially through the first few hundred thousand games, then hovered
-around the low 50s in the lower-fidelity late standard reads. That is a stronger signal than the
-foul-play curve, but it is still short of the intended plateau-breaking bar.
+The max-damage curve improved materially through the first few hundred thousand games and remained
+around the low 50s in the lower-fidelity late standard reads. That is the main actionable signal
+from this run: the recipe is still producing useful strength against a simpler fixed opponent, and
+the 500k checkpoint is not enough evidence to call the recipe exhausted.
 
 ### Final standard yardstick snapshot
 
@@ -106,22 +106,22 @@ foul-play curve, but it is still short of the intended plateau-breaking bar.
 
 ## Readout
 
-The 500k readout is still constructive for the current recipe. The max-damage progression improved
+The 500k readout is constructive for the current recipe. The max-damage progression improved
 materially across the run and was still around the low 50s at the final milestones, which suggests
-the policy had not simply stalled at the earliest baseline. The MIT thesis recipe also used a much
+the policy has not simply stalled at the earliest baseline. The MIT thesis recipe also used a much
 larger training scale, so this 500k run should be treated as a mid-scale check rather than a final
 verdict.
 
-The high-fidelity foul-play series is still in the low single digits through 450k games, but that is
-not surprising for this stage. Foul-play is a stronger, higher-quality opponent than max-damage, so
-it is expected to beat PokeZero until the policy reaches a meaningfully higher level of play. The
-working expectation is that foul-play progress may lag and then improve nonlinearly once the model
-crosses a stronger tactical threshold. As long as max-damage remains a healthy non-collapsed signal,
-continuing toward 1M games is the right next test before declaring the recipe plateaued.
+The high-fidelity foul-play series is still in the low single digits through 500k games, but that is
+not surprising for this stage and should not be read as proof that the recipe is failing. Foul-play
+is a much stronger, higher-quality opponent than max-damage, so it is expected to beat PokeZero
+until the policy reaches a meaningfully higher level of play. The working expectation is that
+foul-play progress may lag the max-damage curve and then improve nonlinearly once the model crosses
+a stronger tactical threshold. Since max-damage remains a healthy non-collapsed signal, continuing
+toward 1M games is the right next test before declaring the recipe plateaued.
 
 Concrete follow-ups:
 
-- Record the 500k high-fidelity foul-play read when the in-flight eval completes.
 - Normalize or rerun the 400k over-complete partial artifact so plots do not mix clean and partial
   statuses.
 - Continue the recipe-faithful run toward 1M games before treating the current recipe as exhausted.
