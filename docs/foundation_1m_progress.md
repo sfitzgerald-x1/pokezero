@@ -85,8 +85,8 @@ both held at 61.2%. The 740k row dipped to 58.0%, the 750k row held nearby at 57
 rebounded to 60.2%, and the 770k scheduled row held near that rebound at 59.8%. The 780k scheduled
 row then reached 62.5%, the strongest scheduled max-damage read up to that point, before the 790k row
 returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row then reached 62.7%,
-the 820k scheduled row reached 64.0%, the strongest scheduled max-damage read in the continuation so
-far, the 830k row stayed in the low-60s at 60.5%, and the 840k row matched that 64.0% high.
+the 820k and 840k scheduled rows both reached 64.0%, the strongest scheduled read in the continuation
+so far, and the 830k row stayed in the low-60s at 60.5%.
 
 That broader upward drift against max-damage is the leading signal for this phase. The
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
@@ -95,9 +95,10 @@ evidence therefore supports continuing toward the 1M readout rather than treatin
 exhausted. The completed 600k, 750k, and 800k high-fidelity rows corroborate the same broad band:
 max-damage was 1,116 / 2,000 (55.8%) at 600k, 1,193 / 2,000 (59.7%) at 750k, and
 1,229 / 2,000 (61.5%) at 800k, while foul-play remained a harder downstream bar at
-59 / 1,000 (5.9%), 42 / 1,000 (4.2%), and 47 / 1,000 (4.7%). Individual scheduled rows should still
-be treated as noisy, but the broader high-50s/low-60s max-damage trend is now supported by completed
-higher-fidelity continuation rows.
+59 / 1,000 (5.9%), 42 / 1,000 (4.2%), and 47 / 1,000 (4.7%). The 600k high-fidelity max-damage row
+was below the co-located 600k scheduled read's 59.8%, so individual scheduled rows should still be
+treated as noisy. The broader high-50s/low-60s max-damage trend is now supported by completed
+higher-fidelity continuation rows, but the higher-fidelity reads remain the cleaner trend signal.
 
 Foul-play remains the higher-quality benchmark because it is a stronger opponent than max-damage, and
 it is expected to beat PokeZero until the policy is substantially stronger. Low early foul-play scores
