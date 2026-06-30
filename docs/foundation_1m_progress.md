@@ -103,7 +103,7 @@ continuation so far; the 851k row then dipped back to 58.5%, still inside the re
 range, the 861k row rebounded to 63.5%, the 870k row eased to 60.2%, still inside the band, and the
 880k row edged up to 62.2%. The 891k row then reached 63.0%, continuing the recent low-60s band, and
 the 901k row eased to 59.5%, softening the recent low-60s streak but still inside the broader
-high-50s/low-60s range. The 910k and 920k rows moved back to 61.0% and 62.7%, while the 931k row
+high-50s/low-60s range. The 910k and 920k rows rose to 61.0% and 62.7%, while the 931k row
 eased again to 59.2%.
 
 That broader upward drift against max-damage is the leading signal for this phase. The
