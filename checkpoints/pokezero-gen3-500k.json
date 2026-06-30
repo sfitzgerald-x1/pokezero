@@ -1,0 +1,47 @@
+{
+  "name": "pokezero-gen3-500k",
+  "file": "pokezero-gen3-500k.pt",
+  "sha256": "2f2f28632be1e8b95f664c7205fd6cdc525b8f9906603e2407cf924d036cf641",
+  "date": "2026-06-30",
+  "format": "gen3randombattle",
+  "games_trained": 500800,
+  "run_id": "foundation-500k-20260629192858",
+  "iteration": 313,
+  "parent": null,
+  "schema_version": "pokezero.neural_policy.v0",
+  "training_schema_version": "pokezero.neural_training.v0",
+  "policy_id": "foundation-midscale-iter-0313",
+  "model": {
+    "action_schema_version": "pokezero.action_space.v0",
+    "observation_schema_version": "pokezero.observation.v1",
+    "window_size": 4,
+    "embedding_dim": 128,
+    "transformer_layers": 2,
+    "attention_heads": 4,
+    "feedforward_dim": 256
+  },
+  "recipe": {
+    "objective": "ppo",
+    "device": "cuda",
+    "batch_size": 1024,
+    "epochs": 7,
+    "cadence_games": 1600,
+    "learning_rate_schedule": "mit-thesis",
+    "learning_rate_schedule_total_games": 500800,
+    "learning_rate_progress_start": 0.996805111821,
+    "learning_rate_progress_end": 1.0,
+    "discount": 0.9999,
+    "value_clip_range": 0.0184,
+    "entropy_coef": 0.0588,
+    "clip_epsilon": 0.0829,
+    "gae_lambda": 0.754,
+    "max_grad_norm": 0.543
+  },
+  "winrates": {
+    "max-damage": 0.515,
+    "simple-legal": 0.9233333333333333,
+    "random-legal": 0.9866666666666667,
+    "foul-play": 0.037
+  },
+  "notes": "Final 500,800-game foundation checkpoint. Foul-play is the independent 1,000-game milestone read; the other win rates are the final standard mirrored yardstick snapshot."
+}
