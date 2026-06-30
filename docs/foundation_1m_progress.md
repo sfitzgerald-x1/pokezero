@@ -84,22 +84,27 @@ returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row 
 and the 820k scheduled row reached 64.0%, the strongest scheduled max-damage read in the continuation
 so far.
 
-That max-damage climb is the leading signal for this phase. The MIT-inspired recipe expected
-meaningful progress to require substantially more than 500k games, so the current evidence supports
-continuing toward the 1M readout rather than treating the recipe as exhausted. The completed 750k
-high-fidelity row corroborates the same band: max-damage was 1,193 / 2,000 (59.7%), while foul-play
-remained a harder downstream bar at 42 / 1,000 (4.2%). The earlier completed non-foul high-fidelity
-max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so
-individual scheduled rows should still be treated as noisy, but the broader high-50s/low-60s
-max-damage trend is now supported by a complete higher-fidelity continuation row.
+That broader upward drift against max-damage is the leading signal for this phase. The
+MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
+[`foundation_500k_results.md`](foundation_500k_results.md) for the anchor readout. The current
+evidence therefore supports continuing toward the 1M readout rather than treating the recipe as
+exhausted. The completed 750k high-fidelity row corroborates the same band: max-damage was
+1,193 / 2,000 (59.7%), while foul-play remained a harder downstream bar at 42 / 1,000 (4.2%). The
+earlier completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the
+co-located 600k scheduled row's 59.8%, so individual scheduled rows should still be treated as
+noisy, but the broader high-50s/low-60s max-damage trend is now supported by a complete
+higher-fidelity continuation row.
 
-Foul-play remains the higher-quality benchmark and is expected to beat PokeZero until the policy is
-substantially stronger. Low early foul-play scores should be treated as a lagging high-bar readout,
-not as negative evidence while max-damage is holding or climbing. The working expectation is that
-foul-play progress may be delayed and nonlinear: it can stay low until the model crosses a practical
-competence threshold, then move more sharply. The next meaningful check is whether max-damage holds
-or improves as the run crosses later 10k thresholds, and whether complete higher-fidelity 50k reads
-show the same trend while foul-play remains tracked for delayed movement.
+Foul-play remains the higher-quality benchmark because it is a stronger opponent than max-damage, and
+it is expected to beat PokeZero until the policy is substantially stronger. Low early foul-play scores
+should be treated as a lagging high-bar readout, not as negative evidence while max-damage is holding
+or climbing. The working expectation is that foul-play progress may be delayed and nonlinear: it can
+stay low until the model crosses a practical competence threshold, then move more sharply. The
+interpretation remains falsifiable: if larger-scale max-damage reads stall or collapse, the recipe
+should be reassessed, and any isolated foul-play uptick should be corroborated by continued
+max-damage strength before treating it as a durable breakthrough. The next meaningful check is
+whether max-damage holds or improves as the run crosses later 10k thresholds, and whether complete
+higher-fidelity 50k reads show the same trend while foul-play remains tracked for delayed movement.
 
 ## Next Updates
 
