@@ -40,6 +40,7 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 680,000 | continuation iteration 112 | 398 / 400 (99.5%) | 386 / 400 (96.5%) | 233 / 400 (58.2%) | 5 / 100 (5.0%) |
 | 691,200 | continuation iteration 119 | 396 / 400 (99.0%) | 368 / 400 (92.0%) | 221 / 400 (55.2%) | 6 / 100 (6.0%) |
 | 700,800 | continuation iteration 125 | 398 / 400 (99.5%) | 376 / 400 (94.0%) | 241 / 400 (60.2%) | 9 / 100 (9.0%) |
+| 710,400 | continuation iteration 131 | 395 / 400 (98.8%) | 376 / 400 (94.0%) | 242 / 400 (60.5%) | 5 / 100 (5.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -60,13 +61,13 @@ milestones are not mixed into the trend table.
 ## Current Readout
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
-but non-collapsed. From 630k through 700k, scheduled max-damage reads mostly held in the high 50s to
+but non-collapsed. From 630k through 710k, scheduled max-damage reads mostly held in the high 50s to
 low 60s. The 690k scheduled row dipped back to 55.2%, similar to the earlier 610k row at 55.8%, but
-the 700k scheduled row rebounded to 60.2%, the strongest scheduled max-damage read in the
-continuation so far. The completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000
-(55.8%), below the co-located 600k scheduled row's 59.8%, so treat the latest scheduled rows as
-constructive but still provisional until future complete high-fidelity rows corroborate the broader
-trend.
+the 700k scheduled row rebounded to 60.2% and the 710k row held at 60.5%, the strongest scheduled
+max-damage read in the continuation so far. The completed non-foul high-fidelity max-damage leg at
+600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so treat the latest
+scheduled rows as constructive but still provisional until future complete high-fidelity rows
+corroborate the broader trend.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
