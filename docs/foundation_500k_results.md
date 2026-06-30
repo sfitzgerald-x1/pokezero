@@ -106,16 +106,24 @@ foul-play curve, but it is still short of the intended plateau-breaking bar.
 
 ## Readout
 
-The high-fidelity foul-play series does **not** show a sustained climb by 450k games. The policy is
-strong against random/simple baselines and noisy-but-competitive against max-damage, but foul-play is
-still in the low single digits. That is negative evidence for the current recipe as a
-plateau-breaking path.
+The 500k readout is still constructive for the current recipe. The max-damage progression improved
+materially across the run and was still around the low 50s at the final milestones, which suggests
+the policy had not simply stalled at the earliest baseline. The MIT thesis recipe also used a much
+larger training scale, so this 500k run should be treated as a mid-scale check rather than a final
+verdict.
+
+The high-fidelity foul-play series is still in the low single digits through 450k games, but that is
+not surprising for this stage. Foul-play is a stronger, higher-quality opponent than max-damage, so
+it is expected to beat PokeZero until the policy reaches a meaningfully higher level of play. The
+working expectation is that foul-play progress may lag and then improve nonlinearly once the model
+crosses a stronger tactical threshold. As long as max-damage remains an improving signal, continuing
+toward 1M games is the right next test before declaring the recipe plateaued.
 
 Concrete follow-ups:
 
-- Finish or rerun the 500k high-fidelity foul-play read.
+- Record the 500k high-fidelity foul-play read when the in-flight eval completes.
 - Normalize or rerun the 400k over-complete partial artifact so plots do not mix clean and partial
   statuses.
-- Treat the next recipe change as an experiment, not merely a longer continuation of this run.
+- Continue the recipe-faithful run toward 1M games before treating the current recipe as exhausted.
 - Keep the MIT recipe and UT Austin transformer/input paper as inspiration, but continue to verify
   PokeZero-specific assumptions with fixed-opponent curves.
