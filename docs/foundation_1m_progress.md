@@ -81,6 +81,7 @@ milestones are not mixed into the trend table.
 | 750,400 | continuation iteration 156 | 1,974 / 2,000 (98.7%) | 1,899 / 2,000 (95.0%) | 1,193 / 2,000 (59.7%) | 42 / 1,000 (4.2%) |
 | 800,000 | continuation iteration 187 | 1,979 / 2,000 (99.0%) | 1,887 / 2,000 (94.3%) | 1,229 / 2,000 (61.5%) | 47 / 1,000 (4.7%) |
 | 850,000 | continuation iteration 219 | 1,982 / 2,000 (99.1%) | 1,889 / 2,000 (94.4%) | 1,236 / 2,000 (61.8%) | 43 / 1,000 (4.3%) |
+| 900,000 | continuation iteration 250 | 1,983 / 2,000 (99.2%) | 1,907 / 2,000 (95.4%) | 1,248 / 2,000 (62.4%) | 51 / 1,000 (5.1%) |
 
 ## Current Readout
 
@@ -105,16 +106,16 @@ That broader upward drift against max-damage is the leading signal for this phas
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
 [`foundation_500k_results.md`](foundation_500k_results.md) for the anchor readout. The current
 evidence therefore supports continuing toward the 1M readout rather than treating the recipe as
-exhausted. The completed 550k, 600k, 650k, 750k, 800k, and 850k high-fidelity rows show the same rising
+exhausted. The completed 550k, 600k, 650k, 750k, 800k, 850k, and 900k high-fidelity rows show the same rising
 max-damage shape: max-damage was 1,091 / 2,000 (54.5%) at 550k, 1,116 / 2,000 (55.8%) at 600k,
 1,163 / 2,000 (58.1%) at 650k, 1,193 / 2,000 (59.7%) at 750k, and
-1,229 / 2,000 (61.5%) at 800k, and 1,236 / 2,000 (61.8%) at 850k, while foul-play remained a harder
-downstream bar at
+1,229 / 2,000 (61.5%) at 800k, 1,236 / 2,000 (61.8%) at 850k, and
+1,248 / 2,000 (62.4%) at 900k, while foul-play remained a harder downstream bar at
 37 / 1,000 (3.7%), 59 / 1,000 (5.9%), 45 / 1,000 (4.5%), 42 / 1,000 (4.2%), and
-47 / 1,000 (4.7%), and 43 / 1,000 (4.3%). The 600k high-fidelity max-damage row was below the
-co-located 600k scheduled read's 59.8%, so individual scheduled rows should still be treated as noisy.
-The later high-fidelity reads support the high-50s/low-60s max-damage trend, but the higher-fidelity
-reads remain the cleaner trend signal.
+47 / 1,000 (4.7%), 43 / 1,000 (4.3%), and 51 / 1,000 (5.1%). The 600k high-fidelity max-damage row
+was below the co-located 600k scheduled read's 59.8%, so individual scheduled rows should still be
+treated as noisy. The later high-fidelity reads support the high-50s/low-60s max-damage trend, but
+the higher-fidelity reads remain the cleaner trend signal.
 
 Foul-play remains the higher-quality benchmark because it is a stronger opponent than max-damage, and
 it is expected to beat PokeZero until the policy is substantially stronger. Low early foul-play scores
@@ -134,5 +135,5 @@ the same trend while foul-play remains tracked for delayed movement.
 - Add the next scheduled 10k read once the run crosses the next threshold.
 - Include the refreshed 10k trajectory plot with the next public progress report.
 - Add the 700k independent high-fidelity row once all four opponents complete.
-- Add the 900k independent high-fidelity row once the run crosses 900k and all four opponents
+- Add the 950k independent high-fidelity row once the run crosses 950k and all four opponents
   complete.
