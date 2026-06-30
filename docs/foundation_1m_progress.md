@@ -78,9 +78,9 @@ the 700k scheduled row rebounded to 60.2%, the 710k row held at 60.5%, and the 7
 both held at 61.2%. The 740k row dipped to 58.0%, which is below that 61.2% mark but still within
 the recent high-50s/low-60s scheduled band, the 750k row held nearby at 57.8%, the 760k row rebounded
 to 60.2%, and the 770k scheduled row held near that rebound at 59.8%. The 780k scheduled row then
-reached 62.5%, the strongest scheduled max-damage read in the continuation so far, before the 790k
-row returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row then reached
-62.7%, the strongest scheduled max-damage read in the continuation so far. The completed 750k
+reached 62.5%, the strongest scheduled max-damage read up to that point, before the 790k row
+returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row then reached 62.7%,
+the strongest scheduled max-damage read in the continuation so far. The completed 750k
 high-fidelity row now corroborates that band: max-damage was 1,193 / 2,000 (59.7%), while foul-play
 remained a harder downstream bar at 42 / 1,000 (4.2%). The earlier completed non-foul high-fidelity
 max-damage leg at 600k is 1,116 / 2,000 (55.8%), below the co-located 600k scheduled row's 59.8%, so
