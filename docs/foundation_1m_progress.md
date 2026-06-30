@@ -120,7 +120,7 @@ evidence therefore supports continuing toward the 1M readout rather than treatin
 exhausted. The completed 550k, 600k, 650k, 750k, 800k, 850k, 900k, and 950k high-fidelity rows show the same rising
 max-damage shape: max-damage was 1,091 / 2,000 (54.5%) at 550k, 1,116 / 2,000 (55.8%) at 600k,
 1,163 / 2,000 (58.1%) at 650k, 1,193 / 2,000 (59.7%) at 750k,
-1,229 / 2,000 (61.5%) at 800k, 1,236 / 2,000 (61.8%) at 850k, and
+1,229 / 2,000 (61.5%) at 800k, 1,236 / 2,000 (61.8%) at 850k,
 1,248 / 2,000 (62.4%) at 900k, and 1,262 / 2,000 (63.1%) at 950k. Foul-play remained a harder downstream bar at
 37 / 1,000 (3.7%), 59 / 1,000 (5.9%), 45 / 1,000 (4.5%), 42 / 1,000 (4.2%),
 47 / 1,000 (4.7%), 43 / 1,000 (4.3%), 51 / 1,000 (5.1%), and 50 / 1,000 (5.0%). The 600k high-fidelity max-damage row
@@ -145,4 +145,5 @@ foul-play remains tracked for delayed movement.
 
 - Add the next scheduled 10k read once the run crosses the next threshold.
 - Add the 700k independent high-fidelity row once all four opponents complete.
-- Add the 1M final readout once training and the final scheduled evaluations complete.
+- Add the 1M final readout once training and the final scheduled evaluations complete, including the
+  requested 100k-step and 10k-step plots.
