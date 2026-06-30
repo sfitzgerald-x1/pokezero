@@ -45,14 +45,16 @@ milestones are not mixed into the trend table.
 
 | Total self-play games | Checkpoint | Random-legal | Simple-legal | Max-damage | Foul-play |
 |---:|---|---:|---:|---:|---:|
-| 550,000 | continuation iteration 31 | 1,981 / 2,000 (99.1%) | 1,872 / 2,000 (93.6%) | 1,091 / 2,000 (54.5%) | 37 / 1,000 (3.7%) |
+| 550,400 | continuation iteration 31 | 1,981 / 2,000 (99.1%) | 1,872 / 2,000 (93.6%) | 1,091 / 2,000 (54.5%) | 37 / 1,000 (3.7%) |
 
 ## Current Readout
 
 The continuation rows so far are consistent with the 500k interpretation: max-damage remains noisy
-but non-collapsed around the low-to-mid 50s, with the 600k scheduled row landing above the recent
-range at 59.8%. Foul-play remains a harder downstream benchmark with expected low early win rates.
-The next meaningful check is whether max-damage holds or improves as the run crosses later 10k
+but non-collapsed around the low-to-mid 50s. The 600k scheduled 400-game row landed higher at 59.8%,
+but the completed non-foul high-fidelity max-damage leg at the same checkpoint is 1,116 / 2,000
+(55.8%), so treat the small-sample 600k uptick as provisional until the full high-fidelity row
+completes. Foul-play remains a harder downstream benchmark with expected low early win rates. The
+next meaningful check is whether max-damage holds or improves as the run crosses later 10k
 thresholds, and whether complete higher-fidelity 50k reads show the same trend.
 
 ## Next Updates
