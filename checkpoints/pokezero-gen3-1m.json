@@ -1,0 +1,53 @@
+{
+  "name": "pokezero-gen3-1m",
+  "file": "pokezero-gen3-1m.pt",
+  "sha256": "394a08e57e63b0ed8cc9e4d0e626766e789c0e0a31090ccceeb58c79404a3d21",
+  "date": "2026-06-30",
+  "format": "gen3randombattle",
+  "games_trained": 1000000,
+  "run_id": "foundation-1m-20260630020847",
+  "iteration": 312,
+  "parent": "pokezero-gen3-500k",
+  "schema_version": "pokezero.neural_policy.v0",
+  "training_schema_version": "pokezero.neural_training.v0",
+  "policy_id": "foundation-midscale-iter-0312",
+  "model": {
+    "action_schema_version": "pokezero.action_space.v0",
+    "observation_schema_version": "pokezero.observation.v1",
+    "window_size": 4,
+    "embedding_dim": 128,
+    "transformer_layers": 2,
+    "attention_heads": 4,
+    "feedforward_dim": 256
+  },
+  "recipe": {
+    "objective": "ppo",
+    "device": "cuda",
+    "batch_size": 1024,
+    "epochs": 7,
+    "cadence_games": 1600,
+    "learning_rate_schedule": "mit-thesis",
+    "learning_rate_schedule_total_games": 1000000,
+    "learning_rate_progress_start": 0.9984,
+    "learning_rate_progress_end": 1.0,
+    "discount": 0.9999,
+    "value_clip_range": 0.0184,
+    "entropy_coef": 0.0588,
+    "clip_epsilon": 0.0829,
+    "gae_lambda": 0.754,
+    "max_grad_norm": 0.543
+  },
+  "winrates": {
+    "max-damage": 0.625,
+    "simple-legal": 0.955,
+    "random-legal": 0.9875,
+    "foul-play": 0.04
+  },
+  "high_fidelity_winrates": {
+    "max-damage": 0.6225,
+    "simple-legal": 0.9505,
+    "random-legal": 0.9895,
+    "foul-play": 0.056
+  },
+  "notes": "Final 1,000,000-game continuation checkpoint. High-fidelity standard opponents use 2,000 mirrored games; high-fidelity foul-play uses 1,000 direct games."
+}
