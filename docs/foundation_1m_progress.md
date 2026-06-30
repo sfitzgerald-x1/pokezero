@@ -65,6 +65,8 @@ This note records evaluation evidence only. It intentionally omits private opera
 | 931,200 | continuation iteration 269 | 395 / 400 (98.8%) | 378 / 400 (94.5%) | 237 / 400 (59.2%) | 6 / 100 (6.0%) |
 | 940,800 | continuation iteration 275 | 393 / 400 (98.2%) | 377 / 400 (94.2%) | 258 / 400 (64.5%) | 8 / 100 (8.0%) |
 | 950,400 | continuation iteration 281 | 393 / 400 (98.2%) | 374 / 400 (93.5%) | 250 / 400 (62.5%) | 6 / 100 (6.0%) |
+| 960,000 | continuation iteration 287 | 395 / 400 (98.8%) | 381 / 400 (95.2%) | 247 / 400 (61.8%) | 5 / 100 (5.0%) |
+| 971,200 | continuation iteration 294 | 397 / 400 (99.2%) | 378 / 400 (94.5%) | 265 / 400 (66.2%) | 7 / 100 (7.0%) |
 
 The 502,400 row is the first checkpoint after resuming from the 500,800-game model. It is useful as
 an initial continuation baseline, but it is closer to a startup read than a regular 10k interval.
@@ -87,6 +89,7 @@ milestones are not mixed into the trend table.
 | 800,000 | continuation iteration 187 | 1,979 / 2,000 (99.0%) | 1,887 / 2,000 (94.3%) | 1,229 / 2,000 (61.5%) | 47 / 1,000 (4.7%) |
 | 850,000 | continuation iteration 219 | 1,982 / 2,000 (99.1%) | 1,889 / 2,000 (94.4%) | 1,236 / 2,000 (61.8%) | 43 / 1,000 (4.3%) |
 | 900,000 | continuation iteration 250 | 1,983 / 2,000 (99.2%) | 1,907 / 2,000 (95.4%) | 1,248 / 2,000 (62.4%) | 51 / 1,000 (5.1%) |
+| 950,000 | continuation iteration 281 | 1,979 / 2,000 (99.0%) | 1,894 / 2,000 (94.7%) | 1,262 / 2,000 (63.1%) | 50 / 1,000 (5.0%) |
 
 ## Current Readout
 
@@ -106,20 +109,21 @@ range, the 861k row rebounded to 63.5%, the 870k row eased to 60.2%, still insid
 880k row edged up to 62.2%. The 891k row then reached 63.0%, continuing the recent low-60s band, and
 the 901k row eased to 59.5%, softening the recent low-60s streak but still inside the broader
 high-50s/low-60s range. The 910k and 920k rows rose to 61.0% and 62.7%, while the 931k row
-eased again to 59.2%. The 941k row then reached 64.5%, the strongest scheduled max-damage read so
-far, and the 950k row held at 62.5%.
+eased again to 59.2%. The 941k row then reached 64.5%, the strongest scheduled max-damage read up to
+that point, the 950k row held at 62.5%, the 960k row stayed nearby at 61.8%, and the 971k row reached
+66.2%, the strongest scheduled max-damage read so far.
 
 That broader upward drift against max-damage is the leading signal for this phase. The
 MIT-inspired recipe expected meaningful progress to require substantially more than 500k games; see
 [`foundation_500k_results.md`](foundation_500k_results.md) for the anchor readout. The current
 evidence therefore supports continuing toward the 1M readout rather than treating the recipe as
-exhausted. The completed 550k, 600k, 650k, 750k, 800k, 850k, and 900k high-fidelity rows show the same rising
+exhausted. The completed 550k, 600k, 650k, 750k, 800k, 850k, 900k, and 950k high-fidelity rows show the same rising
 max-damage shape: max-damage was 1,091 / 2,000 (54.5%) at 550k, 1,116 / 2,000 (55.8%) at 600k,
 1,163 / 2,000 (58.1%) at 650k, 1,193 / 2,000 (59.7%) at 750k,
 1,229 / 2,000 (61.5%) at 800k, 1,236 / 2,000 (61.8%) at 850k, and
-1,248 / 2,000 (62.4%) at 900k. Foul-play remained a harder downstream bar at
+1,248 / 2,000 (62.4%) at 900k, and 1,262 / 2,000 (63.1%) at 950k. Foul-play remained a harder downstream bar at
 37 / 1,000 (3.7%), 59 / 1,000 (5.9%), 45 / 1,000 (4.5%), 42 / 1,000 (4.2%),
-47 / 1,000 (4.7%), 43 / 1,000 (4.3%), and 51 / 1,000 (5.1%). The 600k high-fidelity max-damage row
+47 / 1,000 (4.7%), 43 / 1,000 (4.3%), 51 / 1,000 (5.1%), and 50 / 1,000 (5.0%). The 600k high-fidelity max-damage row
 was below the co-located 600k scheduled read's 59.8%, so individual scheduled rows should still be
 treated as noisy. The later high-fidelity reads support the high-50s/low-60s max-damage trend, but
 the higher-fidelity reads remain the cleaner trend signal.
@@ -132,7 +136,7 @@ stay low until the model crosses a practical competence threshold, then move mor
 interpretation remains falsifiable: if larger-scale max-damage reads stall or collapse, the recipe
 should be reassessed, and any isolated foul-play uptick should be corroborated by continued
 max-damage strength before treating it as a durable breakthrough. Scheduled foul-play reads from 870k
-through 950k stayed between 3 / 100 and 8 / 100, which remains consistent with the lagging-benchmark
+through 971k stayed between 3 / 100 and 8 / 100, which remains consistent with the lagging-benchmark
 interpretation. The next meaningful check is whether max-damage holds or improves as the run crosses
 later 10k thresholds, and whether complete higher-fidelity 50k reads show the same trend while
 foul-play remains tracked for delayed movement.
@@ -140,6 +144,5 @@ foul-play remains tracked for delayed movement.
 ## Next Updates
 
 - Add the next scheduled 10k read once the run crosses the next threshold.
-- Include the refreshed 10k trajectory plot with the next public progress report.
 - Add the 700k independent high-fidelity row once all four opponents complete.
-- Add the 950k independent high-fidelity row once the running foul-play leg completes.
+- Add the 1M final readout once training and the final scheduled evaluations complete.
