@@ -100,8 +100,8 @@ rebounded to 60.2%, and the 770k scheduled row held near that rebound at 59.8%. 
 row then reached 62.5%, the strongest scheduled max-damage read up to that point, before the 790k row
 returned to 58.8% and the 800k row held nearby at 59.2%. The 810k scheduled row then reached 62.7%,
 the 820k scheduled row reached 64.0%, the 830k row stayed in the low-60s at 60.5%, and the 840k row
-matched that 64.0% mark. The 820k and 840k rows are the strongest scheduled max-damage reads in the
-continuation so far; the 851k row then dipped back to 58.5%, still inside the recent high-50s/low-60s
+matched that 64.0% mark. The 820k and 840k rows were the strongest scheduled max-damage reads up to
+that point; the 851k row then dipped back to 58.5%, still inside the recent high-50s/low-60s
 range, the 861k row rebounded to 63.5%, the 870k row eased to 60.2%, still inside the band, and the
 880k row edged up to 62.2%. The 891k row then reached 63.0%, continuing the recent low-60s band, and
 the 901k row eased to 59.5%, softening the recent low-60s streak but still inside the broader
