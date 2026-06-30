@@ -94,7 +94,8 @@ mirrored yardstick and are labeled `standard`.
 The max-damage curve improved materially through the first few hundred thousand games and remained
 around the low 50s in the lower-fidelity late standard reads. That is the main actionable signal
 from this run: the recipe has produced useful strength against a simpler fixed opponent, and the
-500k checkpoint is not enough evidence to call the recipe exhausted.
+500k checkpoint is positive evidence for continuing the recipe rather than evidence that it has
+plateaued.
 
 ### Final standard yardstick snapshot
 
@@ -109,25 +110,26 @@ from this run: the recipe has produced useful strength against a simpler fixed o
 The 500k readout is constructive for the current recipe. The clearest leading signal is the
 max-damage curve: it improved materially across the run and was still around the low 50s in the late
 lower-fidelity standard reads. That is evidence that the policy learned useful strength against a
-simpler fixed opponent. This is not a recipe rejection while max-damage remains non-collapsed; it is
-the reason to continue the recipe-faithful run and look for a clearer large-scale trend.
+simpler fixed opponent. This should be read as support for continuing the recipe-faithful run toward
+larger scale, not as a recipe rejection.
 
 The high-fidelity foul-play series remains in the low single digits through 500k games, but that is
-not surprising at this stage. Foul-play is a much stronger, higher-quality bot than max-damage, so it
-is expected to beat PokeZero until the policy reaches a substantially higher level of play. The
-working expectation is that foul-play progress may be delayed and nonlinear: the score may stay low
-for a long time and then move once the model crosses a practical competence threshold. Because the
-max-damage curve is still the healthier near-term signal, low early foul-play scores should be
-treated as a high-bar lagging readout rather than evidence that the recipe is already exhausted.
-The inverse is also true: an isolated foul-play uptick should be corroborated by a further
-max-damage climb or sustained non-collapsed fixed-opponent strength before treating it as a durable
-breakthrough.
+not surprising at this stage and should not be treated as negative evidence for the recipe by
+itself. Foul-play is a much stronger, higher-quality bot than max-damage, so it is expected to beat
+PokeZero until the policy reaches a substantially higher level of play. The working expectation is
+that foul-play progress may be delayed and nonlinear: the score may stay low for a long time and
+then move once the model crosses a practical competence threshold. Because the max-damage curve is
+still the healthier near-term signal, low early foul-play scores should be treated as a high-bar
+lagging readout rather than evidence that the recipe is already exhausted. The inverse is also true:
+an isolated foul-play uptick should be corroborated by a further max-damage climb or sustained
+non-collapsed fixed-opponent strength before treating it as a durable breakthrough.
 
-The MIT thesis recipe used a much larger training scale, so the right next readout is PokeZero's
-scheduled continuation toward 1M rather than treating the 500k foul-play score as a rejection of the
-recipe. As long as max-damage keeps holding or improving at larger scale, the working hypothesis is
-that the recipe remains promising. Foul-play should stay in the report because it is the higher
-quality bar, but the expected path is max-damage improvement first and foul-play movement later.
+The MIT thesis recipe used a much larger training scale before showing meaningful strength, so the
+right next readout is PokeZero's scheduled continuation toward 1M rather than treating the 500k
+foul-play score as a rejection of the recipe. As long as max-damage keeps holding or improving at
+larger scale, the working hypothesis is that the recipe remains promising. Foul-play should stay in
+the report because it is the higher-quality bar, but the expected path is max-damage improvement
+first and foul-play movement later.
 
 Concrete follow-ups:
 

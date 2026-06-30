@@ -36,8 +36,8 @@ The first completed 500k-scale recipe-fidelity run is recorded in
 [`foundation_500k_results.md`](foundation_500k_results.md). Its high-fidelity foul-play reads are
 low single digits through 500k games, while max-damage remains a healthy non-collapsed signal. The
 current interpretation is that foul-play is a lagging high-quality benchmark, not an early rejection
-of the recipe while max-damage is holding; whether max-damage resumes a clear climb is the next
-larger-scale readout question.
+of the recipe while max-damage is holding or improving; the scheduled continuation toward 1M is the
+right readout before deciding whether the recipe has actually plateaued.
 The continuation toward 1M games is tracked in
 [`foundation_1m_progress.md`](foundation_1m_progress.md); treat the fixed-opponent curves there as
 the current recipe readout before making another recipe change.
