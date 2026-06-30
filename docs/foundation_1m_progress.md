@@ -56,7 +56,8 @@ The continuation rows so far are consistent with the 500k interpretation: max-da
 but non-collapsed around the low-to-mid 50s. The 600k scheduled 400-game row landed higher at 59.8%,
 then the 610k and 620k scheduled rows returned to 55.8% and 52.5%, before 630k moved back to 57.5%.
 The completed non-foul high-fidelity max-damage leg at 600k is 1,116 / 2,000 (55.8%), so treat the
-600k/630k scheduled upticks as provisional until complete high-fidelity rows corroborate them.
+600k/630k scheduled upticks as provisional until future complete high-fidelity rows corroborate the
+broader trend.
 Foul-play remains a harder downstream benchmark with expected low early win rates. The next
 meaningful check is whether max-damage holds or improves as the run crosses later 10k thresholds,
 and whether complete higher-fidelity 50k reads show the same trend.
