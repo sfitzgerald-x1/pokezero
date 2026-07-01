@@ -16,7 +16,7 @@ GAMES="${1:-100}"; FAST_MS="${2:-150}"; STRONG_MS="${3:-1000}"
 OUT="${OUT_DIR:-$(mktemp -d /tmp/fpcal.XXXXXX)}"; mkdir -p "$OUT"
 export SHOWDOWN_MAX_TURNS="${SHOWDOWN_MAX_TURNS:-250}"  # cap stall-war games -> tie at 250 turns
 WS="ws://localhost:8000/showdown/websocket"
-cleanup(){ kill $(jobs -p) 2>/dev/null; pkill -x node 2>/dev/null; pkill -f play_online_baseline 2>/dev/null; pkill -f "$FP/run.py" 2>/dev/null; }
+cleanup(){ kill $(jobs -p) 2>/dev/null; }  # kill only our own backgrounded jobs (server+bots); never broad `pkill node`
 trap cleanup EXIT
 
 # tag  baseline       search_ms
