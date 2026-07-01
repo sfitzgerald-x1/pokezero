@@ -9,9 +9,9 @@ versioning policy (pin only at a breaking change) and the sidecar format.
 
 | name | run | games | parent (lineage) | vs max-damage | vs simple | vs random |
 |---|---|---|---|---|---|---|
-| `pokezero-gen3-500k` | `foundation-500k-20260629192858` | 500,800 | — (from scratch) | 51.5% | 92.3% | 98.7% |
-| `pokezero-gen3-1m` | `foundation-1m-20260630020847` | ~1,000,000 | **`pokezero-gen3-500k`** | 62.5% | 95.5% | 98.75% |
-| `pokezero-gen3-1-5m` | `foundation-2m-20260630171151` | 1,500,800 | **`pokezero-gen3-1m`** | 72.9% | 96.25% | 99.5% |
+| `pokezero-no-belief-gen3-500k` | `foundation-500k-20260629192858` | 500,800 | — (from scratch) | 51.5% | 92.3% | 98.7% |
+| `pokezero-no-belief-gen3-1m` | `foundation-1m-20260630020847` | ~1,000,000 | **`pokezero-no-belief-gen3-500k`** | 62.5% | 95.5% | 98.75% |
+| `pokezero-no-belief-gen3-1-5m` | `foundation-2m-20260630171151` | 1,500,800 | **`pokezero-no-belief-gen3-1m`** | 72.9% | 96.25% | 99.5% |
 
 These are recipe-faithful (value-clip on, 1600-game cadence, MIT-thesis LR annealing), trained
 **from scratch with no teacher.** The 500k crossed the imitation ceiling (>50% vs max-damage); the
@@ -25,7 +25,7 @@ pending and should be recorded in the follow-up progress documentation.
 ## Play a checkpoint
 ```sh
 # local Showdown server (pinned commit), then:
-python scripts/play_online.py --checkpoint checkpoints/pokezero-gen3-1m.pt \
+python scripts/play_online.py --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt \
   --showdown-root /path/to/pokemon-showdown --username PokeZeroBot \
   --format gen3randombattle --accept --no-login
 ```

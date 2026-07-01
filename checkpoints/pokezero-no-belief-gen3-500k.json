@@ -1,6 +1,6 @@
 {
-  "name": "pokezero-gen3-500k",
-  "file": "pokezero-gen3-500k.pt",
+  "name": "pokezero-no-belief-gen3-500k",
+  "file": "pokezero-no-belief-gen3-500k.pt",
   "sha256": "2f2f28632be1e8b95f664c7205fd6cdc525b8f9906603e2407cf924d036cf641",
   "date": "2026-06-30",
   "format": "gen3randombattle",

@@ -7,8 +7,8 @@ new checkpoints are added). For every state it records, per checkpoint, the prob
 policy assigns to each legal choice (labeled: move:Surf, switch:Blissey, ...).
 
   python scripts/choice_sample.py \
-      --checkpoint checkpoints/pokezero-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-gen3-1m.pt=1M \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       --out evals/turn10_choice_sample.json
 """

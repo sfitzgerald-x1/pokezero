@@ -19,7 +19,7 @@
 # Usage:
 #   POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown scripts/play_local.sh
 #       -> serves the committed milestones as PokeZeroBot-500k and PokeZeroBot-1M
-#   scripts/play_local.sh 500k=checkpoints/pokezero-gen3-500k.pt foo=runs/.../transformer-policy.pt
+#   scripts/play_local.sh 500k=checkpoints/pokezero-no-belief-gen3-500k.pt foo=runs/.../transformer-policy.pt
 #       -> one PokeZeroBot-<name> per name=checkpoint argument
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,7 +34,7 @@ L="$(mktemp -d /tmp/pokezero-play.XXXXXX)"
 [ -d "$CLIENT_DIR" ] || { echo "client not found at $CLIENT_DIR — set POKEZERO_SHOWDOWN_CLIENT"; exit 1; }
 
 VARIANTS=("$@")
-[ ${#VARIANTS[@]} -eq 0 ] && VARIANTS=("500k=$REPO/checkpoints/pokezero-gen3-500k.pt" "1M=$REPO/checkpoints/pokezero-gen3-1m.pt")
+[ ${#VARIANTS[@]} -eq 0 ] && VARIANTS=("500k=$REPO/checkpoints/pokezero-no-belief-gen3-500k.pt" "1M=$REPO/checkpoints/pokezero-no-belief-gen3-1m.pt")
 
 pids=()
 cleanup(){ kill "${pids[@]}" 2>/dev/null; pkill -x node 2>/dev/null; }

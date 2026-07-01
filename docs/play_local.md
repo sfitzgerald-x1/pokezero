@@ -10,7 +10,7 @@ POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown scripts/play_local.sh
 ```
 Custom variants (one `PokeZeroBot-<name>` per `name=checkpoint`):
 ```sh
-scripts/play_local.sh 1m=checkpoints/pokezero-gen3-1m.pt mine=runs/<...>/transformer-policy.pt
+scripts/play_local.sh 1m=checkpoints/pokezero-no-belief-gen3-1m.pt mine=runs/<...>/transformer-policy.pt
 ```
 
 ## What it runs (and the gotcha it solves)

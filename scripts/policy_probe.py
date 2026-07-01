@@ -21,8 +21,8 @@ Caveats (documented so the numbers aren't over-read):
 
 Usage:
   python scripts/policy_probe.py \
-      --checkpoint checkpoints/pokezero-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-gen3-1m.pt=1M \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       [--capture-seed 7] [--out runs/probes/toxic-<date>.json]
 """

@@ -2,8 +2,8 @@
 shared, fixed corpus of real decision states. Re-run on each new checkpoint; watch the factors.
 
   python scripts/checkpoint_factors.py \
-      --checkpoint checkpoints/pokezero-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-gen3-1m.pt=1M \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
+      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       --num-games 60 --out runs/probes/factors-<date>.json
 
