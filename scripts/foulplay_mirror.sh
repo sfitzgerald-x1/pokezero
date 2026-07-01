@@ -18,6 +18,7 @@ FPVENV="${FOULPLAY_VENV:-$FP/.venv}"
 SHOWDOWN="${POKEZERO_SHOWDOWN_ROOT:?set POKEZERO_SHOWDOWN_ROOT to a pokemon-showdown checkout}"
 N="${1:-10}"; STM="${2:-150}"
 OUT="${3:-$(mktemp -d /tmp/fpmirror.XXXXXX)}"; mkdir -p "$OUT"
+export SHOWDOWN_MAX_TURNS="${SHOWDOWN_MAX_TURNS:-250}"  # cap stall-war games -> tie at 250 turns
 WS="ws://localhost:8000/showdown/websocket"
 cleanup(){ kill "${A:-}" "${B:-}" "${SRV:-}" 2>/dev/null; pkill -x node 2>/dev/null; }
 trap cleanup EXIT
