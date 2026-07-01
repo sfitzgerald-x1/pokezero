@@ -11,6 +11,8 @@
   "schema_version": "pokezero.neural_policy.v0",
   "training_schema_version": "pokezero.neural_training.v0",
   "policy_id": "foundation-midscale-iter-0313",
+  "input_family": "no-belief",
+  "known_input_issue": "Belief-derived opponent set features were unavailable: the policy did not receive candidate opponent movesets, possible items, or hidden-set branches.",
   "model": {
     "action_schema_version": "pokezero.action_space.v0",
     "observation_schema_version": "pokezero.observation.v1",
@@ -46,10 +48,8 @@
   "high_fidelity_winrates": {
     "max-damage": 0.729,
     "simple-legal": 0.9625,
-    "random-legal": 0.995
+    "random-legal": 0.995,
+    "foul-play": 0.087
   },
-  "high_fidelity_pending": [
-    "foul-play"
-  ],
-  "notes": "1,500,800-game checkpoint from the foundation 2M continuation run. High-fidelity standard opponents use 2,000 mirrored games; high-fidelity foul-play is pending and should be recorded in the follow-up documentation update."
+  "notes": "1,500,800-game no-belief checkpoint from the foundation 2M continuation run. High-fidelity standard opponents use 2,000 mirrored games; high-fidelity foul-play uses 1,000 direct games."
 }

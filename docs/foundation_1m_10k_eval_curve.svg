@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="650" viewBox="0 0 1500 650">
 <rect x="0" y="0" width="1500" height="650" fill="#fbfaf7"/>
-<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">Foundation continuation scheduled evals at 10k cadence</text>
-<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">500k anchor plus async scheduled 400-game standard reads and 100-game foul-play reads through 1M.</text>
+<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">No-belief foundation scheduled evals at 10k cadence</text>
+<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">No-belief 500k anchor plus async scheduled 400-game standard reads and 100-game foul-play reads through 1M.</text>
 <line x1="92" y1="72" x2="92" y2="558" stroke="#555"/>
 <line x1="92" y1="558" x2="1240" y2="558" stroke="#555"/>
 <line x1="92" y1="558.00" x2="1240" y2="558.00" stroke="#e4dfd3"/>

@@ -18,9 +18,19 @@ These are recipe-faithful (value-clip on, 1600-game cadence, MIT-thesis LR annea
 1M is a **continuation of the 500k** that climbed to 62.5%, and the 1.5M checkpoint is a
 continuation of the same foundation line. (The 500k -> 1M lineage link is currently *inferred* —
 the 1M run used a 1,000,000-game LR denominator over its ~500k segment and continued the 500k's
-win-rate curve; future runs should record `continued_from` explicitly.) The 1.5M sidecar records
-the completed low-fidelity row plus high-fidelity standard opponents; high-fidelity foul-play is
-pending and should be recorded in the follow-up progress documentation.
+win-rate curve; future runs should record `continued_from` explicitly.)
+
+## No-belief caveat
+
+The `pokezero-no-belief-*` prefix is intentional. These checkpoints were trained before the belief
+input bug was identified, so the policy did **not** receive belief-derived opponent set information:
+candidate movesets, possible items, and possible hidden-set branches were unavailable to the model.
+The policy still received the normal public battle state, but it was effectively blind to the
+opponent randbat set/item possibilities that the fixed belief-input run should expose.
+
+Keep these high-fidelity evals as a baseline family, not as evidence for the fixed belief-input recipe. See
+[`../docs/no_belief_foundation_baseline.md`](../docs/no_belief_foundation_baseline.md) for the
+comparison table.
 
 ## Play a checkpoint
 ```sh

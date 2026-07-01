@@ -1,9 +1,15 @@
-# Foundation 500k run results
+# No-belief foundation 500k run results
 
 Status: current evidence from the completed recipe-fidelity foundation run that ended at
 **500,800 self-play games** on June 30, 2026.
 
 This note records evaluation evidence only. It intentionally omits private operational details.
+
+Retrospective caveat: this run belongs to the `pokezero-no-belief-*` checkpoint family. The belief
+input path was broken, so the policy did **not** receive belief-derived opponent moveset, item, or
+hidden-set candidate features. The evals remain useful as a no-belief baseline, but they should be
+compared against, not merged with, future fixed-belief runs. See
+[`no_belief_foundation_baseline.md`](no_belief_foundation_baseline.md).
 
 ## Source papers
 
@@ -107,7 +113,8 @@ plateaued.
 
 ## Readout
 
-The 500k readout is constructive for the current recipe and should be treated as bullish-but-unproven
+The 500k readout is constructive for the no-belief recipe and should be treated as
+bullish-but-unproven
 evidence for continuing the recipe-faithful run. The clearest leading signal is the max-damage curve:
 it improved materially across the run and was still around the low 50s in the late lower-fidelity
 standard reads. That is evidence that the policy learned useful strength against a simpler fixed
