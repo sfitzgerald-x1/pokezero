@@ -11,7 +11,9 @@
 # Emits: <out_dir>/capA.jsonl and <out_dir>/capB.jsonl (one seat each).
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-FP="$REPO/third_party/foul-play"
+# FOULPLAY_DIR lets the deploy image point at its own foul-play checkout (/opt/foul-play);
+# defaults to the in-repo submodule for local runs.
+FP="${FOULPLAY_DIR:-$REPO/third_party/foul-play}"
 FPVENV="${FOULPLAY_VENV:-$FP/.venv}"
 SHOWDOWN="${POKEZERO_SHOWDOWN_ROOT:?set POKEZERO_SHOWDOWN_ROOT to a pokemon-showdown checkout}"
 N="${1:-10}"; STM="${2:-150}"

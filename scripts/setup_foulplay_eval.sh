@@ -15,7 +15,7 @@ git -C "$REPO" submodule update --init "$FP"
 echo "[2/3] apply foul-play patches (idempotent)"
 # --no-security login patch (local eval servers) + Rest 'cant' crash fix (rest_turns==1 called
 # exit(1), killing long gen3 games with Rest/Sleep Talk; the fix decrements to 0 and continues).
-for patch in foulplay-local-nosec.patch foulplay-rest-cant.patch; do
+for patch in foulplay-local-nosec.patch foulplay-rest-cant.patch foulplay-capture.patch; do
   if git -C "$FP" apply --reverse --check "$REPO/third_party/$patch" 2>/dev/null; then
     echo "      $patch: already applied"
   else
