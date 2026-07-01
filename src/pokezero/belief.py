@@ -473,7 +473,10 @@ class PublicBattleBeliefEngine:
         if not item:
             return
 
-        # The item belongs to the mon the effect applies to (target), else the acting mon.
+        # The item belongs to the mon the effect applies to (target), else the acting mon. In Gen 3
+        # every "[from] item:" surface (Leftovers -heal, Life Orb -damage, -enditem berries/Knock
+        # Off) owns to that mon, so the "[of]" tag is deliberately not consulted; revisit if a later
+        # gen introduces items whose "[from]" effect owns to the "[of]" mon.
         slot = _event_value(event, "target_slot") or _event_value(event, "actor_slot")
         ident = _event_value(event, "target_ident") or _event_value(event, "actor_ident")
         if not slot:
@@ -830,6 +833,7 @@ def _event_value(event: Any, name: str) -> Optional[str]:
 
 # Moves that invoke ANOTHER move. The invoked move is not part of the caller's own set, so it must
 # not be recorded as a revealed move (e.g. Metronome -> Fissure, Sleep Talk -> Spore).
+# (copycat is Gen 4+; harmless to list for a Gen 3 engine — it just never matches.)
 _CALLER_MOVES = frozenset(
     {"metronome", "mirrormove", "sleeptalk", "assist", "naturepower", "copycat"}
 )

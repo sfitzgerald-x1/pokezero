@@ -375,6 +375,19 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(num[ditto_idx][NUMERIC_ACTIVE], 0.0)
         self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)  # Ditto again, not Snorlax
 
+    def test_revealed_moves_survive_bucket_truncation(self) -> None:
+        # A revealed (ground-truth) move must never be evicted by the encoder's alphabetical
+        # sort+truncate, even when possible_moves alone would overflow the 16 buckets and the
+        # revealed move sorts last. (Off-script: the revealed move is not among possible_moves.)
+        from pokezero.showdown import _prioritized_belief_moves, _normalize_identifier
+
+        revealed = ("Zap Cannon",)  # sorts after any "aaa..." possible move
+        possible = tuple(f"aaamove{i:02d}" for i in range(20))  # 20 > 16 buckets
+        result = _prioritized_belief_moves(revealed, possible, 16)
+
+        self.assertIn("Zap Cannon", result)
+        self.assertLessEqual(len({_normalize_identifier(m) for m in result}), 16)
+
     def test_side_conditions_are_player_relative_in_metadata(self) -> None:
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],

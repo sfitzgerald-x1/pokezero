@@ -1253,12 +1253,11 @@ def _encode_pokemon_tokens(
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_item", item_feature_values)
         # Moves mirror ability/item: revealed moves are ground truth (protocol-observed, no belief
         # set source required) and must always be encoded; possible_moves from the set source
-        # augment them when available. Union with revealed first — the encoder dedups/sorts and
-        # truncates to the bucket count (Gen 3 max 14 moves <= 16 buckets, so no reveal is dropped).
+        # augment them. Revealed take priority and are never evicted by the sort/truncate.
         _encode_belief_fact_categories(
             categorical_ids[token_index],
             "possible_move",
-            tuple(revealed_moves) + tuple(possible_moves),
+            _prioritized_belief_moves(revealed_moves, possible_moves, BELIEF_MOVE_BUCKET_COUNT),
         )
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
@@ -1492,6 +1491,28 @@ def _known_or_possible_values(known: str | None, possible: Sequence[str]) -> tup
     if known:
         return (known,)
     return _compact_belief_values(possible)
+
+
+def _prioritized_belief_moves(
+    revealed_moves: Sequence[str], possible_moves: Sequence[str], limit: int
+) -> tuple[str, ...]:
+    """Revealed moves (ground truth) first and never evicted; fill the rest with possible_moves.
+
+    ``_encode_belief_fact_categories`` sorts its values alphabetically and truncates to the bucket
+    count, so passing ``revealed + possible`` unbounded could drop an alphabetically-late REVEALED
+    move once the union exceeds ``limit`` (reachable off-script, where a revealed move is not in
+    possible_moves). Cap the union here — revealed kept in full — so the downstream sort/truncate
+    can never evict a ground-truth reveal."""
+    values = list(revealed_moves)
+    seen = {_normalize_identifier(move) for move in revealed_moves if _normalize_identifier(move)}
+    for move in possible_moves:
+        if len(seen) >= limit:
+            break
+        key = _normalize_identifier(move)
+        if key and key not in seen:
+            values.append(move)
+            seen.add(key)
+    return tuple(values)
 
 
 def _encode_belief_fact_categories(row: list[str], fact_kind: str, values: Sequence[str]) -> None:

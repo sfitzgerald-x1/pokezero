@@ -14,13 +14,16 @@ live env (not a replay fixture) because the batch replay path does not reconstru
 beliefs, so it cannot exercise the belief slots this test exists to guard.
 """
 from __future__ import annotations
+import os
 import random
 from pathlib import Path
 import unittest
 
 from pokezero.local_showdown import LocalShowdownEnv, LocalShowdownConfig
 
-SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+SHOWDOWN_ROOT = Path(
+    os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
+)
 SEEDS = tuple(range(1, 13))  # fixed -> reproducible coverage
 
 NUMERIC_LABELS = {
