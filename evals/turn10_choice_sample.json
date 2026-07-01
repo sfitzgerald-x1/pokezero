@@ -51,8 +51,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Altaria",
+          "item": "leftovers",
+          "ability": "naturalcure",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Dragon Dance",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Earthquake",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Flying 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Fire Blast",
+              "pp": 7,
+              "maxpp": 8,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Altaria",
@@ -195,8 +227,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Banette",
+          "item": "leftovers",
+          "ability": "insomnia",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Shadow Ball",
+              "pp": 21,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Fighting 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Will-O-Wisp",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Knock Off",
+              "pp": 31,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Banette",
@@ -352,9 +416,41 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {
           "atk": -1
+        },
+        "active_detail": {
+          "species": "Salamence",
+          "item": "lumberry",
+          "ability": "intimidate",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Earthquake",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Fire Blast",
+              "pp": 7,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Flying 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Dragon Dance",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
         },
         "self_team": [
           {
@@ -499,8 +595,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Alakazam",
+          "item": "leftovers",
+          "ability": "synchronize",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Calm Mind",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Fire Punch",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Psychic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Recover",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Alakazam",
@@ -639,8 +767,40 @@
         "weather": "sunnyday",
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Raikou",
+          "item": "leftovers",
+          "ability": "pressure",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Sleep Talk",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Rest",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Thunderbolt",
+              "pp": 23,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Ice 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Raikou",
@@ -785,10 +945,42 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {
-          "atk": -1
-        },
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Camerupt",
+          "item": "leftovers",
+          "ability": "magmaarmor",
+          "status": "none",
+          "boosts": {
+            "atk": -1
+          },
+          "moves": [
+            {
+              "name": "Earthquake",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Fire Blast",
+              "pp": 1,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Sleep Talk",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Rest",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Camerupt",
@@ -955,10 +1147,42 @@
         "opponent_side_conditions": [
           "spikes"
         ],
-        "self_boosts": {
-          "spa": 1
-        },
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Electabuzz",
+          "item": "",
+          "ability": "static",
+          "status": "none",
+          "boosts": {
+            "spa": 1
+          },
+          "moves": [
+            {
+              "name": "Fire Punch",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Thunderbolt",
+              "pp": 23,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Substitute",
+              "pp": 12,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Ice Punch",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Electabuzz",
@@ -1102,11 +1326,43 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {
-          "atk": -1,
-          "def": -1
-        },
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Parasect",
+          "item": "leftovers",
+          "ability": "effectspore",
+          "status": "none",
+          "boosts": {
+            "atk": -1,
+            "def": -1
+          },
+          "moves": [
+            {
+              "name": "Stun Spore",
+              "pp": 48,
+              "maxpp": 48,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Bug 70",
+              "pp": 23,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Return 102",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Spore",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Parasect",
@@ -1245,9 +1501,41 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {
           "def": -1
+        },
+        "active_detail": {
+          "species": "Slaking",
+          "item": "choiceband",
+          "ability": "truant",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Hyper Beam",
+              "pp": 8,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Earthquake",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Return 102",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
         },
         "self_team": [
           {
@@ -1371,8 +1659,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Tentacruel",
+          "item": "leftovers",
+          "ability": "liquidooze",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Hydro Pump",
+              "pp": 6,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Ice Beam",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Rapid Spin",
+              "pp": 64,
+              "maxpp": 64,
+              "disabled": false
+            },
+            {
+              "name": "Sludge Bomb",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Tentacruel",
@@ -1508,10 +1828,42 @@
         "weather": "raindance",
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {
-          "atk": 2
-        },
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Absol",
+          "item": "salacberry",
+          "ability": "pressure",
+          "status": "none",
+          "boosts": {
+            "atk": 2
+          },
+          "moves": [
+            {
+              "name": "Shadow Ball",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Fighting 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Double-Edge",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Swords Dance",
+              "pp": 47,
+              "maxpp": 48,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Absol",
@@ -1638,8 +1990,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Gardevoir",
+          "item": "leftovers",
+          "ability": "trace",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Fire Punch",
+              "pp": 23,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Calm Mind",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Psychic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Hypnosis",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Gardevoir",
@@ -1766,8 +2150,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Kecleon",
+          "item": "choiceband",
+          "ability": "colorchange",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Trick",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": true
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 22,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Return 102",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": true
+            },
+            {
+              "name": "Brick Break",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": true
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Kecleon",
@@ -1894,9 +2310,41 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {
           "spd": -1
+        },
+        "active_detail": {
+          "species": "Manectric",
+          "item": "petayaberry",
+          "ability": "static",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Crunch",
+              "pp": 16,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Ice 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Substitute",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Thunderbolt",
+              "pp": 19,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
         },
         "self_team": [
           {
@@ -2055,8 +2503,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Claydol",
+          "item": "leftovers",
+          "ability": "levitate",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Explosion",
+              "pp": 8,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Ice Beam",
+              "pp": 14,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Toxic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Earthquake",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Claydol",
@@ -2200,8 +2680,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Machamp",
+          "item": "choiceband",
+          "ability": "guts",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Hidden Power Ghost 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Rock Slide",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Cross Chop",
+              "pp": 7,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Earthquake",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Machamp",
@@ -2354,8 +2866,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Corsola",
+          "item": "leftovers",
+          "ability": "naturalcure",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Ice Beam",
+              "pp": 14,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Recover",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Toxic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Surf",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Corsola",
@@ -2503,8 +3047,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Banette",
+          "item": "leftovers",
+          "ability": "insomnia",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Will-O-Wisp",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Fighting 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Double-Edge",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Banette",
@@ -2640,8 +3216,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Kangaskhan",
+          "item": "leftovers",
+          "ability": "earlybird",
+          "status": "tox",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Return 102",
+              "pp": 29,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Protect",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Earthquake",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Wish",
+              "pp": 15,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Kangaskhan",
@@ -2775,8 +3383,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Suicune",
+          "item": "leftovers",
+          "ability": "pressure",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Surf",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Sleep Talk",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Rest",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Calm Mind",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Suicune",
@@ -2908,9 +3548,41 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {
           "atk": -1
+        },
+        "active_detail": {
+          "species": "Mightyena",
+          "item": "leftovers",
+          "ability": "intimidate",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Crunch",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Toxic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Hidden Power Fighting 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
         },
         "self_team": [
           {
@@ -3041,9 +3713,41 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {
           "spd": -1
+        },
+        "active_detail": {
+          "species": "Kecleon",
+          "item": "leftovers",
+          "ability": "colorchange",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Thunder Wave",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 21,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Brick Break",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Return 102",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            }
+          ]
         },
         "self_team": [
           {
@@ -3189,8 +3893,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Absol",
+          "item": "choiceband",
+          "ability": "pressure",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Quick Attack",
+              "pp": 45,
+              "maxpp": 48,
+              "disabled": false
+            },
+            {
+              "name": "Shadow Ball",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": true
+            },
+            {
+              "name": "Double-Edge",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": true
+            },
+            {
+              "name": "Hidden Power Fighting 70",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": true
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Absol",
@@ -3319,8 +4055,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Jynx",
+          "item": "leftovers",
+          "ability": "oblivious",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Calm Mind",
+              "pp": 32,
+              "maxpp": 32,
+              "disabled": false
+            },
+            {
+              "name": "Ice Beam",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Psychic",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            },
+            {
+              "name": "Substitute",
+              "pp": 16,
+              "maxpp": 16,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Jynx",
@@ -3466,8 +4234,40 @@
         "weather": null,
         "self_side_conditions": [],
         "opponent_side_conditions": [],
-        "self_boosts": {},
         "opponent_boosts": {},
+        "active_detail": {
+          "species": "Gengar",
+          "item": "leftovers",
+          "ability": "levitate",
+          "status": "none",
+          "boosts": {},
+          "moves": [
+            {
+              "name": "Explosion",
+              "pp": 8,
+              "maxpp": 8,
+              "disabled": false
+            },
+            {
+              "name": "Thunderbolt",
+              "pp": 23,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Ice Punch",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            },
+            {
+              "name": "Will-O-Wisp",
+              "pp": 24,
+              "maxpp": 24,
+              "disabled": false
+            }
+          ]
+        },
         "self_team": [
           {
             "species": "Gengar",

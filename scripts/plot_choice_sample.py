@@ -30,13 +30,55 @@ def _hp_color(hp: float) -> str:
     return "#37a35a" if hp > 0.5 else ("#e0a020" if hp > 0.2 else "#d0402a")
 
 
-def _draw_team(ax, x0, width, header, mons, boosts):
+def _pretty(value) -> str:
+    return str(value).replace("-", " ").title() if value else "—"
+
+
+def _boost_text(boosts) -> str:
+    if not boosts:
+        return "—"
+    return ", ".join(f"{'+' if v > 0 else ''}{v} {k.capitalize()[:3]}" for k, v in boosts.items())
+
+
+def _draw_active_detail(ax, x0, width, detail):
+    """Left column: the active mon's moveset, item, ability, status and stat changes."""
+    if not detail:
+        return
+    ax.text(x0, 0.96, "ACTIVE MON", fontsize=10, fontweight="bold", va="top")
+    y, lh = 0.82, 0.082
+    ax.text(x0, y, detail.get("species") or "?", fontsize=10, fontweight="bold", va="center")
+    y -= lh
+    ax.text(x0, y, f"Item: {_pretty(detail.get('item'))}", fontsize=8.5, va="center")
+    y -= lh
+    ax.text(x0, y, f"Ability: {_pretty(detail.get('ability'))}", fontsize=8.5, va="center")
+    y -= lh
+    status = detail.get("status", "none")
+    ax.text(x0, y, "Status:", fontsize=8.5, va="center")
+    if status and status != "none":
+        ax.text(x0 + width * 0.42, y, status.upper(), fontsize=7.5, color="white", va="center",
+                bbox=dict(boxstyle="round,pad=0.15", fc=STATUS_COLOR.get(status, "#666"), ec="none"))
+    else:
+        ax.text(x0 + width * 0.42, y, "healthy", fontsize=8.5, color="#777", va="center")
+    y -= lh
+    ax.text(x0, y, f"Boosts: {_boost_text(detail.get('boosts'))}", fontsize=8.5, va="center")
+    y -= lh * 1.2
+    ax.text(x0, y, "Moves:", fontsize=8.5, fontweight="bold", va="center")
+    y -= lh
+    for move in detail.get("moves", []):
+        disabled = move.get("disabled")
+        color = "#bbbbbb" if disabled else "#222"
+        pp = f"  ({move['pp']}/{move['maxpp']})" if move.get("maxpp") is not None else ""
+        tag = "  [disabled]" if disabled else ""
+        ax.text(x0 + 0.01, y, f"• {move.get('name') or '?'}{pp}{tag}", fontsize=8, color=color, va="center")
+        y -= lh * 0.92
+
+
+def _draw_team(ax, x0, width, header, mons):
     """Draw one side's team as a stack of name + HP-bar + status rows within [x0, x0+width]."""
     n = len(mons)
-    ax.text(x0, 0.96, header, fontsize=10, fontweight="bold", va="top", transform=ax.transData)
+    ax.text(x0, 0.96, header, fontsize=10, fontweight="bold", va="top")
     top, rowh = 0.82, min(0.16, 0.82 / max(n, 1))
-    name_x = x0 + 0.02
-    bar_x = x0 + width * 0.42
+    bar_x = x0 + width * 0.44
     bar_w = width * 0.30
     for i, mon in enumerate(mons):
         y = top - i * rowh
@@ -44,11 +86,8 @@ def _draw_team(ax, x0, width, header, mons, boosts):
         color = "#111111" if active else ("#b0b0b0" if fainted else "#555555")
         marker = "▶" if active else ("✗" if fainted else "•")
         weight = "bold" if active else "normal"
-        label = mon["species"]
-        if active and boosts:
-            label += "  " + " ".join(f"{'+' if v > 0 else ''}{v}{k.capitalize()[:3]}" for k, v in boosts.items())
         ax.text(x0, y, marker, fontsize=9, color=color, va="center", fontweight=weight)
-        ax.text(name_x, y, label, fontsize=8.5, color=color, va="center", fontweight=weight)
+        ax.text(x0 + 0.02, y, mon["species"], fontsize=8.5, color=color, va="center", fontweight=weight)
         ax.add_patch(Rectangle((bar_x, y - 0.28 * rowh), bar_w, 0.42 * rowh, fill=False, ec="#999", lw=0.6))
         if not fainted and hp > 0:
             ax.add_patch(Rectangle((bar_x, y - 0.28 * rowh), bar_w * hp, 0.42 * rowh, color=_hp_color(hp), lw=0))
@@ -56,7 +95,7 @@ def _draw_team(ax, x0, width, header, mons, boosts):
         status = mon["status"]
         if status and status != "none":
             ax.text(
-                bar_x + bar_w + 0.055, y, status.upper(), fontsize=7, color="white", va="center",
+                bar_x + bar_w + 0.05, y, status.upper(), fontsize=7, color="white", va="center",
                 bbox=dict(boxstyle="round,pad=0.15", fc=STATUS_COLOR.get(status, "#666"), ec="none"),
             )
 
@@ -65,8 +104,9 @@ def _draw_state(ax, snapshot):
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
-    _draw_team(ax, 0.0, 0.48, "YOU (p1)", snapshot["self_team"], snapshot.get("self_boosts"))
-    _draw_team(ax, 0.52, 0.48, "OPPONENT (revealed)", snapshot["opponent_team"], snapshot.get("opponent_boosts"))
+    _draw_active_detail(ax, 0.0, 0.26, snapshot.get("active_detail"))
+    _draw_team(ax, 0.30, 0.33, "YOU (p1)", snapshot["self_team"])
+    _draw_team(ax, 0.66, 0.33, "OPPONENT (revealed)", snapshot["opponent_team"])
     field = []
     if snapshot.get("weather"):
         field.append(f"weather:{snapshot['weather']}")
@@ -74,7 +114,7 @@ def _draw_state(ax, snapshot):
         field.append("you:" + ",".join(snapshot["self_side_conditions"]))
     if snapshot.get("opponent_side_conditions"):
         field.append("opp:" + ",".join(snapshot["opponent_side_conditions"]))
-    ax.text(0.0, -0.02, "field:  " + ("  ·  ".join(field) if field else "none"),
+    ax.text(0.30, -0.02, "field:  " + ("  ·  ".join(field) if field else "none"),
             fontsize=8, color="#555", va="top")
 
 
@@ -95,9 +135,10 @@ def _plot_one(state, checkpoints, colors, min_prob):
 
     if snapshot:
         team_rows = max(len(snapshot["self_team"]), len(snapshot["opponent_team"]))
-        state_h = 0.32 * team_rows + 0.9
-        fig = plt.figure(figsize=(9.0, state_h + bars_h))
-        gs = fig.add_gridspec(2, 1, height_ratios=[state_h, bars_h], hspace=0.32)
+        detail_rows = 6 + len(snapshot.get("active_detail", {}).get("moves", []))
+        state_h = 0.30 * max(team_rows, detail_rows) + 0.8
+        fig = plt.figure(figsize=(12.0, state_h + bars_h))
+        gs = fig.add_gridspec(2, 1, height_ratios=[state_h, bars_h], hspace=0.30)
         _draw_state(fig.add_subplot(gs[0]), snapshot)
         ax = fig.add_subplot(gs[1])
     else:

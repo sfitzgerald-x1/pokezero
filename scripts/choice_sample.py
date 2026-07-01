@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT
@@ -43,15 +44,52 @@ def _mon_snapshot(mon) -> dict:
     }
 
 
+def _active_detail(state) -> dict:
+    """Our active mon's full context from the request: moveset (with pp/disabled), item,
+    ability, status, and stat changes."""
+    request = state.request if isinstance(state.request, Mapping) else {}
+    active = request.get("active")
+    moves = []
+    if isinstance(active, (list, tuple)) and active and isinstance(active[0], Mapping):
+        for move in active[0].get("moves") or []:
+            if isinstance(move, Mapping):
+                moves.append(
+                    {
+                        "name": move.get("move") or move.get("id"),
+                        "pp": move.get("pp"),
+                        "maxpp": move.get("maxpp"),
+                        "disabled": bool(move.get("disabled")),
+                    }
+                )
+    item = ability = None
+    side = request.get("side") if isinstance(request, Mapping) else None
+    roster = side.get("pokemon") if isinstance(side, Mapping) else None
+    if isinstance(roster, (list, tuple)):
+        for mon in roster:
+            if isinstance(mon, Mapping) and mon.get("active"):
+                item = mon.get("item")
+                ability = mon.get("baseAbility") or mon.get("ability")
+                break
+    active_mon = state.self_active
+    return {
+        "species": active_mon.species if active_mon is not None else None,
+        "item": item,
+        "ability": ability,
+        "status": active_status(active_mon.condition) if active_mon is not None else "none",
+        "boosts": {k: v for k, v in state.self_active_boosts.items() if v},
+        "moves": moves,
+    }
+
+
 def _state_snapshot(state) -> dict:
-    """Board context for reading the plot: both teams (HP/status), active boosts, field."""
+    """Board context for reading the plot: both teams (HP/status), active-mon detail, field."""
     return {
         "turn": state.turn_number,
         "weather": state.weather,
         "self_side_conditions": list(state.self_side_conditions),
         "opponent_side_conditions": list(state.opponent_side_conditions),
-        "self_boosts": {k: v for k, v in state.self_active_boosts.items() if v},
         "opponent_boosts": {k: v for k, v in state.opponent_active_boosts.items() if v},
+        "active_detail": _active_detail(state),
         "self_team": [_mon_snapshot(m) for m in state.self_team],
         "opponent_team": [_mon_snapshot(m) for m in state.opponent_team],
     }
