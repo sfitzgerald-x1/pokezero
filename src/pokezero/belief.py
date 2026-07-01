@@ -40,6 +40,10 @@ class CandidateSetSummary:
     possible_moves: tuple[str, ...] = ()
     candidate_variants: tuple[Mapping[str, Any], ...] = ()
     source_metadata: Mapping[str, Any] | None = None
+    # True when the reveals matched no known set (Showdown randbats drift, an unfiltered called or
+    # copied move, ...) and we fell back to the unconstrained species pool. The state is "maximally
+    # uncertain", NOT "certain": uncertainty is forced to 1.0 in that case.
+    inconsistent: bool = False
 
 
 class PokemonSetSource(Protocol):
@@ -75,6 +79,11 @@ class RevealedPokemonBelief:
     candidate_variants: tuple[Mapping[str, Any], ...] = ()
     source_metadata: Mapping[str, Any] | None = None
     evidence: tuple[BeliefEvidence, ...] = ()
+    # Transform (Ditto): while transformed the mon fights as ``transform_species`` — its stats,
+    # types and moves are the copied target's, NOT its own set. Consumers should read stats/types
+    # from ``transform_species`` and must not treat moves used while transformed as its real set.
+    transformed: bool = False
+    transform_species: Optional[str] = None
 
     @property
     def key(self) -> str:
@@ -99,6 +108,8 @@ class RevealedPokemonBelief:
             "candidate_variants": [dict(variant) for variant in self.candidate_variants],
             "source_metadata": dict(self.source_metadata) if self.source_metadata else None,
             "evidence": [item.to_payload() for item in self.evidence],
+            "transformed": self.transformed,
+            "transform_species": self.transform_species,
         }
 
 
@@ -314,6 +325,7 @@ class PublicBattleBeliefEngine:
         elif self._pending_switches:
             self._resolve_pending_switches_as_no_trigger(raw_line)
         self._record_raw_ability_reveal(event)
+        self._record_item_reveal(event)
 
         if event_type in {"switch", "drag", "replace"} and actor_slot and primary:
             self._mark_side_inactive(actor_slot)
@@ -333,10 +345,37 @@ class PublicBattleBeliefEngine:
                 )
             return
 
+        if event_type == "-transform" and actor_slot and primary:
+            # ``|-transform|p1a: Ditto|p2a: Blissey`` — the actor now fights as the target. Record
+            # the copied identity so consumers read stats/types from it; moves used while
+            # transformed are suppressed below (they are the target's, not the actor's set).
+            species = self._active_species(actor_slot) or _species_from_ident(actor_ident)
+            target_species = _species_from_ident(primary)
+            if species and target_species:
+                belief = self._upsert(showdown_slot=actor_slot, species=species)
+                self._replace_belief(
+                    belief,
+                    transformed=True,
+                    transform_species=target_species,
+                    evidence=_append_evidence(
+                        belief.evidence,
+                        BeliefEvidence(
+                            kind="transform",
+                            detail=f"Transformed into {target_species}; copied moves are not its set.",
+                            source_line=raw_line,
+                        ),
+                    ),
+                )
+            return
+
         if event_type == "move" and actor_slot and primary:
             species = self._active_species(actor_slot) or _species_from_ident(actor_ident)
             if species:
                 belief = self._upsert(showdown_slot=actor_slot, species=species)
+                # A move called by another move (Metronome, Sleep Talk, ...) or used while
+                # transformed (Ditto) is not part of this mon's own set — do not record it.
+                if _called_move_source(raw_line) in _CALLER_MOVES or belief.transformed:
+                    return
                 revealed_moves = _append_unique(belief.revealed_moves, str(primary))
                 evidence = belief.evidence
                 if revealed_moves != belief.revealed_moves:
@@ -412,6 +451,54 @@ class PublicBattleBeliefEngine:
                     ),
                 )
 
+    def _record_item_reveal(self, event: Any) -> None:
+        """Record an item reveal that the explicit ``-item`` branch misses.
+
+        Items are revealed three ways in the protocol: ``|-item|`` (Frisk/Trick/Trace — handled in
+        ingest_event), ``|-enditem|`` (a berry is eaten, or the item is knocked off / consumed), and
+        inline ``[from] item: X`` tags on other events (``|-heal|...|[from] item: Leftovers``,
+        ``|-damage|...|[from] item: Life Orb``). The last two are how the most common Gen 3 items
+        (Leftovers, Life Orb, berries) actually surface, so without this they never register."""
+        event_type = _event_value(event, "event_type")
+        raw_line = _event_value(event, "raw_line") or ""
+        primary = _event_value(event, "primary")
+
+        item: Optional[str] = None
+        if event_type == "-enditem" and primary:
+            item = primary  # the ended/consumed/removed item names itself
+        else:
+            marker = "[from] item:"
+            if marker in raw_line:
+                item = raw_line.split(marker, 1)[1].split("|")[0].strip()
+        if not item:
+            return
+
+        # The item belongs to the mon the effect applies to (target), else the acting mon. In Gen 3
+        # every "[from] item:" surface (Leftovers -heal, Life Orb -damage, -enditem berries/Knock
+        # Off) owns to that mon, so the "[of]" tag is deliberately not consulted; revisit if a later
+        # gen introduces items whose "[from]" effect owns to the "[of]" mon.
+        slot = _event_value(event, "target_slot") or _event_value(event, "actor_slot")
+        ident = _event_value(event, "target_ident") or _event_value(event, "actor_ident")
+        if not slot:
+            return
+        belief = self._target_belief(slot, ident)
+        if belief is None:
+            return
+        if _normalize_identifier(belief.revealed_item or "") == _normalize_identifier(item):
+            return  # already known
+        self._replace_belief(
+            belief,
+            revealed_item=item,
+            evidence=_append_evidence(
+                belief.evidence,
+                BeliefEvidence(
+                    kind="revealed-item",
+                    detail=f"Observed item {item} via {event_type}; incompatible set variants were removed.",
+                    source_line=raw_line,
+                ),
+            ),
+        )
+
     def resolve_pending_switches_at_boundary(self) -> None:
         self._resolve_pending_switches_as_no_trigger(None)
 
@@ -479,8 +566,13 @@ class PublicBattleBeliefEngine:
         return belief
 
     def _mark_side_inactive(self, showdown_slot: str) -> None:
+        # Leaving the field ends Transform: the mon reverts to itself, so clear the copied identity
+        # (and the known-stats it implied). A fainted mon keeps its last state — we stop caring once
+        # it is KO'd.
         self._sides[showdown_slot] = [
-            replace(pokemon, active=False)
+            replace(pokemon, active=False, transformed=False, transform_species=None)
+            if pokemon.transformed
+            else replace(pokemon, active=False)
             for pokemon in self._sides.get(showdown_slot, [])
         ]
 
@@ -737,6 +829,32 @@ def _event_value(event: Any, name: str) -> Optional[str]:
     else:
         value = getattr(event, name, None)
     return str(value) if value is not None else None
+
+
+# Moves that invoke ANOTHER move. The invoked move is not part of the caller's own set, so it must
+# not be recorded as a revealed move (e.g. Metronome -> Fissure, Sleep Talk -> Spore).
+# (copycat is Gen 4+; harmless to list for a Gen 3 engine — it just never matches.)
+_CALLER_MOVES = frozenset(
+    {"metronome", "mirrormove", "sleeptalk", "assist", "naturepower", "copycat"}
+)
+
+
+def _called_move_source(raw_line: Optional[str]) -> Optional[str]:
+    """Normalized caller move if a ``|move|`` line was invoked by another move, else None.
+
+    Handles both protocol forms — ``[from]move: Sleep Talk`` and the bare ``[from] Sleep Talk`` —
+    and deliberately does NOT match ``[from]lockedmove`` (Thrash/Outrage continuations ARE the
+    mon's own move) or other non-caller effects."""
+    if not raw_line:
+        return None
+    marker = raw_line.find("[from]")
+    if marker == -1:
+        return None
+    tag = raw_line[marker + len("[from]"):].split("|")[0].strip()
+    lowered = tag.lower()
+    if lowered.startswith("move:"):
+        tag = tag[len("move:"):].strip()
+    return _normalize_identifier(tag)
 
 
 def _append_unique(values: tuple[str, ...], value: str) -> tuple[str, ...]:

@@ -1222,9 +1222,20 @@ def _encode_pokemon_tokens(
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
         uncertainty = belief.uncertainty if belief is not None else 1.0
-        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
-        _encode_species_type_categories(categorical_ids[token_index], dex, candidate.species)
-        _encode_pokemon_stats(numeric_features[token_index], dex, candidate.species, candidate.details)
+        # A transformed mon (Ditto) fights as its target: encode species, types and base stats from
+        # the copied identity so the model sees the effective battler, not Ditto's base 48-across.
+        # Transform copies everything EXCEPT HP and level, so base HP stays the original's (a
+        # transformed Ditto is still frail) and level comes from the original's details.
+        transformed = belief is not None and belief.transformed and bool(belief.transform_species)
+        enc_species = belief.transform_species if transformed else candidate.species
+        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{enc_species}")
+        _encode_species_type_categories(categorical_ids[token_index], dex, enc_species)
+        _encode_pokemon_stats(numeric_features[token_index], dex, enc_species, candidate.details)
+        if transformed and dex is not None:
+            original = dex.species_info(candidate.species)
+            original_hp = original.base_stats.get("hp") if original is not None else None
+            if original_hp:
+                _set_numeric(numeric_features[token_index], NUMERIC_BASE_HP, min(1.0, float(original_hp) / 200.0))
         _encode_actual_stats(numeric_features[token_index], candidate.stats)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
@@ -1240,7 +1251,14 @@ def _encode_pokemon_tokens(
         # (The SLOT column stays in use on action tokens for move_slot/switch_slot.)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_ability", ability_feature_values)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_item", item_feature_values)
-        _encode_belief_fact_categories(categorical_ids[token_index], "possible_move", possible_moves)
+        # Moves mirror ability/item: revealed moves are ground truth (protocol-observed, no belief
+        # set source required) and must always be encoded; possible_moves from the set source
+        # augment them. Revealed take priority and are never evicted by the sort/truncate.
+        _encode_belief_fact_categories(
+            categorical_ids[token_index],
+            "possible_move",
+            _prioritized_belief_moves(revealed_moves, possible_moves, BELIEF_MOVE_BUCKET_COUNT),
+        )
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 0.0 if condition.fainted else 1.0)
@@ -1473,6 +1491,28 @@ def _known_or_possible_values(known: str | None, possible: Sequence[str]) -> tup
     if known:
         return (known,)
     return _compact_belief_values(possible)
+
+
+def _prioritized_belief_moves(
+    revealed_moves: Sequence[str], possible_moves: Sequence[str], limit: int
+) -> tuple[str, ...]:
+    """Revealed moves (ground truth) first and never evicted; fill the rest with possible_moves.
+
+    ``_encode_belief_fact_categories`` sorts its values alphabetically and truncates to the bucket
+    count, so passing ``revealed + possible`` unbounded could drop an alphabetically-late REVEALED
+    move once the union exceeds ``limit`` (reachable off-script, where a revealed move is not in
+    possible_moves). Cap the union here — revealed kept in full — so the downstream sort/truncate
+    can never evict a ground-truth reveal."""
+    values = list(revealed_moves)
+    seen = {_normalize_identifier(move) for move in revealed_moves if _normalize_identifier(move)}
+    for move in possible_moves:
+        if len(seen) >= limit:
+            break
+        key = _normalize_identifier(move)
+        if key and key not in seen:
+            values.append(move)
+            seen.add(key)
+    return tuple(values)
 
 
 def _encode_belief_fact_categories(row: list[str], fact_kind: str, values: Sequence[str]) -> None:

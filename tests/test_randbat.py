@@ -133,6 +133,30 @@ class Gen3RandbatSourceTest(unittest.TestCase):
         self.assertIn("psychic", summary.possible_moves)
         self.assertNotIn("nightshade", summary.possible_moves)
 
+    def test_off_script_reveal_falls_back_to_full_pool(self) -> None:
+        # A move no Xatu set has: Showdown randbats drift from our snapshot, or an unfiltered
+        # called/copied move. Instead of returning an empty, uncertainty-0.0 state (which reads as
+        # "fully certain"), degrade to the unconstrained pool at maximum uncertainty.
+        summary = source().summarize(
+            format_id="gen3randombattle",
+            species="Xatu",
+            revealed_moves=("Surf",),
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertTrue(summary.inconsistent)
+        self.assertEqual(summary.uncertainty, 1.0)
+        self.assertGreater(summary.candidate_count, 0)  # not the misleading empty/"certain" state
+        self.assertIn("psychic", summary.possible_moves)  # Xatu's real moves are still offered
+
+    def test_consistent_reveal_is_not_flagged_inconsistent(self) -> None:
+        summary = source().summarize(
+            format_id="gen3randombattle",
+            species="Xatu",
+            revealed_moves=("Psychic",),
+        )
+        self.assertFalse(summary.inconsistent)
+
     def test_generic_hidden_power_reveal_matches_typed_hidden_power_variants(self) -> None:
         summary = source().summarize(
             format_id="gen3randombattle",

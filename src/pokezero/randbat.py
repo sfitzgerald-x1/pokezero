@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .belief import CandidateSetSummary
@@ -325,11 +326,7 @@ class Gen3RandbatSource:
             revealed_item=revealed_item,
             ruled_out_abilities=ruled_out_abilities,
         )
-        possible_abilities = _stable_unique(variant.ability for variant in surviving if variant.ability)
-        possible_items = _stable_unique(variant.item for variant in surviving if variant.item)
-        possible_moves = _stable_unique(move for variant in surviving for move in variant.moves)
         total = max(1, len(universe.variants))
-        count = len(surviving)
         notes: list[str] = []
         if revealed_moves:
             notes.append(f"Filtered by revealed moves: {', '.join(revealed_moves)}.")
@@ -339,16 +336,34 @@ class Gen3RandbatSource:
             notes.append(f"Filtered by revealed item: {revealed_item}.")
         if ruled_out_abilities:
             notes.append(f"Ruled out abilities: {', '.join(ruled_out_abilities)}.")
+
+        # Off-script: the reveals are consistent with NO known set. This happens if Showdown's
+        # randbats sets drift from our snapshot, or an unfiltered called/copied move slipped in.
+        # Degrade to the unconstrained species pool (assume anything in the universe is possible)
+        # rather than returning an empty, uncertainty-0.0 state that reads as "fully certain".
+        inconsistent = not surviving and (
+            bool(revealed_moves) or bool(revealed_ability) or bool(revealed_item) or bool(ruled_out_abilities)
+        )
+        if inconsistent:
+            surviving = universe.variants
+            notes.append("Reveals matched no known set (off-script); fell back to the full species pool.")
+
+        possible_abilities = _stable_unique(variant.ability for variant in surviving if variant.ability)
+        possible_items = _stable_unique(variant.item for variant in surviving if variant.item)
+        possible_moves = _stable_unique(move for variant in surviving for move in variant.moves)
+        count = len(surviving)
         return CandidateSetSummary(
             species=universe.species,
             candidate_count=count,
-            uncertainty=count / total,
+            # Off-script means maximally uncertain, not certain — force uncertainty high.
+            uncertainty=1.0 if inconsistent else count / total,
             notes=tuple(notes),
             possible_abilities=tuple(possible_abilities),
             possible_items=tuple(possible_items),
             possible_moves=tuple(possible_moves),
             candidate_variants=tuple(variant.to_summary() for variant in surviving),
             source_metadata=self.metadata.to_payload(),
+            inconsistent=inconsistent,
         )
 
 
@@ -756,3 +771,24 @@ def _normalize_move(value: str) -> str:
 
 def _normalize_id(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+_SOURCE_CACHE: dict[Path, "Gen3RandbatSource"] = {}
+_SOURCE_CACHE_LOCK = threading.Lock()
+
+
+def load_gen3_randbat_source_cached(showdown_root: Path | str) -> "Gen3RandbatSource":
+    """Process-wide cached ``Gen3RandbatSource``.
+
+    The source is immutable and heavy to build (it enumerates every species' candidate set
+    universe), and belief engines share it read-only across battles (see ``resolved_player_view``).
+    A collector creates one env per battle, so without caching each would rebuild the universe;
+    this mirrors ``load_showdown_dex_cached`` so the cost is paid once per (root, process)."""
+    root = Path(showdown_root).expanduser().resolve()
+    with _SOURCE_CACHE_LOCK:
+        cached = _SOURCE_CACHE.get(root)
+        if cached is not None:
+            return cached
+    loaded = Gen3RandbatSource.from_showdown_root(root, use_cache=True)
+    with _SOURCE_CACHE_LOCK:
+        return _SOURCE_CACHE.setdefault(root, loaded)

@@ -266,6 +266,128 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.metadata["action_candidates"][0]["move_name"], "flamethrower")
         self.assertEqual(observation.metadata["action_candidates"][4]["pokemon"]["species"], "Snorlax")
 
+    def test_revealed_opponent_moves_populate_move_buckets_without_set_source(self) -> None:
+        # Regression: revealed opponent moves are protocol ground truth and must be encoded even
+        # when the belief set source is off (possible_moves empty). Previously the move buckets were
+        # fed only possible_moves, so revealed moves never reached the persistent per-mon token —
+        # the model saw the revealed-move COUNT but never which moves.
+        from pokezero.showdown import CATEGORY_BELIEF_MOVE_OFFSET
+
+        replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+        xatu = state.belief_view.opponent_pokemon[1]
+        self.assertEqual(xatu.revealed_moves, ("Psychic",))
+        self.assertEqual(xatu.possible_moves, ())  # no set source wired in this path
+
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        xatu_row = observation.categorical_ids[opponent_offset + 1]
+        self.assertEqual(
+            xatu_row[CATEGORY_BELIEF_MOVE_OFFSET],
+            stable_category_id("belief:possible_move:psychic"),
+        )
+
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_transformed_ditto_encodes_target_stats_but_original_hp(self) -> None:
+        # Ditto transforms into our Snorlax. Transform copies battle stats + types but NOT HP, so the
+        # opponent Ditto token must show Snorlax's Attack yet keep Ditto's (frail) base HP.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import NUMERIC_ACTIVE
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+            "|switch|p2a: Ditto|Ditto, L78|100/100",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Snorlax",
+            "|-transform|p2a: Ditto|p1a: Snorlax",
+            "|turn|2",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+        obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        ditto = next(
+            obs.numeric_features[opponent_offset + i]
+            for i in range(OPPONENT_POKEMON_TOKEN_COUNT)
+            if obs.numeric_features[opponent_offset + i][NUMERIC_ACTIVE] == 1.0
+        )
+        self.assertAlmostEqual(ditto[NUMERIC_BASE_ATK], 110 / 200)  # Snorlax's attack (copied)
+        self.assertAlmostEqual(ditto[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP (NOT copied)
+
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_ditto_transform_lifecycle_encoding_coverage(self) -> None:
+        # Full Ditto lifecycle through the production encoder: while transformed it shows the
+        # target's battle stats (Snorlax Attack) with its own HP; once it switches out it reverts
+        # to Ditto's own stats. Guards both the transform masking and the switch-out reset.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import CATEGORY_PRIMARY, NUMERIC_ACTIVE
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        base = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+            "|switch|p2a: Ditto|Ditto, L78|100/100",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Snorlax",
+            "|-transform|p2a: Ditto|p1a: Snorlax",
+            "|turn|2",
+        ]
+        after_switch = base + [
+            "|switch|p2a: Gengar|Gengar, L78|100/100",  # Ditto leaves -> reverts on the bench
+            "|turn|3",
+        ]
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+
+        def opponent_tokens(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+            return [obs.numeric_features[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], \
+                   [obs.categorical_ids[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], obs
+
+        # While transformed: the active opponent (Ditto) fights as Snorlax.
+        num, _, _ = opponent_tokens(base)
+        transformed_token = next(row for row in num if row[NUMERIC_ACTIVE] == 1.0)
+        self.assertAlmostEqual(transformed_token[NUMERIC_BASE_ATK], 110 / 200)  # Snorlax
+        self.assertAlmostEqual(transformed_token[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP
+
+        # After switch-out: the benched Ditto has reverted to itself.
+        num, cat, _ = opponent_tokens(after_switch)
+        ditto_species = vocab.encode("species:Ditto")
+        ditto_idx = next(i for i, row in enumerate(cat) if row[CATEGORY_PRIMARY] == ditto_species)
+        self.assertEqual(num[ditto_idx][NUMERIC_ACTIVE], 0.0)
+        self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)  # Ditto again, not Snorlax
+
+    def test_revealed_moves_survive_bucket_truncation(self) -> None:
+        # A revealed (ground-truth) move must never be evicted by the encoder's alphabetical
+        # sort+truncate, even when possible_moves alone would overflow the 16 buckets and the
+        # revealed move sorts last. (Off-script: the revealed move is not among possible_moves.)
+        from pokezero.showdown import _prioritized_belief_moves, _normalize_identifier
+
+        revealed = ("Zap Cannon",)  # sorts after any "aaa..." possible move
+        possible = tuple(f"aaamove{i:02d}" for i in range(20))  # 20 > 16 buckets
+        result = _prioritized_belief_moves(revealed, possible, 16)
+
+        self.assertIn("Zap Cannon", result)
+        self.assertLessEqual(len({_normalize_identifier(m) for m in result}), 16)
+
     def test_side_conditions_are_player_relative_in_metadata(self) -> None:
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],
