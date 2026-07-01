@@ -67,6 +67,93 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
         self.assertEqual(blissey.revealed_item, "Leftovers")
         self.assertEqual(skarmory.revealed_item, "Salac Berry")
 
+    def test_transform_records_target_and_suppresses_copied_moves(self) -> None:
+        # Ditto transforms into Blissey and then "uses" Blissey's moves. Those copied moves are not
+        # part of Ditto's own set and must not be recorded (they would collapse candidate inference).
+        lines = [
+            "|start",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            "|switch|p2a: Blissey|Blissey, F|352/352",
+            "|turn|1",
+            "|move|p1a: Ditto|Transform|p2a: Blissey",
+            "|-transform|p1a: Ditto|p2a: Blissey",
+            "|turn|2",
+            "|move|p1a: Ditto|Ice Beam|p2a: Blissey",
+            "|turn|3",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        ditto = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Ditto")
+
+        self.assertTrue(ditto.transformed)
+        self.assertEqual(ditto.transform_species, "Blissey")
+        self.assertIn("Transform", ditto.revealed_moves)  # its own move, used directly
+        self.assertNotIn("Ice Beam", ditto.revealed_moves)  # copied — not Ditto's set
+
+    def test_transform_flag_resets_when_the_mon_switches_back_in(self) -> None:
+        lines = [
+            "|start",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",
+            "|switch|p2a: Blissey|Blissey, F|352/352",
+            "|turn|1",
+            "|move|p1a: Ditto|Transform|p2a: Blissey",
+            "|-transform|p1a: Ditto|p2a: Blissey",
+            "|turn|2",
+            "|switch|p1a: Starmie|Starmie, L78|100/100",  # Ditto leaves the field
+            "|turn|3",
+            "|switch|p1a: Ditto|Ditto, L78|100/100",  # ...and returns as its true self
+            "|turn|4",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        ditto = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Ditto")
+
+        self.assertFalse(ditto.transformed)
+        self.assertIsNone(ditto.transform_species)
+
+    def test_called_moves_are_not_recorded_as_revealed(self) -> None:
+        # Metronome / Sleep Talk invoke another move; the invoked move is not part of the caller's
+        # set. Both the "[from]move: X" and bare "[from] X" protocol forms must be guarded.
+        lines = [
+            "|start",
+            "|switch|p1a: Clefable|Clefable, F|100/100",
+            "|switch|p2a: Blissey|Blissey, F|352/352",
+            "|turn|1",
+            "|move|p1a: Clefable|Metronome|p1a: Clefable",
+            "|move|p1a: Clefable|Fissure|p2a: Blissey|[from]move: Metronome",
+            "|turn|2",
+            "|move|p1a: Clefable|Sleep Talk|p1a: Clefable",
+            "|move|p1a: Clefable|Ice Beam|p2a: Blissey|[from] Sleep Talk",
+            "|turn|3",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        clefable = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Clefable")
+
+        self.assertIn("Metronome", clefable.revealed_moves)
+        self.assertIn("Sleep Talk", clefable.revealed_moves)
+        self.assertNotIn("Fissure", clefable.revealed_moves)
+        self.assertNotIn("Ice Beam", clefable.revealed_moves)
+
+    def test_locked_move_continuation_is_still_recorded(self) -> None:
+        # "[from]lockedmove" (Thrash/Outrage/Petal Dance) IS the mon's own move continuing — it must
+        # NOT be treated as a called move.
+        lines = [
+            "|start",
+            "|switch|p1a: Gyarados|Gyarados, M|100/100",
+            "|switch|p2a: Blissey|Blissey, F|352/352",
+            "|turn|1",
+            "|move|p1a: Gyarados|Thrash|p2a: Blissey",
+            "|turn|2",
+            "|move|p1a: Gyarados|Thrash|p2a: Blissey|[from]lockedmove",
+            "|turn|3",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        gyarados = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Gyarados")
+
+        self.assertIn("Thrash", gyarados.revealed_moves)
+
     def test_player_view_is_overlay_ready_and_player_relative(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
 

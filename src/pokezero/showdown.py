@@ -1222,9 +1222,13 @@ def _encode_pokemon_tokens(
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
         uncertainty = belief.uncertainty if belief is not None else 1.0
-        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{candidate.species}")
-        _encode_species_type_categories(categorical_ids[token_index], dex, candidate.species)
-        _encode_pokemon_stats(numeric_features[token_index], dex, candidate.species, candidate.details)
+        # A transformed mon (Ditto) fights as its target: encode species, types and base stats from
+        # the copied identity so the model sees the effective battler, not Ditto's base 48-across.
+        transformed = belief is not None and belief.transformed and bool(belief.transform_species)
+        enc_species = belief.transform_species if transformed else candidate.species
+        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{enc_species}")
+        _encode_species_type_categories(categorical_ids[token_index], dex, enc_species)
+        _encode_pokemon_stats(numeric_features[token_index], dex, enc_species, candidate.details)
         _encode_actual_stats(numeric_features[token_index], candidate.stats)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)
