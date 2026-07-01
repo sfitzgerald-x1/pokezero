@@ -57,6 +57,7 @@
           "item": "leftovers",
           "ability": "naturalcure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -91,7 +92,8 @@
             "hp": 0.774,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Sneasel",
@@ -156,7 +158,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -233,6 +236,7 @@
           "item": "leftovers",
           "ability": "insomnia",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -267,7 +271,8 @@
             "hp": 0.723,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Sunflora",
@@ -339,7 +344,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -424,6 +430,7 @@
           "item": "lumberry",
           "ability": "intimidate",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -458,7 +465,8 @@
             "hp": 0.19,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Skarmory",
@@ -502,7 +510,8 @@
             "hp": 0.567,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Meganium",
@@ -601,6 +610,7 @@
           "item": "leftovers",
           "ability": "synchronize",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -635,7 +645,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Pidgeot",
@@ -700,7 +711,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -773,6 +785,7 @@
           "item": "leftovers",
           "ability": "pressure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -807,7 +820,8 @@
             "hp": 0.333,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Groudon",
@@ -872,7 +886,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -951,6 +966,7 @@
           "item": "leftovers",
           "ability": "magmaarmor",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {
             "atk": -1
           },
@@ -987,7 +1003,8 @@
             "hp": 0.349,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Beautifly",
@@ -1031,7 +1048,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Spinda",
@@ -1153,6 +1171,7 @@
           "item": "",
           "ability": "static",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {
             "spa": 1
           },
@@ -1189,7 +1208,8 @@
             "hp": 0.037,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Houndoom",
@@ -1247,7 +1267,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -1332,6 +1353,7 @@
           "item": "leftovers",
           "ability": "effectspore",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {
             "atk": -1,
             "def": -1
@@ -1369,7 +1391,8 @@
             "hp": 0.736,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Charizard",
@@ -1434,7 +1457,8 @@
             "hp": 0.787,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -1509,6 +1533,7 @@
           "item": "choiceband",
           "ability": "truant",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -1543,7 +1568,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Mightyena",
@@ -1594,7 +1620,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -1665,6 +1692,7 @@
           "item": "leftovers",
           "ability": "liquidooze",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -1699,7 +1727,8 @@
             "hp": 0.41,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Tropius",
@@ -1757,7 +1786,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -1834,6 +1864,7 @@
           "item": "salacberry",
           "ability": "pressure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {
             "atk": 2
           },
@@ -1870,7 +1901,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Jirachi",
@@ -1921,7 +1953,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -1996,6 +2029,7 @@
           "item": "leftovers",
           "ability": "trace",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2030,7 +2064,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Electrode",
@@ -2081,7 +2116,8 @@
             "hp": 0.919,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Golem",
@@ -2156,6 +2192,7 @@
           "item": "choiceband",
           "ability": "colorchange",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2190,7 +2227,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Slaking",
@@ -2241,7 +2279,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -2318,6 +2357,7 @@
           "item": "petayaberry",
           "ability": "static",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2352,7 +2392,8 @@
             "hp": 0.512,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Altaria",
@@ -2417,7 +2458,8 @@
             "hp": 0.663,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Grumpig",
@@ -2509,6 +2551,7 @@
           "item": "leftovers",
           "ability": "levitate",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2543,7 +2586,8 @@
             "hp": 0.117,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Metagross",
@@ -2601,7 +2645,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -2686,6 +2731,7 @@
           "item": "choiceband",
           "ability": "guts",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2720,7 +2766,8 @@
             "hp": 0.734,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Golem",
@@ -2785,7 +2832,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Hypno",
@@ -2872,6 +2920,7 @@
           "item": "leftovers",
           "ability": "naturalcure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -2906,7 +2955,8 @@
             "hp": 0.722,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Blastoise",
@@ -2978,7 +3028,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -3053,6 +3104,7 @@
           "item": "leftovers",
           "ability": "insomnia",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -3087,7 +3139,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Exeggutor",
@@ -3159,7 +3212,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -3222,6 +3276,7 @@
           "item": "leftovers",
           "ability": "earlybird",
           "status": "tox",
+          "toxic_stage": 3,
           "boosts": {},
           "moves": [
             {
@@ -3256,7 +3311,8 @@
             "hp": 0.519,
             "status": "tox",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 3
           },
           {
             "species": "Sceptile",
@@ -3307,7 +3363,8 @@
             "hp": 0.322,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Typhlosion",
@@ -3389,6 +3446,7 @@
           "item": "leftovers",
           "ability": "pressure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -3423,7 +3481,8 @@
             "hp": 0.974,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Blaziken",
@@ -3481,7 +3540,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -3556,6 +3616,7 @@
           "item": "leftovers",
           "ability": "intimidate",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -3590,7 +3651,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Kabutops",
@@ -3648,7 +3710,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -3721,6 +3784,7 @@
           "item": "leftovers",
           "ability": "colorchange",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -3755,7 +3819,8 @@
             "hp": 0.419,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Tangela",
@@ -3834,7 +3899,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -3899,6 +3965,7 @@
           "item": "choiceband",
           "ability": "pressure",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -3933,7 +4000,8 @@
             "hp": 0.027,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Marowak",
@@ -3984,7 +4052,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },
@@ -4061,6 +4130,7 @@
           "item": "leftovers",
           "ability": "oblivious",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -4095,7 +4165,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Blastoise",
@@ -4139,7 +4210,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Slaking",
@@ -4240,6 +4312,7 @@
           "item": "leftovers",
           "ability": "levitate",
           "status": "none",
+          "toxic_stage": 0,
           "boosts": {},
           "moves": [
             {
@@ -4274,7 +4347,8 @@
             "hp": 0.218,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           },
           {
             "species": "Ampharos",
@@ -4339,7 +4413,8 @@
             "hp": 1.0,
             "status": "none",
             "fainted": false,
-            "active": true
+            "active": true,
+            "toxic_stage": 0
           }
         ]
       },

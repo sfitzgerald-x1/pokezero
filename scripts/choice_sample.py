@@ -44,6 +44,15 @@ def _mon_snapshot(mon) -> dict:
     }
 
 
+def _team_snapshot(team, active_toxic_stage: int) -> list:
+    """Snapshot a team; annotate the active mon with the badly-poisoned counter."""
+    mons = [_mon_snapshot(m) for m in team]
+    for mon in mons:
+        if mon["active"]:
+            mon["toxic_stage"] = active_toxic_stage
+    return mons
+
+
 def _active_detail(state) -> dict:
     """Our active mon's full context from the request: moveset (with pp/disabled), item,
     ability, status, and stat changes."""
@@ -76,6 +85,7 @@ def _active_detail(state) -> dict:
         "item": item,
         "ability": ability,
         "status": active_status(active_mon.condition) if active_mon is not None else "none",
+        "toxic_stage": state.self_toxic_stage,
         "boosts": {k: v for k, v in state.self_active_boosts.items() if v},
         "moves": moves,
     }
@@ -90,8 +100,8 @@ def _state_snapshot(state) -> dict:
         "opponent_side_conditions": list(state.opponent_side_conditions),
         "opponent_boosts": {k: v for k, v in state.opponent_active_boosts.items() if v},
         "active_detail": _active_detail(state),
-        "self_team": [_mon_snapshot(m) for m in state.self_team],
-        "opponent_team": [_mon_snapshot(m) for m in state.opponent_team],
+        "self_team": _team_snapshot(state.self_team, state.self_toxic_stage),
+        "opponent_team": _team_snapshot(state.opponent_team, state.opponent_toxic_stage),
     }
 
 

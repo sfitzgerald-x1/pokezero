@@ -57,6 +57,10 @@ def _draw_active_detail(ax, x0, width, detail):
     if status and status != "none":
         ax.text(x0 + width * 0.42, y, status.upper(), fontsize=7.5, color="white", va="center",
                 bbox=dict(boxstyle="round,pad=0.15", fc=STATUS_COLOR.get(status, "#666"), ec="none"))
+        if status == "tox":
+            stage = detail.get("toxic_stage") or 0
+            ax.text(x0 + width * 0.58, y, f"×{stage}  (≈{stage}/16 HP/turn)",
+                    fontsize=8, color="#9c40b0", va="center")
     else:
         ax.text(x0 + width * 0.42, y, "healthy", fontsize=8.5, color="#777", va="center")
     y -= lh
@@ -94,8 +98,11 @@ def _draw_team(ax, x0, width, header, mons):
         ax.text(bar_x + bar_w + 0.008, y, "fnt" if fainted else f"{hp*100:.0f}%", fontsize=7.5, color=color, va="center")
         status = mon["status"]
         if status and status != "none":
+            tag = status.upper()
+            if status == "tox" and mon.get("toxic_stage"):
+                tag += f" ×{mon['toxic_stage']}"
             ax.text(
-                bar_x + bar_w + 0.05, y, status.upper(), fontsize=7, color="white", va="center",
+                bar_x + bar_w + 0.05, y, tag, fontsize=7, color="white", va="center",
                 bbox=dict(boxstyle="round,pad=0.15", fc=STATUS_COLOR.get(status, "#666"), ec="none"),
             )
 
