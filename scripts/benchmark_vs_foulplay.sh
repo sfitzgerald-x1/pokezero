@@ -13,14 +13,16 @@ PYBIN="${POKEZERO_PYTHON:-$REPO/.venv/bin/python}"
 SHOWDOWN="${POKEZERO_SHOWDOWN_ROOT:?set POKEZERO_SHOWDOWN_ROOT to a pokemon-showdown checkout}"
 CKPT="${1:?usage: $0 <checkpoint.pt> [games=50] [search_ms=1000]}"
 N="${2:-50}"; STM="${3:-1000}"
-WS="ws://localhost:8000/showdown/websocket"
+PORT="${POKEZERO_BENCH_PORT:-8000}"   # override to run alongside another local server
+WS="ws://localhost:${PORT}/showdown/websocket"
 L="$(mktemp -d /tmp/fpbench.XXXXXX)"
-cleanup(){ kill "${FPID:-}" "${BOT:-}" "${SRV:-}" 2>/dev/null; pkill -x node 2>/dev/null; }
+# Kill only our own processes (NOT a broad `pkill node`) so a concurrent server on another port survives.
+cleanup(){ kill "${FPID:-}" "${BOT:-}" "${SRV:-}" 2>/dev/null; }
 trap cleanup EXIT
 
-echo "[1] local Showdown server (--no-security)…"
-( cd "$SHOWDOWN" && exec node pokemon-showdown start --no-security ) >"$L/server.log" 2>&1 & SRV=$!
-for i in $(seq 1 90); do curl -sf -o /dev/null http://localhost:8000/ && break; sleep 1; done
+echo "[1] local Showdown server (--no-security) on :${PORT}…"
+( cd "$SHOWDOWN" && exec node pokemon-showdown start "$PORT" --no-security ) >"$L/server.log" 2>&1 & SRV=$!
+for i in $(seq 1 90); do curl -sf -o /dev/null "http://localhost:${PORT}/" && break; sleep 1; done
 
 echo "[2] PokeZeroBot (accept, gen3randombattle, $N games)…"
 "$PYBIN" "$REPO/scripts/play_online.py" --checkpoint "$CKPT" --showdown-root "$SHOWDOWN" \
