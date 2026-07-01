@@ -18,6 +18,9 @@ neural = [
   "numpy>=1.26",
   "tensorboard>=2.14",
 ]
+viz = [
+  "matplotlib>=3.8",
+]
 
 [project.scripts]
 pokezero-linear = "pokezero.linear_cli:main"

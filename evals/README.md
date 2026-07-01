@@ -26,6 +26,15 @@ python scripts/choice_sample.py \
 The state set is deterministic in (seed_start, num_games, turn, driver ensemble), so re-running
 reproduces the same states and only the checkpoint list changes.
 
+Render it as a grouped bar chart (one panel per state, one bar per checkpoint per choice):
+
+```sh
+pip install -e '.[viz]'   # matplotlib
+python scripts/plot_choice_sample.py --in evals/turn10_choice_sample.json --out evals/turn10_choice_sample.png
+```
+
+![turn-10 choice probabilities](turn10_choice_sample.png)
+
 ## `scripts/checkpoint_factors.py` — factor suite
 
 Aggregate behavioral factors over a shared corpus of real decision states:
