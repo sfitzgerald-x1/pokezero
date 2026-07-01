@@ -1224,11 +1224,18 @@ def _encode_pokemon_tokens(
         uncertainty = belief.uncertainty if belief is not None else 1.0
         # A transformed mon (Ditto) fights as its target: encode species, types and base stats from
         # the copied identity so the model sees the effective battler, not Ditto's base 48-across.
+        # Transform copies everything EXCEPT HP and level, so base HP stays the original's (a
+        # transformed Ditto is still frail) and level comes from the original's details.
         transformed = belief is not None and belief.transformed and bool(belief.transform_species)
         enc_species = belief.transform_species if transformed else candidate.species
         _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"species:{enc_species}")
         _encode_species_type_categories(categorical_ids[token_index], dex, enc_species)
         _encode_pokemon_stats(numeric_features[token_index], dex, enc_species, candidate.details)
+        if transformed and dex is not None:
+            original = dex.species_info(candidate.species)
+            original_hp = original.base_stats.get("hp") if original is not None else None
+            if original_hp:
+                _set_numeric(numeric_features[token_index], NUMERIC_BASE_HP, min(1.0, float(original_hp) / 200.0))
         _encode_actual_stats(numeric_features[token_index], candidate.stats)
         if candidate.active:
             _encode_active_boosts(numeric_features[token_index], active_boosts)

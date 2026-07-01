@@ -335,9 +335,6 @@ class PublicBattleBeliefEngine:
                 condition=_string_or_none(secondary),
                 active=True,
             )
-            if belief.transformed:
-                # Transform ends when the mon leaves the field; a fresh switch-in is its true self.
-                belief = self._replace_belief(belief, transformed=False, transform_species=None)
             if self._can_queue_intimidate_non_trigger(belief):
                 self._pending_switches.append(
                     _PendingSwitch(
@@ -566,8 +563,13 @@ class PublicBattleBeliefEngine:
         return belief
 
     def _mark_side_inactive(self, showdown_slot: str) -> None:
+        # Leaving the field ends Transform: the mon reverts to itself, so clear the copied identity
+        # (and the known-stats it implied). A fainted mon keeps its last state — we stop caring once
+        # it is KO'd.
         self._sides[showdown_slot] = [
-            replace(pokemon, active=False)
+            replace(pokemon, active=False, transformed=False, transform_species=None)
+            if pokemon.transformed
+            else replace(pokemon, active=False)
             for pokemon in self._sides.get(showdown_slot, [])
         ]
 

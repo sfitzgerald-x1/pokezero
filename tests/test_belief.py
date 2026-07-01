@@ -90,7 +90,9 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
         self.assertIn("Transform", ditto.revealed_moves)  # its own move, used directly
         self.assertNotIn("Ice Beam", ditto.revealed_moves)  # copied — not Ditto's set
 
-    def test_transform_flag_resets_when_the_mon_switches_back_in(self) -> None:
+    def test_transform_flag_resets_when_the_mon_leaves_the_field(self) -> None:
+        # Transform ends the moment the mon switches out (it reverts to itself on the bench), so the
+        # flag must clear on switch-out — not only when it returns.
         lines = [
             "|start",
             "|switch|p1a: Ditto|Ditto, L78|100/100",
@@ -99,15 +101,14 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
             "|move|p1a: Ditto|Transform|p2a: Blissey",
             "|-transform|p1a: Ditto|p2a: Blissey",
             "|turn|2",
-            "|switch|p1a: Starmie|Starmie, L78|100/100",  # Ditto leaves the field
+            "|switch|p1a: Starmie|Starmie, L78|100/100",  # Ditto leaves the field -> reverts
             "|turn|3",
-            "|switch|p1a: Ditto|Ditto, L78|100/100",  # ...and returns as its true self
-            "|turn|4",
         ]
         replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
         snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
         ditto = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Ditto")
 
+        self.assertFalse(ditto.active)
         self.assertFalse(ditto.transformed)
         self.assertIsNone(ditto.transform_species)
 

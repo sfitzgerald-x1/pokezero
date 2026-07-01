@@ -287,6 +287,43 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
             stable_category_id("belief:possible_move:psychic"),
         )
 
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_transformed_ditto_encodes_target_stats_but_original_hp(self) -> None:
+        # Ditto transforms into our Snorlax. Transform copies battle stats + types but NOT HP, so the
+        # opponent Ditto token must show Snorlax's Attack yet keep Ditto's (frail) base HP.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import NUMERIC_ACTIVE
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+            "|switch|p2a: Ditto|Ditto, L78|100/100",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Snorlax",
+            "|-transform|p2a: Ditto|p1a: Snorlax",
+            "|turn|2",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+        obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        ditto = next(
+            obs.numeric_features[opponent_offset + i]
+            for i in range(OPPONENT_POKEMON_TOKEN_COUNT)
+            if obs.numeric_features[opponent_offset + i][NUMERIC_ACTIVE] == 1.0
+        )
+        self.assertAlmostEqual(ditto[NUMERIC_BASE_ATK], 110 / 200)  # Snorlax's attack (copied)
+        self.assertAlmostEqual(ditto[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP (NOT copied)
+
     def test_side_conditions_are_player_relative_in_metadata(self) -> None:
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],
