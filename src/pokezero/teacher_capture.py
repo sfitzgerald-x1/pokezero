@@ -16,6 +16,8 @@ matching when the teacher submits a move/switch by name rather than slot.
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT, switch_action_index_for_team_index
@@ -121,3 +123,62 @@ def action_index_from_choice_string(state, choice: str) -> int | None:
         return _switch_index_by_species(state, arg)
 
     return None  # default / pass / team-preview: not a gen3 mid-battle action we clone
+
+
+@dataclass
+class CaptureDecision:
+    room: str
+    protocol_lines: tuple[str, ...]  # room protocol accumulated up to this decision
+    choice: str  # the /choose body, e.g. "move icebeam" / "switch 3"
+
+
+@dataclass
+class CaptureGame:
+    room: str
+    decisions: list[CaptureDecision] = field(default_factory=list)
+    winner: str | None = None
+    final_lines: tuple[str, ...] = ()
+
+
+def parse_capture_transcript(path: str) -> list[CaptureGame]:
+    """Parse a foul-play capture transcript (JSONL of {"t":"recv"|"send","msg":...}) into games.
+
+    Received messages are Showdown protocol blocks led by a ``>room`` header; we accumulate each
+    room's ``|`` lines. Each outgoing ``room|/choose <body>|<rqid>`` becomes a decision snapshotted
+    against the room's protocol so far. The room's ``|win|<name>`` line gives the terminal winner.
+    """
+    games: dict[str, CaptureGame] = {}
+    rooms: dict[str, list[str]] = {}
+
+    def game(room: str) -> CaptureGame:
+        return games.setdefault(room, CaptureGame(room=room))
+
+    for raw in open(path):
+        raw = raw.strip()
+        if not raw:
+            continue
+        row = json.loads(raw)
+        message = row.get("msg", "")
+        if row.get("t") == "recv":
+            current = None
+            for line in message.split("\n"):
+                if line.startswith(">"):
+                    current = line[1:].strip()
+                    rooms.setdefault(current, [])
+                elif current is not None and line.startswith("|"):
+                    rooms[current].append(line)
+                    if line.startswith("|win|"):
+                        game(current).winner = line[len("|win|"):].strip() or None
+        elif row.get("t") == "send" and "/choose" in message:
+            parts = message.split("|")
+            room = parts[0]
+            body = next((p for p in parts if p.startswith("/choose")), "")
+            choice = body[len("/choose "):].strip()
+            if room in rooms and choice:
+                game(room).decisions.append(
+                    CaptureDecision(room=room, protocol_lines=tuple(rooms[room]), choice=choice)
+                )
+
+    for room, entry in games.items():
+        entry.final_lines = tuple(rooms.get(room, ()))
+    return list(games.values())
