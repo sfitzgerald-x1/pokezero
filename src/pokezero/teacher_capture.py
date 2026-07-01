@@ -34,8 +34,11 @@ def _active_team_index(self_team) -> int | None:
     return None
 
 
-def _request_move_ids(state) -> list[str]:
-    """Normalized move ids/names in the active request's slot order (index == move action)."""
+def _request_move_candidates(state) -> list[frozenset[str]]:
+    """Per active-move slot (index == move action), the normalized names it can be chosen by:
+    both the request ``id`` and the display ``move``. Hidden Power is the reason both are needed —
+    foul-play submits ``move hiddenpowerflying70`` (the typed display) while the request ``id`` is
+    just ``hiddenpower``; matching only the id would drop every Hidden Power decision."""
     request = getattr(state, "request", None)
     if not isinstance(request, Mapping):
         return []
@@ -44,7 +47,13 @@ def _request_move_ids(state) -> list[str]:
     moves = first.get("moves") if isinstance(first, Mapping) else None
     if not isinstance(moves, (list, tuple)):
         return []
-    return [_norm(m.get("id") or m.get("move")) if isinstance(m, Mapping) else "" for m in moves]
+    candidates = []
+    for move in moves:
+        if isinstance(move, Mapping):
+            candidates.append(frozenset(c for c in (_norm(move.get("id")), _norm(move.get("move"))) if c))
+        else:
+            candidates.append(frozenset())
+    return candidates
 
 
 def _move_index_by_name(state, name: str) -> int | None:
@@ -52,8 +61,8 @@ def _move_index_by_name(state, name: str) -> int | None:
     if not target:
         return None
     mask = state.legal_action_mask
-    for slot, move_id in enumerate(_request_move_ids(state)):
-        if move_id == target and slot < MOVE_ACTION_COUNT and slot < len(mask) and mask[slot]:
+    for slot, names in enumerate(_request_move_candidates(state)):
+        if target in names and slot < MOVE_ACTION_COUNT and slot < len(mask) and mask[slot]:
             return slot
     return None
 

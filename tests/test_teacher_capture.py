@@ -61,6 +61,20 @@ def test_move_with_target_and_gimmick_suffix():
     assert action_index_from_choice_string(_state(LEGAL, MOVES), "move 4 terastallize") == 3
 
 
+def test_hidden_power_matched_by_display_name():
+    # foul-play submits the typed Hidden Power id while the request id is just "hiddenpower".
+    state = SimpleNamespace(
+        self_team=[_mon("Zapdos", active=True), _mon("Blissey")],
+        legal_action_mask=(True, True, False, False, False, True, False, False, False),
+        request={"active": [{"moves": [
+            {"move": "Thunderbolt", "id": "thunderbolt"},
+            {"move": "Hidden Power Ice 70", "id": "hiddenpower"},
+        ]}]},
+    )
+    assert action_index_from_choice_string(state, "move hiddenpowerice70") == 1
+    assert action_index_from_choice_string(state, "move hiddenpower") == 1  # id form still works
+
+
 def test_non_battle_choices_return_none():
     for choice in ("default", "pass", "team 123456", "", "move", "switch"):
         assert action_index_from_choice_string(_state(LEGAL, MOVES), choice) is None
