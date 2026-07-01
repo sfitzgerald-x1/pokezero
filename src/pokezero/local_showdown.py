@@ -21,6 +21,7 @@ from .belief import PublicBattleBeliefEngine
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, PlayerId, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
+from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -51,6 +52,12 @@ class LocalShowdownConfig:
     # vocabulary here so encode-time rows match the embedding exactly (no silent row drift).
     category_vocab: "CategoryVocabulary | None" = None
     read_timeout_seconds: float = 10.0
+    # Whether the belief engine narrows opponent candidate sets via the Gen 3 randbats set source
+    # (populates possible_moves / candidate_variants / possible ability+item). None defers to the
+    # POKEZERO_BELIEF_SET_SOURCE env var so training and eval images flip together from one place;
+    # set explicitly (True/False) to pin it (e.g. in tests). Revealed moves/ability/item do NOT
+    # depend on this — they come straight from the protocol.
+    set_belief_source: bool | None = None
 
     def resolved_showdown_root(self) -> Path:
         configured = self.showdown_root or os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT
@@ -58,6 +65,11 @@ class LocalShowdownConfig:
 
     def resolved_bridge_path(self) -> Path:
         return Path(self.bridge_path).expanduser().resolve()
+
+    def belief_set_source_enabled(self) -> bool:
+        if self.set_belief_source is not None:
+            return self.set_belief_source
+        return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class LocalShowdownEnv:
@@ -81,7 +93,16 @@ class LocalShowdownEnv:
         # / event exactly once (see _sync_incremental_state), so observations cost O(state) instead
         # of re-parsing and re-ingesting the whole accumulated log every call (O(n^2) per battle).
         self._parser = _ReplayParser(self._battle_id)
-        self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
+        # Shared, immutable candidate-set source (built once per process, cached). None when the
+        # belief set source is disabled, in which case only protocol-revealed facts populate.
+        self._belief_set_source = (
+            load_gen3_randbat_source_cached(self.config.resolved_showdown_root())
+            if self.config.belief_set_source_enabled()
+            else None
+        )
+        self._belief_engine = PublicBattleBeliefEngine(
+            format_id=self._format_id, set_source=self._belief_set_source
+        )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
         # Warm pool: the bridge process is reused across battles. Each battle gets a unique routing
@@ -105,7 +126,9 @@ class LocalShowdownEnv:
         self._terminal = None
         self._last_step_had_error = False
         self._parser = _ReplayParser(self._battle_id)
-        self._belief_engine = PublicBattleBeliefEngine(format_id=self._format_id)
+        self._belief_engine = PublicBattleBeliefEngine(
+            format_id=self._format_id, set_source=self._belief_set_source
+        )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
         # Reuse a live bridge process across battles (warm pool); only spawn when there is none or

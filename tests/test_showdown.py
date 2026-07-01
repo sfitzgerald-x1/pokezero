@@ -266,6 +266,27 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.metadata["action_candidates"][0]["move_name"], "flamethrower")
         self.assertEqual(observation.metadata["action_candidates"][4]["pokemon"]["species"], "Snorlax")
 
+    def test_revealed_opponent_moves_populate_move_buckets_without_set_source(self) -> None:
+        # Regression: revealed opponent moves are protocol ground truth and must be encoded even
+        # when the belief set source is off (possible_moves empty). Previously the move buckets were
+        # fed only possible_moves, so revealed moves never reached the persistent per-mon token —
+        # the model saw the revealed-move COUNT but never which moves.
+        from pokezero.showdown import CATEGORY_BELIEF_MOVE_OFFSET
+
+        replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+        xatu = state.belief_view.opponent_pokemon[1]
+        self.assertEqual(xatu.revealed_moves, ("Psychic",))
+        self.assertEqual(xatu.possible_moves, ())  # no set source wired in this path
+
+        observation = observation_from_player_state(state, category_vocab=_TEST_VOCAB)
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+        xatu_row = observation.categorical_ids[opponent_offset + 1]
+        self.assertEqual(
+            xatu_row[CATEGORY_BELIEF_MOVE_OFFSET],
+            stable_category_id("belief:possible_move:psychic"),
+        )
+
     def test_side_conditions_are_player_relative_in_metadata(self) -> None:
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],

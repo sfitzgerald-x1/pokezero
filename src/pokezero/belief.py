@@ -314,6 +314,7 @@ class PublicBattleBeliefEngine:
         elif self._pending_switches:
             self._resolve_pending_switches_as_no_trigger(raw_line)
         self._record_raw_ability_reveal(event)
+        self._record_item_reveal(event)
 
         if event_type in {"switch", "drag", "replace"} and actor_slot and primary:
             self._mark_side_inactive(actor_slot)
@@ -411,6 +412,51 @@ class PublicBattleBeliefEngine:
                         ),
                     ),
                 )
+
+    def _record_item_reveal(self, event: Any) -> None:
+        """Record an item reveal that the explicit ``-item`` branch misses.
+
+        Items are revealed three ways in the protocol: ``|-item|`` (Frisk/Trick/Trace — handled in
+        ingest_event), ``|-enditem|`` (a berry is eaten, or the item is knocked off / consumed), and
+        inline ``[from] item: X`` tags on other events (``|-heal|...|[from] item: Leftovers``,
+        ``|-damage|...|[from] item: Life Orb``). The last two are how the most common Gen 3 items
+        (Leftovers, Life Orb, berries) actually surface, so without this they never register."""
+        event_type = _event_value(event, "event_type")
+        raw_line = _event_value(event, "raw_line") or ""
+        primary = _event_value(event, "primary")
+
+        item: Optional[str] = None
+        if event_type == "-enditem" and primary:
+            item = primary  # the ended/consumed/removed item names itself
+        else:
+            marker = "[from] item:"
+            if marker in raw_line:
+                item = raw_line.split(marker, 1)[1].split("|")[0].strip()
+        if not item:
+            return
+
+        # The item belongs to the mon the effect applies to (target), else the acting mon.
+        slot = _event_value(event, "target_slot") or _event_value(event, "actor_slot")
+        ident = _event_value(event, "target_ident") or _event_value(event, "actor_ident")
+        if not slot:
+            return
+        belief = self._target_belief(slot, ident)
+        if belief is None:
+            return
+        if _normalize_identifier(belief.revealed_item or "") == _normalize_identifier(item):
+            return  # already known
+        self._replace_belief(
+            belief,
+            revealed_item=item,
+            evidence=_append_evidence(
+                belief.evidence,
+                BeliefEvidence(
+                    kind="revealed-item",
+                    detail=f"Observed item {item} via {event_type}; incompatible set variants were removed.",
+                    source_line=raw_line,
+                ),
+            ),
+        )
 
     def resolve_pending_switches_at_boundary(self) -> None:
         self._resolve_pending_switches_as_no_trigger(None)

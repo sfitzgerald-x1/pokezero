@@ -172,8 +172,13 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     move_strings += [f"move:{move}" for move in UNIVERSAL_MOVES]
     move_strings += [s for move in UNIVERSAL_MOVES for s in _move_action_strings(move)]
     groups["move_action"] = move_strings
+    # Revealed opponent moves feed the same belief-move buckets as inferred possible_moves (see
+    # showdown.py). The protocol can reveal moves that never appear in a randbats *set* entry — the
+    # generic "Hidden Power" (before its type is known) and "Struggle" (out of PP) — so the belief
+    # universe must include the UNIVERSAL_MOVES too, or those tokens fall into OOV.
     groups["belief_move"] = [
-        f"belief:possible_move:{_normalize_identifier(move)}" for move in entities["moves"]
+        f"belief:possible_move:{_normalize_identifier(move)}"
+        for move in (*entities["moves"], *UNIVERSAL_MOVES)
     ]
     groups["belief_ability"] = [
         f"belief:possible_ability:{_normalize_identifier(ability)}" for ability in entities["abilities"]

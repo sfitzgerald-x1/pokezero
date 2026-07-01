@@ -44,6 +44,29 @@ class PublicBattleBeliefEngineTest(unittest.TestCase):
         self.assertEqual(xatu.revealed_moves, ("Psychic",))
         self.assertNotIn("Thunder Wave", xatu.revealed_moves)
 
+    def test_tracks_item_reveals_from_passive_tags_and_enditem(self) -> None:
+        # The explicit `-item` event (Frisk/Trick/Trace) is the rare case. The common items surface
+        # as an inline `[from] item:` tag on -heal/-damage (Leftovers, Life Orb) or via `-enditem`
+        # (berries, Knock Off). Neither was tracked before, so Leftovers etc. never registered.
+        lines = [
+            "|start",
+            "|switch|p1a: Blissey|Blissey, F|352/352",
+            "|switch|p2a: Skarmory|Skarmory, M|271/271",
+            "|turn|1",
+            "|-damage|p1a: Blissey|300/352",
+            "|-heal|p1a: Blissey|322/352|[from] item: Leftovers",
+            "|-enditem|p2a: Skarmory|Salac Berry|[eat]",
+            "|turn|2",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+
+        snapshot = PublicBattleBeliefEngine.from_events(replay.public_events).snapshot()
+        blissey = next(pokemon for pokemon in snapshot.side("p1") if pokemon.species == "Blissey")
+        skarmory = next(pokemon for pokemon in snapshot.side("p2") if pokemon.species == "Skarmory")
+
+        self.assertEqual(blissey.revealed_item, "Leftovers")
+        self.assertEqual(skarmory.revealed_item, "Salac Berry")
+
     def test_player_view_is_overlay_ready_and_player_relative(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
 

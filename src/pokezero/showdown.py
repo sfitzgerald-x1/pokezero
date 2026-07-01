@@ -1240,7 +1240,15 @@ def _encode_pokemon_tokens(
         # (The SLOT column stays in use on action tokens for move_slot/switch_slot.)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_ability", ability_feature_values)
         _encode_belief_fact_categories(categorical_ids[token_index], "possible_item", item_feature_values)
-        _encode_belief_fact_categories(categorical_ids[token_index], "possible_move", possible_moves)
+        # Moves mirror ability/item: revealed moves are ground truth (protocol-observed, no belief
+        # set source required) and must always be encoded; possible_moves from the set source
+        # augment them when available. Union with revealed first — the encoder dedups/sorts and
+        # truncates to the bucket count (Gen 3 max 14 moves <= 16 buckets, so no reveal is dropped).
+        _encode_belief_fact_categories(
+            categorical_ids[token_index],
+            "possible_move",
+            tuple(revealed_moves) + tuple(possible_moves),
+        )
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 0.0 if condition.fainted else 1.0)

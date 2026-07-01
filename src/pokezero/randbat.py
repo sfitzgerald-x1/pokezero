@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .belief import CandidateSetSummary
@@ -756,3 +757,24 @@ def _normalize_move(value: str) -> str:
 
 def _normalize_id(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+_SOURCE_CACHE: dict[Path, "Gen3RandbatSource"] = {}
+_SOURCE_CACHE_LOCK = threading.Lock()
+
+
+def load_gen3_randbat_source_cached(showdown_root: Path | str) -> "Gen3RandbatSource":
+    """Process-wide cached ``Gen3RandbatSource``.
+
+    The source is immutable and heavy to build (it enumerates every species' candidate set
+    universe), and belief engines share it read-only across battles (see ``resolved_player_view``).
+    A collector creates one env per battle, so without caching each would rebuild the universe;
+    this mirrors ``load_showdown_dex_cached`` so the cost is paid once per (root, process)."""
+    root = Path(showdown_root).expanduser().resolve()
+    with _SOURCE_CACHE_LOCK:
+        cached = _SOURCE_CACHE.get(root)
+        if cached is not None:
+            return cached
+    loaded = Gen3RandbatSource.from_showdown_root(root, use_cache=True)
+    with _SOURCE_CACHE_LOCK:
+        return _SOURCE_CACHE.setdefault(root, loaded)
