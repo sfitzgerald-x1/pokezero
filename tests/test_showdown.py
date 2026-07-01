@@ -324,6 +324,57 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertAlmostEqual(ditto[NUMERIC_BASE_ATK], 110 / 200)  # Snorlax's attack (copied)
         self.assertAlmostEqual(ditto[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP (NOT copied)
 
+    @unittest.skipUnless(
+        Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown/data/random-battles/gen3/sets.json").exists(),
+        "requires a real Gen 3 Showdown checkout for the dex + vocab",
+    )
+    def test_ditto_transform_lifecycle_encoding_coverage(self) -> None:
+        # Full Ditto lifecycle through the production encoder: while transformed it shows the
+        # target's battle stats (Snorlax Attack) with its own HP; once it switches out it reverts
+        # to Ditto's own stats. Guards both the transform masking and the switch-out reset.
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import CATEGORY_PRIMARY, NUMERIC_ACTIVE
+
+        root = "/Users/scott/workspace/pokerena/vendor/pokemon-showdown"
+        dex = load_showdown_dex_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        base = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+            "|switch|p2a: Ditto|Ditto, L78|100/100",
+            "|turn|1",
+            "|move|p2a: Ditto|Transform|p1a: Snorlax",
+            "|-transform|p2a: Ditto|p1a: Snorlax",
+            "|turn|2",
+        ]
+        after_switch = base + [
+            "|switch|p2a: Gengar|Gengar, L78|100/100",  # Ditto leaves -> reverts on the bench
+            "|turn|3",
+        ]
+        opponent_offset = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT
+
+        def opponent_tokens(lines):
+            replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+            state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+            obs = observation_from_player_state(state, category_vocab=vocab, dex=dex)
+            return [obs.numeric_features[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], \
+                   [obs.categorical_ids[opponent_offset + i] for i in range(OPPONENT_POKEMON_TOKEN_COUNT)], obs
+
+        # While transformed: the active opponent (Ditto) fights as Snorlax.
+        num, _, _ = opponent_tokens(base)
+        transformed_token = next(row for row in num if row[NUMERIC_ACTIVE] == 1.0)
+        self.assertAlmostEqual(transformed_token[NUMERIC_BASE_ATK], 110 / 200)  # Snorlax
+        self.assertAlmostEqual(transformed_token[NUMERIC_BASE_HP], 48 / 200)  # Ditto's HP
+
+        # After switch-out: the benched Ditto has reverted to itself.
+        num, cat, _ = opponent_tokens(after_switch)
+        ditto_species = vocab.encode("species:Ditto")
+        ditto_idx = next(i for i, row in enumerate(cat) if row[CATEGORY_PRIMARY] == ditto_species)
+        self.assertEqual(num[ditto_idx][NUMERIC_ACTIVE], 0.0)
+        self.assertAlmostEqual(num[ditto_idx][NUMERIC_BASE_ATK], 48 / 200)  # Ditto again, not Snorlax
+
     def test_side_conditions_are_player_relative_in_metadata(self) -> None:
         lines = [
             *fixture_lines("p2_seat_replay.txt")[:5],
