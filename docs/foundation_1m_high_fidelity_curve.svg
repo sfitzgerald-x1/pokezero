@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620">
 <rect x="0" y="0" width="1280" height="620" fill="#fbfaf7"/>
-<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">Foundation continuation high-fidelity evals</text>
-<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">50k milestone reads: 2,000 mirrored games for standard opponents and 1,000 direct foul-play games.</text>
+<text x="92" y="32" font-family="ui-monospace, Menlo, monospace" font-size="20" fill="#222">No-belief foundation high-fidelity evals</text>
+<text x="92" y="55" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#555">No-belief 50k milestone reads: 2,000 mirrored games for standard opponents and 1,000 direct foul-play games.</text>
 <line x1="92" y1="72" x2="92" y2="528" stroke="#555"/>
 <line x1="92" y1="528" x2="1020" y2="528" stroke="#555"/>
 <line x1="92" y1="528.00" x2="1020" y2="528.00" stroke="#e4dfd3"/>

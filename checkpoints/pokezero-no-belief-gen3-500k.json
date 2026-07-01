@@ -11,6 +11,8 @@
   "schema_version": "pokezero.neural_policy.v0",
   "training_schema_version": "pokezero.neural_training.v0",
   "policy_id": "foundation-midscale-iter-0313",
+  "input_family": "no-belief",
+  "known_input_issue": "Belief-derived opponent set features were unavailable: the policy did not receive candidate opponent movesets, possible items, or hidden-set branches.",
   "model": {
     "action_schema_version": "pokezero.action_space.v0",
     "observation_schema_version": "pokezero.observation.v1",
@@ -43,5 +45,5 @@
     "random-legal": 0.9866666666666667,
     "foul-play": 0.037
   },
-  "notes": "Final 500,800-game foundation checkpoint. Foul-play is the independent 1,000-game milestone read; the other win rates are the final standard mirrored yardstick snapshot."
+  "notes": "Final 500,800-game no-belief foundation checkpoint. Foul-play is the independent 1,000-game milestone read; the other win rates are the final standard mirrored yardstick snapshot."
 }

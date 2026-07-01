@@ -41,6 +41,8 @@ and win-rate continuity). So every checkpoint in `checkpoints/` carries a sideca
   "games_trained": 1000000,
   "run_id": "foundation-1m-20260630020847",
   "parent": "pokezero-no-belief-gen3-500k",          // ← lineage link (null if from scratch)
+  "input_family": "no-belief",
+  "known_input_issue": "Belief-derived opponent set features were unavailable.",
   "schema_version": "<from checkpoint>",
   "recipe": {"value_clip": true, "cadence_games": 1600, "lr_schedule": "mit-thesis", "lr_total_games": 1000000},
   "winrates": {"max-damage": 0.625, "simple-legal": 0.955, "random-legal": 0.9875},
@@ -48,8 +50,11 @@ and win-rate continuity). So every checkpoint in `checkpoints/` carries a sideca
 }
 ```
 
-The `parent` field chains the lineage (500k → 1M). Going forward, the training side should record
-`continued_from` in each run's summary so lineage is captured automatically rather than reconstructed.
+The `parent` field chains the lineage (500k → 1M). `input_family` records meaningful observation
+family differences, such as `no-belief` versus a future fixed belief-input run, so eval curves can be
+compared without accidentally merging incompatible inputs. Going forward, the training side should
+record `continued_from` in each run's summary so lineage is captured automatically rather than
+reconstructed.
 
 ## Storage & retention
 Checkpoints are ~1.5 MB and self-describing, so curated **milestone** checkpoints may be committed

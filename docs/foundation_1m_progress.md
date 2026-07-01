@@ -1,9 +1,15 @@
-# Foundation 1M continuation progress
+# No-belief foundation 1M continuation progress
 
 Status: final progress record for the recipe-fidelity continuation from the completed
 **500,800-game** foundation checkpoint toward **1,000,000 self-play games**.
 
 This note records evaluation evidence only. It intentionally omits private operational details.
+
+Retrospective caveat: this continuation belongs to the `pokezero-no-belief-*` checkpoint family. The
+belief input path was broken, so the policy did **not** receive belief-derived opponent moveset,
+item, or hidden-set candidate features. The evals remain useful as a no-belief baseline, but they
+should be compared against, not merged with, future fixed-belief runs. See
+[`no_belief_foundation_baseline.md`](no_belief_foundation_baseline.md).
 
 ## Evaluation cadence
 
@@ -24,11 +30,11 @@ readouts below. The second plot shows the continuation's lower-fidelity schedule
 table below preserves the exact data. The third plot shows the independent high-fidelity 50k
 milestone reads.
 
-![Foundation 100k-step curve](foundation_1m_100k_curve.svg)
+![No-belief foundation 100k-step curve](foundation_1m_100k_curve.svg)
 
-![Foundation scheduled 10k eval curve](foundation_1m_10k_eval_curve.svg)
+![No-belief foundation scheduled 10k eval curve](foundation_1m_10k_eval_curve.svg)
 
-![Foundation high-fidelity curve](foundation_1m_high_fidelity_curve.svg)
+![No-belief foundation high-fidelity curve](foundation_1m_high_fidelity_curve.svg)
 
 ## Standard 10k Progress
 
@@ -114,7 +120,7 @@ milestones are not mixed into the trend table.
 
 ## Final Readout
 
-The 500k-to-1M continuation is constructive for the current recipe. The 500k anchor was 309 / 600
+The 500k-to-1M continuation is constructive for the no-belief recipe. The 500k anchor was 309 / 600
 (51.5%) against max-damage, while the final scheduled 1M read was 250 / 400 (62.5%). Scheduled
 10k reads are noisy, but the continuation spent most of the later run in a high-50s to mid-60s
 max-damage band, with a peak scheduled read of 265 / 400 (66.2%) at the 970k threshold.
