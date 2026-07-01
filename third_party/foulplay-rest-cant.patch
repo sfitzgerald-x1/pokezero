@@ -1,0 +1,39 @@
+diff --git a/fp/battle_modifier.py b/fp/battle_modifier.py
+index 07d220c..ad9caa5 100644
+--- a/fp/battle_modifier.py
++++ b/fp/battle_modifier.py
+@@ -2241,12 +2241,12 @@ def cant(battle, split_msg):
+                 )
+             )
+         elif side.active.rest_turns == 1:
+-            logger.critical(
+-                "{} has rest_turns==1 and got 'cant' from sleep".format(
++            side.active.rest_turns = 0
++            logger.info(
++                "Decrementing {}'s final rest_turn to 0".format(
+                     side.active.name
+                 )
+             )
+-            exit(1)
+         else:
+             side.active.sleep_turns += 1
+             logger.info(
+diff --git a/tests/test_battle_modifiers.py b/tests/test_battle_modifiers.py
+index 4f06d54..8986f9d 100644
+--- a/tests/test_battle_modifiers.py
++++ b/tests/test_battle_modifiers.py
+@@ -4230,6 +4230,14 @@ class TestCant(unittest.TestCase):
+         self.assertEqual(0, self.battle.user.active.sleep_turns)
+         self.assertEqual(2, self.battle.user.active.rest_turns)
+ 
++    def test_decrements_final_rest_turn_when_cant_from_sleep(self):
++        self.battle.user.active.sleep_turns = 0
++        self.battle.user.active.rest_turns = 1
++        self.battle.user.active.status = constants.SLEEP
++        cant(self.battle, ["", "-cant", "p1a: Weedle", "slp"])
++        self.assertEqual(0, self.battle.user.active.sleep_turns)
++        self.assertEqual(0, self.battle.user.active.rest_turns)
++
+     def test_gen1_pkmn_trapping_foe_releases_target_after_fully_paralyzed(
+         self,
+     ):

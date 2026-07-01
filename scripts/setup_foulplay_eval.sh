@@ -8,17 +8,20 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 FP="$REPO/third_party/foul-play"
 FPVENV="${FOULPLAY_VENV:-$FP/.venv}"
-PATCH="$REPO/third_party/foulplay-local-nosec.patch"
 
 echo "[1/3] materialize submodule"
 git -C "$REPO" submodule update --init "$FP"
 
-echo "[2/3] apply local --no-security login patch (idempotent)"
-if git -C "$FP" apply --reverse --check "$PATCH" 2>/dev/null; then
-  echo "      already applied"
-else
-  git -C "$FP" apply "$PATCH" && echo "      applied"
-fi
+echo "[2/3] apply foul-play patches (idempotent)"
+# --no-security login patch (local eval servers) + Rest 'cant' crash fix (rest_turns==1 called
+# exit(1), killing long gen3 games with Rest/Sleep Talk; the fix decrements to 0 and continues).
+for patch in foulplay-local-nosec.patch foulplay-rest-cant.patch; do
+  if git -C "$FP" apply --reverse --check "$REPO/third_party/$patch" 2>/dev/null; then
+    echo "      $patch: already applied"
+  else
+    git -C "$FP" apply "$REPO/third_party/$patch" && echo "      $patch: applied"
+  fi
+done
 
 echo "[3/3] build isolated venv + poke-engine (gen3) via uv"
 uv venv --python 3.12 "$FPVENV"
