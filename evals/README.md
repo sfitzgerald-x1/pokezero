@@ -17,8 +17,8 @@ lands, append it and eyeball how the distributions moved. Regenerate with:
 
 ```sh
 python scripts/choice_sample.py \
-  --checkpoint checkpoints/pokezero-gen3-500k.pt=500k \
-  --checkpoint checkpoints/pokezero-gen3-1m.pt=1M \
+  --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
+  --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
   --showdown-root <path-to-pokemon-showdown> \
   --out evals/turn10_choice_sample.json
 ```

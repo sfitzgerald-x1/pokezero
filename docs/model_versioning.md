@@ -35,12 +35,12 @@ and win-rate continuity). So every checkpoint in `checkpoints/` carries a sideca
 
 ```json
 {
-  "name": "pokezero-gen3-1m",
-  "file": "pokezero-gen3-1m.pt",
+  "name": "pokezero-no-belief-gen3-1m",
+  "file": "pokezero-no-belief-gen3-1m.pt",
   "sha256": "<hash>",
   "games_trained": 1000000,
   "run_id": "foundation-1m-20260630020847",
-  "parent": "pokezero-gen3-500k",          // ← lineage link (null if from scratch)
+  "parent": "pokezero-no-belief-gen3-500k",          // ← lineage link (null if from scratch)
   "schema_version": "<from checkpoint>",
   "recipe": {"value_clip": true, "cadence_games": 1600, "lr_schedule": "mit-thesis", "lr_total_games": 1000000},
   "winrates": {"max-damage": 0.625, "simple-legal": 0.955, "random-legal": 0.9875},
