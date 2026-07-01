@@ -18,6 +18,64 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
+
+STATUS_COLOR = {
+    "tox": "#9c40b0", "psn": "#9c40b0", "brn": "#d0492a",
+    "par": "#c8a000", "slp": "#6a7a8a", "frz": "#3390c8",
+}
+
+
+def _hp_color(hp: float) -> str:
+    return "#37a35a" if hp > 0.5 else ("#e0a020" if hp > 0.2 else "#d0402a")
+
+
+def _draw_team(ax, x0, width, header, mons, boosts):
+    """Draw one side's team as a stack of name + HP-bar + status rows within [x0, x0+width]."""
+    n = len(mons)
+    ax.text(x0, 0.96, header, fontsize=10, fontweight="bold", va="top", transform=ax.transData)
+    top, rowh = 0.82, min(0.16, 0.82 / max(n, 1))
+    name_x = x0 + 0.02
+    bar_x = x0 + width * 0.42
+    bar_w = width * 0.30
+    for i, mon in enumerate(mons):
+        y = top - i * rowh
+        active, fainted, hp = mon["active"], mon["fainted"], mon["hp"]
+        color = "#111111" if active else ("#b0b0b0" if fainted else "#555555")
+        marker = "▶" if active else ("✗" if fainted else "•")
+        weight = "bold" if active else "normal"
+        label = mon["species"]
+        if active and boosts:
+            label += "  " + " ".join(f"{'+' if v > 0 else ''}{v}{k.capitalize()[:3]}" for k, v in boosts.items())
+        ax.text(x0, y, marker, fontsize=9, color=color, va="center", fontweight=weight)
+        ax.text(name_x, y, label, fontsize=8.5, color=color, va="center", fontweight=weight)
+        ax.add_patch(Rectangle((bar_x, y - 0.28 * rowh), bar_w, 0.42 * rowh, fill=False, ec="#999", lw=0.6))
+        if not fainted and hp > 0:
+            ax.add_patch(Rectangle((bar_x, y - 0.28 * rowh), bar_w * hp, 0.42 * rowh, color=_hp_color(hp), lw=0))
+        ax.text(bar_x + bar_w + 0.008, y, "fnt" if fainted else f"{hp*100:.0f}%", fontsize=7.5, color=color, va="center")
+        status = mon["status"]
+        if status and status != "none":
+            ax.text(
+                bar_x + bar_w + 0.055, y, status.upper(), fontsize=7, color="white", va="center",
+                bbox=dict(boxstyle="round,pad=0.15", fc=STATUS_COLOR.get(status, "#666"), ec="none"),
+            )
+
+
+def _draw_state(ax, snapshot):
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    _draw_team(ax, 0.0, 0.48, "YOU (p1)", snapshot["self_team"], snapshot.get("self_boosts"))
+    _draw_team(ax, 0.52, 0.48, "OPPONENT (revealed)", snapshot["opponent_team"], snapshot.get("opponent_boosts"))
+    field = []
+    if snapshot.get("weather"):
+        field.append(f"weather:{snapshot['weather']}")
+    if snapshot.get("self_side_conditions"):
+        field.append("you:" + ",".join(snapshot["self_side_conditions"]))
+    if snapshot.get("opponent_side_conditions"):
+        field.append("opp:" + ",".join(snapshot["opponent_side_conditions"]))
+    ax.text(0.0, -0.02, "field:  " + ("  ·  ".join(field) if field else "none"),
+            fontsize=8, color="#555", va="top")
 
 
 def _select_labels(state, checkpoints, min_prob):
@@ -29,10 +87,21 @@ def _select_labels(state, checkpoints, min_prob):
 
 
 def _plot_one(state, checkpoints, colors, min_prob):
-    """Draw one decision as a standalone grouped horizontal bar chart on a fresh figure."""
+    """Draw one decision: a game-state board panel on top, grouped choice-probability bars below."""
     dists = state["checkpoints"]
     labels = _select_labels(state, checkpoints, min_prob)
-    fig, ax = plt.subplots(figsize=(8.5, max(2.2, 0.55 * len(labels) + 1.2)))
+    snapshot = state.get("state")
+    bars_h = max(2.2, 0.55 * len(labels) + 1.2)
+
+    if snapshot:
+        team_rows = max(len(snapshot["self_team"]), len(snapshot["opponent_team"]))
+        state_h = 0.32 * team_rows + 0.9
+        fig = plt.figure(figsize=(9.0, state_h + bars_h))
+        gs = fig.add_gridspec(2, 1, height_ratios=[state_h, bars_h], hspace=0.32)
+        _draw_state(fig.add_subplot(gs[0]), snapshot)
+        ax = fig.add_subplot(gs[1])
+    else:
+        fig, ax = plt.subplots(figsize=(8.5, bars_h))
     y = np.arange(len(labels))
     h = 0.8 / len(checkpoints)
     for i, cp in enumerate(checkpoints):
@@ -51,7 +120,8 @@ def _plot_one(state, checkpoints, colors, min_prob):
     )
     ax.legend(fontsize=9, loc="lower right")
     ax.grid(axis="x", alpha=0.25)
-    fig.tight_layout()
+    if not state.get("state"):
+        fig.tight_layout()
     return fig, ax
 
 

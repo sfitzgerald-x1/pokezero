@@ -46,6 +46,88 @@
           "label": "switch:Arbok"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Altaria",
+            "hp": 0.774,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Sneasel",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Hariyama",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Registeel",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Arbok",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sandslash",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Mightyena",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Shiftry",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kecleon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dustox",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Dragon Dance": 0.0233,
@@ -108,6 +190,95 @@
           "label": "switch:Lanturn"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Banette",
+            "hp": 0.723,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Sunflora",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Deoxys-Speed",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Persian",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gengar",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Lanturn",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Aipom",
+            "hp": 0.269,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Metagross",
+            "hp": 0.852,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Vaporeon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Ludicolo",
+            "hp": 0.511,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Bellossom",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Shadow Ball": 0.1818,
@@ -176,6 +347,83 @@
           "label": "switch:Ludicolo"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {
+          "atk": -1
+        },
+        "self_team": [
+          {
+            "species": "Salamence",
+            "hp": 0.19,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Skarmory",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Seviper",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Delcatty",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Tauros",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Ludicolo",
+            "hp": 0.136,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Murkrow",
+            "hp": 0.567,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Meganium",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Machamp",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Earthquake": 0.0878,
@@ -246,6 +494,88 @@
           "label": "switch:Girafarig"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Alakazam",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Pidgeot",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Umbreon",
+            "hp": 0.681,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Forretress",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Heracross",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Girafarig",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Lanturn",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sceptile",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Masquerain",
+            "hp": 0.876,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Pelipper",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Calm Mind": 0.2694,
@@ -304,6 +634,88 @@
           "label": "switch:Sableye"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": "sunnyday",
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Raikou",
+            "hp": 0.333,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Groudon",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Smeargle",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sableye",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Tyranitar",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Quagsire",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Lanturn",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Tangela",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Armaldo",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gengar",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Sleep Talk": 0.0078,
@@ -368,6 +780,104 @@
           "label": "switch:Gorebyss"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {
+          "atk": -1
+        },
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Camerupt",
+            "hp": 0.349,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Beautifly",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Absol",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Steelix",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gyarados",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gorebyss",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Hitmonlee",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Spinda",
+            "hp": 0.489,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Castform",
+            "hp": 0.493,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Mawile",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Electrode",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dugtrio",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Earthquake": 0.6849,
@@ -438,6 +948,85 @@
           "label": "switch:Heracross"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [
+          "spikes"
+        ],
+        "self_boosts": {
+          "spa": 1
+        },
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Electabuzz",
+            "hp": 0.037,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Houndoom",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Forretress",
+            "hp": 0.579,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Nidoqueen",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Politoed",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Heracross",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Claydol",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Swampert",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Manectric",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Fire Punch": 0.169,
@@ -508,6 +1097,91 @@
           "label": "switch:Dusclops"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {
+          "atk": -1,
+          "def": -1
+        },
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Parasect",
+            "hp": 0.736,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Charizard",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Aerodactyl",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Groudon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Unown-Question",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dusclops",
+            "hp": 0.388,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Seaking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Delibird",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Granbull",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Arcanine",
+            "hp": 0.787,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Stun Spore": 0.2472,
@@ -566,6 +1240,76 @@
           "label": "switch:Nidoqueen"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {
+          "def": -1
+        },
+        "self_team": [
+          {
+            "species": "Slaking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Mightyena",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Persian",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Vileplume",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Salamence",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Nidoqueen",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Mew",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dunsparce",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Hyper Beam": 0.3506,
@@ -622,6 +1366,81 @@
           "label": "switch:Jynx"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Tentacruel",
+            "hp": 0.41,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Tropius",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Aggron",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Whiscash",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Grumpig",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Jynx",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Aggron",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kingler",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kangaskhan",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Hydro Pump": 0.4065,
@@ -684,6 +1503,76 @@
           "label": "switch:Victreebel"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": "raindance",
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {
+          "atk": 2
+        },
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Absol",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Jirachi",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Muk",
+            "hp": 0.768,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Manectric",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Crawdaunt",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Victreebel",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Primeape",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Seaking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Shadow Ball": 0.4255,
@@ -744,6 +1633,88 @@
           "label": "switch:Tangela"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Gardevoir",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Electrode",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Relicanth",
+            "hp": 0.881,
+            "status": "tox",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sunflora",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Tangela",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Octillery",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Girafarig",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dewgong",
+            "hp": 0.919,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Golem",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Marowak",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Fire Punch": 0.112,
@@ -790,6 +1761,74 @@
           "label": "switch:Pinsir"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Kecleon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Slaking",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Nidoking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Groudon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Magcargo",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Pinsir",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Solrock",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sharpedo",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Shadow Ball": 0.6573,
@@ -850,6 +1889,97 @@
           "label": "switch:Venusaur"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {
+          "spd": -1
+        },
+        "self_team": [
+          {
+            "species": "Manectric",
+            "hp": 0.512,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Altaria",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Lickitung",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Corsola",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Umbreon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Venusaur",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Charizard",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kecleon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gengar",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Raikou",
+            "hp": 0.663,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Grumpig",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Crunch": 0.1854,
@@ -920,6 +2050,81 @@
           "label": "switch:Luvdisc"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Claydol",
+            "hp": 0.117,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Metagross",
+            "hp": 0.768,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sableye",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Nidoking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Aerodactyl",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Luvdisc",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Lanturn",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Illumise",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Togetic",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Explosion": 0.0097,
@@ -990,6 +2195,102 @@
           "label": "switch:Torkoal"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Machamp",
+            "hp": 0.734,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Golem",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Golduck",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Murkrow",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Linoone",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Torkoal",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Arbok",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Magneton",
+            "hp": 0.942,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Altaria",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kingdra",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Hypno",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Porygon2",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Hidden Power Ghost 70": 0.0445,
@@ -1048,6 +2349,95 @@
           "label": "switch:Spinda"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Corsola",
+            "hp": 0.722,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Blastoise",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Ninetales",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Spinda",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Pidgeot",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Electabuzz",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Flygon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Electabuzz",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Porygon2",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Fearow",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Espeon",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Ice Beam": 0.219,
@@ -1108,6 +2498,95 @@
           "label": "switch:Golem"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Banette",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Exeggutor",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Metagross",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Absol",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Miltank",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Golem",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Noctowl",
+            "hp": 0.412,
+            "status": "par",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Ariados",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Poliwrath",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Deoxys-Attack",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Slaking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Will-O-Wisp": 0.2435,
@@ -1156,6 +2635,81 @@
           "label": "move:Wish"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Kangaskhan",
+            "hp": 0.519,
+            "status": "tox",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Sceptile",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Mawile",
+            "hp": 0.271,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Nidoqueen",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Sandslash",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Torkoal",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Delibird",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Dugtrio",
+            "hp": 0.322,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Typhlosion",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Return 102": 0.831,
@@ -1216,6 +2770,81 @@
           "label": "switch:Fearow"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Suicune",
+            "hp": 0.974,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Blaziken",
+            "hp": 0.679,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Mawile",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Lapras",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Entei",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Fearow",
+            "hp": 0.895,
+            "status": "tox",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Yanma",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Steelix",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Poliwrath",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Surf": 0.7493,
@@ -1274,6 +2903,83 @@
           "label": "switch:Rayquaza"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {
+          "atk": -1
+        },
+        "self_team": [
+          {
+            "species": "Mightyena",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Kabutops",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Rayquaza",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Celebi",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Ampharos",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Fearow",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Sandslash",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Corsola",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Hitmonlee",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Crunch": 0.4936,
@@ -1330,6 +3036,104 @@
           "label": "switch:Kingler"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {
+          "spd": -1
+        },
+        "self_team": [
+          {
+            "species": "Kecleon",
+            "hp": 0.419,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Tangela",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Ditto",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Nidoking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Bellossom",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Kingler",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Huntail",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Sudowoodo",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Pelipper",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Exploud",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Rayquaza",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Medicham",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Thunder Wave": 0.0979,
@@ -1380,6 +3184,74 @@
           "label": "switch:Raikou"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Absol",
+            "hp": 0.027,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Marowak",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Regirock",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Camerupt",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Luvdisc",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Raikou",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Quagsire",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Nosepass",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Quick Attack": 0.4396,
@@ -1442,6 +3314,95 @@
           "label": "switch:Hitmontop"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Jynx",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Blastoise",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Linoone",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Skarmory",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Regirock",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Hitmontop",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Hypno",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Slaking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Machamp",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Zangoose",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Cacturne",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Calm Mind": 0.2308,
@@ -1500,6 +3461,88 @@
           "label": "switch:Nidoking"
         }
       ],
+      "state": {
+        "turn": 10,
+        "weather": null,
+        "self_side_conditions": [],
+        "opponent_side_conditions": [],
+        "self_boosts": {},
+        "opponent_boosts": {},
+        "self_team": [
+          {
+            "species": "Gengar",
+            "hp": 0.218,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          },
+          {
+            "species": "Ampharos",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Gorebyss",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Donphan",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Politoed",
+            "hp": 0.0,
+            "status": "none",
+            "fainted": true,
+            "active": false
+          },
+          {
+            "species": "Nidoking",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          }
+        ],
+        "opponent_team": [
+          {
+            "species": "Medicham",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Kingler",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Blaziken",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": false
+          },
+          {
+            "species": "Magmar",
+            "hp": 1.0,
+            "status": "none",
+            "fainted": false,
+            "active": true
+          }
+        ]
+      },
       "checkpoints": {
         "500k": {
           "move:Explosion": 0.0098,

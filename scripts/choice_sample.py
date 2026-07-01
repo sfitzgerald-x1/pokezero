@@ -21,10 +21,40 @@ import sys
 from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT
-from pokezero.checkpoint_factors import choice_label, sample_states_at_turn
+from pokezero.checkpoint_factors import (
+    active_status,
+    choice_label,
+    hp_fraction,
+    sample_states_at_turn,
+)
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
 from pokezero.showdown import observation_from_player_state
+
+
+def _mon_snapshot(mon) -> dict:
+    condition = mon.condition
+    return {
+        "species": mon.species,
+        "hp": round(hp_fraction(condition), 3),
+        "status": active_status(condition),
+        "fainted": "fnt" in str(condition or ""),
+        "active": mon.active,
+    }
+
+
+def _state_snapshot(state) -> dict:
+    """Board context for reading the plot: both teams (HP/status), active boosts, field."""
+    return {
+        "turn": state.turn_number,
+        "weather": state.weather,
+        "self_side_conditions": list(state.self_side_conditions),
+        "opponent_side_conditions": list(state.opponent_side_conditions),
+        "self_boosts": {k: v for k, v in state.self_active_boosts.items() if v},
+        "opponent_boosts": {k: v for k, v in state.opponent_active_boosts.items() if v},
+        "self_team": [_mon_snapshot(m) for m in state.self_team],
+        "opponent_team": [_mon_snapshot(m) for m in state.opponent_team],
+    }
 
 
 def main() -> int:
@@ -67,6 +97,7 @@ def main() -> int:
                 "active_condition": state.self_active.condition,
                 "opponent_active": opponent.species if opponent is not None else None,
                 "legal_choices": [{"index": i, "label": choice_label(state, i)} for i in legal],
+                "state": _state_snapshot(state),
                 "checkpoints": {},
             }
         )
