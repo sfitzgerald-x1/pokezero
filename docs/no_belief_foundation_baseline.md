@@ -47,3 +47,8 @@ foul-play, without regressing the saturated random/simple baselines.
 
 Do not merge fixed-belief checkpoints into this series. Start a separately named family so plots and
 tables can compare `no-belief` versus `belief-fixed` directly.
+
+The first completed fixed-belief run is recorded in
+[`foundation_belief_1_5m_results.md`](foundation_belief_1_5m_results.md) (belief-on, from scratch to
+1.5M). At 1.5M the two families are within read noise on the standard opponents; the belief-on run's
+distinguishing effect was reaching max-damage parity ~40% sooner in games.
