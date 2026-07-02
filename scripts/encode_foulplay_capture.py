@@ -15,12 +15,14 @@ seats are teacher labels, so both capture files contribute. Output feeds
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dex import load_showdown_dex_cached
 from pokezero.env import TerminalState
+from pokezero.randbat import load_gen3_randbat_source_cached
 from pokezero.randbat_vocab import gen3_category_vocabulary
 from pokezero.showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -32,7 +34,7 @@ from pokezero.teacher_capture import action_index_from_choice_string, parse_capt
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
-def _encode_capture(path, username, *, vocab, dex, spec, stats):
+def _encode_capture(path, username, *, vocab, dex, spec, stats, set_source=None):
     records = []
     for game in parse_capture_transcript(path):
         if not game.decisions:
@@ -46,7 +48,13 @@ def _encode_capture(path, username, *, vocab, dex, spec, stats):
             stats["total"] += 1
             try:
                 replay = parse_showdown_replay(decision.protocol_lines, battle_id=decision.room)
-                state = normalize_for_player(replay, player_id="bot", player_name=username)
+                state = normalize_for_player(
+                    replay,
+                    player_id="bot",
+                    player_name=username,
+                    format_id="gen3randombattle",
+                    set_source=set_source,
+                )
             except ValueError:
                 stats["parse_err"] += 1
                 continue
@@ -133,13 +141,23 @@ def main() -> int:
     spec = DEFAULT_REPLAY_OBSERVATION_SPEC
     stats = {"total": 0, "encoded": 0, "undecoded": 0, "illegal": 0, "parse_err": 0, "games": 0}
 
+    # Match the self-play encoder: when POKEZERO_BELIEF_SET_SOURCE is enabled, encode opponent
+    # candidate-set beliefs (possible_moves/candidate_set_count) so the BC clone trains on the same
+    # observation the belief-on self-play line uses. Off by default -> belief-blind (legacy) data.
+    set_source = None
+    if os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        set_source = load_gen3_randbat_source_cached(args.showdown_root)
+        print("[encode] belief set source ENABLED (candidate-set beliefs populated)")
+
     all_records = []
     for spec_str in args.capture:
         path, _, username = spec_str.partition("=")
         if not username:
             raise SystemExit(f"--capture needs PATH=USERNAME, got {spec_str!r}")
         print(f"[encode] {path} (seat {username})…")
-        all_records.extend(_encode_capture(path, username, vocab=vocab, dex=dex, spec=spec, stats=stats))
+        all_records.extend(
+            _encode_capture(path, username, vocab=vocab, dex=dex, spec=spec, stats=stats, set_source=set_source)
+        )
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
