@@ -43,13 +43,14 @@ the foul-play cell below cites the most recent completed high-fidelity foul-play
 
 | Run | Random-legal | Simple-legal | Max-damage | Foul-play | Source |
 |---|---:|---:|---:|---:|---|
-| belief-on 1.5M (this run) | 1984 / 2000 (99.2%) | 1937 / 2000 (96.9%) | 1374 / 2000 (68.7%) | 70 / 1000 (7.0%, @1.4M) | High-fidelity |
+| belief-on 1.5M (this run) | 1984 / 2000 (99.2%) | 1937 / 2000 (96.9%) | 1374 / 2000 (68.7%) | 90 / 1000 (9.0%, @1.45M) | High-fidelity |
 | no-belief 1.5M (baseline) | 1990 / 2000 (99.5%) | 1925 / 2000 (96.2%) | 1458 / 2000 (72.9%) | 87 / 1000 (8.7%) | High-fidelity |
 
 On the standard opponents the two families land within read-to-read noise of each other at 1.5M
-(belief slightly higher vs simple-legal, slightly lower vs max-damage). Foul-play is comparable and
-still in single digits for both — the searchless-policy ceiling against a search-based opponent has
-not moved materially by 1.5M for either family.
+(belief slightly higher vs simple-legal, slightly lower vs max-damage). Foul-play stays in single
+digits for both — the searchless-policy ceiling against a search-based opponent has not been broken
+by 1.5M — but the belief-on run holds a small, fairly consistent edge across most of the run (see the
+comparison chart), ending comparable to the no-belief baseline (9.0% @1.45M vs 8.7% @1.5M).
 
 ## Where belief actually helped: earlier skill acquisition
 
@@ -95,4 +96,21 @@ the run's progress reporting, so move-preference drift and pivoting can be watch
 
 ## Comparison chart
 
-A same-size (1.5M) belief-vs-no-belief eval comparison chart is added as a follow-up to this note.
+Same-size (1.5M), same-recipe high-fidelity comparison of the belief-on run against the no-belief
+baseline:
+
+![belief-on vs no-belief to 1.5M](foundation_belief_vs_nobelief_1_5m.svg)
+
+Reading the chart:
+
+- **Max-damage (left):** belief-on sits clearly above no-belief through ~1.2M games — roughly a
+  5–8 point lead across the 300k–500k band — then the two converge and no-belief edges slightly ahead
+  in the final 1.3–1.5M stretch. The belief signal front-loaded skill acquisition rather than raising
+  the ceiling.
+- **Foul-play (right):** belief-on holds a small, fairly consistent edge for most of the run, ending
+  comparable to the no-belief baseline.
+
+Fidelity caveat: no-belief's 50k–500k points are the 500k run's high-fidelity / standard yardstick
+reads (that run predates the append-only eval timeline); 550k–1.5M is from the run index. Belief-on
+is the run index across the whole range. The belief-on 1.5M foul-play high-fidelity read was still
+in progress at authoring time, so the foul-play curve ends at its 1.45M read.
