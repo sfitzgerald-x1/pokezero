@@ -684,8 +684,10 @@ def _opponent_team_from_belief_result(
         return None, "opponent belief has more revealed pokemon than team slots"
     constrained_hidden = _sample_constrained_hidden_backline(
         set_source,
+        format_id=format_id,
         used_species=used_species,
         team_index_constraints=team_index_constraints or {},
+        move_slot_constraints=move_slot_constraints or {},
         count_limit=hidden_needed,
         rng=rng,
     )
@@ -855,8 +857,10 @@ def _variant_public_max_hp(
 def _sample_constrained_hidden_backline(
     set_source: Gen3RandbatSource,
     *,
+    format_id: str,
     used_species: set[str],
     team_index_constraints: Mapping[str, int],
+    move_slot_constraints: Mapping[str, Mapping[int, str]],
     count_limit: int,
     rng: random.Random,
 ) -> tuple[FixturePokemon, ...] | None:
@@ -872,8 +876,30 @@ def _sample_constrained_hidden_backline(
         universe = set_source.universe_for(species)
         if universe is None or not universe.variants:
             return None
-        variant = universe.variants[rng.randrange(len(universe.variants))]
-        fixture = _fixture_from_variant(variant, set_source=set_source)
+        species_move_slot_constraints = move_slot_constraints.get(_normalize_species_id(species), {})
+        revealed_moves = tuple(
+            move
+            for _slot, move in sorted(species_move_slot_constraints.items())
+            if str(move).strip()
+        )
+        if revealed_moves:
+            summary = set_source.summarize(
+                format_id=format_id,
+                species=universe.species,
+                revealed_moves=revealed_moves,
+            )
+            variants = tuple(summary.candidate_variants) if summary is not None else ()
+        else:
+            variants = tuple(variant.to_summary() for variant in universe.variants)
+        if not variants:
+            return None
+        variant = variants[rng.randrange(len(variants))]
+        fixture = _fixture_from_variant_payload(
+            variant,
+            fallback_species=universe.species,
+            set_source=set_source,
+            move_slot_constraints=species_move_slot_constraints,
+        )
         if fixture is None:
             return None
         used_species.add(_normalize_species_id(fixture.species))
@@ -1094,6 +1120,8 @@ def _fixture_from_variant_payload(
     moves = _moves_from_payload(payload.get("moves"))
     if not moves:
         return None
+    # Randbat summary payloads intentionally omit species, so fallback_species preserves public
+    # cosmetic formes such as Unown-Z while stats/source lookup canonicalizes to base Unown.
     species = _optional_text(payload.get("species")) or fallback_species
     level = payload.get("level")
     resolved_level = int(level) if isinstance(level, int) else 100
