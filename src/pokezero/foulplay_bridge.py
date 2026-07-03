@@ -76,6 +76,7 @@ class ControlledFoulPlayConfig:
     cpuct: float = 1.25
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
+    opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
     pokezero_username: str = "PokeZeroBot"
@@ -97,6 +98,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.leaf_rollout_rounds < 0:
             raise ValueError("leaf_rollout_rounds must be non-negative.")
+        if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
+            raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
     @property
     def resolved_foulplay_python(self) -> Path:
@@ -176,6 +179,8 @@ class ControlledFoulPlayBenchmarkResult:
                 "cpuct": self.config.cpuct,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
+                "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
+                "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
                 "searches": root_searches,
                 "fallbacks": root_fallbacks,
@@ -853,13 +858,20 @@ async def _handle_decision_boundary(
             observation=observations["p1"],
             requested_players=requested_players,
             trajectory=state.trajectory,
-            requested_legal_action_masks={
-                player: tuple(observation.legal_action_mask)
-                for player, observation in observations.items()
-            },
+            requested_legal_action_masks=_requested_legal_action_masks_for_context(
+                observations,
+                acting_player="p1",
+                opponent_legal_mask_mode=config.opponent_legal_mask_mode,
+            ),
             requested_observations=dict(observations),
         )
-        decisions["p1"] = _select_policy_decision(policy, observations["p1"], p1_context, seed=state.seed)
+        decisions["p1"] = await asyncio.to_thread(
+            _select_policy_decision,
+            policy,
+            observations["p1"],
+            p1_context,
+            seed=state.seed,
+        )
         choices["p1"] = showdown_choice_for_action(player_states["p1"], decisions["p1"].action_index)
     if "p2" in requested_players:
         choice = await _wait_for_foulplay_choice_or_exit(
@@ -938,6 +950,20 @@ def _select_policy_decision(
     if callable(selector):
         return selector(context, rng=rng)
     return policy.select_action(observation, rng=rng)
+
+
+def _requested_legal_action_masks_for_context(
+    observations: Mapping[PlayerId, PokeZeroObservationV0],
+    *,
+    acting_player: PlayerId,
+    opponent_legal_mask_mode: str,
+) -> dict[PlayerId, tuple[bool, ...]]:
+    masks: dict[PlayerId, tuple[bool, ...]] = {}
+    for player, observation in observations.items():
+        if player != acting_player and opponent_legal_mask_mode == "hidden":
+            continue
+        masks[player] = tuple(observation.legal_action_mask)
+    return masks
 
 
 def _player_state(state: _ControlledBattleState, player: PlayerId) -> PlayerRelativeBattleState:
@@ -1044,6 +1070,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Decision rounds to continue each root branch before leaf value evaluation.",
     )
     parser.add_argument(
+        "--opponent-legal-mask-mode",
+        choices=("hidden", "privileged"),
+        default="hidden",
+        help=(
+            "Whether root opponent-action planning withholds the opponent's private legal mask "
+            "(hidden, default) or uses it as a privileged benchmark safety guard."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Raise on search failure instead of falling back to the raw checkpoint action.",
@@ -1077,6 +1112,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         cpuct=args.cpuct,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
+        opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,
         pokezero_username=args.pokezero_username,

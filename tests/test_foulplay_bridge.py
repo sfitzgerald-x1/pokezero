@@ -12,6 +12,7 @@ from pokezero.foulplay_bridge import (
     _choice_body_from_outgoing_message,
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
+    _requested_legal_action_masks_for_context,
     _split_outgoing_showdown_message,
     _write_json,
 )
@@ -67,6 +68,33 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(state.next_foulplay_rqid, 2)
         self.assertEqual(_line_for_foulplay(state, '|request|{"rqid":99}'), '|request|{"rqid":99}')
 
+    def test_requested_legal_action_masks_can_hide_opponent_private_mask(self) -> None:
+        class Observation:
+            def __init__(self, mask: tuple[bool, ...]) -> None:
+                self.legal_action_mask = mask
+
+        observations = {
+            "p1": Observation((True, False)),
+            "p2": Observation((False, True)),
+        }
+
+        self.assertEqual(
+            _requested_legal_action_masks_for_context(
+                observations,  # type: ignore[arg-type]
+                acting_player="p1",
+                opponent_legal_mask_mode="hidden",
+            ),
+            {"p1": (True, False)},
+        )
+        self.assertEqual(
+            _requested_legal_action_masks_for_context(
+                observations,  # type: ignore[arg-type]
+                acting_player="p1",
+                opponent_legal_mask_mode="privileged",
+            ),
+            {"p1": (True, False), "p2": (False, True)},
+        )
+
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
@@ -110,6 +138,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["win_rate"], 0.5)
         self.assertEqual(payload["root_puct"]["searches"], 5)
         self.assertEqual(payload["root_puct"]["fallbacks"], 2)
+        self.assertEqual(payload["root_puct"]["opponent_legal_mask_mode"], "hidden")
+        self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
 
     def test_write_json_creates_parent_directory_atomically(self) -> None:
