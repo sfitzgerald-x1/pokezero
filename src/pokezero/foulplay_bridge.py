@@ -2095,8 +2095,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=ACTION_COUNT,
         help=(
             "Number of checkpoint-prior opponent root-action candidates to try while searching "
-            "for replay-legal scenarios. Defaults to the full action space so hidden-mode search "
-            "can usually find a legal reserve before falling back. The search stops after "
+            "for replay-legal scenarios. Defaults to the full action space; when the opponent "
+            "legal mask is hidden, exchangeable switch slots are collapsed into one summed switch "
+            "candidate before this cap is applied. The search stops after "
             "--root-opponent-action-scenarios legal scenarios are accepted."
         ),
     )

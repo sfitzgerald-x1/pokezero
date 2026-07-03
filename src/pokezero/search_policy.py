@@ -9,7 +9,7 @@ import math
 import random
 from typing import Callable, Mapping, Sequence
 
-from .actions import ACTION_COUNT
+from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .env import PlayerId, PokeZeroEnv
 from .mcts_diagnostics import root_puct_fallback_category
 from .observation import PokeZeroObservationV0
@@ -817,15 +817,31 @@ def _top_prior_action_choices(
     if limit <= 0:
         raise ValueError("opponent action scenario limit must be positive.")
     legal = _requested_legal_action_indices_for_player(context, player)
-    candidate_indices = legal if legal else tuple(range(ACTION_COUNT))
-    ranked = sorted(candidate_indices, key=lambda index: (-priors[index], index))[:limit]
+    candidates = (
+        tuple((index, priors[index]) for index in legal)
+        if legal
+        else _hidden_mask_prior_action_choices(priors)
+    )
+    ranked = sorted(candidates, key=lambda item: (-item[1], item[0]))[:limit]
     if not ranked:
         raise ValueError(f"no opponent action candidates available for {player}.")
-    total = sum(priors[index] for index in ranked)
+    total = sum(weight for _index, weight in ranked)
     if total <= 0.0:
         uniform = 1.0 / len(ranked)
-        return tuple((index, uniform) for index in ranked)
-    return tuple((index, priors[index] / total) for index in ranked)
+        return tuple((index, uniform) for index, _weight in ranked)
+    return tuple((index, weight / total) for index, weight in ranked)
+
+
+def _hidden_mask_prior_action_choices(priors: tuple[float, ...]) -> tuple[tuple[int, float], ...]:
+    """Collapse exchangeable hidden switch slots when opponent legal masks are unavailable."""
+
+    move_choices = tuple((index, priors[index]) for index in range(MOVE_ACTION_COUNT))
+    switch_indices = tuple(range(MOVE_ACTION_COUNT, ACTION_COUNT))
+    switch_weight = sum(priors[index] for index in switch_indices)
+    # Hidden switch slots are exchangeable. Use the first concrete switch slot only as a stable
+    # replay handle; the scenario weight still carries the total switch prior mass.
+    representative_switch = switch_indices[0]
+    return (*move_choices, (representative_switch, switch_weight))
 
 
 def _normalize_scenarios(

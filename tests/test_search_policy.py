@@ -313,6 +313,54 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertAlmostEqual(scenarios[1].weight, 0.2 / 0.9)
         self.assertEqual([scenario.label for scenario in scenarios], ["p2:1", "p2:2"])
 
+    def test_prior_top_k_opponent_action_scenario_planner_collapses_hidden_switch_slots(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.05, 0.04, 0.03, 0.07, 0.08, 0.09, 0.10, 0.20),
+            scenario_count=3,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 4}, {"p2": 0}, {"p2": 1}])
+        self.assertAlmostEqual(scenarios[0].weight, 0.54 / 0.69)
+        self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.69)
+        self.assertAlmostEqual(scenarios[2].weight, 0.05 / 0.69)
+
+    def test_prior_top_k_opponent_action_scenario_planner_preserves_legal_switch_slots(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.05, 0.04, 0.03, 0.20, 0.10, 0.09, 0.08, 0.07),
+            scenario_count=3,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0, 1), "p2": _mask(4, 5, 6)},
+        )
+
+        scenarios = planner(context, random.Random(1))
+
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 4}, {"p2": 5}, {"p2": 6}])
+        self.assertAlmostEqual(scenarios[0].weight, 0.20 / 0.39)
+        self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.39)
+        self.assertAlmostEqual(scenarios[2].weight, 0.09 / 0.39)
+
     def test_policy_opponent_action_planner_uses_requested_opponent_observation(self) -> None:
         opponent_policy = ResettableFixedPolicy(1, policy_id="benchmark-opponent")
         planner = policy_opponent_action_planner({"p2": opponent_policy}, planner_id="benchmark")
