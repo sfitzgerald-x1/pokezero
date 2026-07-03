@@ -22,7 +22,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Piece | Status | Where / caveat |
 |---|---|---|
 | Forking = **replay-from-root** | **built** | `replay_branching.py`, `search.py` |
-| Root PUCT with optional visit budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` now supports an optional root visit budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
+| Root PUCT with optional visit budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` now supports an optional root visit budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits. Repeated leaf rollouts use visit-specific rollout seeds, and the controlled foul-play harness can use sampled checkpoint policies inside leaf rollouts. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
 | Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, and replay-illegal opponent-scenario skip counts. Those skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
@@ -69,10 +69,11 @@ In priority order:
    randbats-prior rejection sampling; note the divergence from the literal recipe and why. Required
    for the ladder; not needed for perfect-info benchmarking.
 
-Current root visit accumulation allows multiple root visits, but without determinization injection or
-stochastic leaf variation it can still re-evaluate the same branch deterministically. Chance handling
-(damage rolls), simultaneous-move uncertainty, and opponent hidden legal-action uncertainty are
-therefore **not yet** adequately covered. Hidden-mode foul-play smokes make this concrete: when the
+Current root visit accumulation allows multiple root visits, and sampled leaf rollouts now get
+visit-specific rollout seeds. Without determinization injection, however, repeated visits still run
+through the same revealed branch state, so chance handling, simultaneous-move uncertainty, and
+opponent hidden legal-action uncertainty are **not yet** adequately covered. Hidden-mode foul-play
+smokes make this concrete: when the
 opponent private legal mask is withheld, the opponent-action prior can still propose illegal opponent
 actions. The searcher now skips replay-illegal opponent-action scenarios and reports skip counts, but
 that skip is learned by probing replay legality against the real branch state. It is useful for
