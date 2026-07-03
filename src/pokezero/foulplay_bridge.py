@@ -79,6 +79,7 @@ class ControlledFoulPlayConfig:
     root_visit_budget: int | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
+    leaf_rollout_sampling: bool = False
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -107,6 +108,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.leaf_rollout_rounds < 0:
             raise ValueError("leaf_rollout_rounds must be non-negative.")
+        if self.leaf_rollout_sampling and self.leaf_rollout_rounds <= 0:
+            raise ValueError("leaf_rollout_sampling requires positive leaf_rollout_rounds.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
@@ -211,6 +214,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "root_visit_budget": self.config.root_visit_budget,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
+                "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -573,11 +577,15 @@ def _build_policy(
     rollout_config: RolloutConfig,
     policy_id: str,
 ) -> Policy:
-    def raw_policy(policy_id_override: str | None = None) -> TransformerSoftmaxPolicy:
+    def raw_policy(
+        policy_id_override: str | None = None,
+        *,
+        deterministic: bool = True,
+    ) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
             model=model,
             result=result,
-            deterministic=True,
+            deterministic=deterministic,
             sampling_temperature=config.temperature,
             device=config.device,
             policy_id=policy_id_override,
@@ -623,7 +631,10 @@ def _build_policy(
 
     leaf_rollout_policy_factory = None
     if config.leaf_rollout_rounds:
-        leaf_rollout_policy_factory = lambda player_id: raw_policy(f"{search_policy_id}-leaf-{player_id}")
+        leaf_rollout_policy_factory = lambda player_id: raw_policy(
+            f"{search_policy_id}-leaf-{player_id}",
+            deterministic=not config.leaf_rollout_sampling,
+        )
 
     return RootPUCTSearchPolicy(
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -641,7 +652,10 @@ def _build_policy(
         root_visit_budget=config.root_visit_budget,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
-        leaf_rollout_metadata={"root_puct_leaf_rollout_opponent_policy": "checkpoint"}
+        leaf_rollout_metadata={
+            "root_puct_leaf_rollout_opponent_policy": "checkpoint",
+            "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
+        }
         if config.leaf_rollout_rounds
         else {},
     )
@@ -1236,6 +1250,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Decision rounds to continue each root branch before leaf value evaluation.",
     )
     parser.add_argument(
+        "--leaf-rollout-sampling",
+        action="store_true",
+        help="Use sampled checkpoint policies, rather than greedy policies, inside leaf rollouts.",
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -1281,6 +1300,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         root_visit_budget=args.root_visit_budget,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
+        leaf_rollout_sampling=args.leaf_rollout_sampling,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

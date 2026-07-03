@@ -141,6 +141,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 root_visit_budget=0,
             )
+        with self.assertRaisesRegex(ValueError, "leaf_rollout_sampling"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                leaf_rollout_sampling=True,
+            )
 
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -150,6 +156,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
             selection_mode="visits",
             minimum_value_improvement=0.25,
             root_visit_budget=16,
+            leaf_rollout_rounds=1,
+            leaf_rollout_sampling=True,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -213,6 +221,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["selection_mode"], "visits")
         self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
+        self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
 
     def test_write_json_creates_parent_directory_atomically(self) -> None:

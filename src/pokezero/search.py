@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 import math
 from typing import Callable, Mapping
 
@@ -263,6 +264,13 @@ def value_branch_search(
                 leaf_rollout_policies=leaf_rollout_policies,
                 leaf_rollout_config=leaf_rollout_config,
                 leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+                leaf_rollout_seed=_branch_rollout_seed(
+                    trajectory.seed,
+                    player_id=player_id,
+                    prefix_decision_round_count=prefix_decision_round_count,
+                    action_index=action_index,
+                    visit_index=0,
+                ),
             )
         )
 
@@ -365,6 +373,13 @@ def puct_branch_search(
             leaf_rollout_policies=leaf_rollout_policies,
             leaf_rollout_config=leaf_rollout_config,
             leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+            leaf_rollout_seed=_branch_rollout_seed(
+                trajectory.seed,
+                player_id=player_id,
+                prefix_decision_round_count=prefix_decision_round_count,
+                action_index=action_index,
+                visit_index=accumulators[action_index].visits,
+            ),
         )
         accumulator = accumulators[action_index]
         accumulators[action_index] = replace(
@@ -472,6 +487,7 @@ def _value_branch_candidate(
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None,
     leaf_rollout_config: RolloutConfig | None,
     leaf_rollout_decision_rounds: int,
+    leaf_rollout_seed: int,
 ) -> ValueBranchSearchCandidate:
     terminal = branch.step_result.terminal
     if terminal is not None:
@@ -526,7 +542,7 @@ def _value_branch_candidate(
             max_decision_rounds=leaf_max_decision_rounds,
             format_id=leaf_rollout_config.format_id,
         ),
-        seed=trajectory.seed,
+        seed=leaf_rollout_seed,
         battle_id=f"value-branch-leaf-{player_id}-{prefix_decision_round_count}-{action_index}",
         starting_decision_round_index=prefix_decision_round_count + 1,
         available_observations=branch.step_result.observations,
@@ -582,6 +598,20 @@ def _rollout_leaf_history(
     if post_branch_history and continuation_observations[0] == post_branch_history[-1]:
         return (*post_branch_history[:-1], *continuation_observations)
     return (*post_branch_history, *continuation_observations)
+
+
+def _branch_rollout_seed(
+    seed: int,
+    *,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    action_index: int,
+    visit_index: int,
+) -> int:
+    digest = hashlib.sha256(
+        f"{seed}:{player_id}:{prefix_decision_round_count}:{action_index}:{visit_index}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 def _finite_value(value: float) -> float:

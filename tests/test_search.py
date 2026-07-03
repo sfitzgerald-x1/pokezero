@@ -147,6 +147,18 @@ class FirstLegalPolicy:
         )
 
 
+class RngRecordingPolicy:
+    policy_id = "rng-recording"
+
+    def __init__(self) -> None:
+        self.samples_by_branch_action: dict[int, list[float]] = {}
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        branch_action = _only_legal_action(observation)
+        self.samples_by_branch_action.setdefault(branch_action, []).append(rng.random())
+        return PolicyDecision(action_index=branch_action, policy_id=self.policy_id)
+
+
 class ContinuationOutcomeEnv:
     def __init__(self, winners_after_branch: dict[int, str | None]) -> None:
         self.winners_after_branch = winners_after_branch
@@ -424,6 +436,32 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual([candidate.visits for candidate in result.candidates], [4, 1])
         self.assertEqual(len(env.all_step_calls), 5)
         self.assertEqual(result.action_index, 0)
+
+    def test_puct_branch_search_varies_leaf_rollout_rng_across_repeated_visits(self) -> None:
+        env = ContinuationOutcomeEnv({0: None, 1: None})
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        recording_policy = RngRecordingPolicy()
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+            leaf_rollout_policies={"p1": recording_policy, "p2": FixedPolicy(0)},
+            leaf_rollout_config=RolloutConfig(max_decision_rounds=2),
+            leaf_rollout_decision_rounds=1,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        action_zero_samples = recording_policy.samples_by_branch_action[0]
+        self.assertGreater(len(action_zero_samples), 1)
+        self.assertEqual(len(action_zero_samples), len(set(action_zero_samples)))
 
     def test_puct_branch_search_rejects_budget_below_legal_action_count(self) -> None:
         with self.assertRaisesRegex(ValueError, "root_visit_budget"):
