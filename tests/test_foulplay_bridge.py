@@ -185,6 +185,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 leaf_rollout_sampling=True,
             )
+        with self.assertRaisesRegex(ValueError, "start_override_attempts"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                start_override_attempts=0,
+            )
         with self.assertRaisesRegex(ValueError, "foulplay_random_seed"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -288,6 +294,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             leaf_rollout_rounds=1,
             leaf_rollout_sampling=True,
             belief_start_overrides=True,
+            start_override_attempts=7,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -310,6 +317,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_pre_gate_prior_action_changes=3,
                     root_puct_time_budget_exhaustions=2,
                     root_puct_start_override_sources_used=3,
+                    root_puct_start_override_attempts_used=5,
                     root_puct_prior_action_change_details=(
                         {
                             "decision_index": 1,
@@ -339,6 +347,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_pre_gate_prior_action_changes=2,
                     root_puct_time_budget_exhaustions=1,
                     root_puct_start_override_sources_used=1,
+                    root_puct_start_override_attempts_used=4,
                     root_puct_fallback_reasons={"search failed: boom": 2},
                     root_puct_average_elapsed_seconds=0.4,
                 ),
@@ -364,6 +373,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["pre_gate_prior_action_changes"], 5)
         self.assertEqual(payload["root_puct"]["time_budget_exhaustions"], 3)
         self.assertEqual(payload["root_puct"]["start_override_sources_used"], 4)
+        self.assertEqual(payload["root_puct"]["start_override_attempts"], 7)
+        self.assertEqual(payload["root_puct"]["start_override_attempts_used"], 9)
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
@@ -371,6 +382,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["game_results"][0]["root_puct_pre_gate_prior_action_changes"], 3)
         self.assertEqual(payload["game_results"][0]["root_puct_time_budget_exhaustions"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_sources_used"], 3)
+        self.assertEqual(payload["game_results"][0]["root_puct_start_override_attempts_used"], 5)
         self.assertEqual(
             payload["game_results"][0]["root_puct_prior_action_change_details"],
             [

@@ -10,7 +10,6 @@ from .belief import (
     BeliefEvidence,
     PlayerBeliefView,
     RevealedPokemonBelief,
-    sample_opponent_determinizations,
 )
 from .env import BattleStartOverride
 from .policy import PolicyContext
@@ -111,7 +110,7 @@ def gen3_randbat_belief_start_override(
     if view is None:
         return None
     self_team = _self_team_from_metadata(
-        metadata.get("self_team"),
+        _root_self_team_payload(context, team_size=team_size) or metadata.get("self_team"),
         team_size=team_size,
         set_source=set_source,
     )
@@ -132,8 +131,24 @@ def gen3_randbat_belief_start_override(
         player_teams={
             view.self_slot: pack_team(self_team),
             view.opponent_slot: pack_team(opponent_team),
-        }
+        },
+        observation_format_id=context.format_id,
     )
+
+
+def _root_self_team_payload(context: PolicyContext, *, team_size: int) -> Any:
+    """Return the earliest request-known self-team snapshot for root replay materialization."""
+
+    for step in context.trajectory.steps:
+        if step.player_id != context.player_id:
+            continue
+        metadata = step.observation.metadata
+        if not isinstance(metadata, Mapping):
+            continue
+        rows = _as_sequence(metadata.get("self_team"))
+        if len(rows) == team_size:
+            return rows
+    return None
 
 
 def player_belief_view_from_payload(payload: Any) -> PlayerBeliefView | None:
@@ -268,19 +283,14 @@ def _opponent_team_from_belief(
     rng: random.Random,
     team_size: int,
 ) -> tuple[FixturePokemon, ...] | None:
-    sampled = sample_opponent_determinizations(view, sample_count=1, rng=rng)[0]
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
-    for belief, pokemon in zip(view.opponent_pokemon, sampled.opponent_pokemon, strict=True):
-        fixture = (
-            _fixture_from_determinized(pokemon, set_source=set_source)
-            if pokemon.resolved
-            else _sample_revealed_opponent_fixture(
-                belief,
-                set_source=set_source,
-                format_id=format_id,
-                rng=rng,
-            )
+    for belief in view.opponent_pokemon:
+        fixture = _sample_revealed_opponent_fixture(
+            belief,
+            set_source=set_source,
+            format_id=format_id,
+            rng=rng,
         )
         if fixture is None:
             return None
@@ -320,8 +330,70 @@ def _sample_revealed_opponent_fixture(
         variants = tuple(summary.candidate_variants) if summary is not None else ()
     if not variants:
         return None
+    public_max_hp = _condition_max_hp(pokemon.condition)
+    if public_max_hp is not None:
+        hp_matched = tuple(
+            variant
+            for variant in variants
+            if _variant_public_max_hp(
+                variant,
+                fallback_species=pokemon.species,
+                set_source=set_source,
+            )
+            == public_max_hp
+        )
+        if not hp_matched:
+            return None
+        variants = hp_matched
     variant = variants[rng.randrange(len(variants))]
-    return _fixture_from_variant_payload(variant, fallback_species=pokemon.species, set_source=set_source)
+    return _fixture_from_variant_payload(
+        variant,
+        fallback_species=pokemon.species,
+        set_source=set_source,
+    )
+
+
+def _condition_max_hp(condition: str | None) -> int | None:
+    if not condition:
+        return None
+    match = re.match(r"^\s*\d+\s*/\s*(\d+)\s*(?:\s|$)", condition)
+    if match is None:
+        return None
+    try:
+        max_hp = int(match.group(1))
+    except ValueError:
+        return None
+    # Opponent public conditions are percentages in Showdown's request/public state
+    # (e.g. "70/100"). Only request-known absolute HP denominators can safely filter variants.
+    if max_hp <= 100:
+        return None
+    return max_hp
+
+
+def _variant_public_max_hp(
+    payload: Mapping[str, Any],
+    *,
+    fallback_species: str,
+    set_source: Gen3RandbatSource,
+) -> int | None:
+    fixture = _fixture_from_variant_payload(
+        payload,
+        fallback_species=fallback_species,
+        set_source=set_source,
+    )
+    if fixture is None:
+        return None
+    base_stats = _base_stats_for_species(set_source, fixture.species)
+    if base_stats is None:
+        return None
+    ivs = fixture.ivs or {}
+    evs = fixture.evs or {}
+    return _hp_stat(
+        base_hp=base_stats["hp"],
+        iv=int(ivs.get("hp", 31)),
+        ev=int(evs.get("hp", 0)),
+        level=fixture.level,
+    )
 
 
 def _sample_hidden_backline(
@@ -440,10 +512,15 @@ def _should_minimize_confusion_damage(
 ) -> bool:
     if "transform" in normalized_moves:
         return False
-    return not any(
-        _gen3_move_category(move, move_metadata) == "Physical"
-        for move in normalized_moves
-    )
+    for move in normalized_moves:
+        metadata = move_metadata.get(_normalize_id(move), {})
+        # Showdown's random-team counter treats Seismic Toss/Night Shade/etc. as fixed-damage
+        # moves, not physical attacks, when deciding whether to minimize confusion damage.
+        if metadata.get("damage") or metadata.get("damageCallback"):
+            continue
+        if _gen3_move_category(move, move_metadata) == "Physical":
+            return False
+    return True
 
 
 def _gen3_move_category(
@@ -453,7 +530,12 @@ def _gen3_move_category(
     metadata = move_metadata.get(_normalize_id(move), {})
     if str(metadata.get("category") or "") == "Status":
         return "Status"
-    move_type = str(metadata.get("type") or "")
+    normalized_move = _normalize_id(move)
+    if normalized_move.startswith("hiddenpower") and len(normalized_move) > len("hiddenpower"):
+        raw_type = normalized_move[len("hiddenpower") :]
+        move_type = raw_type[:1].upper() + raw_type[1:]
+    else:
+        move_type = str(metadata.get("type") or "")
     if move_type in {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}:
         return "Physical"
     if move_type in {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}:

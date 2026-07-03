@@ -69,6 +69,11 @@ GEN3_STATUSES = ("brn", "par", "slp", "frz", "psn", "tox", "fnt", "none")
 # Recharge (after Hyper Beam etc.), and the bare in-battle "Hidden Power" label.
 UNIVERSAL_MOVES = ("struggle", "recharge", "hiddenpower")
 
+# Showdown can surface happiness-dependent move IDs such as ``return102`` in live requests/events.
+# They are the same move for category-embedding purposes; the numeric suffix is dynamic battle
+# mechanics, not a distinct Gen 3 randbat vocabulary row.
+DYNAMIC_POWER_MOVE_ALIASES = ("return", "frustration")
+
 # Unown's cosmetic formes share one randbat set but appear with forme-specific display
 # names in battle (e.g. "Unown-L"). The A forme is the base species "Unown" (no suffix),
 # so cosmetic formes start at B. Enumerate them so each is collision-free in vocab.
@@ -282,11 +287,22 @@ def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int,
 
 
 def gen3_category_string_aliases(showdown_root: str | Path) -> dict[str, str]:
-    """Cosmetic-forme aliases as category strings: {"species:Unown-L": "species:Unown", ...}."""
+    """Category string aliases onto existing base rows."""
     entities = gen3_randbat_entities(showdown_root)
+    aliases: dict[str, str] = {}
     if not any(_normalize_identifier(species) == "unown" for species in entities["species"]):
-        return {}
-    return {f"species:{forme}": "species:Unown" for forme in UNOWN_FORMES}
+        pass
+    else:
+        aliases.update({f"species:{forme}": "species:Unown" for forme in UNOWN_FORMES})
+    move_universe = {_normalize_identifier(move) for move in entities["moves"]} | {
+        _normalize_identifier(move) for move in UNIVERSAL_MOVES
+    }
+    for move in DYNAMIC_POWER_MOVE_ALIASES:
+        if move not in move_universe:
+            continue
+        for power in range(1, 103):
+            aliases[f"move:{move}{power}"] = f"move:{move}"
+    return aliases
 
 
 @lru_cache(maxsize=8)

@@ -224,6 +224,7 @@ class RootPUCTSearchPolicy:
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     start_override_planner: StartOverridePlanner | None = None
+    start_override_attempts: int = 1
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -251,6 +252,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
         if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
             raise ValueError("leaf_rollout_policy_factory is required when leaf rollouts are enabled.")
+        if self.start_override_attempts <= 0:
+            raise ValueError("start_override_attempts must be positive.")
 
     def reset(self) -> None:
         reset = getattr(self.fallback_policy, "reset", None)
@@ -334,54 +337,83 @@ class RootPUCTSearchPolicy:
                 )
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                 start_override_sources_used = 0
+                start_override_attempts_used = 0
                 for scenario_index, scenario in enumerate(opponent_scenarios):
-                    start_override = (
-                        None
-                        if self.start_override_planner is None
-                        else self.start_override_planner(
-                            context,
-                            scenario,
-                            scenario_index,
-                            rng,
+                    scenario_search: PUCTBranchSearchResult | None = None
+                    scenario_start_override: StartOverrideSource = None
+                    replay_rejection_reasons: list[str] = []
+                    attempts = self.start_override_attempts if self.start_override_planner is not None else 1
+                    for _attempt_index in range(attempts):
+                        start_override_attempts_used += 1
+                        start_override = (
+                            None
+                            if self.start_override_planner is None
+                            else self.start_override_planner(
+                                context,
+                                scenario,
+                                scenario_index,
+                                rng,
+                            )
                         )
-                    )
-                    try:
-                        search = puct_branch_search(
-                            env=env,
-                            trajectory=search_trajectory,
-                            player_id=context.player_id,
-                            prefix_decision_round_count=context.decision_round_index,
-                            legal_action_mask=context.observation.legal_action_mask,
-                            opponent_actions=scenario.actions,
-                            value_fn=self.value_fn,
-                            action_priors=priors,
-                            cpuct=self.cpuct,
-                            leaf_rollout_policies=leaf_rollout_policies,
-                            leaf_rollout_config=self.rollout_config,
-                            leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
-                            root_visit_budget=self.root_visit_budget,
-                            root_time_budget_seconds=scenario_root_time_budget_seconds,
-                            start_override=start_override,
-                            expected_current_observation=context.observation,
+                        try:
+                            search = puct_branch_search(
+                                env=env,
+                                trajectory=search_trajectory,
+                                player_id=context.player_id,
+                                prefix_decision_round_count=context.decision_round_index,
+                                legal_action_mask=context.observation.legal_action_mask,
+                                opponent_actions=scenario.actions,
+                                value_fn=self.value_fn,
+                                action_priors=priors,
+                                cpuct=self.cpuct,
+                                leaf_rollout_policies=leaf_rollout_policies,
+                                leaf_rollout_config=self.rollout_config,
+                                leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                root_visit_budget=self.root_visit_budget,
+                                root_time_budget_seconds=scenario_root_time_budget_seconds,
+                                start_override=start_override,
+                                expected_current_observation=context.observation,
+                            )
+                        except ValueError as exc:
+                            reason = _opponent_scenario_replay_legality_error(exc, scenario)
+                            if reason is None:
+                                raise
+                            replay_rejection_reasons.append(reason)
+                            if start_override is None:
+                                break
+                        else:
+                            scenario_search = search
+                            scenario_start_override = start_override
+                            break
+                    if scenario_search is None:
+                        skipped_scenarios.append(
+                            (
+                                scenario,
+                                _format_replay_rejection_reasons(replay_rejection_reasons),
+                            )
                         )
-                    except ValueError as exc:
-                        reason = _opponent_scenario_replay_legality_error(exc, scenario)
-                        if reason is None:
-                            raise
-                        skipped_scenarios.append((scenario, reason))
                     else:
-                        scenario_search_pairs.append((scenario, search))
-                        if start_override is not None:
+                        scenario_search_pairs.append((scenario, scenario_search))
+                        if scenario_start_override is not None:
                             start_override_sources_used += 1
                 if not scenario_search_pairs:
                     details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
+                    metadata = _opponent_scenario_skip_metadata(
+                        opponent_scenarios=opponent_scenarios,
+                        used_scenarios=(),
+                        skipped_scenarios=tuple(skipped_scenarios),
+                    )
+                    if self.start_override_planner is not None:
+                        metadata.update(
+                            {
+                                "root_puct_start_override_sources_used": 0,
+                                "root_puct_start_override_attempts": self.start_override_attempts,
+                                "root_puct_start_override_attempts_used": start_override_attempts_used,
+                            }
+                        )
                     raise _AllOpponentScenariosReplayIllegal(
                         details=details,
-                        metadata=_opponent_scenario_skip_metadata(
-                            opponent_scenarios=opponent_scenarios,
-                            used_scenarios=(),
-                            skipped_scenarios=tuple(skipped_scenarios),
-                        ),
+                        metadata=metadata,
                     )
                 used_scenarios = _normalize_scenarios(tuple(scenario for scenario, _search in scenario_search_pairs))
                 scenario_searches = tuple(search for _scenario, search in scenario_search_pairs)
@@ -470,7 +502,11 @@ class RootPUCTSearchPolicy:
                 "root_puct_time_budget_exhausted": any(search.time_budget_exhausted for search in scenario_searches),
             }
         start_override_metadata = (
-            {"root_puct_start_override_sources_used": start_override_sources_used}
+            {
+                "root_puct_start_override_sources_used": start_override_sources_used,
+                "root_puct_start_override_attempts": self.start_override_attempts,
+                "root_puct_start_override_attempts_used": start_override_attempts_used,
+            }
             if self.start_override_planner is not None
             else {}
         )
@@ -832,6 +868,22 @@ def _opponent_scenario_replay_legality_error(
         if message == unqualified or message == f"{player}: {unqualified}":
             return message
     return None
+
+
+def _format_replay_rejection_reasons(reasons: Sequence[str]) -> str:
+    if not reasons:
+        return "unknown replay rejection"
+    counts: dict[str, int] = {}
+    ordered: list[str] = []
+    for reason in reasons:
+        if reason not in counts:
+            ordered.append(reason)
+            counts[reason] = 0
+        counts[reason] += 1
+    return "; ".join(
+        reason if counts[reason] == 1 else f"{reason} ({counts[reason]} attempts)"
+        for reason in ordered
+    )
 
 
 def _requested_legal_action_indices_for_player(

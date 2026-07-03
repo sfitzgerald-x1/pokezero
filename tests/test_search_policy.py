@@ -140,6 +140,32 @@ class StartOverrideOutcomeEnv(ImmediateOutcomeEnv):
         self.reset(seed=seed, format_id=format_id or start_override.format_id)
 
 
+class RejectingStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.rejected_start_overrides = 0
+
+    def reset_with_start_override(
+        self,
+        *,
+        seed: int,
+        format_id: str | None = None,
+        start_override: BattleStartOverride,
+    ) -> None:
+        packed_teams = tuple(start_override.player_teams.values())
+        if any("Badmon" in packed_team for packed_team in packed_teams):
+            self.rejected_start_overrides += 1
+            raise ValueError(
+                "start override does not reproduce recorded replay prefix observations "
+                "for decision round 0: p1."
+            )
+        super().reset_with_start_override(
+            seed=seed,
+            format_id=format_id,
+            start_override=start_override,
+        )
+
+
 class TwoOpponentActionEnv(ImmediateOutcomeEnv):
     def observe(self, player: str) -> PokeZeroObservationV0:
         return _observation(0, 1)
@@ -638,6 +664,110 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             "start override does not reproduce recorded replay prefix observations "
             "for decision round 0: p1.",
         )
+
+    def test_root_puct_policy_retries_start_override_replay_rejections(self) -> None:
+        branch_envs: list[RejectingStartOverrideOutcomeEnv] = []
+        planner_calls = 0
+
+        def branch_env_factory() -> RejectingStartOverrideOutcomeEnv:
+            env = RejectingStartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            nonlocal planner_calls
+            del context, scenario, scenario_index, rng
+            planner_calls += 1
+            species = "Badmon" if planner_calls == 1 else "Xatu"
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": f"{species}||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.0, 1.0) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            start_override_planner=start_override_planner,
+            start_override_attempts=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertFalse(decision.metadata["root_puct_fallback"])
+        self.assertEqual(planner_calls, 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_attempts"], 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_attempts_used"], 2)
+        self.assertEqual(decision.metadata["root_puct_start_override_sources_used"], 1)
+        self.assertEqual(branch_envs[0].rejected_start_overrides, 1)
+
+    def test_root_puct_policy_reports_start_override_attempts_on_rejected_fallback(self) -> None:
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            del context, scenario, scenario_index, rng
+            return BattleStartOverride(
+                player_teams={
+                    "p1": "Charizard||||Tackle|||||||",
+                    "p2": "Badmon||||Psychic|||||||",
+                }
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: RejectingStartOverrideOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed"),
+            allow_fallback=True,
+            cpuct=0.0,
+            start_override_planner=start_override_planner,
+            start_override_attempts=3,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_start_override_attempts"], 3)
+        self.assertEqual(decision.metadata["root_puct_start_override_attempts_used"], 3)
+        self.assertEqual(decision.metadata["root_puct_start_override_sources_used"], 0)
 
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(
@@ -1160,6 +1290,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 leaf_rollout_decision_rounds=1,
+            )
+
+    def test_root_puct_policy_rejects_invalid_start_override_attempts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "start_override_attempts"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                start_override_attempts=0,
             )
 
     def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:
