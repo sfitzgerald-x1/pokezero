@@ -63,6 +63,7 @@ SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
 COMPARISON_SCHEMA_VERSION = "pokezero.controlled-foulplay-comparison.v1"
 DEFAULT_FOULPLAY_ROOT = Path(__file__).resolve().parents[2] / "third_party" / "foul-play"
 DEFAULT_BATTLE_ID_PREFIX = "battle-gen3randombattle-controlled"
+DEFAULT_START_OVERRIDE_ATTEMPTS = 10
 _WILSON_95_Z = 1.959963984540054
 _MIN_STRENGTH_SAMPLE_GAMES = 300
 ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
@@ -98,7 +99,7 @@ class ControlledFoulPlayConfig:
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
-    start_override_attempts: int = 1
+    start_override_attempts: int = DEFAULT_START_OVERRIDE_ATTEMPTS
     belief_start_override_samples: int = 1
     start_override_hp_fraction_tolerance: float = 0.02
     opponent_legal_mask_mode: str = "hidden"
@@ -2317,11 +2318,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--start-override-attempts",
         type=int,
-        default=1,
+        default=DEFAULT_START_OVERRIDE_ATTEMPTS,
         help=(
             "Replay-consistency attempts per opponent-action scenario when a start-override "
-            "planner is enabled. Higher values rejection-sample more hidden worlds before falling "
-            "back."
+            "planner is enabled. Defaults to 10 to borrow the randbat determinization "
+            "recipe's rejection-sampling budget; "
+            "lower values are useful for fast smoke diagnostics."
         ),
     )
     parser.add_argument(
