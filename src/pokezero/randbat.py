@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import itertools
 import json
@@ -149,6 +149,8 @@ class Gen3RandbatSpeciesUniverse:
 class Gen3RandbatSource:
     metadata: RandbatSourceMetadata
     universes: Mapping[str, Gen3RandbatSpeciesUniverse]
+    move_metadata: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    species_metadata: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_showdown_root(
@@ -182,7 +184,9 @@ class Gen3RandbatSource:
         resolved_cache_dir = Path(cache_dir).expanduser() if cache_dir else Path.home() / ".cache" / "pokezero"
         cache_path = resolved_cache_dir / f"gen3randbat-{source_hash}.json"
         if use_cache and cache_path.exists():
-            return cls.from_payload(json.loads(cache_path.read_text(encoding="utf-8")))
+            cached = cls.from_payload(json.loads(cache_path.read_text(encoding="utf-8")))
+            if cached.move_metadata and cached.species_metadata:
+                return cached
 
         data = json.loads(sets_path.read_text(encoding="utf-8"))
         if not isinstance(data, Mapping):
@@ -239,7 +243,12 @@ class Gen3RandbatSource:
                 level=level,
                 variants=variants,
             )
-        return cls(metadata=source_metadata, universes=universes)
+        return cls(
+            metadata=source_metadata,
+            universes=universes,
+            move_metadata=move_metadata or {},
+            species_metadata=species_metadata or {},
+        )
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "Gen3RandbatSource":
@@ -281,7 +290,14 @@ class Gen3RandbatSource:
                 level=int(raw_universe.get("level") or 100),
                 variants=variants,
             )
-        return cls(metadata=metadata, universes=universes)
+        move_metadata = payload.get("move_metadata")
+        species_metadata = payload.get("species_metadata")
+        return cls(
+            metadata=metadata,
+            universes=universes,
+            move_metadata=move_metadata if isinstance(move_metadata, Mapping) else {},
+            species_metadata=species_metadata if isinstance(species_metadata, Mapping) else {},
+        )
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -294,6 +310,8 @@ class Gen3RandbatSource:
                 }
                 for key, universe in self.universes.items()
             },
+            "move_metadata": dict(self.move_metadata),
+            "species_metadata": dict(self.species_metadata),
         }
 
     def supports(self, format_id: Optional[str]) -> bool:

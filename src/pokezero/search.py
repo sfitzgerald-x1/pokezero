@@ -215,6 +215,7 @@ def value_branch_search(
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
     start_override: StartOverrideSource = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ValueBranchSearchResult:
     """Enumerate legal root actions and score branch leaves.
 
@@ -257,6 +258,7 @@ def value_branch_search(
                 branch_actions=branch_actions,
                 start_override=_materialize_start_override(start_override),
                 consistency_player_id=player_id,
+                expected_current_observation=expected_current_observation,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -314,6 +316,7 @@ def puct_branch_search(
     root_visit_budget: int | None = None,
     root_time_budget_seconds: float | None = None,
     start_override: StartOverrideSource = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> PUCTBranchSearchResult:
     """Score root replay branches with PUCT-style policy-prior exploration.
 
@@ -346,6 +349,7 @@ def puct_branch_search(
         leaf_rollout_config=leaf_rollout_config,
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
         start_override=start_override,
+        expected_current_observation=expected_current_observation,
     )
     if root_visit_budget is not None and root_visit_budget < len(value_search.candidates):
         raise ValueError("root_visit_budget must be at least the number of legal root actions.")
@@ -393,6 +397,7 @@ def puct_branch_search(
             branch_actions=branch_actions,
             start_override=_materialize_start_override(start_override),
             consistency_player_id=player_id,
+            expected_current_observation=expected_current_observation,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -460,6 +465,7 @@ def flat_branch_search(
     rollout_policies: Mapping[PlayerId, Policy],
     rollout_config: RolloutConfig,
     start_override: StartOverrideSource = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> FlatBranchSearchResult:
     """Enumerate legal root actions, roll each branch out, and score terminal outcomes."""
 
@@ -487,6 +493,7 @@ def flat_branch_search(
             battle_id=f"flat-branch-search-{player_id}-{prefix_decision_round_count}-{action_index}",
             start_override=_materialize_start_override(start_override),
             consistency_player_id=player_id,
+            expected_current_observation=expected_current_observation,
         )
         terminal = rollout.continuation.terminal
         candidates.append(

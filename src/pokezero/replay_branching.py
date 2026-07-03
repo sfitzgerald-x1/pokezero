@@ -7,10 +7,24 @@ from typing import Mapping
 
 from .actions import ACTION_COUNT
 from .env import BattleFormat, BattleStartOverride, PlayerId, PokeZeroEnv, StepResult, TerminalState
-from .observation import PokeZeroObservationV0
+from .observation import (
+    ACTION_CANDIDATE_TOKEN_COUNT,
+    FIELD_TOKEN_COUNT,
+    OPPONENT_POKEMON_TOKEN_COUNT,
+    PokeZeroObservationV0,
+    SELF_POKEMON_TOKEN_COUNT,
+)
 from .policy import Policy
 from .rollout import RolloutConfig, RolloutResult, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
+
+
+_RECENT_EVENT_TOKEN_OFFSET = (
+    FIELD_TOKEN_COUNT
+    + SELF_POKEMON_TOKEN_COUNT
+    + OPPONENT_POKEMON_TOKEN_COUNT
+    + ACTION_CANDIDATE_TOKEN_COUNT
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +156,7 @@ def replay_action_rounds(
     action_rounds: tuple[ReplayActionRound, ...],
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ReplayPrefixResult:
     """Reset ``env`` and replay a recorded action prefix from the battle root."""
 
@@ -163,8 +178,26 @@ def replay_action_rounds(
             requested_players=env.requested_players(),
         )
         if start_override is not None and consistency_player_id is not None:
-            _require_expected_observation(env, action_round, player_id=consistency_player_id)
+            _require_expected_observation(
+                env,
+                action_round,
+                player_id=consistency_player_id,
+                ignore_recent_events=True,
+            )
         env.step(action_round.actions)
+
+    if (
+        start_override is not None
+        and consistency_player_id is not None
+        and expected_current_observation is not None
+    ):
+        _require_observation_match(
+            env,
+            expected=expected_current_observation,
+            player_id=consistency_player_id,
+            turn_index=len(action_rounds),
+            ignore_recent_events=True,
+        )
 
     return ReplayPrefixResult(
         replayed_round_count=len(action_rounds),
@@ -180,6 +213,7 @@ def replay_trajectory_prefix(
     decision_round_count: int,
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ReplayPrefixResult:
     """Replay the first N decision rounds from a trajectory into ``env``."""
 
@@ -193,6 +227,7 @@ def replay_trajectory_prefix(
         ),
         start_override=start_override,
         consistency_player_id=consistency_player_id,
+        expected_current_observation=expected_current_observation,
     )
 
 
@@ -204,6 +239,7 @@ def replay_trajectory_branch(
     branch_actions: Mapping[PlayerId, int],
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ReplayBranchResult:
     """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
 
@@ -213,6 +249,7 @@ def replay_trajectory_branch(
         decision_round_count=prefix_decision_round_count,
         start_override=start_override,
         consistency_player_id=consistency_player_id,
+        expected_current_observation=expected_current_observation,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -244,6 +281,7 @@ def replay_trajectory_branch_rollout(
     reset_policies: bool = True,
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ReplayBranchRolloutResult:
     """Replay, branch once, then continue the rollout with policies until terminal or cap."""
 
@@ -254,6 +292,7 @@ def replay_trajectory_branch_rollout(
         branch_actions=branch_actions,
         start_override=start_override,
         consistency_player_id=consistency_player_id,
+        expected_current_observation=expected_current_observation,
     )
     continuation = continue_rollout_from_current_state(
         env=env,
@@ -314,27 +353,74 @@ def _require_expected_observation(
     action_round: ReplayActionRound,
     *,
     player_id: PlayerId,
+    ignore_recent_events: bool = False,
 ) -> None:
     if not action_round.expected_observations:
         return
     expected = action_round.expected_observations.get(player_id)
     if expected is None:
         return
+    _require_observation_match(
+        env,
+        expected=expected,
+        player_id=player_id,
+        turn_index=action_round.turn_index,
+        ignore_recent_events=ignore_recent_events,
+    )
+
+
+def _require_observation_match(
+    env: PokeZeroEnv,
+    *,
+    expected: PokeZeroObservationV0,
+    player_id: PlayerId,
+    turn_index: int,
+    ignore_recent_events: bool = False,
+) -> None:
     actual = env.observe(player_id)
-    if not _observations_match_for_replay(actual, expected):
+    if not _observations_match_for_replay(
+        actual,
+        expected,
+        ignore_recent_events=ignore_recent_events,
+    ):
         raise ValueError(
             "start override does not reproduce recorded replay prefix observations "
-            f"for decision round {action_round.turn_index}: {player_id}."
+            f"for decision round {turn_index}: {player_id}."
         )
 
 
-def _observations_match_for_replay(actual: PokeZeroObservationV0, expected: PokeZeroObservationV0) -> bool:
+def _observations_match_for_replay(
+    actual: PokeZeroObservationV0,
+    expected: PokeZeroObservationV0,
+    *,
+    ignore_recent_events: bool = False,
+) -> bool:
+    categorical_actual = actual.categorical_ids
+    categorical_expected = expected.categorical_ids
+    numeric_actual = actual.numeric_features
+    numeric_expected = expected.numeric_features
+    token_type_actual = actual.token_type_ids
+    token_type_expected = expected.token_type_ids
+    attention_actual = actual.attention_mask
+    attention_expected = expected.attention_mask
+    if ignore_recent_events:
+        # Start overrides for randbats use gen3customgame because Showdown only honors arbitrary
+        # packed teams there. Its startup rule/tier protocol lines differ from gen3randombattle
+        # even when the current battle state, request, teams, and legal actions are faithful.
+        categorical_actual = categorical_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        categorical_expected = categorical_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        numeric_actual = numeric_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        numeric_expected = numeric_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        token_type_actual = token_type_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        token_type_expected = token_type_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        attention_actual = attention_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        attention_expected = attention_expected[:_RECENT_EVENT_TOKEN_OFFSET]
     return (
         actual.schema_version == expected.schema_version
-        and actual.categorical_ids == expected.categorical_ids
-        and actual.numeric_features == expected.numeric_features
-        and actual.token_type_ids == expected.token_type_ids
-        and actual.attention_mask == expected.attention_mask
+        and categorical_actual == categorical_expected
+        and numeric_actual == numeric_expected
+        and token_type_actual == token_type_expected
+        and attention_actual == attention_expected
         and tuple(actual.legal_action_mask) == tuple(expected.legal_action_mask)
         and actual.perspective == expected.perspective
     )

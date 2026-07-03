@@ -362,6 +362,7 @@ class RootPUCTSearchPolicy:
                             root_visit_budget=self.root_visit_budget,
                             root_time_budget_seconds=scenario_root_time_budget_seconds,
                             start_override=start_override,
+                            expected_current_observation=context.observation,
                         )
                     except ValueError as exc:
                         reason = _opponent_scenario_replay_legality_error(exc, scenario)
@@ -824,6 +825,8 @@ def _opponent_scenario_replay_legality_error(
     scenario: OpponentActionScenario,
 ) -> str | None:
     message = str(exc)
+    if message.startswith("start override does not reproduce recorded replay prefix observations"):
+        return message
     for player, action_index in scenario.actions.items():
         unqualified = f"action_index {action_index} is not legal for the current request."
         if message == unqualified or message == f"{player}: {unqualified}":

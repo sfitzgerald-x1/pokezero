@@ -7,7 +7,13 @@ import shutil
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import BattleStartOverride, DEFAULT_BATTLE_START_OVERRIDE_FORMAT, StepResult
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
-from pokezero.observation import PokeZeroObservationV0
+from pokezero.observation import (
+    ACTION_CANDIDATE_TOKEN_COUNT,
+    FIELD_TOKEN_COUNT,
+    OPPONENT_POKEMON_TOKEN_COUNT,
+    PokeZeroObservationV0,
+    SELF_POKEMON_TOKEN_COUNT,
+)
 from pokezero.policy import RandomLegalPolicy
 from pokezero.replay_branching import (
     ReplayActionRound,
@@ -18,6 +24,7 @@ from pokezero.replay_branching import (
     replay_trajectory_prefix,
 )
 from pokezero.rollout import RolloutConfig, RolloutDriver
+from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -41,6 +48,34 @@ def _observation(*, legal_action: int = 0) -> PokeZeroObservationV0:
         numeric_features=(),
         token_type_ids=(),
         attention_mask=(),
+        legal_action_mask=legal_action_mask,
+    )
+
+
+def _observation_with_recent_event_token(*, legal_action: int = 0, recent_event_token: int = 0) -> PokeZeroObservationV0:
+    spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    recent_event_offset = (
+        FIELD_TOKEN_COUNT
+        + SELF_POKEMON_TOKEN_COUNT
+        + OPPONENT_POKEMON_TOKEN_COUNT
+        + ACTION_CANDIDATE_TOKEN_COUNT
+    )
+    categorical_ids = [[0] * spec.categorical_feature_count for _ in range(spec.token_count)]
+    numeric_features = [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+    token_type_ids = [0] * spec.token_count
+    attention_mask = [False] * spec.token_count
+    categorical_ids[0][0] = 1
+    numeric_features[0][0] = 1.0
+    attention_mask[0] = True
+    categorical_ids[recent_event_offset][0] = recent_event_token
+    numeric_features[recent_event_offset][0] = 1.0
+    attention_mask[recent_event_offset] = True
+    legal_action_mask = tuple(index == legal_action for index in range(ACTION_COUNT))
+    return PokeZeroObservationV0(
+        categorical_ids=tuple(tuple(row) for row in categorical_ids),
+        numeric_features=tuple(tuple(row) for row in numeric_features),
+        token_type_ids=tuple(token_type_ids),
+        attention_mask=tuple(attention_mask),
         legal_action_mask=legal_action_mask,
     )
 
@@ -106,6 +141,15 @@ class StartOverrideReplayEnv(ScriptedReplayEnv):
     ) -> None:
         self.start_overrides.append(start_override)
         self.reset(seed=seed, format_id=format_id or start_override.format_id)
+
+
+class ObservationReplayEnv(StartOverrideReplayEnv):
+    def __init__(self, requested_by_round: tuple[tuple[str, ...], ...], observation: PokeZeroObservationV0) -> None:
+        super().__init__(requested_by_round)
+        self.observation = observation
+
+    def observe(self, player: str) -> PokeZeroObservationV0:
+        return self.observation
 
 
 class ReplayBranchingUnitTest(unittest.TestCase):
@@ -273,6 +317,30 @@ class ReplayBranchingUnitTest(unittest.TestCase):
 
         self.assertEqual(env.submitted_actions, [{"p1": 0, "p2": 0}])
 
+    def test_start_override_consistency_ignores_recent_event_token_drift(self) -> None:
+        env = ObservationReplayEnv((("p1",),), _observation_with_recent_event_token(recent_event_token=2))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        replay_action_rounds(
+            env,
+            seed=17,
+            action_rounds=(
+                ReplayActionRound(
+                    turn_index=0,
+                    actions={"p1": 0},
+                    expected_observations={
+                        "p1": _observation_with_recent_event_token(recent_event_token=1),
+                    },
+                ),
+            ),
+            start_override=start_override,
+            consistency_player_id="p1",
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 0}])
+
     def test_replay_action_rounds_rejects_request_mismatch(self) -> None:
         env = ScriptedReplayEnv((("p1",),))
 
@@ -311,6 +379,24 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                 trajectory,
                 prefix_decision_round_count=0,
                 branch_actions={"p1": 4, "p2": 3},
+            )
+
+    def test_replay_trajectory_branch_checks_start_override_current_observation_at_zero_prefix(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        env = StartOverrideReplayEnv((("p1",),))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "decision round 0: p1"):
+            replay_trajectory_branch(
+                env,
+                trajectory,
+                prefix_decision_round_count=0,
+                branch_actions={"p1": 0},
+                start_override=start_override,
+                consistency_player_id="p1",
+                expected_current_observation=_observation(legal_action=2),
             )
 
     def test_replay_trajectory_branch_rollout_continues_after_branch_action(self) -> None:
