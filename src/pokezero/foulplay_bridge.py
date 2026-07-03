@@ -74,6 +74,8 @@ class ControlledFoulPlayConfig:
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
+    selection_mode: str = "puct"
+    minimum_value_improvement: float | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
     opponent_legal_mask_mode: str = "hidden"
@@ -94,6 +96,10 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct"}:
             raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
+        if self.selection_mode not in {"puct", "value"}:
+            raise ValueError("selection_mode must be 'puct' or 'value'.")
+        if self.minimum_value_improvement is not None and self.minimum_value_improvement < 0.0:
+            raise ValueError("minimum_value_improvement must be non-negative when set.")
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.leaf_rollout_rounds < 0:
@@ -177,6 +183,8 @@ class ControlledFoulPlayBenchmarkResult:
             "max_decision_rounds": self.config.max_decision_rounds,
             "root_puct": {
                 "cpuct": self.config.cpuct,
+                "selection_mode": self.config.selection_mode,
+                "minimum_value_improvement": self.config.minimum_value_improvement,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
@@ -597,6 +605,8 @@ def _build_policy(
         allow_fallback=config.allow_search_fallback,
         policy_id=search_policy_id,
         cpuct=config.cpuct,
+        selection_mode=config.selection_mode,
+        minimum_value_improvement=config.minimum_value_improvement,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         leaf_rollout_metadata={"root_puct_leaf_rollout_opponent_policy": "checkpoint"}
@@ -1128,6 +1138,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=1.0, help="Checkpoint policy softmax temperature.")
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
     parser.add_argument(
+        "--selection-mode",
+        choices=("puct", "value"),
+        default="puct",
+        help="Root search candidate selection rule.",
+    )
+    parser.add_argument(
+        "--minimum-value-improvement",
+        type=float,
+        default=None,
+        help=(
+            "Require the search-selected action to beat the prior-best action by this value margin; "
+            "otherwise use the prior-best action."
+        ),
+    )
+    parser.add_argument(
         "--root-opponent-action-scenarios",
         type=int,
         default=1,
@@ -1180,6 +1205,8 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,
+        selection_mode=args.selection_mode,
+        minimum_value_improvement=args.minimum_value_improvement,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,

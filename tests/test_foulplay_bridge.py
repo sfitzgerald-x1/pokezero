@@ -122,11 +122,27 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(_is_terminal_protocol_line("|tie|"))
         self.assertFalse(_is_terminal_protocol_line("|turn|2"))
 
+    def test_config_rejects_invalid_search_tuning_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "selection_mode"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                selection_mode="unknown",
+            )
+        with self.assertRaisesRegex(ValueError, "minimum_value_improvement"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                minimum_value_improvement=-0.1,
+            )
+
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
             showdown_root=Path("/showdown"),
             games=2,
+            selection_mode="value",
+            minimum_value_improvement=0.25,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -167,6 +183,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["fallbacks"], 2)
         self.assertEqual(payload["root_puct"]["opponent_legal_mask_mode"], "hidden")
         self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)
+        self.assertEqual(payload["root_puct"]["selection_mode"], "value")
+        self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
 
     def test_write_json_creates_parent_directory_atomically(self) -> None:
