@@ -419,7 +419,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_prior_score": prior_best.score,
                 "root_puct_prior_action_prior": prior_best.prior,
                 "root_puct_prior_action_visits": prior_best.visits,
-                "root_puct_search_changed_prior_action": best.action_index != prior_best.action_index,
+                "root_puct_selected_changed_prior_action": best.action_index != prior_best.action_index,
                 "root_puct_pre_gate_changed_prior_action": search_best.action_index != prior_best.action_index,
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
