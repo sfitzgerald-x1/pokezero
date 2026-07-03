@@ -17,6 +17,7 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayGameResult,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
+    _build_policy,
     _foulplay_command,
     _foulplay_env,
     _line_for_foulplay,
@@ -251,6 +252,37 @@ class FoulPlayBridgeTest(unittest.TestCase):
             temperature=1.75,
         )
         self.assertEqual(warmed_config.effective_root_prior_temperature, 1.75)
+
+    def test_build_policy_uses_full_action_default_opponent_candidate_reserve(self) -> None:
+        class FakePolicy:
+            def __init__(self, policy_id: str | None = None, **_: object) -> None:
+                self.policy_id = policy_id or "fake-transformer"
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+        )
+
+        with patch("pokezero.foulplay_bridge.TransformerSoftmaxPolicy", side_effect=FakePolicy):
+            policy = _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(
+            getattr(policy.opponent_action_scenario_planner, "planner_id"),
+            f"checkpoint-top{ACTION_COUNT}",
+        )
+        self.assertEqual(policy.max_opponent_action_scenarios, 1)
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
