@@ -268,6 +268,7 @@ def value_branch_search(
                     trajectory.seed,
                     player_id=player_id,
                     prefix_decision_round_count=prefix_decision_round_count,
+                    opponent_actions=opponent_actions,
                     action_index=action_index,
                     visit_index=0,
                 ),
@@ -377,6 +378,7 @@ def puct_branch_search(
                 trajectory.seed,
                 player_id=player_id,
                 prefix_decision_round_count=prefix_decision_round_count,
+                opponent_actions=opponent_actions,
                 action_index=action_index,
                 visit_index=accumulators[action_index].visits,
             ),
@@ -605,11 +607,19 @@ def _branch_rollout_seed(
     *,
     player_id: PlayerId,
     prefix_decision_round_count: int,
+    opponent_actions: Mapping[PlayerId, int],
     action_index: int,
     visit_index: int,
 ) -> int:
+    opponent_key = ",".join(
+        f"{player}:{action}"
+        for player, action in sorted(opponent_actions.items())
+    )
     digest = hashlib.sha256(
-        f"{seed}:{player_id}:{prefix_decision_round_count}:{action_index}:{visit_index}".encode("utf-8")
+        (
+            f"{seed}:{player_id}:{prefix_decision_round_count}:"
+            f"{opponent_key}:{action_index}:{visit_index}"
+        ).encode("utf-8")
     ).digest()
     return int.from_bytes(digest[:8], "big")
 
