@@ -197,6 +197,10 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_scenarios_generated: int = 0
     root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_opponent_action_scenarios_unsearched: int = 0
+    root_puct_opponent_action_groups_generated: int = 0
+    root_puct_opponent_action_groups_used: int = 0
+    root_puct_opponent_action_groups_skipped: int = 0
+    root_puct_opponent_action_groups_unsearched: int = 0
     root_puct_selected_prior_action_changes: int = 0
     root_puct_pre_gate_prior_action_changes: int = 0
     root_puct_time_budget_exhaustions: int = 0
@@ -220,6 +224,10 @@ class ControlledFoulPlayGameResult:
             "root_puct_opponent_action_scenarios_generated": self.root_puct_opponent_action_scenarios_generated,
             "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
             "root_puct_opponent_action_scenarios_unsearched": self.root_puct_opponent_action_scenarios_unsearched,
+            "root_puct_opponent_action_groups_generated": self.root_puct_opponent_action_groups_generated,
+            "root_puct_opponent_action_groups_used": self.root_puct_opponent_action_groups_used,
+            "root_puct_opponent_action_groups_skipped": self.root_puct_opponent_action_groups_skipped,
+            "root_puct_opponent_action_groups_unsearched": self.root_puct_opponent_action_groups_unsearched,
             "root_puct_selected_prior_action_changes": self.root_puct_selected_prior_action_changes,
             "root_puct_pre_gate_prior_action_changes": self.root_puct_pre_gate_prior_action_changes,
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
@@ -267,6 +275,10 @@ class ControlledFoulPlayBenchmarkResult:
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
         root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
         root_scenarios_unsearched = sum(game.root_puct_opponent_action_scenarios_unsearched for game in self.games)
+        root_action_groups_generated = sum(game.root_puct_opponent_action_groups_generated for game in self.games)
+        root_action_groups_used = sum(game.root_puct_opponent_action_groups_used for game in self.games)
+        root_action_groups_skipped = sum(game.root_puct_opponent_action_groups_skipped for game in self.games)
+        root_action_groups_unsearched = sum(game.root_puct_opponent_action_groups_unsearched for game in self.games)
         root_selected_prior_action_changes = sum(game.root_puct_selected_prior_action_changes for game in self.games)
         root_pre_gate_prior_action_changes = sum(game.root_puct_pre_gate_prior_action_changes for game in self.games)
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
@@ -322,6 +334,10 @@ class ControlledFoulPlayBenchmarkResult:
                 "opponent_action_scenarios_generated": root_scenarios_generated,
                 "opponent_action_scenarios_skipped": root_scenarios_skipped,
                 "opponent_action_scenarios_unsearched": root_scenarios_unsearched,
+                "opponent_action_groups_generated": root_action_groups_generated,
+                "opponent_action_groups_used": root_action_groups_used,
+                "opponent_action_groups_skipped": root_action_groups_skipped,
+                "opponent_action_groups_unsearched": root_action_groups_unsearched,
                 "selected_prior_action_changes": root_selected_prior_action_changes,
                 "pre_gate_prior_action_changes": root_pre_gate_prior_action_changes,
                 "time_budget_exhaustions": root_time_budget_exhaustions,
@@ -1153,9 +1169,6 @@ def _build_policy(
     if config.belief_start_overrides:
         set_source = load_gen3_randbat_source_cached(config.showdown_root)
         start_override_planner = gen3_randbat_belief_start_override_planner(set_source)
-    max_opponent_action_scenarios = config.root_opponent_action_scenarios
-    if start_override_planner is not None:
-        max_opponent_action_scenarios *= config.belief_start_override_samples
 
     return RootPUCTSearchPolicy(
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -1177,7 +1190,7 @@ def _build_policy(
         root_time_budget_seconds=(
             None if config.root_time_budget_ms is None else config.root_time_budget_ms / 1000.0
         ),
-        max_opponent_action_scenarios=max_opponent_action_scenarios,
+        max_opponent_action_scenarios=config.root_opponent_action_scenarios,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         start_override_planner=start_override_planner,
@@ -1397,6 +1410,26 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_action_groups_generated = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_generated") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_used = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_used") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_skipped = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_skipped") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_unsearched = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_unsearched") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_selected_prior_action_changes = sum(
         1
         for decision in state.decisions
@@ -1444,6 +1477,10 @@ async def _run_single_game(
         root_puct_opponent_action_scenarios_generated=root_scenarios_generated,
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_opponent_action_scenarios_unsearched=root_scenarios_unsearched,
+        root_puct_opponent_action_groups_generated=root_action_groups_generated,
+        root_puct_opponent_action_groups_used=root_action_groups_used,
+        root_puct_opponent_action_groups_skipped=root_action_groups_skipped,
+        root_puct_opponent_action_groups_unsearched=root_action_groups_unsearched,
         root_puct_selected_prior_action_changes=root_selected_prior_action_changes,
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,

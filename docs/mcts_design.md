@@ -62,10 +62,11 @@ In priority order:
    `BattleStartOverride` into `LocalShowdownEnv`, so branches can start from sampled packed teams
    instead of the default random battle root. Root-PUCT can now expand each accepted opponent-action
    scenario into multiple weighted belief-world samples before aggregation; in the foul-play harness,
-   `--belief-start-override-samples N` multiplies the effective searched scenario cap by `N` when
-   `--belief-start-overrides` is enabled. This is still PIMC-style averaging, not an information-set
-   tree, but it makes hidden backline/switch-in uncertainty observable to search instead of locking
-   each action scenario to one sampled team. This seam is intentionally strict: arbitrary packed
+   `--belief-start-override-samples N` keeps the opponent-action cap fixed and searches up to `N`
+   sampled worlds inside each accepted opponent action before advancing to the next reserve action.
+   This is still PIMC-style averaging, not an information-set tree, but it makes hidden
+   backline/switch-in uncertainty observable to search instead of locking each action scenario to one
+   sampled team. This seam is intentionally strict: arbitrary packed
    teams are only materialized through `gen3customgame`, both players' teams must be supplied, and
    strict replay audits can check the searched player's prefix observation features so a sampled
    world that no longer reproduces that player's recorded prefix fails loudly. Root search uses the
@@ -123,8 +124,8 @@ coverage and a plausible search-selection configuration are in place.
 A one-game multi-belief start-override smoke over seed `952001` with
 `--belief-start-overrides`, `--belief-start-override-samples 2`, and
 `--start-override-attempts 2` completed end-to-end, but exposed the expected replay brittleness:
-raw and root-PUCT both won `0/1`; root-PUCT searched 19 decisions, used 31 start-override sources,
-spent 494 override attempts, changed the selected prior action once, and fell back 7 times because
+raw and root-PUCT both won `0/1`; root-PUCT searched 12 decisions, used 15 start-override sources,
+spent 379 override attempts, changed no selected prior actions, and fell back 11 times because
 sampled worlds or sampled opponent-action scenarios failed replay validation. This proves the
 multi-belief path is wired, not that it is strong enough for a headline read.
 

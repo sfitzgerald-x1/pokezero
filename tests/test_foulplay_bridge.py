@@ -351,7 +351,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             )
 
         self.assertEqual(policy.start_override_samples_per_scenario, 3)
-        self.assertEqual(policy.max_opponent_action_scenarios, 3)
+        self.assertEqual(policy.max_opponent_action_scenarios, 1)
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -473,6 +473,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_scenarios_generated=9,
                     root_puct_opponent_action_scenarios_skipped=1,
                     root_puct_opponent_action_scenarios_unsearched=2,
+                    root_puct_opponent_action_groups_generated=5,
+                    root_puct_opponent_action_groups_used=3,
+                    root_puct_opponent_action_groups_skipped=1,
+                    root_puct_opponent_action_groups_unsearched=1,
                     root_puct_selected_prior_action_changes=2,
                     root_puct_pre_gate_prior_action_changes=3,
                     root_puct_time_budget_exhaustions=2,
@@ -504,6 +508,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_scenarios_generated=6,
                     root_puct_opponent_action_scenarios_skipped=3,
                     root_puct_opponent_action_scenarios_unsearched=1,
+                    root_puct_opponent_action_groups_generated=4,
+                    root_puct_opponent_action_groups_used=2,
+                    root_puct_opponent_action_groups_skipped=1,
+                    root_puct_opponent_action_groups_unsearched=1,
                     root_puct_selected_prior_action_changes=1,
                     root_puct_pre_gate_prior_action_changes=2,
                     root_puct_time_budget_exhaustions=1,
@@ -531,6 +539,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_generated"], 15)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_skipped"], 4)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_unsearched"], 3)
+        self.assertEqual(payload["root_puct"]["opponent_action_groups_generated"], 9)
+        self.assertEqual(payload["root_puct"]["opponent_action_groups_used"], 5)
+        self.assertEqual(payload["root_puct"]["opponent_action_groups_skipped"], 2)
+        self.assertEqual(payload["root_puct"]["opponent_action_groups_unsearched"], 2)
         self.assertEqual(payload["root_puct"]["selected_prior_action_changes"], 3)
         self.assertEqual(payload["root_puct"]["pre_gate_prior_action_changes"], 5)
         self.assertEqual(payload["root_puct"]["time_budget_exhaustions"], 3)
@@ -541,6 +553,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_unsearched"], 2)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_groups_generated"], 5)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_groups_used"], 3)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_groups_skipped"], 1)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_groups_unsearched"], 1)
         self.assertEqual(payload["game_results"][0]["root_puct_selected_prior_action_changes"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_pre_gate_prior_action_changes"], 3)
         self.assertEqual(payload["game_results"][0]["root_puct_time_budget_exhaustions"], 2)
