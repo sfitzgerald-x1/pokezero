@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
-from pokezero.env import StepResult, TerminalState
+from pokezero.env import BattleStartOverride, StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy
 from pokezero.policy import PolicyDecision
@@ -18,6 +18,12 @@ def _observation(action_index: int) -> PokeZeroObservationV0:
         token_type_ids=(),
         attention_mask=(),
         legal_action_mask=tuple(index == action_index for index in range(ACTION_COUNT)),
+    )
+
+
+def _start_override() -> BattleStartOverride:
+    return BattleStartOverride(
+        player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
     )
 
 
@@ -298,6 +304,19 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(result.action_index, 1)
         self.assertEqual(result.best_candidate.value, 1.0)
         self.assertEqual(result.best_candidate.evaluated_history_length, 0)
+
+    def test_value_branch_search_requires_current_observation_for_start_override(self) -> None:
+        with self.assertRaisesRegex(ValueError, "expected_current_observation"):
+            value_branch_search(
+                env=ValueBranchEnv({0: "p1"}),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                start_override=_start_override(),
+            )
 
     def test_value_branch_search_skips_candidate_actions_rejected_by_replay(self) -> None:
         env = StrictLegalValueBranchEnv({1})
@@ -673,6 +692,20 @@ class FlatBranchSearchTest(unittest.TestCase):
             ],
         )
         self.assertEqual(result.to_dict()["selected_action_index"], 1)
+
+    def test_flat_branch_search_requires_current_observation_for_start_override(self) -> None:
+        with self.assertRaisesRegex(ValueError, "expected_current_observation"):
+            flat_branch_search(
+                env=BranchOutcomeEnv({0: "p1"}),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                rollout_policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                start_override=_start_override(),
+            )
 
     def test_flat_branch_search_rejects_bad_legal_mask_width(self) -> None:
         with self.assertRaisesRegex(ValueError, "legal_action_mask"):

@@ -238,6 +238,10 @@ def value_branch_search(
         raise ValueError("leaf_rollout_policies are required when leaf rollouts are enabled.")
     if leaf_rollout_decision_rounds and leaf_rollout_config is None:
         raise ValueError("leaf_rollout_config is required when leaf rollouts are enabled.")
+    _require_current_observation_for_start_override(
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
 
     prefix_history = player_observation_history(
         trajectory,
@@ -483,6 +487,10 @@ def flat_branch_search(
         raise ValueError("flat branch search requires at least one legal action.")
     if player_id in opponent_actions:
         raise ValueError("opponent_actions must not include the searched player.")
+    _require_current_observation_for_start_override(
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
 
     candidates: list[BranchSearchCandidate] = []
     for action_index in candidate_indices:
@@ -636,6 +644,15 @@ def _materialize_start_override(start_override: StartOverrideSource) -> BattleSt
     if callable(start_override):
         return start_override()
     return start_override
+
+
+def _require_current_observation_for_start_override(
+    *,
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+) -> None:
+    if start_override is not None and expected_current_observation is None:
+        raise ValueError("expected_current_observation is required when start_override is provided.")
 
 
 def _post_branch_history(
