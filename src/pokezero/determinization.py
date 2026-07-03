@@ -7,6 +7,7 @@ import random
 import re
 from typing import Any, Mapping, Sequence
 
+from .actions import MOVE_ACTION_COUNT, canonical_switch_action_map, is_switch_action
 from .belief import (
     BeliefEvidence,
     PlayerBeliefView,
@@ -118,6 +119,13 @@ def gen3_randbat_belief_start_override(
     )
     if self_team is None:
         return None
+    team_index_constraints = _public_opponent_team_index_constraints(
+        context,
+        opponent_slot=view.opponent_slot,
+        team_size=team_size,
+    )
+    if team_index_constraints is None:
+        return None
     opponent_team = _opponent_team_from_belief(
         view,
         set_source=set_source,
@@ -125,6 +133,7 @@ def gen3_randbat_belief_start_override(
         rng=rng,
         team_size=team_size,
         move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
+        team_index_constraints=team_index_constraints,
     )
     if opponent_team is None:
         return None
@@ -197,6 +206,179 @@ def _public_opponent_move_slot_constraints(
     return constraints
 
 
+def _public_opponent_team_index_constraints(
+    context: PolicyContext,
+    *,
+    opponent_slot: str,
+    team_size: int,
+) -> dict[str, int] | None:
+    """Map public opponent switch targets back to recorded packed-team indices.
+
+    Replay submits historical opponent switch actions by action index. In Showdown, that action
+    index decodes through the opponent's private team order, so a sampled packed team must put a
+    publicly switched-in species at the same party index that the recorded action targeted. The
+    switch action index comes from the replay trajectory; the target species comes only from public
+    switch/drag/replace lines visible in the acting player's observations.
+    """
+
+    if team_size <= 0:
+        return None
+    own_observations = _own_observations_by_decision_round(context)
+    constraints: dict[str, int] = {}
+    current_order = list(range(team_size))
+    active_position: int | None = None
+    active_species: str | None = None
+    if own_observations:
+        first_turn = min(own_observations)
+        if first_turn == 0:
+            active_species = _public_opponent_active_species(own_observations[first_turn])
+            if active_species is not None:
+                if not _assign_team_index_constraint(
+                    constraints,
+                    species=active_species,
+                    team_index=0,
+                    team_size=team_size,
+                ):
+                    return None
+                active_position = 0
+
+    opponent_steps = sorted(
+        (
+            step
+            for step in context.trajectory.steps
+            if step.player_id == opponent_slot and step.turn_index < context.decision_round_index
+        ),
+        key=lambda step: step.turn_index,
+    )
+    for step in opponent_steps:
+        next_active = _public_opponent_active_species(own_observations.get(step.turn_index + 1))
+        if is_switch_action(step.action_index) and active_position is not None:
+            switch_slot = step.action_index - MOVE_ACTION_COUNT
+            try:
+                switch_targets = canonical_switch_action_map(active_position, team_size=team_size)
+            except ValueError:
+                switch_targets = ()
+            if switch_slot < len(switch_targets):
+                switch_species = _public_switch_after_decision_round(
+                    own_observations,
+                    opponent_slot=opponent_slot,
+                    self_slot=context.player_id,
+                    turn_index=step.turn_index,
+                )
+                if switch_species is not None:
+                    target_position = switch_targets[switch_slot]
+                    target_index = current_order[target_position]
+                    if not _assign_team_index_constraint(
+                        constraints,
+                        species=switch_species,
+                        team_index=target_index,
+                        team_size=team_size,
+                    ):
+                        return None
+                    current_order[active_position], current_order[target_position] = (
+                        current_order[target_position],
+                        current_order[active_position],
+                    )
+                    active_species = switch_species
+                    active_position = 0
+                    continue
+
+        if next_active is None:
+            continue
+        next_key = _normalize_id(next_active)
+        if next_key in constraints:
+            active_species = next_active
+            active_position = _move_constrained_species_to_active_position(
+                current_order,
+                constraints[next_key],
+                active_position=active_position,
+            )
+        elif active_species is not None and next_key != _normalize_id(active_species):
+            active_species = next_active
+            active_position = None
+    return constraints
+
+
+def _move_constrained_species_to_active_position(
+    current_order: list[int],
+    initial_index: int,
+    *,
+    active_position: int | None,
+) -> int | None:
+    try:
+        current_position = current_order.index(initial_index)
+    except ValueError:
+        return None
+    if active_position is None:
+        return None
+    if current_position != active_position:
+        current_order[active_position], current_order[current_position] = (
+            current_order[current_position],
+            current_order[active_position],
+        )
+    return 0
+
+
+def _assign_team_index_constraint(
+    constraints: dict[str, int],
+    *,
+    species: str,
+    team_index: int,
+    team_size: int,
+) -> bool:
+    if team_index < 0 or team_index >= team_size:
+        return False
+    species_key = _normalize_id(species)
+    existing = constraints.get(species_key)
+    if existing is not None:
+        return existing == team_index
+    if any(index == team_index for key, index in constraints.items() if key != species_key):
+        return False
+    constraints[species_key] = team_index
+    return True
+
+
+def _public_switch_after_decision_round(
+    observations_by_turn: Mapping[int, PokeZeroObservationV0],
+    *,
+    opponent_slot: str,
+    self_slot: str,
+    turn_index: int,
+) -> str | None:
+    next_observation = observations_by_turn.get(turn_index + 1)
+    if next_observation is None:
+        return None
+    for line in reversed(_recent_public_events(next_observation)):
+        species = _switch_species_from_public_event_line(
+            line,
+            opponent_slot=opponent_slot,
+            self_slot=self_slot,
+        )
+        if species is not None:
+            return species
+    return None
+
+
+def _switch_species_from_public_event_line(
+    line: str,
+    *,
+    opponent_slot: str,
+    self_slot: str,
+) -> str | None:
+    parts = str(line).split("|")
+    if len(parts) < 4 or parts[1] not in {"switch", "drag", "replace"}:
+        return None
+    actor = parts[2]
+    if not _public_actor_matches_slot(actor, slot=opponent_slot, self_slot=self_slot):
+        return None
+    return _species_from_switch_details(parts[3]) or _species_from_public_actor(actor)
+
+
+def _species_from_switch_details(details: str) -> str | None:
+    species = str(details).split(",", 1)[0].strip()
+    return species or None
+
+
 def _own_observations_by_decision_round(context: PolicyContext) -> dict[int, PokeZeroObservationV0]:
     observations: dict[int, PokeZeroObservationV0] = {
         context.decision_round_index: context.observation,
@@ -207,7 +389,9 @@ def _own_observations_by_decision_round(context: PolicyContext) -> dict[int, Pok
     return observations
 
 
-def _public_opponent_active_species(observation: PokeZeroObservationV0) -> str | None:
+def _public_opponent_active_species(observation: PokeZeroObservationV0 | None) -> str | None:
+    if observation is None:
+        return None
     metadata = observation.metadata
     if not isinstance(metadata, Mapping):
         return None
@@ -431,6 +615,7 @@ def _opponent_team_from_belief(
     rng: random.Random,
     team_size: int,
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
+    team_index_constraints: Mapping[str, int] | None = None,
 ) -> tuple[FixturePokemon, ...] | None:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
@@ -457,7 +642,48 @@ def _opponent_team_from_belief(
     )
     if hidden is None:
         return None
-    return tuple(team + list(hidden))
+    return _fixture_team_with_index_constraints(
+        tuple(team + list(hidden)),
+        team_index_constraints or {},
+        team_size=team_size,
+    )
+
+
+def _fixture_team_with_index_constraints(
+    team: tuple[FixturePokemon, ...],
+    constraints: Mapping[str, int],
+    *,
+    team_size: int,
+) -> tuple[FixturePokemon, ...] | None:
+    if len(team) != team_size:
+        return None
+    if not constraints:
+        return team
+    slots: list[FixturePokemon | None] = [None] * team_size
+    unconstrained: list[FixturePokemon] = []
+    for fixture in team:
+        species_key = _normalize_id(fixture.species)
+        target_index = constraints.get(species_key)
+        if target_index is None:
+            unconstrained.append(fixture)
+            continue
+        if target_index < 0 or target_index >= team_size or slots[target_index] is not None:
+            return None
+        slots[target_index] = fixture
+    constrained_species = {_normalize_id(fixture.species) for fixture in team}
+    missing_constraints = set(constraints) - constrained_species
+    if missing_constraints:
+        return None
+    remaining = iter(unconstrained)
+    for index, value in enumerate(slots):
+        if value is None:
+            try:
+                slots[index] = next(remaining)
+            except StopIteration:
+                return None
+    if any(slot is None for slot in slots):
+        return None
+    return tuple(slot for slot in slots if slot is not None)
 
 
 def _sample_revealed_opponent_fixture(
