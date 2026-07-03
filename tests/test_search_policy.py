@@ -2155,7 +2155,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             decision.metadata["root_puct_fallback_category"],
-            "illegal_action_for_current_request",
+            "all_opponent_scenarios_replay_illegal",
         )
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 1)
