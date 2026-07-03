@@ -151,7 +151,16 @@ def prior_top_k_opponent_action_scenario_planner(
         priors = tuple(float(value) for value in prior_fn(history))
         _validate_action_prior_vector(priors, name="opponent action priors")
         choices_by_player = tuple(
-            (player, _top_prior_action_choices(context, player, priors, limit=scenario_count))
+            (
+                player,
+                _top_prior_action_choices(
+                    context,
+                    player,
+                    priors,
+                    limit=scenario_count,
+                    rng=_opponent_action_choice_rng(context, player),
+                ),
+            )
             for player in requested_opponents
         )
         scenarios: list[OpponentActionScenario] = []
@@ -991,6 +1000,7 @@ def _top_prior_action_choices(
     priors: tuple[float, ...],
     *,
     limit: int,
+    rng: random.Random,
 ) -> tuple[tuple[int, float], ...]:
     if limit <= 0:
         raise ValueError("opponent action scenario limit must be positive.")
@@ -998,7 +1008,7 @@ def _top_prior_action_choices(
     candidates = (
         tuple((index, priors[index]) for index in legal)
         if legal
-        else _hidden_mask_prior_action_choices(priors)
+        else _hidden_mask_prior_action_choices(priors, rng=rng)
     )
     ranked = sorted(candidates, key=lambda item: (-item[1], item[0]))[:limit]
     if not ranked:
@@ -1010,16 +1020,52 @@ def _top_prior_action_choices(
     return tuple((index, weight / total) for index, weight in ranked)
 
 
-def _hidden_mask_prior_action_choices(priors: tuple[float, ...]) -> tuple[tuple[int, float], ...]:
+def _opponent_action_choice_rng(context: PolicyContext, player: PlayerId) -> random.Random:
+    """Return an independent RNG for hidden-mask replay handles.
+
+    Opponent-action planning runs before belief start-override sampling. Keep this stream separate
+    so choosing a concrete replay handle for an abstract switch bucket does not shift downstream
+    determinization samples.
+    """
+
+    return random.Random(
+        f"{context.seed}|{context.battle_id}|{context.decision_round_index}|"
+        f"{context.player_id}|{player}|hidden-switch-handle"
+    )
+
+
+def _hidden_mask_prior_action_choices(
+    priors: tuple[float, ...],
+    *,
+    rng: random.Random,
+) -> tuple[tuple[int, float], ...]:
     """Collapse exchangeable hidden switch slots when opponent legal masks are unavailable."""
 
     move_choices = tuple((index, priors[index]) for index in range(MOVE_ACTION_COUNT))
     switch_indices = tuple(range(MOVE_ACTION_COUNT, ACTION_COUNT))
     switch_weight = sum(priors[index] for index in switch_indices)
-    # Hidden switch slots are exchangeable. Use the first concrete switch slot only as a stable
-    # replay handle; the scenario weight still carries the total switch prior mass.
-    representative_switch = switch_indices[0]
+    # Hidden switch slots are exchangeable at the information-set level, but replay still needs a
+    # concrete handle. Sample that handle from the slot-prior mass so repeated determinizations can
+    # cover different hidden backline positions without splitting the abstract switch bucket.
+    representative_switch = _sample_representative_switch_action(priors, switch_indices, rng)
     return (*move_choices, (representative_switch, switch_weight))
+
+
+def _sample_representative_switch_action(
+    priors: tuple[float, ...],
+    switch_indices: tuple[int, ...],
+    rng: random.Random,
+) -> int:
+    switch_weight = sum(max(0.0, priors[index]) for index in switch_indices)
+    if switch_weight <= 0.0:
+        return switch_indices[rng.randrange(len(switch_indices))]
+    threshold = rng.random() * switch_weight
+    cumulative = 0.0
+    for index in switch_indices:
+        cumulative += max(0.0, priors[index])
+        if threshold <= cumulative:
+            return index
+    return switch_indices[-1]
 
 
 def _normalize_scenarios(
