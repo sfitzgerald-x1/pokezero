@@ -23,6 +23,7 @@ import random
 import sys
 from typing import Any, Callable, Mapping, Sequence
 
+from .actions import ACTION_COUNT
 from .category_vocab import CategoryVocabulary
 from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
@@ -87,7 +88,7 @@ class ControlledFoulPlayConfig:
     root_visit_budget: int | None = 16
     root_time_budget_ms: int | None = None
     root_opponent_action_scenarios: int = 1
-    root_opponent_action_candidate_scenarios: int = 4
+    root_opponent_action_candidate_scenarios: int = ACTION_COUNT
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
@@ -1569,11 +1570,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root-opponent-action-candidate-scenarios",
         type=int,
-        default=4,
+        default=ACTION_COUNT,
         help=(
             "Number of checkpoint-prior opponent root-action candidates to try while searching "
-            "for replay-legal scenarios. The search stops after --root-opponent-action-scenarios "
-            "legal scenarios are accepted."
+            "for replay-legal scenarios. Defaults to the full action space so hidden-mode search "
+            "can usually find a legal reserve before falling back. The search stops after "
+            "--root-opponent-action-scenarios legal scenarios are accepted."
         ),
     )
     parser.add_argument(
