@@ -377,6 +377,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             prior_fn=lambda history: (0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             opponent_action_planner=lambda context, rng: {"p2": 0},
             cpuct=0.0,
+            root_visit_budget=None,
         )
         live_env = ImmediateOutcomeEnv(label="live")
 
@@ -559,6 +560,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
             opponent_action_scenario_planner=scenario_planner,
             cpuct=0.0,
+            root_visit_budget=None,
         )
         context = PolicyContext(
             player_id="p1",
@@ -828,7 +830,6 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
             opponent_action_planner=lambda context, rng: {"p2": 0},
             cpuct=4.0,
-            root_visit_budget=5,
         )
 
         result = RolloutDriver(
@@ -838,11 +839,15 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         ).run(seed=96, battle_id="search-policy")
 
         step = result.trajectory.steps_for_player("p1")[0]
-        self.assertEqual(step.action_index, 0)
+        self.assertEqual(step.action_index, 1)
         self.assertEqual(step.metadata["root_puct_selection_mode"], "visits")
-        self.assertEqual(step.metadata["root_puct_total_visits"], 5)
+        self.assertEqual(step.metadata["root_puct_total_visits"], 16)
         self.assertEqual(step.metadata["root_puct_prior_action"], 0)
-        self.assertFalse(step.metadata["root_puct_selected_changed_prior_action"])
+        self.assertGreater(
+            step.metadata["root_puct_selected_action_visits"],
+            step.metadata["root_puct_prior_action_visits"],
+        )
+        self.assertTrue(step.metadata["root_puct_selected_changed_prior_action"])
 
     def test_root_puct_policy_puct_selection_mode_uses_final_exploration_score(self) -> None:
         policy = RootPUCTSearchPolicy(
@@ -853,6 +858,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             opponent_action_planner=lambda context, rng: {"p2": 0},
             cpuct=4.0,
             selection_mode="puct",
+            root_visit_budget=None,
         )
 
         result = RolloutDriver(
@@ -1105,6 +1111,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             cpuct=4.0,
             selection_mode="value",
             minimum_score_improvement=0.0,
+            root_visit_budget=None,
         )
 
         result = RolloutDriver(
@@ -1216,6 +1223,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             cpuct=0.0,
             leaf_rollout_decision_rounds=1,
             leaf_rollout_policy_factory=lambda player_id: FixedPolicy(0, policy_id=f"leaf-{player_id}"),
+            root_visit_budget=None,
         )
         context = PolicyContext(
             player_id="p1",

@@ -83,7 +83,7 @@ class ControlledFoulPlayConfig:
     minimum_value_improvement: float | None = None
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
-    root_visit_budget: int | None = None
+    root_visit_budget: int | None = 16
     root_time_budget_ms: int | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
@@ -1501,9 +1501,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root-visit-budget",
         type=int,
-        default=None,
+        default=16,
         help=(
-            "Root visits per opponent-action scenario; defaults to one visit per legal action. "
+            "Root visits per opponent-action scenario; defaults to 16. "
             "With multiple scenarios, total decision visits scale by the searched scenario count."
         ),
     )

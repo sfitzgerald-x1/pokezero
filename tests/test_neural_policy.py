@@ -2330,6 +2330,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         )
 
         self.assertEqual(args.selection_mode, "visits")
+        self.assertEqual(args.root_visit_budget, 16)
 
     def test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios(self) -> None:
         if not torch_available():

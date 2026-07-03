@@ -678,8 +678,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct_play.add_argument(
         "--root-visit-budget",
         type=int,
-        default=None,
-        help="Total root visits per searched decision; defaults to one visit per legal action.",
+        default=16,
+        help="Total root visits per searched decision; defaults to 16.",
     )
     root_puct_play.add_argument(
         "--min-value-improvement",

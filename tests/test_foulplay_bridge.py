@@ -214,7 +214,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
 
         self.assertEqual(config.selection_mode, "visits")
+        self.assertEqual(config.root_visit_budget, 16)
         self.assertEqual(args.selection_mode, "visits")
+        self.assertEqual(args.root_visit_budget, 16)
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
