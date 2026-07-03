@@ -106,8 +106,7 @@ def root_puct_replay_request_mismatch_player_counts(reason: object) -> dict[str,
     """Count missing/unexpected players in replay request-shape mismatch diagnostics."""
 
     counts: dict[str, int] = {}
-    for match in _REQUEST_MISMATCH_DETAIL_RE.finditer(str(reason or "")):
-        details = match.group("details")
+    for details in _request_mismatch_detail_strings(reason):
         for chunk in details.split(";"):
             label, players_text = _request_mismatch_detail_parts(chunk)
             if not label:
@@ -115,6 +114,26 @@ def root_puct_replay_request_mismatch_player_counts(reason: object) -> dict[str,
             for player in re.findall(r"\bp[12]\b", players_text, flags=re.IGNORECASE):
                 key = f"{label}:{player.lower()}"
                 counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def root_puct_replay_request_mismatch_shape_counts(reason: object) -> dict[str, int]:
+    """Count full replay request shapes, keyed by requested players and recorded action players."""
+
+    counts: dict[str, int] = {}
+    for details in _request_mismatch_detail_strings(reason):
+        requested_players: str | None = None
+        action_players: str | None = None
+        for chunk in details.split(";"):
+            normalized = chunk.strip().lower()
+            if normalized.startswith("requested players:"):
+                requested_players = _request_mismatch_players_key(chunk.split(":", 1)[1])
+            elif normalized.startswith("action players:"):
+                action_players = _request_mismatch_players_key(chunk.split(":", 1)[1])
+        if requested_players is None or action_players is None:
+            continue
+        key = f"requested:{requested_players}|actions:{action_players}"
+        counts[key] = counts.get(key, 0) + 1
     return counts
 
 
@@ -148,6 +167,13 @@ def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str
     return counts
 
 
+def _request_mismatch_detail_strings(reason: object) -> list[str]:
+    return [
+        match.group("details")
+        for match in _REQUEST_MISMATCH_DETAIL_RE.finditer(str(reason or ""))
+    ]
+
+
 def _request_mismatch_detail_parts(chunk: str) -> tuple[str | None, str]:
     normalized = chunk.strip().lower()
     if normalized.startswith("missing requested players:"):
@@ -155,3 +181,12 @@ def _request_mismatch_detail_parts(chunk: str) -> tuple[str | None, str]:
     if normalized.startswith("unexpected players:"):
         return "unexpected", chunk.split(":", 1)[1]
     return None, ""
+
+
+def _request_mismatch_players_key(players_text: str) -> str:
+    players = sorted(
+        set(re.findall(r"\bp[12]\b", players_text, flags=re.IGNORECASE)),
+    )
+    if not players:
+        return "none"
+    return ",".join(player.lower() for player in players)

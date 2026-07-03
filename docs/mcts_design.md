@@ -198,9 +198,11 @@ request-shape divergence remains dominant (`replay_request_unexpected_player=321
 `replay_request_missing_player=20` in that run), while larger HP drift and belief/item-token
 mismatches continue to reject sampled worlds. Request-shape diagnostics now also report the
 missing/unexpected player side (`missing:p1`, `unexpected:p2`, etc.) so follow-up materialization
-work can distinguish self-side request drift from opponent-side or force-switch drift. A same-seed
-`961001` one-game artifact with this field showed `unexpected:p2=335`, which localizes the dominant
-request-shape failure to extra opponent-side requests under sampled hidden worlds.
+work can distinguish self-side request drift from opponent-side or force-switch drift. Newer
+diagnostics also report the full shape (`requested:<players>|actions:<players>`). A same-seed
+`961001` one-game artifact showed `unexpected:p2=388` and
+`requested:p1|actions:p1,p2=388`, meaning sampled hidden-world replay reached positions where only
+PokeZero was requested while the recorded prefix still expected both players to act.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those

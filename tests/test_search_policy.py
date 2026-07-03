@@ -1810,7 +1810,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         scenario = OpponentActionScenario(actions={"p2": 0})
         message = (
             "replay actions for decision round 4 do not match environment request "
-            "(unexpected players: p1)."
+            "(requested players: none; action players: p1; unexpected players: p1)."
         )
 
         self.assertEqual(
@@ -1828,7 +1828,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     scenario,
                     (
                         "replay actions for decision round 4 do not match environment request "
-                        "(missing requested players: p1; unexpected players: p2)."
+                        "(requested players: p1; action players: p2; "
+                        "missing requested players: p1; unexpected players: p2)."
                     ),
                 ),
             ),
@@ -1841,6 +1842,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(
             metadata["root_puct_opponent_action_replay_request_mismatch_players"],
             {"missing:p1": 1, "unexpected:p2": 1},
+        )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_replay_request_mismatch_shapes"],
+            {"requested:p1|actions:p2": 1},
         )
 
     def test_opponent_scenario_replay_legality_classifies_illegal_prefix_action(self) -> None:

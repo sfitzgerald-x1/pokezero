@@ -349,7 +349,10 @@ def _require_requested_players(
         return
     missing = sorted(requested_set - action_players)
     extra = sorted(action_players - requested_set)
-    details: list[str] = []
+    details: list[str] = [
+        f"requested players: {_format_player_set(requested_set)}",
+        f"action players: {_format_player_set(action_players)}",
+    ]
     if missing:
         details.append(f"missing requested players: {', '.join(missing)}")
     if extra:
@@ -358,6 +361,12 @@ def _require_requested_players(
         f"replay actions for decision round {action_round.turn_index} "
         f"do not match environment request ({'; '.join(details)})."
     )
+
+
+def _format_player_set(players: set[PlayerId]) -> str:
+    if not players:
+        return "none"
+    return ", ".join(sorted(players))
 
 
 def _reset_env(

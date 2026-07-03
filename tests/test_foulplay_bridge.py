@@ -539,6 +539,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                         "missing:p1": 1,
                         "unexpected:p2": 1,
                     },
+                    root_puct_opponent_action_replay_request_mismatch_shapes={
+                        "requested:p1|actions:p2": 1,
+                    },
                     root_puct_opponent_action_start_override_mismatch_decision_rounds={"12": 1},
                     root_puct_opponent_action_first_observation_mismatch_paths={
                         "numeric_features/opponent_pokemon[8][0]": 1,
@@ -596,6 +599,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(
             payload["root_puct"]["opponent_action_replay_request_mismatch_players"],
             {"missing:p1": 1, "unexpected:p2": 1},
+        )
+        self.assertEqual(
+            payload["root_puct"]["opponent_action_replay_request_mismatch_shapes"],
+            {"requested:p1|actions:p2": 1},
         )
         self.assertEqual(
             payload["root_puct"]["opponent_action_start_override_mismatch_decision_rounds"],
@@ -691,6 +698,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(
             payload["game_results"][1]["root_puct_opponent_action_replay_request_mismatch_players"],
             {"missing:p1": 1, "unexpected:p2": 1},
+        )
+        self.assertEqual(
+            payload["game_results"][1]["root_puct_opponent_action_replay_request_mismatch_shapes"],
+            {"requested:p1|actions:p2": 1},
         )
         self.assertEqual(payload["root_puct"]["opponent_legal_mask_mode"], "hidden")
         self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)
