@@ -838,7 +838,9 @@ def _hidden_mask_prior_action_choices(priors: tuple[float, ...]) -> tuple[tuple[
     move_choices = tuple((index, priors[index]) for index in range(MOVE_ACTION_COUNT))
     switch_indices = tuple(range(MOVE_ACTION_COUNT, ACTION_COUNT))
     switch_weight = sum(priors[index] for index in switch_indices)
-    representative_switch = max(switch_indices, key=lambda index: (priors[index], -index))
+    # Hidden switch slots are exchangeable. Use the first concrete switch slot only as a stable
+    # replay handle; the scenario weight still carries the total switch prior mass.
+    representative_switch = switch_indices[0]
     return (*move_choices, (representative_switch, switch_weight))
 
 

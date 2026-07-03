@@ -141,11 +141,11 @@ oracle default-world search.
 
 After adding aggregate fallback/skip categories and collapsing hidden opponent switch-slot priors into
 one exchangeable switch candidate, a same-seed `961001` diagnostic still had raw and root-PUCT both
-win `0/1`; root-PUCT searched 2 decisions, fell back 46 times, used 32 total visits, and changed the
+win `0/1`; root-PUCT searched 2 decisions, fell back 42 times, used 32 total visits, and changed the
 selected prior action 0 times. The change reduced hidden opponent scenario volume/override attempts
-(`opponent_action_scenarios_generated=440`, `start_override_attempts_used=862`) while the dominant
+(`opponent_action_scenarios_generated=400`, `start_override_attempts_used=782`) while the dominant
 skip categories remained replay materialization failures
-(`replay_request_unexpected_player=369`, `start_override_observation_mismatch=51`). This is a
+(`replay_request_unexpected_player=323`, `start_override_observation_mismatch=66`). This is a
 semantic and cost cleanup, not strength evidence.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search

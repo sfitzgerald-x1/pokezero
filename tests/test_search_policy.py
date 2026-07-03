@@ -315,7 +315,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
     def test_prior_top_k_opponent_action_scenario_planner_collapses_hidden_switch_slots(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(
-            lambda history: (0.10, 0.05, 0.04, 0.03, 0.20, 0.10, 0.09, 0.08, 0.07),
+            lambda history: (0.10, 0.05, 0.04, 0.03, 0.07, 0.08, 0.09, 0.10, 0.20),
             scenario_count=3,
         )
         context = PolicyContext(
