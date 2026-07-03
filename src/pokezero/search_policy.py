@@ -218,8 +218,8 @@ class RootPUCTSearchPolicy:
     minimum_value_improvement: float | None = None
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
-    selection_mode: str = "puct"
-    root_visit_budget: int | None = None
+    selection_mode: str = "visits"
+    root_visit_budget: int | None = ACTION_COUNT + 7
     root_time_budget_seconds: float | None = None
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
