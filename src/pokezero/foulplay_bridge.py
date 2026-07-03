@@ -59,9 +59,13 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 
 
 SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
+COMPARISON_SCHEMA_VERSION = "pokezero.controlled-foulplay-comparison.v1"
 DEFAULT_FOULPLAY_ROOT = Path(__file__).resolve().parents[2] / "third_party" / "foul-play"
 DEFAULT_BATTLE_ID_PREFIX = "battle-gen3randombattle-controlled"
+_WILSON_95_Z = 1.959963984540054
+_MIN_STRENGTH_SAMPLE_GAMES = 300
 ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
+ControlledFoulPlayComparisonProgressCallback = Callable[["ControlledFoulPlayComparisonResult"], None]
 
 
 @dataclass(frozen=True)
@@ -325,6 +329,188 @@ class ControlledFoulPlayBenchmarkResult:
         if root_fallback_reasons:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
         return payload
+
+
+@dataclass(frozen=True)
+class ControlledFoulPlayComparisonResult:
+    config: ControlledFoulPlayConfig
+    raw: ControlledFoulPlayBenchmarkResult | None
+    root_puct: ControlledFoulPlayBenchmarkResult | None
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.raw is not None
+            and self.root_puct is not None
+            and self.raw.completed_games >= self.raw.config.games
+            and self.root_puct.completed_games >= self.root_puct.config.games
+        )
+
+    @property
+    def status(self) -> str:
+        if self.raw is None:
+            return "pending"
+        return "complete" if self.complete else "partial"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": COMPARISON_SCHEMA_VERSION,
+            "checkpoint": str(self.config.checkpoint),
+            "format_id": self.config.format_id,
+            "opponent_policy_id": "foul-play",
+            "games": self.config.games,
+            "seed_start": self.config.seed_start,
+            "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
+            "status": self.status,
+            "complete": self.complete,
+            "runs": {
+                "raw": self.raw.to_dict() if self.raw is not None else None,
+                "root_puct": self.root_puct.to_dict() if self.root_puct is not None else None,
+            },
+            "comparison": _comparison_readout(self.raw, self.root_puct),
+        }
+
+
+def _comparison_readout(
+    raw: ControlledFoulPlayBenchmarkResult | None,
+    root_puct: ControlledFoulPlayBenchmarkResult | None,
+) -> dict[str, Any]:
+    raw_by_seed = _games_by_seed(raw)
+    search_by_seed = _games_by_seed(root_puct)
+    matched_seeds = tuple(sorted(raw_by_seed.keys() & search_by_seed.keys()))
+    raw_paired_wins = sum(1 for seed in matched_seeds if raw_by_seed[seed].pokezero_won)
+    search_paired_wins = sum(1 for seed in matched_seeds if search_by_seed[seed].pokezero_won)
+    both_won = sum(
+        1
+        for seed in matched_seeds
+        if raw_by_seed[seed].pokezero_won and search_by_seed[seed].pokezero_won
+    )
+    raw_only_won = sum(
+        1
+        for seed in matched_seeds
+        if raw_by_seed[seed].pokezero_won and not search_by_seed[seed].pokezero_won
+    )
+    root_puct_only_won = sum(
+        1
+        for seed in matched_seeds
+        if search_by_seed[seed].pokezero_won and not raw_by_seed[seed].pokezero_won
+    )
+    neither_won = sum(
+        1
+        for seed in matched_seeds
+        if not raw_by_seed[seed].pokezero_won and not search_by_seed[seed].pokezero_won
+    )
+    paired_games = len(matched_seeds)
+    raw_completed_games = raw.completed_games if raw is not None else 0
+    search_completed_games = root_puct.completed_games if root_puct is not None else 0
+    raw_wins = raw.wins if raw is not None else 0
+    search_wins = root_puct.wins if root_puct is not None else 0
+
+    return {
+        "sample_size": {
+            "paired_games": paired_games,
+            "minimum_strength_games": _MIN_STRENGTH_SAMPLE_GAMES,
+            "status": "strength_sized" if paired_games >= _MIN_STRENGTH_SAMPLE_GAMES else "diagnostic_only",
+        },
+        "aggregate": {
+            "analysis_method": "completed_prefix_marginal_rates",
+            "raw": _rate_readout(raw_wins, raw_completed_games),
+            "root_puct": _rate_readout(search_wins, search_completed_games),
+            "root_puct_minus_raw_win_rate": _delta_rate(
+                search_wins,
+                search_completed_games,
+                raw_wins,
+                raw_completed_games,
+                require_equal_games=True,
+            ),
+            "delta_interpretation": (
+                "descriptive_only_when_both_prefixes_have_equal_nonzero_completed_games"
+            ),
+        },
+        "paired_by_seed": {
+            "pairing_method": "shared_battlestream_seed_only",
+            "opponent_deterministic": False,
+            "paired_counterfactual": False,
+            "interval_method": "marginal_wilson_per_arm_not_paired_delta",
+            "delta_interpretation": "descriptive_only",
+            "games": paired_games,
+            "raw": _rate_readout(raw_paired_wins, paired_games),
+            "root_puct": _rate_readout(search_paired_wins, paired_games),
+            "root_puct_minus_raw_win_rate": _delta_rate(
+                search_paired_wins,
+                paired_games,
+                raw_paired_wins,
+                paired_games,
+            ),
+            "discordant_pairs": {
+                "both_won": both_won,
+                "raw_only_won": raw_only_won,
+                "root_puct_only_won": root_puct_only_won,
+                "neither_won": neither_won,
+            },
+            "first_seed": matched_seeds[0] if matched_seeds else None,
+            "last_seed": matched_seeds[-1] if matched_seeds else None,
+        },
+    }
+
+
+def _games_by_seed(
+    result: ControlledFoulPlayBenchmarkResult | None,
+) -> dict[int, ControlledFoulPlayGameResult]:
+    if result is None:
+        return {}
+    return {game.seed: game for game in result.games}
+
+
+def _rate_readout(wins: int, games: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "games": games,
+        "wins": wins,
+        "win_rate": _rate(wins, games),
+        "interval_method": "wilson_score_marginal_95",
+    }
+    if games:
+        lower, upper = _wilson_interval(wins, games, z=_WILSON_95_Z)
+        payload["wilson_95"] = {"lower": lower, "upper": upper}
+    else:
+        payload["wilson_95"] = None
+    return payload
+
+
+def _rate(wins: int, games: int) -> float:
+    return wins / games if games else 0.0
+
+
+def _delta_rate(
+    first_wins: int,
+    first_games: int,
+    second_wins: int,
+    second_games: int,
+    *,
+    require_equal_games: bool = False,
+) -> float | None:
+    if first_games <= 0 or second_games <= 0:
+        return None
+    if require_equal_games and first_games != second_games:
+        return None
+    return _rate(first_wins, first_games) - _rate(second_wins, second_games)
+
+
+def _wilson_interval(wins: int, games: int, *, z: float) -> tuple[float, float]:
+    if games <= 0:
+        return (0.0, 0.0)
+    if z == 0.0:
+        rate = wins / games
+        return (rate, rate)
+    p_hat = wins / games
+    z_squared = z * z
+    denominator = 1.0 + (z_squared / games)
+    center = p_hat + (z_squared / (2.0 * games))
+    adjustment = z * math.sqrt(((p_hat * (1.0 - p_hat)) + (z_squared / (4.0 * games))) / games)
+    return (
+        max(0.0, (center - adjustment) / denominator),
+        min(1.0, (center + adjustment) / denominator),
+    )
 
 
 class FoulPlayProtocolError(RuntimeError):
@@ -648,6 +834,52 @@ async def run_controlled_foulplay_benchmark(
         config=config,
         policy_id=benchmark_policy_id,
         games=tuple(game_results),
+    )
+
+
+async def run_controlled_foulplay_comparison(
+    config: ControlledFoulPlayConfig,
+    *,
+    progress_callback: ControlledFoulPlayComparisonProgressCallback | None = None,
+) -> ControlledFoulPlayComparisonResult:
+    """Run raw checkpoint and root-PUCT against foul-play over the same seed band."""
+
+    raw_result: ControlledFoulPlayBenchmarkResult | None = None
+    root_puct_result: ControlledFoulPlayBenchmarkResult | None = None
+
+    def emit_progress() -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            ControlledFoulPlayComparisonResult(
+                config=config,
+                raw=raw_result,
+                root_puct=root_puct_result,
+            )
+        )
+
+    def raw_progress(result: ControlledFoulPlayBenchmarkResult) -> None:
+        nonlocal raw_result
+        raw_result = result
+        emit_progress()
+
+    def root_puct_progress(result: ControlledFoulPlayBenchmarkResult) -> None:
+        nonlocal root_puct_result
+        root_puct_result = result
+        emit_progress()
+
+    raw_result = await run_controlled_foulplay_benchmark(
+        replace(config, policy_mode="raw"),
+        progress_callback=raw_progress,
+    )
+    root_puct_result = await run_controlled_foulplay_benchmark(
+        replace(config, policy_mode="root-puct"),
+        progress_callback=root_puct_progress,
+    )
+    return ControlledFoulPlayComparisonResult(
+        config=config,
+        raw=raw_result,
+        root_puct=root_puct_result,
     )
 
 
@@ -1629,12 +1861,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def async_main(argv: Sequence[str] | None = None) -> int:
+def build_comparison_arg_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
-    if args.showdown_root is None:
-        parser.error("--showdown-root is required, or set POKEZERO_SHOWDOWN_ROOT.")
-    config = ControlledFoulPlayConfig(
+    _remove_optional_argument(parser, "--policy-mode")
+    parser.set_defaults(policy_mode="root-puct")
+    parser.description = (
+        "Run paired controlled BattleStream benchmarks: raw checkpoint and root-PUCT "
+        "against external foul-play over the same seed band."
+    )
+    parser.epilog = "The comparison runner always runs both raw and root-puct policy modes."
+    return parser
+
+
+def _remove_optional_argument(parser: argparse.ArgumentParser, option: str) -> None:
+    for action in tuple(parser._actions):
+        if option not in action.option_strings:
+            continue
+        parser._remove_action(action)
+        for group in parser._action_groups:
+            if action in group._group_actions:
+                group._group_actions.remove(action)
+        for option_string in action.option_strings:
+            parser._option_string_actions.pop(option_string, None)
+        return
+    raise AssertionError(f"parser option not found: {option}")
+
+
+def _config_from_args(
+    args: argparse.Namespace,
+    *,
+    policy_mode: str | None = None,
+) -> ControlledFoulPlayConfig:
+    return ControlledFoulPlayConfig(
         checkpoint=args.checkpoint,
         showdown_root=args.showdown_root,
         foulplay_root=args.foulplay_root,
@@ -1645,7 +1903,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         search_time_ms=args.search_time_ms,
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
-        policy_mode=args.policy_mode,
+        policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
         device=args.device,
         temperature=args.temperature,
         cpuct=args.cpuct,
@@ -1668,6 +1926,15 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         pokezero_username=args.pokezero_username,
         foulplay_username=args.foulplay_username,
     )
+
+
+async def async_main(argv: Sequence[str] | None = None) -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.showdown_root is None:
+        parser.error("--showdown-root is required, or set POKEZERO_SHOWDOWN_ROOT.")
+    config = _config_from_args(args)
+
     def write_progress(result: ControlledFoulPlayBenchmarkResult) -> None:
         if args.summary_out is not None:
             _write_json(args.summary_out, result.to_dict())
@@ -1697,8 +1964,62 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
+    parser = build_comparison_arg_parser()
+    args = parser.parse_args(argv)
+    if args.showdown_root is None:
+        parser.error("--showdown-root is required, or set POKEZERO_SHOWDOWN_ROOT.")
+    config = _config_from_args(args, policy_mode="root-puct")
+
+    def write_progress(result: ControlledFoulPlayComparisonResult) -> None:
+        if args.summary_out is not None:
+            _write_json(args.summary_out, result.to_dict())
+
+    result = await run_controlled_foulplay_comparison(
+        config,
+        progress_callback=write_progress if args.summary_out is not None else None,
+    )
+    payload = result.to_dict()
+    if args.summary_out is not None:
+        _write_json(args.summary_out, payload)
+        print(f"controlled_foulplay_comparison_summary: {args.summary_out}", file=sys.stderr)
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        comparison = payload["comparison"]
+        paired = comparison["paired_by_seed"] if isinstance(comparison, Mapping) else {}
+        raw = paired.get("raw", {}) if isinstance(paired, Mapping) else {}
+        root_puct = paired.get("root_puct", {}) if isinstance(paired, Mapping) else {}
+        sample = comparison["sample_size"] if isinstance(comparison, Mapping) else {}
+        result_label = (
+            "DIAGNOSTIC RESULT"
+            if isinstance(sample, Mapping) and sample.get("status") == "diagnostic_only"
+            else "RESULT"
+        )
+        delta = paired.get("root_puct_minus_raw_win_rate") if isinstance(paired, Mapping) else None
+        delta_text = "n/a" if delta is None else f"{float(delta):.1%}"
+        print(
+            f"{result_label}: root-PUCT "
+            f"{int(root_puct.get('wins', 0))}/{int(root_puct.get('games', 0))} "
+            "vs raw "
+            f"{int(raw.get('wins', 0))}/{int(raw.get('games', 0))} "
+            "on paired foul-play seeds "
+            f"(descriptive_delta={delta_text})"
+        )
+        if isinstance(sample, Mapping) and sample.get("status") == "diagnostic_only":
+            print(
+                "sample-size: diagnostic_only "
+                f"({sample.get('paired_games')}/{sample.get('minimum_strength_games')} paired games)"
+            )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     return asyncio.run(async_main(argv))
+
+
+def comparison_main(argv: Sequence[str] | None = None) -> int:
+    return asyncio.run(async_comparison_main(argv))
 
 
 if __name__ == "__main__":

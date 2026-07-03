@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 import random
@@ -13,6 +14,7 @@ from unittest.mock import patch
 from pokezero.actions import ACTION_COUNT
 from pokezero.foulplay_bridge import (
     ControlledFoulPlayBenchmarkResult,
+    ControlledFoulPlayComparisonResult,
     ControlledFoulPlayConfig,
     ControlledFoulPlayGameResult,
     _ControlledBattleState,
@@ -29,8 +31,11 @@ from pokezero.foulplay_bridge import (
     _split_outgoing_showdown_message,
     _terminal_line_for_foulplay,
     _write_json,
+    async_comparison_main,
     async_main,
     build_arg_parser,
+    build_comparison_arg_parser,
+    run_controlled_foulplay_comparison,
     run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
@@ -507,6 +512,265 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertEqual(payload["root_puct"]["belief_start_overrides"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
+
+    def test_comparison_payload_matches_common_seeds_and_marks_small_samples_diagnostic(self) -> None:
+        raw_config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=3,
+            seed_start=10,
+            policy_mode="raw",
+        )
+        search_config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=3,
+            seed_start=10,
+            policy_mode="root-puct",
+        )
+        raw = ControlledFoulPlayBenchmarkResult(
+            config=raw_config,
+            policy_id="checkpoint",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-10",
+                    seed=10,
+                    winner="PokeZeroBot",
+                    pokezero_won=True,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-11",
+                    seed=11,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-12",
+                    seed=12,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=0,
+                    root_puct_fallbacks=0,
+                ),
+            ),
+        )
+        search = ControlledFoulPlayBenchmarkResult(
+            config=search_config,
+            policy_id="checkpoint+root-puct",
+            games=(
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-11",
+                    seed=11,
+                    winner="PokeZeroBot",
+                    pokezero_won=True,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-12",
+                    seed=12,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+            ),
+        )
+        comparison = ControlledFoulPlayComparisonResult(
+            config=search_config,
+            raw=raw,
+            root_puct=search,
+        )
+
+        payload = comparison.to_dict()
+
+        self.assertEqual(payload["schema_version"], "pokezero.controlled-foulplay-comparison.v1")
+        self.assertEqual(payload["status"], "partial")
+        self.assertFalse(payload["complete"])
+        self.assertEqual(payload["runs"]["raw"]["policy_mode"], "raw")
+        self.assertEqual(payload["runs"]["root_puct"]["policy_mode"], "root-puct")
+        self.assertEqual(payload["comparison"]["sample_size"]["status"], "diagnostic_only")
+        self.assertEqual(payload["comparison"]["sample_size"]["paired_games"], 2)
+        self.assertEqual(payload["comparison"]["sample_size"]["minimum_strength_games"], 300)
+        self.assertEqual(payload["comparison"]["aggregate"]["raw"]["wins"], 1)
+        self.assertEqual(payload["comparison"]["aggregate"]["raw"]["games"], 3)
+        self.assertAlmostEqual(payload["comparison"]["aggregate"]["raw"]["win_rate"], 1 / 3)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["games"], 2)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["pairing_method"], "shared_battlestream_seed_only")
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["opponent_deterministic"], False)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["paired_counterfactual"], False)
+        self.assertEqual(
+            payload["comparison"]["paired_by_seed"]["interval_method"],
+            "marginal_wilson_per_arm_not_paired_delta",
+        )
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["delta_interpretation"], "descriptive_only")
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["raw"]["wins"], 0)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["raw"]["interval_method"], "wilson_score_marginal_95")
+        self.assertEqual(
+            payload["comparison"]["paired_by_seed"]["discordant_pairs"],
+            {
+                "both_won": 0,
+                "raw_only_won": 0,
+                "root_puct_only_won": 1,
+                "neither_won": 1,
+            },
+        )
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["first_seed"], 11)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["last_seed"], 12)
+        self.assertAlmostEqual(payload["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"], 0.5)
+        self.assertIsNotNone(payload["comparison"]["paired_by_seed"]["root_puct"]["wilson_95"])
+
+    def test_run_controlled_foulplay_comparison_forces_raw_then_root_puct(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=2,
+            policy_mode="raw",
+        )
+        observed_modes: list[str] = []
+        progress_payloads: list[dict[str, object]] = []
+
+        async def fake_benchmark(
+            benchmark_config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayBenchmarkResult:
+            observed_modes.append(benchmark_config.policy_mode)
+            result = ControlledFoulPlayBenchmarkResult(
+                config=benchmark_config,
+                policy_id=f"checkpoint-{benchmark_config.policy_mode}",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id=f"battle-{benchmark_config.policy_mode}",
+                        seed=benchmark_config.seed_start,
+                        winner="PokeZeroBot" if benchmark_config.policy_mode == "root-puct" else "FoulPlayBot",
+                        pokezero_won=benchmark_config.policy_mode == "root-puct",
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=1 if benchmark_config.policy_mode == "root-puct" else 0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+            if progress_callback is not None:
+                progress_callback(result)
+            return result
+
+        with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+            comparison = asyncio.run(
+                run_controlled_foulplay_comparison(
+                    config,
+                    progress_callback=lambda result: progress_payloads.append(result.to_dict()),
+                )
+            )
+
+        self.assertEqual(observed_modes, ["raw", "root-puct"])
+        self.assertEqual(comparison.raw.config.policy_mode, "raw")
+        self.assertEqual(comparison.root_puct.config.policy_mode, "root-puct")
+        self.assertEqual(progress_payloads[0]["runs"]["root_puct"], None)
+        self.assertIsNone(progress_payloads[0]["comparison"]["aggregate"]["root_puct_minus_raw_win_rate"])
+        self.assertIsNone(progress_payloads[0]["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"])
+        self.assertEqual(comparison.to_dict()["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
+
+    def test_comparison_cli_writes_summary_out(self) -> None:
+        parser_help = build_comparison_arg_parser().format_help()
+        self.assertNotIn("--policy-mode", parser_help)
+
+        async def fake_comparison(
+            config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayComparisonResult:
+            raw = ControlledFoulPlayBenchmarkResult(
+                config=ControlledFoulPlayConfig(
+                    checkpoint=config.checkpoint,
+                    showdown_root=config.showdown_root,
+                    games=config.games,
+                    seed_start=config.seed_start,
+                    policy_mode="raw",
+                ),
+                policy_id="checkpoint",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id="battle-1",
+                        seed=config.seed_start,
+                        winner="FoulPlayBot",
+                        pokezero_won=False,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+            search = ControlledFoulPlayBenchmarkResult(
+                config=ControlledFoulPlayConfig(
+                    checkpoint=config.checkpoint,
+                    showdown_root=config.showdown_root,
+                    games=config.games,
+                    seed_start=config.seed_start,
+                    policy_mode="root-puct",
+                ),
+                policy_id="checkpoint+root-puct",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id="battle-1",
+                        seed=config.seed_start,
+                        winner="PokeZeroBot",
+                        pokezero_won=True,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=1,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+            result = ControlledFoulPlayComparisonResult(config=config, raw=raw, root_puct=search)
+            if progress_callback is not None:
+                progress_callback(result)
+            return result
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "comparison.json"
+            argv = (
+                "--checkpoint",
+                "checkpoint.pt",
+                "--showdown-root",
+                "/showdown",
+                "--games",
+                "1",
+                "--summary-out",
+                str(summary_path),
+            )
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_comparison",
+                side_effect=fake_comparison,
+            ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                exit_code = asyncio.run(async_comparison_main(argv))
+
+            payload = json.loads(summary_path.read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["schema_version"], "pokezero.controlled-foulplay-comparison.v1")
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
+        self.assertEqual(build_comparison_arg_parser().parse_args(argv).games, 1)
+        self.assertIn("DIAGNOSTIC RESULT", stdout.getvalue())
+        self.assertIn("descriptive_delta=100.0%", stdout.getvalue())
 
     def test_observation_with_search_metadata_adds_belief_view_without_mutating_original(self) -> None:
         class BeliefView:

@@ -31,6 +31,7 @@ pokezero-eval = "pokezero.eval_cli:main"
 pokezero-neural = "pokezero.neural_cli:main"
 pokezero-replay-import = "pokezero.replay_import_cli:main"
 pokezero-engine = "pokezero.engine_cli:main"
+pokezero-foulplay-compare = "pokezero.foulplay_bridge:comparison_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
