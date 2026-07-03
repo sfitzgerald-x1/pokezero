@@ -92,6 +92,7 @@ def gen3_randbat_belief_start_override_planner(
         return sample_override
 
     planner.planner_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
+    planner.scenario_independent = True  # type: ignore[attr-defined]
     return planner
 
 

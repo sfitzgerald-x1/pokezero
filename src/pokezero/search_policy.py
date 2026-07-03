@@ -10,10 +10,11 @@ import random
 from typing import Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
-from .env import PlayerId, PokeZeroEnv
+from .env import BattleStartOverride, PlayerId, PokeZeroEnv
 from .mcts_diagnostics import root_puct_fallback_category
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
+from .replay_branching import replay_trajectory_prefix
 from .rollout import RolloutConfig, _reset_unique_policies
 from .search import (
     ActionPriorVector,
@@ -22,6 +23,7 @@ from .search import (
     PUCTBranchSearchResult,
     START_OVERRIDE_MISSING_WORLD_MESSAGE,
     StartOverrideSource,
+    _materialize_start_override,
     _puct_candidate,
     player_observation_history,
     puct_branch_search,
@@ -58,6 +60,13 @@ class OpponentActionScenario:
 class _OpponentActionScenarioGroup:
     root: OpponentActionScenario
     samples: tuple[OpponentActionScenario, ...]
+
+
+@dataclass(frozen=True)
+class _SharedStartOverrideSamples:
+    overrides: tuple[BattleStartOverride | None, ...]
+    rejection_reasons: tuple[str | None, ...]
+    attempts_used: int
 
 
 StartOverridePlanner = Callable[
@@ -370,28 +379,64 @@ class RootPUCTSearchPolicy:
                 skipped_action_group_count = 0
                 searched_action_group_count = 0
                 flat_scenario_index = 0
+                shared_start_override_samples = (
+                    _shared_start_override_samples(
+                        env=env,
+                        policy=self,
+                        context=context,
+                        rng=rng,
+                        sample_scenarios=search_scenario_groups[0].samples,
+                        search_trajectory=search_trajectory,
+                    )
+                    if _uses_scenario_independent_start_overrides(self)
+                    else None
+                )
+                if shared_start_override_samples is not None:
+                    start_override_attempts_used += shared_start_override_samples.attempts_used
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
-                    for scenario in scenario_group.samples:
+                    for sample_index, scenario in enumerate(scenario_group.samples):
                         scenario_index = flat_scenario_index
                         flat_scenario_index += 1
                         scenario_search: PUCTBranchSearchResult | None = None
                         scenario_start_override: StartOverrideSource = None
                         replay_rejection_reasons: list[str] = []
-                        attempts = self.start_override_attempts if self.start_override_planner is not None else 1
-                        for _attempt_index in range(attempts):
-                            start_override_attempts_used += 1
-                            start_override = (
-                                None
-                                if self.start_override_planner is None
-                                else self.start_override_planner(
-                                    context,
-                                    scenario,
-                                    scenario_index,
-                                    rng,
+                        if shared_start_override_samples is not None:
+                            start_override = shared_start_override_samples.overrides[sample_index]
+                            if start_override is None:
+                                replay_rejection_reasons.append(
+                                    shared_start_override_samples.rejection_reasons[sample_index]
+                                    or "start override planner did not produce a sampled world"
                                 )
-                            )
-                            if self.start_override_planner is not None and start_override is None:
+                                skipped_scenarios.append(
+                                    (
+                                        scenario,
+                                        _format_replay_rejection_reasons(replay_rejection_reasons),
+                                    )
+                                )
+                                continue
+                            attempts = 1
+                        else:
+                            attempts = self.start_override_attempts if self.start_override_planner is not None else 1
+                            start_override = None
+                        for _attempt_index in range(attempts):
+                            if shared_start_override_samples is None:
+                                start_override_attempts_used += 1
+                                start_override = (
+                                    None
+                                    if self.start_override_planner is None
+                                    else self.start_override_planner(
+                                        context,
+                                        scenario,
+                                        scenario_index,
+                                        rng,
+                                    )
+                                )
+                            if (
+                                shared_start_override_samples is None
+                                and self.start_override_planner is not None
+                                and start_override is None
+                            ):
                                 replay_rejection_reasons.append(
                                     "start override planner did not produce a sampled world"
                                 )
@@ -488,6 +533,7 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_samples_per_scenario": (
                                     self.start_override_samples_per_scenario
                                 ),
+                                **_shared_start_override_metadata(shared_start_override_samples),
                             }
                         )
                     raise _AllOpponentScenariosReplayIllegal(
@@ -586,6 +632,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_attempts": self.start_override_attempts,
                 "root_puct_start_override_attempts_used": start_override_attempts_used,
                 "root_puct_start_override_samples_per_scenario": self.start_override_samples_per_scenario,
+                **_shared_start_override_metadata(shared_start_override_samples),
             }
             if self.start_override_planner is not None
             else {}
@@ -793,6 +840,91 @@ def _flatten_scenario_groups(
     scenario_groups: Sequence[_OpponentActionScenarioGroup],
 ) -> tuple[OpponentActionScenario, ...]:
     return tuple(scenario for group in scenario_groups for scenario in group.samples)
+
+
+def _uses_scenario_independent_start_overrides(policy: RootPUCTSearchPolicy) -> bool:
+    return policy.start_override_planner is not None and bool(
+        getattr(policy.start_override_planner, "scenario_independent", False)
+    )
+
+
+def _shared_start_override_samples(
+    *,
+    env: PokeZeroEnv,
+    policy: RootPUCTSearchPolicy,
+    context: PolicyContext,
+    rng: random.Random,
+    sample_scenarios: Sequence[OpponentActionScenario],
+    search_trajectory: BattleTrajectory,
+) -> _SharedStartOverrideSamples:
+    if policy.start_override_planner is None:
+        raise ValueError("start_override_planner is required for shared start overrides.")
+
+    overrides: list[BattleStartOverride | None] = []
+    rejection_reasons: list[str | None] = []
+    attempts_used = 0
+    for sample_index, sample_scenario in enumerate(sample_scenarios):
+        sampled_override: BattleStartOverride | None = None
+        sample_rejections: list[str] = []
+        for _attempt_index in range(policy.start_override_attempts):
+            attempts_used += 1
+            start_override = policy.start_override_planner(
+                context,
+                sample_scenario,
+                sample_index,
+                rng,
+            )
+            if start_override is None:
+                sample_rejections.append("start override planner did not produce a sampled world")
+                continue
+            try:
+                materialized_override = _materialize_start_override(start_override)
+            except ValueError as exc:
+                reason = _opponent_scenario_replay_legality_error(exc, sample_scenario)
+                if reason is None:
+                    raise
+                sample_rejections.append(reason)
+                continue
+            try:
+                replay_trajectory_prefix(
+                    env,
+                    search_trajectory,
+                    decision_round_count=context.decision_round_index,
+                    start_override=materialized_override,
+                    consistency_player_id=context.player_id,
+                    expected_current_observation=context.observation,
+                    # Shared sampled worlds need only prove the branch-point state. Earlier
+                    # custom-game replay observations can drift for metadata-only reasons.
+                    check_prefix_observations=False,
+                )
+            except ValueError as exc:
+                reason = _opponent_scenario_replay_legality_error(exc, sample_scenario)
+                if reason is None:
+                    raise
+                sample_rejections.append(reason)
+                continue
+            sampled_override = materialized_override
+            break
+        overrides.append(sampled_override)
+        rejection_reasons.append(
+            None if sampled_override is not None else _format_replay_rejection_reasons(sample_rejections)
+        )
+    return _SharedStartOverrideSamples(
+        overrides=tuple(overrides),
+        rejection_reasons=tuple(rejection_reasons),
+        attempts_used=attempts_used,
+    )
+
+
+def _shared_start_override_metadata(samples: _SharedStartOverrideSamples | None) -> dict[str, int]:
+    if samples is None:
+        return {}
+    used = sum(1 for override in samples.overrides if override is not None)
+    return {
+        "root_puct_start_override_shared_samples": len(samples.overrides),
+        "root_puct_start_override_shared_samples_used": used,
+        "root_puct_start_override_shared_samples_rejected": len(samples.overrides) - used,
+    }
 
 
 def _remaining_root_time_budget_seconds(

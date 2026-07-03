@@ -148,6 +148,20 @@ skip categories remained replay materialization failures
 (`replay_request_unexpected_player=323`, `start_override_observation_mismatch=66`). This is a
 semantic and cost cleanup, not strength evidence.
 
+The Gen 3 belief start-override planner is now marked scenario-independent: sampled hidden worlds are
+validated once per decision and then crossed with opponent-action scenarios, rather than resampling a
+new hidden world for every immediate opponent action. This keeps hidden-world uncertainty separate
+from action uncertainty, adds explicit shared-sample diagnostics, and avoids reattempting the same bad
+belief sample for each opponent-action branch. It does not remove the replay-from-root brittleness:
+sampled worlds still have to reproduce the branch-point observation before they are searched.
+
+On the same seed `961001` one-game diagnostic, shared belief-world samples kept raw and root-PUCT at
+`0/1`, searched only 2 decisions, and changed the prior action 0 times. The useful change was cost and
+diagnostic clarity: start-override attempts fell to `190`, with `96` shared samples prevalidated, `3`
+accepted, and `93` rejected. Replay materialization remains the blocker
+(`replay_request_unexpected_player=342`, `start_override_observation_mismatch=62`,
+`replay_request_missing_player=20`, `illegal_action_for_current_request=5`).
+
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
 runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.
