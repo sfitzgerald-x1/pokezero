@@ -442,6 +442,230 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         assert override is not None
         self.assertIn("Xatu", override.player_teams["p1"])
 
+    def test_public_move_events_constrain_replay_move_slots_without_private_moves(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                }
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Charizard",
+                        "active": True,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "charizard-public-move",
+                                "source_set_id": "charizard-1",
+                                "role": "Berry Sweeper",
+                                "level": 79,
+                                "moves": ["fireblast", "dragonclaw", "hiddenpowergrass", "substitute"],
+                                "ability": "Blaze",
+                                "item": "Petaya Berry",
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+        context = _context(metadata)
+        before_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        current_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [
+                    "|move|opponenta: Charizard|Hidden Power Grass|selfa: Blissey",
+                ],
+            },
+        )
+        context = replace(context, decision_round_index=1, observation=current_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        moves_field = override.player_teams["p1"].split("|")[4]
+        self.assertTrue(moves_field.startswith("hiddenpowergrass,"))
+
+    def test_bare_public_hidden_power_constrains_typed_replay_move_slot(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                }
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Charizard",
+                        "active": True,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "charizard-public-hidden-power",
+                                "source_set_id": "charizard-1",
+                                "role": "Berry Sweeper",
+                                "level": 79,
+                                "moves": ["fireblast", "dragonclaw", "hiddenpowergrass", "substitute"],
+                                "ability": "Blaze",
+                                "item": "Petaya Berry",
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+        context = _context(metadata)
+        before_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        current_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [
+                    "|move|opponenta: Charizard|Hidden Power|selfa: Blissey",
+                ],
+            },
+        )
+        context = replace(context, decision_round_index=1, observation=current_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        moves_field = override.player_teams["p1"].split("|")[4]
+        self.assertTrue(moves_field.startswith("hiddenpowergrass,"))
+
+    def test_called_public_move_events_do_not_constrain_replay_move_slots(self) -> None:
+        metadata = _metadata()
+        context = _context(metadata)
+        before_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=before_observation,
+                legal_action_mask=tuple(before_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        current_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [
+                    "|move|opponenta: Xatu|Ice Beam|selfa: Charizard|[from] Sleep Talk",
+                ],
+            },
+        )
+        context = replace(context, decision_round_index=1, observation=current_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+
     def test_replay_root_uses_initial_self_team_snapshot(self) -> None:
         initial_metadata = _metadata()
         current_metadata = _metadata()
