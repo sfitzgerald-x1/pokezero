@@ -1395,7 +1395,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "When search would override the checkpoint prior's greedy legal action, require the "
-            "selected action prior to be at least this fraction of the prior-best action prior."
+            "selected action prior to be at least this fraction of the prior-best action prior. "
+            "A value of 1.0 only allows max-prior ties to override."
         ),
     )
     parser.add_argument(
