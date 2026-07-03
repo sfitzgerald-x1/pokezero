@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+import re
+
+_DECISION_ROUND_RE = re.compile(r"\bdecision round\s+(\d+)\b", re.IGNORECASE)
+_REQUEST_MISMATCH_ROUND_RE = re.compile(
+    r"\breplay actions for decision round\s+(\d+)\s+do not match environment request\b",
+    re.IGNORECASE,
+)
+_START_OVERRIDE_OBSERVATION_MISMATCH_ROUND_RE = re.compile(
+    r"\bstart override does not reproduce recorded replay prefix observations\s+"
+    r"for decision round\s+(\d+)\b",
+    re.IGNORECASE,
+)
+_OBSERVATION_MISMATCH_PATH_RE = re.compile(
+    r"\((?P<path>[^():]+):\s+actual=.*?\s+expected=.*?\)",
+    re.IGNORECASE,
+)
+
 
 def root_puct_fallback_category(reason: object) -> str:
     """Return a stable, compact category for a verbose root-PUCT fallback reason."""
@@ -62,3 +79,49 @@ def root_puct_fallback_category(reason: object) -> str:
     if "search failed" in text:
         return "search_failed"
     return "other"
+
+
+def root_puct_replay_rejection_decision_round_counts(reason: object) -> dict[str, int]:
+    """Count decision rounds mentioned by a replay rejection reason.
+
+    A single skipped opponent scenario can include multiple retry failures, so this is a rejection
+    occurrence histogram rather than a skipped-scenario histogram.
+    """
+
+    return _decision_round_counts(_DECISION_ROUND_RE, reason)
+
+
+def root_puct_replay_request_mismatch_decision_round_counts(reason: object) -> dict[str, int]:
+    """Count rounds where replayed actions did not match the environment request shape."""
+
+    return _decision_round_counts(_REQUEST_MISMATCH_ROUND_RE, reason)
+
+
+def root_puct_start_override_mismatch_decision_round_counts(reason: object) -> dict[str, int]:
+    """Count rounds where a sampled world failed branch-point observation validation."""
+
+    return _decision_round_counts(_START_OVERRIDE_OBSERVATION_MISMATCH_ROUND_RE, reason)
+
+
+def root_puct_first_observation_mismatch_path_counts(reason: object) -> dict[str, int]:
+    """Count first-mismatch observation paths embedded in replay rejection reasons.
+
+    Replay observation diagnostics report the first differing observation field only, so this is a
+    first-divergence histogram, not a full inventory of every mismatching feature.
+    """
+
+    counts: dict[str, int] = {}
+    for match in _OBSERVATION_MISMATCH_PATH_RE.finditer(str(reason or "")):
+        key = match.group("path").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for match in pattern.finditer(str(reason or "")):
+        key = match.group(1)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
