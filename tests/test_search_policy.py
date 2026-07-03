@@ -1103,7 +1103,11 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"0": 1},
         )
         self.assertEqual(
-            metadata["root_puct_opponent_action_observation_mismatch_paths"],
+            metadata["root_puct_opponent_action_start_override_mismatch_decision_rounds"],
+            {"0": 1},
+        )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_first_observation_mismatch_paths"],
             {"categorical_ids/opponent_pokemon[8][11]": 1},
         )
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 2)

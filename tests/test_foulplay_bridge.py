@@ -485,7 +485,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                         "start_override_observation_mismatch": 1,
                     },
                     root_puct_opponent_action_replay_rejection_decision_rounds={"3": 1},
-                    root_puct_opponent_action_observation_mismatch_paths={
+                    root_puct_opponent_action_start_override_mismatch_decision_rounds={"3": 1},
+                    root_puct_opponent_action_first_observation_mismatch_paths={
                         "categorical_ids/opponent_pokemon[8][11]": 1,
                     },
                     root_puct_opponent_action_groups_generated=5,
@@ -533,7 +534,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_replay_rejection_decision_rounds={
                         "12": 2,
                     },
-                    root_puct_opponent_action_observation_mismatch_paths={
+                    root_puct_opponent_action_replay_request_mismatch_decision_rounds={"12": 1},
+                    root_puct_opponent_action_start_override_mismatch_decision_rounds={"12": 1},
+                    root_puct_opponent_action_first_observation_mismatch_paths={
                         "numeric_features/opponent_pokemon[8][0]": 1,
                     },
                     root_puct_opponent_action_groups_generated=4,
@@ -583,7 +586,15 @@ class FoulPlayBridgeTest(unittest.TestCase):
             {"3": 1, "12": 2},
         )
         self.assertEqual(
-            payload["root_puct"]["opponent_action_observation_mismatch_paths"],
+            payload["root_puct"]["opponent_action_replay_request_mismatch_decision_rounds"],
+            {"12": 1},
+        )
+        self.assertEqual(
+            payload["root_puct"]["opponent_action_start_override_mismatch_decision_rounds"],
+            {"3": 1, "12": 1},
+        )
+        self.assertEqual(
+            payload["root_puct"]["opponent_action_first_observation_mismatch_paths"],
             {
                 "categorical_ids/opponent_pokemon[8][11]": 1,
                 "numeric_features/opponent_pokemon[8][0]": 1,
@@ -622,7 +633,11 @@ class FoulPlayBridgeTest(unittest.TestCase):
             {"3": 1},
         )
         self.assertEqual(
-            payload["game_results"][0]["root_puct_opponent_action_observation_mismatch_paths"],
+            payload["game_results"][0]["root_puct_opponent_action_start_override_mismatch_decision_rounds"],
+            {"3": 1},
+        )
+        self.assertEqual(
+            payload["game_results"][0]["root_puct_opponent_action_first_observation_mismatch_paths"],
             {"categorical_ids/opponent_pokemon[8][11]": 1},
         )
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_groups_generated"], 5)

@@ -12,9 +12,11 @@ from typing import Callable, Mapping, Sequence
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv
 from .mcts_diagnostics import (
+    root_puct_first_observation_mismatch_path_counts,
     root_puct_fallback_category,
-    root_puct_observation_mismatch_path_counts,
     root_puct_replay_rejection_decision_round_counts,
+    root_puct_replay_request_mismatch_decision_round_counts,
+    root_puct_start_override_mismatch_decision_round_counts,
 )
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
@@ -1085,7 +1087,9 @@ def _opponent_scenario_skip_metadata(
 ) -> dict[str, object]:
     skip_categories: dict[str, int] = {}
     replay_rejection_decision_rounds: dict[str, int] = {}
-    observation_mismatch_paths: dict[str, int] = {}
+    replay_request_mismatch_decision_rounds: dict[str, int] = {}
+    start_override_mismatch_decision_rounds: dict[str, int] = {}
+    first_observation_mismatch_paths: dict[str, int] = {}
     for _scenario, reason in skipped_scenarios:
         category = root_puct_fallback_category(reason)
         skip_categories[category] = skip_categories.get(category, 0) + 1
@@ -1094,8 +1098,16 @@ def _opponent_scenario_skip_metadata(
             root_puct_replay_rejection_decision_round_counts(reason),
         )
         _merge_counts(
-            observation_mismatch_paths,
-            root_puct_observation_mismatch_path_counts(reason),
+            replay_request_mismatch_decision_rounds,
+            root_puct_replay_request_mismatch_decision_round_counts(reason),
+        )
+        _merge_counts(
+            start_override_mismatch_decision_rounds,
+            root_puct_start_override_mismatch_decision_round_counts(reason),
+        )
+        _merge_counts(
+            first_observation_mismatch_paths,
+            root_puct_first_observation_mismatch_path_counts(reason),
         )
     metadata: dict[str, object] = {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
@@ -1120,9 +1132,17 @@ def _opponent_scenario_skip_metadata(
         metadata["root_puct_opponent_action_replay_rejection_decision_rounds"] = dict(
             sorted(replay_rejection_decision_rounds.items(), key=lambda item: int(item[0]))
         )
-    if observation_mismatch_paths:
-        metadata["root_puct_opponent_action_observation_mismatch_paths"] = dict(
-            sorted(observation_mismatch_paths.items())
+    if replay_request_mismatch_decision_rounds:
+        metadata["root_puct_opponent_action_replay_request_mismatch_decision_rounds"] = dict(
+            sorted(replay_request_mismatch_decision_rounds.items(), key=lambda item: int(item[0]))
+        )
+    if start_override_mismatch_decision_rounds:
+        metadata["root_puct_opponent_action_start_override_mismatch_decision_rounds"] = dict(
+            sorted(start_override_mismatch_decision_rounds.items(), key=lambda item: int(item[0]))
+        )
+    if first_observation_mismatch_paths:
+        metadata["root_puct_opponent_action_first_observation_mismatch_paths"] = dict(
+            sorted(first_observation_mismatch_paths.items())
         )
     if opponent_action_group_count is not None:
         metadata.update(

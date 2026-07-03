@@ -164,15 +164,17 @@ prevalidated, `3` accepted, and `71` rejected. Replay materialization remains th
 these exact one-game counts are descriptive because foul-play is not fully deterministic.
 
 The next replay-localization diagnostic keeps raw and root-PUCT at `0/1` on seed `961001`, with
-root-PUCT searching only 2 decisions, falling back 46 times, and skipping 429 opponent-action
-scenarios. It now records replay rejection rounds and first observation mismatch paths. In one run the
-largest replay-round concentrations were early or mid-prefix (`2`, `3`, and `12`), while observation
-mismatches concentrated in opponent belief/item and HP features
-(`categorical_ids/opponent_pokemon[8][11]`, `numeric_features/opponent_pokemon[8][0]`) plus our own
-active HP (`numeric_features/self_pokemon[1][0]`). That points at full-prefix public-state divergence
-from sampled damage/item/ability histories, not a PUCT selection knob. The next materialization fix
-should either narrow sampled worlds from public damage/effect evidence or replace replay-from-root
-branch-point validation with a true current-state/snapshot contract.
+root-PUCT searching only 2 decisions, falling back 42 times, and skipping 389 opponent-action
+scenarios. It now records replay rejection rounds split by request-shape mismatch vs start-override
+observation mismatch, plus the first mismatching observation path. In one run the first failing replay
+rounds were often early or mid-prefix (`2`, `3`, and `12`), and the first observed mismatch paths
+included opponent belief/item and HP features (`categorical_ids/opponent_pokemon[8][11]`,
+`numeric_features/opponent_pokemon[8][0]`) plus our own active HP
+(`numeric_features/self_pokemon[1][0]`). These are first-divergence diagnostics, not a full inventory
+of every mismatching feature, but they are enough to rule out pure PUCT selection tuning as the next
+fix. The next materialization fix should either narrow sampled worlds from public damage/effect
+evidence or replace replay-from-root branch-point validation with a true current-state/snapshot
+contract.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
