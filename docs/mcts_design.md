@@ -184,6 +184,20 @@ prefixes inside branch search. This should reduce repeated replay cost for root 
 but it does not by itself resolve the diagnostic above: rejected sampled worlds still fail before
 there is a valid prefix to snapshot.
 
+Replay validation now allows a narrow, opt-in HP-fraction tolerance for sampled start overrides
+(`--start-override-hp-fraction-tolerance`, default `0.02`). This is deliberately scoped to HP
+fraction numeric cells on self/opponent Pokémon tokens only; request shape, legal masks,
+action-candidate tokens, categorical state, status, and all non-HP numeric features still match
+exactly. On the same seed `961001` one-game diagnostic, that tolerance
+kept raw and root-PUCT at `0/1` but improved hidden-world coverage: searches rose from `2` to `7`,
+accepted shared samples from `3` to `9`, skipped opponent-action scenarios fell from `429` to `391`,
+and fallbacks fell from `46` to `41`. This is useful coverage evidence, not strength evidence. The
+mechanism covers small current-HP-fraction drift only; max-HP/stat drift and switch action-candidate
+HP cells still reject sampled worlds. The remaining blocker is still replay materialization:
+request-shape divergence remains dominant (`replay_request_unexpected_player=321`,
+`replay_request_missing_player=20` in that run), while larger HP drift and belief/item-token
+mismatches continue to reject sampled worlds.
+
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
 runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.

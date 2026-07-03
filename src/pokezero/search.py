@@ -226,6 +226,7 @@ def value_branch_search(
     leaf_rollout_decision_rounds: int = 0,
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
 ) -> ValueBranchSearchResult:
     result, _restorable_prefix = _value_branch_search_with_prefix(
         env=env,
@@ -240,6 +241,7 @@ def value_branch_search(
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
         start_override=start_override,
         expected_current_observation=expected_current_observation,
+        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
     return result
 
@@ -258,6 +260,7 @@ def _value_branch_search_with_prefix(
     leaf_rollout_decision_rounds: int = 0,
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
 ) -> tuple[ValueBranchSearchResult, _RestorablePrefix | None]:
     """Enumerate legal root actions and score branch leaves.
 
@@ -280,6 +283,8 @@ def _value_branch_search_with_prefix(
         raise ValueError("leaf_rollout_policies are required when leaf rollouts are enabled.")
     if leaf_rollout_decision_rounds and leaf_rollout_config is None:
         raise ValueError("leaf_rollout_config is required when leaf rollouts are enabled.")
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
     _require_current_observation_for_start_override(
         start_override=start_override,
         expected_current_observation=expected_current_observation,
@@ -297,6 +302,7 @@ def _value_branch_search_with_prefix(
         prefix_decision_round_count=prefix_decision_round_count,
         start_override=start_override,
         expected_current_observation=expected_current_observation,
+        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
     candidates: list[ValueBranchSearchCandidate] = []
     for action_index in candidate_indices:
@@ -314,6 +320,7 @@ def _value_branch_search_with_prefix(
                 start_override=start_override,
                 expected_current_observation=expected_current_observation,
                 restorable_prefix=restorable_prefix,
+                replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -373,6 +380,7 @@ def puct_branch_search(
     root_time_budget_seconds: float | None = None,
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
 ) -> PUCTBranchSearchResult:
     """Score root replay branches with PUCT-style policy-prior exploration.
 
@@ -392,6 +400,8 @@ def puct_branch_search(
         root_time_budget_seconds <= 0.0 or not math.isfinite(root_time_budget_seconds)
     ):
         raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
     time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
     value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
@@ -406,6 +416,7 @@ def puct_branch_search(
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
         start_override=start_override,
         expected_current_observation=expected_current_observation,
+        replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
     if root_visit_budget is not None and root_visit_budget < len(value_search.candidates):
         raise ValueError("root_visit_budget must be at least the number of legal root actions.")
@@ -455,6 +466,7 @@ def puct_branch_search(
             start_override=start_override,
             expected_current_observation=expected_current_observation,
             restorable_prefix=restorable_prefix,
+            replay_hp_fraction_tolerance=replay_hp_fraction_tolerance,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -523,6 +535,7 @@ def flat_branch_search(
     rollout_config: RolloutConfig,
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    replay_hp_fraction_tolerance: float = 0.0,
 ) -> FlatBranchSearchResult:
     """Enumerate legal root actions, roll each branch out, and score terminal outcomes."""
 
@@ -533,6 +546,8 @@ def flat_branch_search(
         raise ValueError("flat branch search requires at least one legal action.")
     if player_id in opponent_actions:
         raise ValueError("opponent_actions must not include the searched player.")
+    if replay_hp_fraction_tolerance < 0.0 or not math.isfinite(replay_hp_fraction_tolerance):
+        raise ValueError("replay_hp_fraction_tolerance must be a finite non-negative value.")
     _require_current_observation_for_start_override(
         start_override=start_override,
         expected_current_observation=expected_current_observation,
@@ -557,6 +572,7 @@ def flat_branch_search(
             expected_current_observation=expected_current_observation,
             # Flat search has the same branch-point consistency contract as value/PUCT search.
             check_prefix_observations=False,
+            hp_fraction_tolerance=replay_hp_fraction_tolerance,
         )
         terminal = rollout.continuation.terminal
         candidates.append(
@@ -703,6 +719,7 @@ def _restorable_prefix_snapshot(
     prefix_decision_round_count: int,
     start_override: StartOverrideSource,
     expected_current_observation: PokeZeroObservationV0 | None,
+    replay_hp_fraction_tolerance: float,
 ) -> _RestorablePrefix | None:
     snapshotter = getattr(env, "snapshot", None)
     restorer = getattr(env, "restore", None)
@@ -720,6 +737,7 @@ def _restorable_prefix_snapshot(
         # Root search validates the branch point. Earlier custom-game replay observations can
         # drift while sampled hidden worlds are rejected by the current observation check.
         check_prefix_observations=False,
+        hp_fraction_tolerance=replay_hp_fraction_tolerance,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -736,6 +754,7 @@ def _branch_from_replay_prefix(
     start_override: StartOverrideSource,
     expected_current_observation: PokeZeroObservationV0 | None,
     restorable_prefix: _RestorablePrefix | None,
+    replay_hp_fraction_tolerance: float,
 ) -> ReplayBranchResult:
     if restorable_prefix is None:
         return replay_trajectory_branch(
@@ -750,6 +769,7 @@ def _branch_from_replay_prefix(
             # observations can drift while sampled hidden worlds are rejected by the
             # branch-point observation check below.
             check_prefix_observations=False,
+            hp_fraction_tolerance=replay_hp_fraction_tolerance,
         )
     restorer = getattr(env, "restore", None)
     if not callable(restorer):

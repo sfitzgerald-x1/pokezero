@@ -25,6 +25,9 @@ _RECENT_EVENT_TOKEN_OFFSET = (
     + OPPONENT_POKEMON_TOKEN_COUNT
     + ACTION_CANDIDATE_TOKEN_COUNT
 )
+_NUMERIC_HP_FRACTION_INDEX = 0
+_SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_COUNT
+_OPPONENT_POKEMON_TOKEN_OFFSET = _SELF_POKEMON_TOKEN_OFFSET + SELF_POKEMON_TOKEN_COUNT
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,7 @@ def replay_action_rounds(
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     check_prefix_observations: bool = True,
+    hp_fraction_tolerance: float = 0.0,
 ) -> ReplayPrefixResult:
     """Reset ``env`` and replay a recorded action prefix from the battle root.
 
@@ -193,6 +197,7 @@ def replay_action_rounds(
                 action_round,
                 player_id=consistency_player_id,
                 ignore_recent_events=True,
+                hp_fraction_tolerance=hp_fraction_tolerance,
             )
         env.step(action_round.actions)
 
@@ -207,6 +212,7 @@ def replay_action_rounds(
             player_id=consistency_player_id,
             turn_index=len(action_rounds),
             ignore_recent_events=True,
+            hp_fraction_tolerance=hp_fraction_tolerance,
         )
 
     return ReplayPrefixResult(
@@ -225,6 +231,7 @@ def replay_trajectory_prefix(
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     check_prefix_observations: bool = True,
+    hp_fraction_tolerance: float = 0.0,
 ) -> ReplayPrefixResult:
     """Replay the first N decision rounds from a trajectory into ``env``."""
 
@@ -240,6 +247,7 @@ def replay_trajectory_prefix(
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
         check_prefix_observations=check_prefix_observations,
+        hp_fraction_tolerance=hp_fraction_tolerance,
     )
 
 
@@ -253,6 +261,7 @@ def replay_trajectory_branch(
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     check_prefix_observations: bool = True,
+    hp_fraction_tolerance: float = 0.0,
 ) -> ReplayBranchResult:
     """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
 
@@ -264,6 +273,7 @@ def replay_trajectory_branch(
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
         check_prefix_observations=check_prefix_observations,
+        hp_fraction_tolerance=hp_fraction_tolerance,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -297,6 +307,7 @@ def replay_trajectory_branch_rollout(
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
     check_prefix_observations: bool = True,
+    hp_fraction_tolerance: float = 0.0,
 ) -> ReplayBranchRolloutResult:
     """Replay, branch once, then continue the rollout with policies until terminal or cap."""
 
@@ -309,6 +320,7 @@ def replay_trajectory_branch_rollout(
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
         check_prefix_observations=check_prefix_observations,
+        hp_fraction_tolerance=hp_fraction_tolerance,
     )
     continuation = continue_rollout_from_current_state(
         env=env,
@@ -370,6 +382,7 @@ def _require_expected_observation(
     *,
     player_id: PlayerId,
     ignore_recent_events: bool = False,
+    hp_fraction_tolerance: float = 0.0,
 ) -> None:
     if not action_round.expected_observations:
         return
@@ -382,6 +395,7 @@ def _require_expected_observation(
         player_id=player_id,
         turn_index=action_round.turn_index,
         ignore_recent_events=ignore_recent_events,
+        hp_fraction_tolerance=hp_fraction_tolerance,
     )
 
 
@@ -392,17 +406,20 @@ def _require_observation_match(
     player_id: PlayerId,
     turn_index: int,
     ignore_recent_events: bool = False,
+    hp_fraction_tolerance: float = 0.0,
 ) -> None:
     actual = env.observe(player_id)
     if not _observations_match_for_replay(
         actual,
         expected,
         ignore_recent_events=ignore_recent_events,
+        hp_fraction_tolerance=hp_fraction_tolerance,
     ):
         details = _observation_replay_mismatch_details(
             actual,
             expected,
             ignore_recent_events=ignore_recent_events,
+            hp_fraction_tolerance=hp_fraction_tolerance,
         )
         detail_suffix = f" ({details})" if details else ""
         raise ValueError(
@@ -416,6 +433,7 @@ def _observations_match_for_replay(
     expected: PokeZeroObservationV0,
     *,
     ignore_recent_events: bool = False,
+    hp_fraction_tolerance: float = 0.0,
 ) -> bool:
     categorical_actual = actual.categorical_ids
     categorical_expected = expected.categorical_ids
@@ -440,7 +458,11 @@ def _observations_match_for_replay(
     return (
         actual.schema_version == expected.schema_version
         and categorical_actual == categorical_expected
-        and numeric_actual == numeric_expected
+        and _numeric_features_match_for_replay(
+            numeric_actual,
+            numeric_expected,
+            hp_fraction_tolerance=hp_fraction_tolerance,
+        )
         and token_type_actual == token_type_expected
         and attention_actual == attention_expected
         and tuple(actual.legal_action_mask) == tuple(expected.legal_action_mask)
@@ -453,6 +475,7 @@ def _observation_replay_mismatch_details(
     expected: PokeZeroObservationV0,
     *,
     ignore_recent_events: bool = False,
+    hp_fraction_tolerance: float = 0.0,
 ) -> str | None:
     if actual.schema_version != expected.schema_version:
         return (
@@ -485,7 +508,11 @@ def _observation_replay_mismatch_details(
         ("attention_mask", attention_actual, attention_expected),
         ("legal_action_mask", actual.legal_action_mask, expected.legal_action_mask),
     ):
-        mismatch = _first_mismatch(actual_values, expected_values)
+        mismatch = _first_mismatch(
+            actual_values,
+            expected_values,
+            hp_fraction_tolerance=hp_fraction_tolerance if name == "numeric_features" else 0.0,
+        )
         if mismatch is not None:
             path, actual_value, expected_value = mismatch
             return (
@@ -502,9 +529,33 @@ def _observation_replay_mismatch_details(
     return None
 
 
-def _first_mismatch(actual, expected, path: tuple[int | str, ...] = ()):
+def _numeric_features_match_for_replay(
+    actual: tuple[tuple[float, ...], ...],
+    expected: tuple[tuple[float, ...], ...],
+    *,
+    hp_fraction_tolerance: float,
+) -> bool:
+    return _first_mismatch(
+        actual,
+        expected,
+        hp_fraction_tolerance=hp_fraction_tolerance,
+    ) is None
+
+
+def _first_mismatch(
+    actual,
+    expected,
+    path: tuple[int | str, ...] = (),
+    *,
+    hp_fraction_tolerance: float = 0.0,
+):
     try:
-        if actual == expected:
+        if actual == expected or _within_hp_fraction_tolerance(
+            actual,
+            expected,
+            path=path,
+            hp_fraction_tolerance=hp_fraction_tolerance,
+        ):
             return None
     except ValueError:
         # Some array types return elementwise comparisons. Fall through to indexed comparison.
@@ -515,11 +566,45 @@ def _first_mismatch(actual, expected, path: tuple[int | str, ...] = ()):
         if actual_len != expected_len:
             return (path + ("len",), actual_len, expected_len)
         for index, (actual_item, expected_item) in enumerate(zip(actual, expected, strict=True)):
-            mismatch = _first_mismatch(actual_item, expected_item, path + (index,))
+            mismatch = _first_mismatch(
+                actual_item,
+                expected_item,
+                path + (index,),
+                hp_fraction_tolerance=hp_fraction_tolerance,
+            )
             if mismatch is not None:
                 return mismatch
         return None
     return (path, actual, expected)
+
+
+def _within_hp_fraction_tolerance(
+    actual,
+    expected,
+    *,
+    path: tuple[int | str, ...],
+    hp_fraction_tolerance: float,
+) -> bool:
+    if hp_fraction_tolerance <= 0.0:
+        return False
+    if (
+        len(path) < 2
+        or path[-1] != _NUMERIC_HP_FRACTION_INDEX
+        or not _is_pokemon_token_path(path)
+    ):
+        return False
+    if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
+        return False
+    return abs(float(actual) - float(expected)) <= hp_fraction_tolerance
+
+
+def _is_pokemon_token_path(path: tuple[int | str, ...]) -> bool:
+    token_index = path[-2]
+    if not isinstance(token_index, int):
+        return False
+    return (
+        _SELF_POKEMON_TOKEN_OFFSET <= token_index < _OPPONENT_POKEMON_TOKEN_OFFSET + OPPONENT_POKEMON_TOKEN_COUNT
+    )
 
 
 def _is_indexable_sequence(value) -> bool:
