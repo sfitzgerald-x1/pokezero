@@ -45,6 +45,8 @@ from pokezero.showdown import (
     NUMERIC_SELF_SCREENS,
     PlayerRelativePublicEvent,
     _event_detail_category,
+    _pokemon_metadata,
+    _self_team_from_request,
     detect_showdown_slot,
     normalize_for_player,
     observation_from_player_state,
@@ -265,6 +267,52 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.metadata["opponent_active"]["species"], "Xatu")
         self.assertEqual(observation.metadata["action_candidates"][0]["move_name"], "flamethrower")
         self.assertEqual(observation.metadata["action_candidates"][4]["pokemon"]["species"], "Snorlax")
+
+    def test_self_team_request_metadata_carries_private_set_fields_for_search_materialization(self) -> None:
+        request = {
+            "active": [
+                {
+                    "moves": [
+                        {"id": "fireblast", "move": "Fire Blast"},
+                        {"id": "dragonclaw", "move": "Dragon Claw"},
+                    ]
+                }
+            ],
+            "side": {
+                "id": "p2",
+                "pokemon": [
+                    {
+                        "ident": "p2a: Charizard",
+                        "details": "Charizard, L79",
+                        "condition": "250/250",
+                        "active": True,
+                        "baseAbility": "Blaze",
+                        "item": "Petaya Berry",
+                        "stats": {"atk": 180, "def": 160, "spa": 240, "spd": 190, "spe": 220},
+                    },
+                    {
+                        "ident": "p2b: Blissey",
+                        "details": "Blissey, L75",
+                        "condition": "300/300",
+                        "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                        "ability": "Natural Cure",
+                        "item": "Leftovers",
+                    },
+                ],
+            },
+        }
+
+        team = _self_team_from_request(request, "p2")
+        metadata = _pokemon_metadata(team[0])
+
+        self.assertEqual(team[0].moves, ("fireblast", "dragonclaw"))
+        self.assertEqual(team[0].ability, "Blaze")
+        self.assertEqual(team[0].item, "Petaya Berry")
+        self.assertEqual(team[1].moves, ("seismictoss", "softboiled", "toxic", "thunderwave"))
+        self.assertEqual(metadata["moves"], ["fireblast", "dragonclaw"])
+        self.assertEqual(metadata["ability"], "Blaze")
+        self.assertEqual(metadata["item"], "Petaya Berry")
+        self.assertEqual(metadata["stats"]["hp"], 250)
 
     def test_revealed_opponent_moves_populate_move_buckets_without_set_source(self) -> None:
         # Regression: revealed opponent moves are protocol ground truth and must be encoded even

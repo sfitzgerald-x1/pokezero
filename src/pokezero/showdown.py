@@ -161,6 +161,9 @@ class ShowdownPokemon:
     condition: Optional[str] = None
     active: bool = False
     details: Optional[str] = None
+    moves: tuple[str, ...] = ()
+    ability: Optional[str] = None
+    item: Optional[str] = None
     # Actual computed stats {hp, atk, def, spa, spd, spe} — known only for the player's own team
     # (from the request); None for opponent mons, whose actual stats are hidden.
     stats: Optional[Mapping[str, int]] = None
@@ -952,12 +955,14 @@ def _self_team_from_request(request: Mapping[str, Any] | None, showdown_slot: st
     pokemon_rows = side.get("pokemon") if isinstance(side, Mapping) else None
     if not isinstance(pokemon_rows, list):
         return ()
+    active_moves = _active_request_moves(request)
     team: list[ShowdownPokemon] = []
     for row in pokemon_rows:
         if not isinstance(row, Mapping):
             continue
         ident = str(row.get("ident") or "")
         condition = str(row.get("condition")) if row.get("condition") is not None else None
+        row_moves = _request_pokemon_moves(row)
         team.append(
             ShowdownPokemon(
                 ident=ident,
@@ -966,6 +971,9 @@ def _self_team_from_request(request: Mapping[str, Any] | None, showdown_slot: st
                 condition=condition,
                 active=bool(row.get("active")),
                 details=str(row.get("details")) if row.get("details") is not None else None,
+                moves=row_moves or (active_moves if row.get("active") else ()),
+                ability=_request_pokemon_ability(row),
+                item=_request_pokemon_item(row),
                 stats=_actual_stats_from_request_row(row, condition),
             )
         )
@@ -1451,6 +1459,10 @@ def _pokemon_metadata(pokemon: ShowdownPokemon | None) -> dict[str, Any] | None:
         "fainted": condition.fainted,
         "active": pokemon.active,
         "details": pokemon.details,
+        "moves": list(pokemon.moves),
+        "ability": pokemon.ability,
+        "item": pokemon.item,
+        "stats": dict(pokemon.stats) if pokemon.stats is not None else None,
     }
 
 
@@ -1626,6 +1638,40 @@ def _active_request(request: Mapping[str, Any] | None) -> Mapping[str, Any] | No
     active_rows = request.get("active") if isinstance(request, Mapping) else None
     if isinstance(active_rows, list) and active_rows and isinstance(active_rows[0], Mapping):
         return active_rows[0]
+    return None
+
+
+def _active_request_moves(request: Mapping[str, Any] | None) -> tuple[str, ...]:
+    active = _active_request(request)
+    moves = active.get("moves") if isinstance(active, Mapping) else None
+    if not isinstance(moves, list):
+        return ()
+    return tuple(
+        _request_move_name(move)
+        for move in moves
+        if isinstance(move, Mapping)
+    )
+
+
+def _request_pokemon_moves(row: Mapping[str, Any]) -> tuple[str, ...]:
+    moves = row.get("moves")
+    if not isinstance(moves, list):
+        return ()
+    return tuple(str(move).strip() for move in moves if str(move).strip())
+
+
+def _request_pokemon_ability(row: Mapping[str, Any]) -> str | None:
+    for key in ("ability", "baseAbility"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _request_pokemon_item(row: Mapping[str, Any]) -> str | None:
+    value = row.get("item")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 

@@ -24,6 +24,7 @@ import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from .category_vocab import CategoryVocabulary
+from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
 from .local_showdown import BRIDGE_PATH, LocalShowdownConfig, LocalShowdownEnv, showdown_seed_from_int
@@ -36,6 +37,7 @@ from .neural_policy import (
 )
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision
+from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .rollout import RolloutConfig
 from .search_policy import (
@@ -86,6 +88,7 @@ class ControlledFoulPlayConfig:
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
+    belief_start_overrides: bool = False
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -262,6 +265,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
+                "belief_start_overrides": self.config.belief_start_overrides,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -697,6 +701,11 @@ def _build_policy(
             deterministic=not config.leaf_rollout_sampling,
         )
 
+    start_override_planner = None
+    if config.belief_start_overrides:
+        set_source = load_gen3_randbat_source_cached(config.showdown_root)
+        start_override_planner = gen3_randbat_belief_start_override_planner(set_source)
+
     return RootPUCTSearchPolicy(
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=rollout_config,
@@ -718,6 +727,7 @@ def _build_policy(
         ),
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
+        start_override_planner=start_override_planner,
         leaf_rollout_metadata={
             "root_puct_leaf_rollout_opponent_policy": "checkpoint",
             "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
@@ -1151,11 +1161,14 @@ async def _handle_decision_boundary(
         for player in requested_players
     }
     observations = {
-        player: observation_from_player_state(
+        player: _observation_with_search_metadata(
+            observation_from_player_state(
+                player_states[player],
+                category_vocab=vocab,
+                spec=observation_spec,
+                dex=dex,
+            ),
             player_states[player],
-            category_vocab=vocab,
-            spec=observation_spec,
-            dex=dex,
         )
         for player in requested_players
     }
@@ -1222,6 +1235,19 @@ async def _handle_decision_boundary(
 
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
     return None
+
+
+def _observation_with_search_metadata(
+    observation: PokeZeroObservationV0,
+    state: PlayerRelativeBattleState,
+) -> PokeZeroObservationV0:
+    return replace(
+        observation,
+        metadata={
+            **dict(observation.metadata),
+            "belief_view": state.belief_view.to_overlay_payload(),
+        },
+    )
 
 
 async def _wait_for_foulplay_choice_or_exit(
@@ -1480,6 +1506,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Use sampled checkpoint policies, rather than greedy policies, inside leaf rollouts.",
     )
     parser.add_argument(
+        "--belief-start-overrides",
+        action="store_true",
+        help=(
+            "Sample public Gen 3 randbat belief into complete custom-game branch starts for "
+            "root-PUCT replay search. This is hidden-info safe but experimental."
+        ),
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -1530,6 +1564,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         leaf_rollout_sampling=args.leaf_rollout_sampling,
+        belief_start_overrides=args.belief_start_overrides,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

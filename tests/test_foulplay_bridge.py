@@ -20,6 +20,7 @@ from pokezero.foulplay_bridge import (
     _foulplay_env,
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
+    _observation_with_search_metadata,
     _root_puct_prior_action_change_details,
     _requested_legal_action_masks_for_context,
     _is_terminal_protocol_line,
@@ -30,6 +31,7 @@ from pokezero.foulplay_bridge import (
     run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
+from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 
 
@@ -285,6 +287,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             root_time_budget_ms=250,
             leaf_rollout_rounds=1,
             leaf_rollout_sampling=True,
+            belief_start_overrides=True,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -390,7 +393,31 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertEqual(payload["root_puct"]["root_time_budget_ms"], 250)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
+        self.assertEqual(payload["root_puct"]["belief_start_overrides"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
+
+    def test_observation_with_search_metadata_adds_belief_view_without_mutating_original(self) -> None:
+        class BeliefView:
+            def to_overlay_payload(self):
+                return {"self_slot": "p1", "opponent_slot": "p2"}
+
+        class State:
+            belief_view = BeliefView()
+
+        observation = PokeZeroObservationV0(
+            categorical_ids=(),
+            numeric_features=(),
+            token_type_ids=(),
+            attention_mask=(),
+            legal_action_mask=(True,) + (False,) * 8,
+            metadata={"existing": "value"},
+        )
+
+        augmented = _observation_with_search_metadata(observation, State())  # type: ignore[arg-type]
+
+        self.assertNotIn("belief_view", observation.metadata)
+        self.assertEqual(augmented.metadata["existing"], "value")
+        self.assertEqual(augmented.metadata["belief_view"]["self_slot"], "p1")
 
     def test_write_json_creates_parent_directory_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
