@@ -105,11 +105,15 @@ request/illegal-action replay drift as retryable scenario rejection, a 3-game sm
 184 generated opponent-action scenarios, used 12 accepted start overrides, and spent 1088
 start-override attempts. Seed `910001` searched 27 of 27 decisions with zero fallbacks; seeds
 `910002` and `910003` still fell back heavily because all sampled worlds drifted in request shape or
-branch-point observation features by midgame. This fixes some fallback classification and makes the
-remaining failure concrete, but the smoke is still replay-brittle. The next gate is not a larger
-strength run; it is reducing replay-prefix/current-state materialization brittleness or moving to
-reversible current-state branching, then running a wider raw-vs-MCTS seed-paired read before any
->=300-game MCTS strength claim is meaningful.
+branch-point observation features by midgame. Adding public switch-slot constraints to the
+belief-backed start override materially improved the same 3-game smoke: it still won `1/3`, but
+searched 130 of 135 PokeZero decisions, fell back 5 times, skipped 9 of 256 generated opponent-action
+scenarios, used 33 accepted start overrides, and spent 352 start-override attempts. The remaining
+fallbacks are concentrated on seed `910002` and still involve request-shape drift plus action-candidate
+/ Pokémon-token mismatches around midgame. This makes the hidden-mode harness much less replay-brittle,
+but it is still coverage evidence, not strength evidence. The next gate is a wider raw-vs-MCTS
+seed-paired read only after verifying the remaining fallback cases are rare enough across more seeds;
+no >=300-game MCTS strength claim is meaningful until coverage remains high at that scale.
 
 ## Design principles / hard constraints
 

@@ -723,6 +723,199 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         moves_field = override.player_teams["p1"].split("|")[4]
         self.assertTrue(moves_field.startswith("substitute,fireblast,hiddenpowergrass,dragonclaw"))
 
+    def test_public_switch_events_constrain_replay_switch_team_slots(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Charizard",
+                    "details": "Charizard, L79",
+                    "moves": ["fireblast", "dragonclaw", "hiddenpowergrass", "substitute"],
+                    "ability": "Blaze",
+                    "item": "Petaya Berry",
+                    "stats": {"hp": 252, "atk": 139, "def": 169, "spa": 217, "spd": 180, "spe": 204},
+                },
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                },
+                {
+                    "showdown_slot": "p2",
+                    "species": "Snorlax",
+                    "details": "Snorlax, L75",
+                    "moves": ["return", "earthquake", "rest", "curse"],
+                    "ability": "Immunity",
+                    "item": "Leftovers",
+                },
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Xatu",
+                        "active": False,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "xatu-support",
+                                "source_set_id": "xatu-1",
+                                "role": "Support",
+                                "level": 84,
+                                "moves": ["psychic", "thunderwave", "wish", "protect"],
+                                "ability": "Synchronize",
+                                "item": "Leftovers",
+                            },
+                        ],
+                    },
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Tauros",
+                        "active": False,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "tauros-breaker",
+                                "source_set_id": "tauros-1",
+                                "role": "Breaker",
+                                "level": 76,
+                                "moves": ["return", "earthquake", "doubleedge", "hiddenpowerghost"],
+                                "ability": "Intimidate",
+                                "item": "Choice Band",
+                            },
+                        ],
+                    },
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Arcanine",
+                        "active": True,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "arcanine-breaker",
+                                "source_set_id": "arcanine-1",
+                                "role": "Breaker",
+                                "level": 78,
+                                "moves": ["fireblast", "crunch", "extremespeed", "hiddenpowergrass"],
+                                "ability": "Flash Fire",
+                                "item": "Leftovers",
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
+        context = _context(metadata)
+        switch_mask = tuple(index in {0, 4} for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Arcanine"},
+                "recent_public_events": [
+                    "|switch|opponenta: Arcanine|Arcanine, L78|100/100",
+                ],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                # With Xatu active at team index 0, action 4 targets team index 1.
+                action_index=4,
+            )
+        )
+        context = replace(context, decision_round_index=1, observation=round_1_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
+        self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
+
+    def test_conflicting_public_switch_team_slot_constraints_disable_override(self) -> None:
+        metadata = _metadata()
+        context = _context(metadata)
+        switch_mask = tuple(index in {0, 4} for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [
+                    "|switch|opponenta: Xatu|Xatu, L84|100/100",
+                ],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                # This switch action targets team index 1, conflicting with Xatu's initial index 0.
+                action_index=4,
+            )
+        )
+        context = replace(context, decision_round_index=1, observation=round_1_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNone(override)
+
     def test_called_public_move_events_do_not_constrain_replay_move_slots(self) -> None:
         metadata = _metadata()
         context = _context(metadata)
