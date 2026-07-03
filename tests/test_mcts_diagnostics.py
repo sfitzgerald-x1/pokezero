@@ -31,6 +31,16 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             "duplicate_start_override",
         )
 
+    def test_duplicate_start_override_does_not_mask_mixed_aggregate(self) -> None:
+        reason = (
+            "all opponent action scenarios were replay-illegal: "
+            "sampled start override duplicated an earlier materialized world; "
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 28: p1."
+        )
+
+        self.assertEqual(root_puct_fallback_category(reason), "mixed_replay_prefix_divergence")
+
     def test_classifies_planner_side_rejections(self) -> None:
         examples = {
             "opponent_action_planner returned an illegal action for p2: 5": (

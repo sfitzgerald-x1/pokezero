@@ -45,8 +45,6 @@ def root_puct_fallback_category(reason: object) -> str:
         return "opponent_planner_unexpected_actions"
     if "no branch candidates" in text:
         return "no_branch_candidates"
-    if "sampled start override duplicated" in text:
-        return "duplicate_start_override"
     if "all opponent action scenarios were replay-illegal" in text:
         has_unexpected_players = "unexpected players" in text
         has_missing_players = "missing requested players" in text
@@ -78,6 +76,8 @@ def root_puct_fallback_category(reason: object) -> str:
         return "all_opponent_scenarios_replay_illegal"
     if "action_index " in text and " is not legal for the current request" in text:
         return "illegal_action_for_current_request"
+    if "sampled start override duplicated" in text:
+        return "duplicate_start_override"
     if "did not produce a sampled world" in text or "sampled world" in text:
         return "missing_sampled_world"
     if "unexpected players" in text:

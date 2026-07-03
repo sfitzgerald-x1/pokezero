@@ -218,7 +218,10 @@ Shared start-override sampling now skips duplicate materialized packed teams bef
 On the same seed/default-attempt smoke, this skipped `16` duplicate materializations and nudged
 accepted shared samples from `19` to `21` and searches from `15` to `16`, while still leaving raw and
 root-PUCT at `0/1`. The gain is small but confirms duplicate sampled worlds were consuming retry
-budget without adding belief-world coverage.
+budget without adding distinct belief-world coverage. This deliberately favors distinct-world
+coverage inside one decision over a pure with-replacement belief expectation; duplicate worlds do
+carry belief mass, so this should be treated as a coverage-efficiency diagnostic rather than an
+unbiased estimator of the belief-weighted root value.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
