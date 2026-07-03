@@ -339,15 +339,6 @@ class RootPUCTSearchPolicy:
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
             try:
-                scenario_root_time_budget_seconds = (
-                    None
-                    if self.root_time_budget_seconds is None
-                    else self.root_time_budget_seconds
-                    / _target_opponent_action_scenario_count(
-                        generated_count=len(opponent_scenarios),
-                        max_used_count=self.max_opponent_action_scenarios,
-                    )
-                )
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                 start_override_sources_used = 0
                 start_override_attempts_used = 0
@@ -368,6 +359,10 @@ class RootPUCTSearchPolicy:
                                 scenario_index,
                                 rng,
                             )
+                        )
+                        scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
+                            total_budget_seconds=self.root_time_budget_seconds,
+                            started_at=start,
                         )
                         try:
                             search = puct_branch_search(
@@ -695,16 +690,16 @@ def _opponent_action_scenarios(
     )
 
 
-def _target_opponent_action_scenario_count(
+def _remaining_root_time_budget_seconds(
     *,
-    generated_count: int,
-    max_used_count: int | None,
-) -> int:
-    if generated_count <= 0:
-        raise ValueError("opponent action scenario planner produced no scenarios.")
-    if max_used_count is None:
-        return generated_count
-    return max(1, min(generated_count, max_used_count))
+    total_budget_seconds: float | None,
+    started_at: float,
+) -> float | None:
+    if total_budget_seconds is None:
+        return None
+    elapsed = perf_counter() - started_at
+    return max(1e-9, total_budget_seconds - elapsed)
+
 
 
 def _top_prior_action_choices(

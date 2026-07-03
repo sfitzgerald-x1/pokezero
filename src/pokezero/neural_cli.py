@@ -690,7 +690,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--root-visit-budget",
         type=int,
         default=16,
-        help="Total root visits per searched decision; defaults to 16.",
+        help=(
+            "Root visits per accepted opponent-action scenario; defaults to 16. "
+            "With multiple accepted scenarios, total decision visits scale by searched scenario count."
+        ),
     )
     root_puct_play.add_argument(
         "--min-value-improvement",

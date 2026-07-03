@@ -469,7 +469,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_action_policy"], "checkpoint-top2")
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 2)
         self.assertEqual(metadata["root_puct_root_time_budget_seconds"], 8.0)
-        self.assertEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 4.0)
+        self.assertGreater(metadata["root_puct_root_scenario_time_budget_seconds"], 0.0)
+        self.assertLessEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 8.0)
         self.assertEqual(
             metadata["root_puct_opponent_action_scenarios"],
             [
@@ -653,7 +654,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 1)
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
-        self.assertEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 3.0)
+        self.assertGreater(metadata["root_puct_root_scenario_time_budget_seconds"], 0.0)
+        self.assertLessEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 3.0)
         self.assertEqual(
             metadata["root_puct_opponent_action_scenarios"],
             [{"label": "legal-hidden", "weight": 1.0, "actions": {"p2": 0}}],
@@ -662,6 +664,48 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 0, "p2": 0},
             {"p1": 1, "p2": 0},
         ])
+
+    def test_root_puct_policy_does_not_pre_split_time_budget_across_rejected_reserve_scenarios(self) -> None:
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 2}, weight=0.5, label="illegal-hidden-1"),
+                OpponentActionScenario(actions={"p2": 0}, weight=0.4, label="legal-hidden"),
+                OpponentActionScenario(actions={"p2": 3}, weight=0.1, label="illegal-hidden-2"),
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: StrictOpponentActionEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            max_opponent_action_scenarios=2,
+            cpuct=0.0,
+            root_visit_budget=2,
+            root_time_budget_seconds=3.0,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        metadata = decision.metadata
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 2)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 0)
+        self.assertGreater(metadata["root_puct_root_scenario_time_budget_seconds"], 2.5)
+        self.assertLessEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 3.0)
 
     def test_root_puct_policy_skips_start_override_consistency_mismatch_scenario(self) -> None:
         branch_envs: list[StartOverrideOutcomeEnv] = []

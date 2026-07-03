@@ -1555,9 +1555,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "PokeZero-side wall-clock budget for extra post-sweep root visits. With multiple "
-            "opponent-action scenarios, the configured decision budget is split evenly across "
-            "scenario searches. The mandatory initial legal-action sweep is always completed and "
-            "can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
+            "opponent-action scenarios, each scenario receives the remaining decision budget at "
+            "the time it is searched. The mandatory initial legal-action sweep is always completed "
+            "and can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
         ),
     )
     parser.add_argument(
