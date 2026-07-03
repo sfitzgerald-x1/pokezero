@@ -77,7 +77,7 @@ from .dataset import (
     training_batch_from_examples,
     write_training_cache_from_rollouts,
 )
-from .env import AsyncPokeZeroEnv, PokeZeroEnv, StepResult, TerminalState
+from .env import AsyncPokeZeroEnv, BattleStartOverride, PokeZeroEnv, StepResult, TerminalState
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
     DEFAULT_MAX_COLLECTION_CAPPED_RATE,
@@ -234,6 +234,7 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    StartOverrideSource,
     ValueBranchSearchCandidate,
     ValueBranchSearchResult,
     flat_branch_search,
@@ -295,6 +296,7 @@ __all__ = [
     "ActionPriorVector",
     "ActionCandidate",
     "AsyncPokeZeroEnv",
+    "BattleStartOverride",
     "BattleBeliefSnapshot",
     "BranchSearchCandidate",
     "CandidateSetSummary",
@@ -421,6 +423,7 @@ __all__ = [
     "SMOKE_EVALUATION_PROFILE",
     "TEACHER_BOOTSTRAP_SCHEMA_VERSION",
     "StepResult",
+    "StartOverrideSource",
     "TerminalState",
     "TeacherBootstrapResult",
     "TorchUnavailableError",

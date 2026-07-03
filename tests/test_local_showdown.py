@@ -12,9 +12,11 @@ from pokezero.local_showdown import (
     LocalShowdownEnv,
     _drain_stderr,
     _drain_stdout,
+    _start_players_payload,
     requested_players_from_requests,
     showdown_seed_from_int,
 )
+from pokezero.env import BattleStartOverride
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
 from pokezero.showdown import normalize_for_player, parse_showdown_replay, showdown_choice_for_action
@@ -96,6 +98,20 @@ class LocalShowdownRequestTest(unittest.TestCase):
         parts = seed.split(",")
         self.assertEqual(len(parts), 4)
         self.assertTrue(all(0 <= int(part) <= 65535 for part in parts))
+
+    def test_start_players_payload_injects_only_overridden_packed_teams(self) -> None:
+        payload = _start_players_payload(
+            BattleStartOverride(player_teams={"p2": "Xatu||||Psychic|||||||"})
+        )
+
+        self.assertEqual(payload["p1"], "PokeZero p1")
+        self.assertEqual(payload["p2"], {"name": "PokeZero p2", "team": "Xatu||||Psychic|||||||"})
+
+    def test_battle_start_override_rejects_unknown_players_and_empty_teams(self) -> None:
+        with self.assertRaisesRegex(ValueError, "p1 or p2"):
+            BattleStartOverride(player_teams={"p3": "Xatu||||Psychic|||||||"})
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            BattleStartOverride(player_teams={"p2": ""})
 
     def test_requested_players_from_normal_and_force_switch_requests(self) -> None:
         requests = {

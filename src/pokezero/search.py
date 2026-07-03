@@ -9,7 +9,7 @@ from time import perf_counter
 from typing import Callable, Mapping
 
 from .actions import ACTION_COUNT
-from .env import PlayerId, PokeZeroEnv, TerminalState
+from .env import BattleStartOverride, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
 from .policy import Policy
 from .replay_branching import (
@@ -23,6 +23,7 @@ from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
 ActionPriorVector = tuple[float, ...]
+StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride | None] | None
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,7 @@ def value_branch_search(
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
+    start_override: StartOverrideSource = None,
 ) -> ValueBranchSearchResult:
     """Enumerate legal root actions and score branch leaves.
 
@@ -253,6 +255,7 @@ def value_branch_search(
                 trajectory,
                 prefix_decision_round_count=prefix_decision_round_count,
                 branch_actions=branch_actions,
+                start_override=_materialize_start_override(start_override),
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -309,6 +312,7 @@ def puct_branch_search(
     leaf_rollout_decision_rounds: int = 0,
     root_visit_budget: int | None = None,
     root_time_budget_seconds: float | None = None,
+    start_override: StartOverrideSource = None,
 ) -> PUCTBranchSearchResult:
     """Score root replay branches with PUCT-style policy-prior exploration.
 
@@ -340,6 +344,7 @@ def puct_branch_search(
         leaf_rollout_policies=leaf_rollout_policies,
         leaf_rollout_config=leaf_rollout_config,
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        start_override=start_override,
     )
     if root_visit_budget is not None and root_visit_budget < len(value_search.candidates):
         raise ValueError("root_visit_budget must be at least the number of legal root actions.")
@@ -385,6 +390,7 @@ def puct_branch_search(
             trajectory,
             prefix_decision_round_count=prefix_decision_round_count,
             branch_actions=branch_actions,
+            start_override=_materialize_start_override(start_override),
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -451,6 +457,7 @@ def flat_branch_search(
     opponent_actions: Mapping[PlayerId, int],
     rollout_policies: Mapping[PlayerId, Policy],
     rollout_config: RolloutConfig,
+    start_override: StartOverrideSource = None,
 ) -> FlatBranchSearchResult:
     """Enumerate legal root actions, roll each branch out, and score terminal outcomes."""
 
@@ -476,6 +483,7 @@ def flat_branch_search(
             policies=rollout_policies,
             rollout_config=rollout_config,
             battle_id=f"flat-branch-search-{player_id}-{prefix_decision_round_count}-{action_index}",
+            start_override=_materialize_start_override(start_override),
         )
         terminal = rollout.continuation.terminal
         candidates.append(
@@ -536,6 +544,7 @@ def _value_branch_candidate(
         prefix_history=prefix_history,
         branch=branch,
     )
+
     if leaf_rollout_decision_rounds <= 0:
         return ValueBranchSearchCandidate(
             action_index=action_index,
@@ -602,6 +611,12 @@ def _value_branch_candidate(
         leaf_evaluation=leaf_evaluation,
         leaf_rollout_decision_round_count=continuation.decision_round_count,
     )
+
+
+def _materialize_start_override(start_override: StartOverrideSource) -> BattleStartOverride | None:
+    if callable(start_override):
+        return start_override()
+    return start_override
 
 
 def _post_branch_history(

@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 
 from pokezero.actions import ACTION_COUNT
-from pokezero.env import StepResult
+from pokezero.env import BattleStartOverride, StepResult
 from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, LocalShowdownEnv
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import RandomLegalPolicy
@@ -91,6 +91,22 @@ class ScriptedReplayEnv:
         return None
 
 
+class StartOverrideReplayEnv(ScriptedReplayEnv):
+    def __init__(self, requested_by_round: tuple[tuple[str, ...], ...]) -> None:
+        super().__init__(requested_by_round)
+        self.start_overrides: list[BattleStartOverride] = []
+
+    def reset_with_start_override(
+        self,
+        *,
+        seed: int,
+        format_id: str = "gen3randombattle",
+        start_override: BattleStartOverride,
+    ) -> None:
+        self.start_overrides.append(start_override)
+        self.reset(seed=seed, format_id=format_id)
+
+
 class ReplayBranchingUnitTest(unittest.TestCase):
     def test_action_rounds_from_trajectory_groups_steps_by_decision_round(self) -> None:
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
@@ -157,6 +173,31 @@ class ReplayBranchingUnitTest(unittest.TestCase):
         self.assertEqual(env.submitted_actions, [{"p1": 2, "p2": 3}, {"p1": 4}])
         self.assertEqual(result.replayed_round_count, 2)
         self.assertEqual(result.requested_players, ())
+
+    def test_replay_action_rounds_passes_start_override_before_prefix_actions(self) -> None:
+        env = StartOverrideReplayEnv((("p1", "p2"),))
+        start_override = BattleStartOverride(player_teams={"p2": "Xatu||||Psychic|||||||"})
+
+        replay_action_rounds(
+            env,
+            seed=17,
+            format_id="gen3randombattle",
+            action_rounds=(ReplayActionRound(turn_index=0, actions={"p1": 2, "p2": 3}),),
+            start_override=start_override,
+        )
+
+        self.assertEqual(env.start_overrides, [start_override])
+        self.assertEqual(env.reset_calls, [(17, "gen3randombattle")])
+        self.assertEqual(env.submitted_actions, [{"p1": 2, "p2": 3}])
+
+    def test_replay_action_rounds_rejects_start_override_without_env_support(self) -> None:
+        with self.assertRaisesRegex(ValueError, "start overrides"):
+            replay_action_rounds(
+                ScriptedReplayEnv((("p1",),)),
+                seed=17,
+                action_rounds=(ReplayActionRound(turn_index=0, actions={"p1": 2}),),
+                start_override=BattleStartOverride(player_teams={"p2": "Xatu||||Psychic|||||||"}),
+            )
 
     def test_replay_action_rounds_rejects_request_mismatch(self) -> None:
         env = ScriptedReplayEnv((("p1",),))

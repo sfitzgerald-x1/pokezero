@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from .actions import ACTION_COUNT
-from .env import BattleFormat, PlayerId, PokeZeroEnv, StepResult, TerminalState
+from .env import BattleFormat, BattleStartOverride, PlayerId, PokeZeroEnv, StepResult, TerminalState
 from .policy import Policy
 from .rollout import RolloutConfig, RolloutResult, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
@@ -115,10 +115,11 @@ def replay_action_rounds(
     seed: int,
     format_id: BattleFormat = "gen3randombattle",
     action_rounds: tuple[ReplayActionRound, ...],
+    start_override: BattleStartOverride | None = None,
 ) -> ReplayPrefixResult:
     """Reset ``env`` and replay a recorded action prefix from the battle root."""
 
-    env.reset(seed=seed, format_id=format_id)
+    _reset_env(env, seed=seed, format_id=format_id, start_override=start_override)
     for expected_index, action_round in enumerate(action_rounds):
         if action_round.turn_index != expected_index:
             raise ValueError(
@@ -149,6 +150,7 @@ def replay_trajectory_prefix(
     trajectory: BattleTrajectory,
     *,
     decision_round_count: int,
+    start_override: BattleStartOverride | None = None,
 ) -> ReplayPrefixResult:
     """Replay the first N decision rounds from a trajectory into ``env``."""
 
@@ -160,6 +162,7 @@ def replay_trajectory_prefix(
             trajectory,
             decision_round_count=decision_round_count,
         ),
+        start_override=start_override,
     )
 
 
@@ -169,6 +172,7 @@ def replay_trajectory_branch(
     *,
     prefix_decision_round_count: int,
     branch_actions: Mapping[PlayerId, int],
+    start_override: BattleStartOverride | None = None,
 ) -> ReplayBranchResult:
     """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
 
@@ -176,6 +180,7 @@ def replay_trajectory_branch(
         env,
         trajectory,
         decision_round_count=prefix_decision_round_count,
+        start_override=start_override,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -205,6 +210,7 @@ def replay_trajectory_branch_rollout(
     rollout_config: RolloutConfig,
     battle_id: str = "replay-branch-rollout",
     reset_policies: bool = True,
+    start_override: BattleStartOverride | None = None,
 ) -> ReplayBranchRolloutResult:
     """Replay, branch once, then continue the rollout with policies until terminal or cap."""
 
@@ -213,6 +219,7 @@ def replay_trajectory_branch_rollout(
         trajectory,
         prefix_decision_round_count=prefix_decision_round_count,
         branch_actions=branch_actions,
+        start_override=start_override,
     )
     continuation = continue_rollout_from_current_state(
         env=env,
@@ -250,3 +257,19 @@ def _require_requested_players(
         f"replay actions for decision round {action_round.turn_index} "
         f"do not match environment request ({'; '.join(details)})."
     )
+
+
+def _reset_env(
+    env: PokeZeroEnv,
+    *,
+    seed: int,
+    format_id: BattleFormat,
+    start_override: BattleStartOverride | None,
+) -> None:
+    if start_override is None:
+        env.reset(seed=seed, format_id=format_id)
+        return
+    resetter = getattr(env, "reset_with_start_override", None)
+    if not callable(resetter):
+        raise ValueError("environment does not support replay start overrides.")
+    resetter(seed=seed, format_id=format_id, start_override=start_override)
