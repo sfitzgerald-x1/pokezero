@@ -6,17 +6,20 @@ from dataclasses import dataclass, replace
 import hashlib
 import math
 from time import perf_counter
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 
 from .actions import ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
 from .policy import Policy
 from .replay_branching import (
+    ReplayActionRound,
     ReplayBranchResult,
     ReplayBranchRolloutResult,
+    ReplayPrefixResult,
     replay_trajectory_branch,
     replay_trajectory_branch_rollout,
+    replay_trajectory_prefix,
 )
 from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
@@ -102,6 +105,12 @@ class ValueBranchSearchResult:
             "selected_value": best.value,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
         }
+
+
+@dataclass(frozen=True)
+class _RestorablePrefix:
+    prefix: ReplayPrefixResult
+    snapshot: Any
 
 
 @dataclass(frozen=True)
@@ -218,6 +227,38 @@ def value_branch_search(
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ValueBranchSearchResult:
+    result, _restorable_prefix = _value_branch_search_with_prefix(
+        env=env,
+        trajectory=trajectory,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        legal_action_mask=legal_action_mask,
+        opponent_actions=opponent_actions,
+        value_fn=value_fn,
+        leaf_rollout_policies=leaf_rollout_policies,
+        leaf_rollout_config=leaf_rollout_config,
+        leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
+    return result
+
+
+def _value_branch_search_with_prefix(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    legal_action_mask: tuple[bool, ...],
+    opponent_actions: Mapping[PlayerId, int],
+    value_fn: ObservationValueFunction,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
+    leaf_rollout_config: RolloutConfig | None = None,
+    leaf_rollout_decision_rounds: int = 0,
+    start_override: StartOverrideSource = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
+) -> tuple[ValueBranchSearchResult, _RestorablePrefix | None]:
     """Enumerate legal root actions and score branch leaves.
 
     The default path is the original one-ply evaluator: branch once and score the
@@ -249,6 +290,14 @@ def value_branch_search(
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
     )
+    restorable_prefix = _restorable_prefix_snapshot(
+        env=env,
+        trajectory=trajectory,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
     candidates: list[ValueBranchSearchCandidate] = []
     for action_index in candidate_indices:
         branch_actions = {
@@ -256,18 +305,15 @@ def value_branch_search(
             player_id: action_index,
         }
         try:
-            branch = replay_trajectory_branch(
-                env,
-                trajectory,
+            branch = _branch_from_replay_prefix(
+                env=env,
+                trajectory=trajectory,
+                player_id=player_id,
                 prefix_decision_round_count=prefix_decision_round_count,
                 branch_actions=branch_actions,
-                start_override=_materialize_start_override(start_override),
-                consistency_player_id=player_id,
+                start_override=start_override,
                 expected_current_observation=expected_current_observation,
-                # Root search scores the current decision point. Earlier custom-game replay
-                # observations can drift while sampled hidden worlds are rejected by the
-                # branch-point observation check below.
-                check_prefix_observations=False,
+                restorable_prefix=restorable_prefix,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -300,12 +346,13 @@ def value_branch_search(
     if not candidates:
         raise ValueError("value branch search found no replay-legal root actions.")
 
-    return ValueBranchSearchResult(
+    result = ValueBranchSearchResult(
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
         opponent_actions=dict(opponent_actions),
         candidates=tuple(candidates),
     )
+    return result, restorable_prefix
 
 
 def puct_branch_search(
@@ -346,7 +393,7 @@ def puct_branch_search(
     ):
         raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
     time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
-    value_search = value_branch_search(
+    value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
         trajectory=trajectory,
         player_id=player_id,
@@ -399,17 +446,15 @@ def puct_branch_search(
             **dict(opponent_actions),
             player_id: action_index,
         }
-        branch = replay_trajectory_branch(
-            env,
-            trajectory,
+        branch = _branch_from_replay_prefix(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
             prefix_decision_round_count=prefix_decision_round_count,
             branch_actions=branch_actions,
-            start_override=_materialize_start_override(start_override),
-            consistency_player_id=player_id,
+            start_override=start_override,
             expected_current_observation=expected_current_observation,
-            # See the initial value sweep above: repeated PUCT visits validate the branch point,
-            # not every intermediate prefix observation.
-            check_prefix_observations=False,
+            restorable_prefix=restorable_prefix,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -648,6 +693,106 @@ def _materialize_start_override(start_override: StartOverrideSource) -> BattleSt
             raise ValueError(START_OVERRIDE_MISSING_WORLD_MESSAGE)
         return sampled_override
     return start_override
+
+
+def _restorable_prefix_snapshot(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+) -> _RestorablePrefix | None:
+    snapshotter = getattr(env, "snapshot", None)
+    restorer = getattr(env, "restore", None)
+    if not callable(snapshotter) or not callable(restorer):
+        return None
+    if callable(start_override):
+        return None
+    prefix = replay_trajectory_prefix(
+        env,
+        trajectory,
+        decision_round_count=prefix_decision_round_count,
+        start_override=start_override,
+        consistency_player_id=player_id,
+        expected_current_observation=expected_current_observation,
+        # Root search validates the branch point. Earlier custom-game replay observations can
+        # drift while sampled hidden worlds are rejected by the current observation check.
+        check_prefix_observations=False,
+    )
+    if prefix.terminal is not None:
+        raise ValueError("cannot branch from a terminal replay prefix.")
+    return _RestorablePrefix(prefix=prefix, snapshot=snapshotter())
+
+
+def _branch_from_replay_prefix(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    branch_actions: Mapping[PlayerId, int],
+    start_override: StartOverrideSource,
+    expected_current_observation: PokeZeroObservationV0 | None,
+    restorable_prefix: _RestorablePrefix | None,
+) -> ReplayBranchResult:
+    if restorable_prefix is None:
+        return replay_trajectory_branch(
+            env,
+            trajectory,
+            prefix_decision_round_count=prefix_decision_round_count,
+            branch_actions=branch_actions,
+            start_override=_materialize_start_override(start_override),
+            consistency_player_id=player_id,
+            expected_current_observation=expected_current_observation,
+            # Root search scores the current decision point. Earlier custom-game replay
+            # observations can drift while sampled hidden worlds are rejected by the
+            # branch-point observation check below.
+            check_prefix_observations=False,
+        )
+    restorer = getattr(env, "restore", None)
+    if not callable(restorer):
+        raise ValueError("environment snapshot restore became unavailable.")
+    restorer(restorable_prefix.snapshot)
+    branch_round = ReplayActionRound(
+        turn_index=prefix_decision_round_count,
+        actions=branch_actions,
+    )
+    _require_exact_requested_players(
+        branch_actions=branch_actions,
+        requested_players=restorable_prefix.prefix.requested_players,
+        turn_index=prefix_decision_round_count,
+    )
+    step_result = env.step(branch_round.actions)
+    return ReplayBranchResult(
+        prefix=restorable_prefix.prefix,
+        branch_round=branch_round,
+        step_result=step_result,
+    )
+
+
+def _require_exact_requested_players(
+    *,
+    branch_actions: Mapping[PlayerId, int],
+    requested_players: tuple[PlayerId, ...],
+    turn_index: int,
+) -> None:
+    requested_set = set(requested_players)
+    action_players = set(branch_actions)
+    if action_players == requested_set:
+        return
+    missing = sorted(requested_set - action_players)
+    extra = sorted(action_players - requested_set)
+    details: list[str] = []
+    if missing:
+        details.append(f"missing requested players: {', '.join(missing)}")
+    if extra:
+        details.append(f"unexpected players: {', '.join(extra)}")
+    raise ValueError(
+        f"replay actions for decision round {turn_index} "
+        f"do not match environment request ({'; '.join(details)})."
+    )
 
 
 def _require_current_observation_for_start_override(

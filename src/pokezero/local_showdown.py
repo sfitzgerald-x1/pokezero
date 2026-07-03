@@ -73,6 +73,21 @@ class LocalShowdownConfig:
         return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
+@dataclass(frozen=True)
+class LocalShowdownSnapshot:
+    """Restorable simulator plus local public-state snapshot for a live bridge battle."""
+
+    battle_token: str
+    battle_id: str
+    format_id: BattleFormat
+    observation_format_id: BattleFormat
+    bridge_snapshot: Mapping[str, Any]
+    protocol_lines: tuple[str, ...]
+    latest_requests: Mapping[PlayerId, Mapping[str, Any]]
+    latest_turn: int
+    terminal: TerminalState | None
+
+
 class LocalShowdownEnv:
     """Synchronous `PokeZeroEnv` backed by a one-battle Node BattleStream bridge."""
 
@@ -204,6 +219,63 @@ class LocalShowdownEnv:
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:
         return self.observe(player).legal_action_mask
+
+    def snapshot(self) -> LocalShowdownSnapshot:
+        """Capture a restorable snapshot of the current live battle.
+
+        The snapshot includes the Node simulator state plus the Python-side protocol parser inputs.
+        It is an oracle simulator snapshot; hidden-info callers must not use it as a replacement for
+        explicit belief sampling.
+        """
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot snapshot before reset.")
+        self._send_command({"type": "snapshot", "battleId": self._battle_token})
+        event = self._read_until_event_type("snapshot")
+        snapshot = event.get("snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise LocalShowdownError(f"Bridge emitted malformed snapshot event: {event!r}")
+        return LocalShowdownSnapshot(
+            battle_token=self._battle_token,
+            battle_id=self._battle_id,
+            format_id=self._format_id,
+            observation_format_id=self._observation_format_id,
+            bridge_snapshot=_json_clone_mapping(snapshot),
+            protocol_lines=tuple(self._lines),
+            latest_requests=_json_clone_requests(self._latest_requests),
+            latest_turn=self._latest_turn,
+            terminal=self._terminal,
+        )
+
+    def restore(self, snapshot: LocalShowdownSnapshot) -> None:
+        """Restore a snapshot captured from this live bridge battle."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot restore before reset.")
+        if snapshot.battle_token != self._battle_token:
+            raise ValueError("LocalShowdownSnapshot can only be restored into its original live battle.")
+        self._send_command(
+            {
+                "type": "restore",
+                "battleId": self._battle_token,
+                "snapshot": snapshot.bridge_snapshot,
+            }
+        )
+        self._read_until_event_type("restored")
+        self._battle_id = snapshot.battle_id
+        self._format_id = snapshot.format_id
+        self._observation_format_id = snapshot.observation_format_id
+        self._lines = list(snapshot.protocol_lines)
+        self._latest_requests = _json_clone_requests(snapshot.latest_requests)
+        self._latest_turn = snapshot.latest_turn
+        self._terminal = snapshot.terminal
+        self._last_step_had_error = False
+        self._parser = _ReplayParser(self._battle_id)
+        self._belief_engine = PublicBattleBeliefEngine(
+            format_id=self._observation_format_id, set_source=self._belief_set_source
+        )
+        self._parsed_line_count = 0
+        self._belief_fed_count = 0
 
     def step(self, actions: Mapping[PlayerId, int]) -> StepResult:
         requested = self.requested_players()
@@ -372,6 +444,23 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted non-object event: {event!r}")
         return event
 
+    def _read_until_event_type(self, event_type: str) -> Mapping[str, Any]:
+        deadline = time.monotonic() + self.config.read_timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LocalShowdownError(self._timeout_message())
+            event = self._read_event(timeout=remaining)
+            if event is None:
+                continue
+            if event.get("type") == "error":
+                raise LocalShowdownError(str(event.get("message") or "Bridge error."))
+            battle_id = event.get("battleId")
+            if battle_id is not None and self._battle_token is not None and battle_id != self._battle_token:
+                continue
+            if event.get("type") == event_type:
+                return event
+
     def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")
         # On a reused (warm) process, events from a finished battle still drain through the queue;
@@ -522,6 +611,20 @@ def _decode_request_line(line: str) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("request payload must be a JSON object.")
     return payload
+
+
+def _json_clone_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    cloned = json.loads(json.dumps(value, separators=(",", ":")))
+    if not isinstance(cloned, Mapping):
+        raise ValueError("expected JSON object clone.")
+    return cloned
+
+
+def _json_clone_requests(
+    value: Mapping[PlayerId, Mapping[str, Any]],
+) -> dict[PlayerId, Mapping[str, Any]]:
+    cloned = _json_clone_mapping(value)
+    return {player: request for player in PLAYER_IDS if isinstance((request := cloned.get(player)), Mapping)}
 
 
 def _drain_stdout(stream: TextIO, target: queue.Queue[str | None]) -> None:
