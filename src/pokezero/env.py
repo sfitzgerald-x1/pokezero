@@ -2,13 +2,47 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional, Protocol, runtime_checkable
 
 from .observation import PokeZeroObservationV0
 
 PlayerId = str
 BattleFormat = str
+DEFAULT_BATTLE_START_OVERRIDE_FORMAT: BattleFormat = "gen3customgame"
+
+
+@dataclass(frozen=True)
+class BattleStartOverride:
+    """Optional explicit start-state materialization for replay/search branches."""
+
+    player_teams: Mapping[PlayerId, str]
+    format_id: BattleFormat = DEFAULT_BATTLE_START_OVERRIDE_FORMAT
+
+    def __post_init__(self) -> None:
+        format_id = str(self.format_id)
+        if format_id != DEFAULT_BATTLE_START_OVERRIDE_FORMAT:
+            raise ValueError(
+                "BattleStartOverride currently requires "
+                f"{DEFAULT_BATTLE_START_OVERRIDE_FORMAT!r} so packed teams are honored."
+            )
+        normalized: dict[PlayerId, str] = {}
+        for player, team in self.player_teams.items():
+            player_id = str(player)
+            if player_id not in {"p1", "p2"}:
+                raise ValueError("BattleStartOverride player_teams keys must be p1 or p2.")
+            team_text = str(team)
+            if not team_text:
+                raise ValueError("BattleStartOverride player team strings must be non-empty.")
+            normalized[player_id] = team_text
+        missing = sorted({"p1", "p2"} - set(normalized))
+        if missing:
+            raise ValueError(
+                "BattleStartOverride must provide complete p1 and p2 packed teams; "
+                f"missing: {', '.join(missing)}."
+            )
+        object.__setattr__(self, "player_teams", normalized)
+        object.__setattr__(self, "format_id", format_id)
 
 
 @dataclass(frozen=True)

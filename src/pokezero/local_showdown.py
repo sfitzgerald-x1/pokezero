@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from .belief import PublicBattleBeliefEngine
 from .dex import load_showdown_dex_cached
-from .env import BattleFormat, PlayerId, StepResult, TerminalState
+from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import ObservationSpec, PokeZeroObservationV0
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
@@ -35,6 +35,7 @@ from .showdown import (
 DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
 BRIDGE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "battle_bridge.mjs"
 PLAYER_IDS: tuple[PlayerId, PlayerId] = ("p1", "p2")
+_DEFAULT_PLAYER_NAMES: Mapping[PlayerId, str] = {"p1": "PokeZero p1", "p2": "PokeZero p2"}
 
 
 class LocalShowdownError(RuntimeError):
@@ -115,6 +116,30 @@ class LocalShowdownEnv:
         return tuple(self._lines)
 
     def reset(self, *, seed: int, format_id: BattleFormat = "gen3randombattle") -> None:
+        self._reset(seed=seed, format_id=format_id, start_override=None)
+
+    def reset_with_start_override(
+        self,
+        *,
+        seed: int,
+        format_id: BattleFormat | None = None,
+        start_override: BattleStartOverride,
+    ) -> None:
+        effective_format_id = start_override.format_id if format_id is None else str(format_id)
+        if effective_format_id != start_override.format_id:
+            raise ValueError(
+                "reset_with_start_override format_id must match "
+                f"start_override.format_id {start_override.format_id!r}."
+            )
+        self._reset(seed=seed, format_id=effective_format_id, start_override=start_override)
+
+    def _reset(
+        self,
+        *,
+        seed: int,
+        format_id: BattleFormat = "gen3randombattle",
+        start_override: BattleStartOverride | None,
+    ) -> None:
         previous_token = self._battle_token
         self._battle_id = f"local-{format_id}-{seed}"
         self._format_id = format_id
@@ -148,7 +173,7 @@ class LocalShowdownEnv:
                     "battleId": self._battle_token,
                     "formatid": format_id,
                     "seed": showdown_seed_from_int(seed),
-                    "players": {"p1": "PokeZero p1", "p2": "PokeZero p2"},
+                    "players": _start_players_payload(start_override),
                 }
             )
             self._read_until_boundary()
@@ -457,6 +482,16 @@ def showdown_seed_from_int(seed: int) -> str:
 
 def requested_players_from_requests(requests: Mapping[PlayerId, Mapping[str, Any]]) -> tuple[PlayerId, ...]:
     return tuple(player for player in PLAYER_IDS if _is_actionable_request(requests.get(player)))
+
+
+def _start_players_payload(start_override: BattleStartOverride | None) -> dict[PlayerId, str | dict[str, str]]:
+    player_teams = start_override.player_teams if start_override is not None else {}
+    players: dict[PlayerId, str | dict[str, str]] = {}
+    for player in PLAYER_IDS:
+        name = _DEFAULT_PLAYER_NAMES[player]
+        team = player_teams.get(player)
+        players[player] = {"name": name, "team": team} if team else name
+    return players
 
 
 def _is_actionable_request(request: Mapping[str, Any] | None) -> bool:

@@ -2,7 +2,7 @@ import random
 import unittest
 
 from pokezero.actions import ACTION_COUNT
-from pokezero.env import StepResult, TerminalState
+from pokezero.env import BattleStartOverride, StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
@@ -122,6 +122,22 @@ class ImmediateOutcomeEnv:
 
     def close(self) -> None:
         self.closed = True
+
+
+class StartOverrideOutcomeEnv(ImmediateOutcomeEnv):
+    def __init__(self, *, label: str) -> None:
+        super().__init__(label=label)
+        self.start_overrides: list[BattleStartOverride] = []
+
+    def reset_with_start_override(
+        self,
+        *,
+        seed: int,
+        format_id: str | None = None,
+        start_override: BattleStartOverride,
+    ) -> None:
+        self.start_overrides.append(start_override)
+        self.reset(seed=seed, format_id=format_id or start_override.format_id)
 
 
 class TwoOpponentActionEnv(ImmediateOutcomeEnv):
@@ -439,6 +455,59 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 0, "p2": 1},
             {"p1": 1, "p2": 1},
         ])
+
+    def test_root_puct_policy_passes_start_override_to_branch_search(self) -> None:
+        branch_envs: list[StartOverrideOutcomeEnv] = []
+        sampled_overrides: list[BattleStartOverride] = []
+
+        def branch_env_factory() -> StartOverrideOutcomeEnv:
+            env = StartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            del context, rng
+            self.assertEqual(scenario.actions, {"p2": 0})
+            self.assertEqual(scenario_index, 0)
+
+            def sample_override() -> BattleStartOverride:
+                override = BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": f"Xatu||||Psychic|||||||{len(sampled_overrides)}",
+                    }
+                )
+                sampled_overrides.append(override)
+                return override
+
+            return sample_override
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            root_visit_budget=3,
+            start_override_planner=start_override_planner,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=91, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.metadata["root_puct_start_override_sources_used"], 1)
+        self.assertEqual(branch_envs[0].start_overrides, sampled_overrides)
+        self.assertEqual(len(sampled_overrides), 3)
 
     def test_root_puct_policy_skips_hidden_opponent_scenarios_replay_rejects(self) -> None:
         branch_envs: list[StrictOpponentActionEnv] = []

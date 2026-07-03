@@ -28,7 +28,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, replay-illegal opponent-scenario skip counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. Those skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
-| **Belief determinizer** `sample_opponent_determinizations` | **built, but NOT wired into search** | `belief.py` — emits concrete opponent realizations from the belief view; nothing injects them into the branch env yet (see "missing" #4). |
+| **Belief determinizer** `sample_opponent_determinizations` | **payload seam built, materializer missing** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; replay checks the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. The missing piece is still the planner/materializer that turns sampled belief worlds, including fully hidden backline slots and our own known team, into complete packed teams for the branch env (see "missing" #4). |
 | poke-engine reversible backend | **probe only** | `engine_cli.py`, `poke_engine_backend.py` — apply/reverse smoke exists, but **Gen-3 outcome equivalence is unproven** (`poke_engine_assessment.md`); not a usable backend yet. |
 | Unit tests for search / search_policy / benchmark | **built** | `tests/test_search*.py` |
 
@@ -56,18 +56,26 @@ In priority order:
    root-only search + a myopic value head may still miss the payoff. Levers: **deeper leaf rollouts**
    (already supported via `leaf_rollout_*`) with a decent rollout policy, or extend to a **multi-ply
    tree**. Deciding root-only-with-rollouts vs a real tree remains the core design question.
-4. **Determinization *injection* for hidden-info ladder play.** The searcher never substitutes a
-   hidden opponent set: replay-from-root re-runs the *real* recorded battle (perfect-info by
-   construction in benchmarks), and leaf rollouts use the branch's real observations. The **sampler
-   already exists** — `belief.py::sample_opponent_determinizations` emits concrete opponent
-   realizations from the public belief view (invents no probabilities; unresolved stays unresolved),
-   and the roadmap already calls it "bounded player-relative opponent determinizations for search."
-   So the missing piece is **not** a sampler and **not** re-implementing MIT's randbats rejection
-   sampling — it is the **injection seam**: materialize a sampled determinization into the
-   branch/replay env so rollouts run against a concrete team, re-sampling **per rollout**. Prefer the
-   **belief-based** determinizer (the project's stated, better-founded basis) over MIT's
+4. **Belief-to-branch materialization for hidden-info ladder play.** The searcher has the first
+   payload/replay seam, but not yet the full hidden-world planner. Replay/search can pass a
+   `BattleStartOverride` into `LocalShowdownEnv`, so a future planner can start a branch from sampled
+   packed teams instead of the default random battle root. This seam is intentionally strict:
+   arbitrary packed teams are only materialized through `gen3customgame`, both players' teams must be
+   supplied, and replay checks the searched player's pre-action observation features so a sampled
+   world that no longer reproduces that player's recorded prefix fails loudly instead of corrupting
+   search values. The check deliberately excludes instance metadata and the opponent's private POV.
+   The **sampler already exists** for revealed-mon belief variants —
+   `belief.py::sample_opponent_determinizations` emits
+   concrete opponent realizations from the public belief view (invents no probabilities; unresolved
+   stays unresolved). The missing piece is now narrower and more concrete: materialize sampled belief
+   worlds into complete packed teams, including our known team and plausible fully unrevealed
+   opponent backline slots, and provide them through `RootPUCTSearchPolicy.start_override_planner` as
+   either fixed scenario determinizations or callable sources that re-sample **per branch
+   replay/visit**.
+   Prefer the **belief-based** determinizer (the project's stated, better-founded basis) over MIT's
    randbats-prior rejection sampling; note the divergence from the literal recipe and why. Required
-   for the ladder; not needed for perfect-info benchmarking.
+   for the ladder; controlled perfect-info benchmarks still need separate raw-vs-search strength
+   reads.
 
 Current root visit accumulation allows multiple root visits, and sampled leaf rollouts now get
 visit-specific rollout seeds. Without determinization injection, however, repeated visits still run
@@ -105,9 +113,13 @@ as a diagnostic safety guard but not a headline hidden-info result.
   or a much smaller rollout budget. **Design decision to make explicit:** pick a target
   rollouts-or-leaf-depth budget tied to a measured per-move cost (from `search_benchmark`'s
   `average_elapsed_seconds`), and treat forking cost as the gating constraint, not a checkbox.
-- **Determinization:** wire the **existing** `belief.sample_opponent_determinizations` into the branch
-  env and re-sample **per rollout** — the *new* work is the **injection seam** (materialize a sampled
-  team into replay/branch state), not a sampler. See the theory note below.
+- **Determinization:** finish wiring the **existing** `belief.sample_opponent_determinizations` into
+  the branch env and re-sample **per branch replay/visit**. The generic **payload/replay seam** now
+  exists (`BattleStartOverride`, replay/search `start_override`, callable start-override sources, and
+  `RootPUCTSearchPolicy.start_override_planner`), but it only accepts complete two-sided
+  `gen3customgame` packed-team materializations and verifies the searched player's replay-prefix
+  observation features. The remaining work is the belief-world-to-packed-team materializer,
+  especially fully hidden backline slots. See the theory note below.
 - **Search core (WS-D):** two extension questions — (a) go from the 1-ply single-pass scorer to a real
   iterated loop (visit accumulation / a multi-ply tree), and (b) is **1-ply + deeper leaf rollouts**
   enough to recover delayed-value lines? Note the roadmap's own leaf-depth results are **non-monotonic**
@@ -202,13 +214,16 @@ first time we'd actually measure this.
 ## Files (mostly *extend*, not new)
 
 - `search.py` — from the single-pass `visits=1` scorer toward an iterated loop / deeper rollouts.
-- `search_policy.py` — fpdistill prior+value into `select_action_with_context`; determinization-
-  injection hook; a prior-**temperature** knob (currently absent).
+- `search_policy.py` — fpdistill prior+value into `select_action_with_context`; determinization
+  planner hook; a prior-**temperature** knob (currently absent).
 - `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — controlled full-game head-to-head strength
   mode vs foul-play. The existing `search_benchmark.py` counterfactual mode replays branches against
   the *recorded* opponent action (`:345`) → don't use it for strength.
-- `belief.py` — **already has** `sample_opponent_determinizations`; no new sampler. The seam is the
-  branch/replay env accepting an injected determinization (likely `local_showdown.py` / `replay_branching.py`).
+- `env.py`, `local_showdown.py`, `replay_branching.py`, `search.py` — `BattleStartOverride` path for
+  branch/replay env start-state overrides, restricted to complete two-sided `gen3customgame` packed
+  teams with searched-player replay-prefix feature checks.
+- `belief.py` — **already has** `sample_opponent_determinizations`; the remaining seam is turning
+  sampled belief worlds into packed teams that can be passed through `BattleStartOverride`.
 - `value_calibration.py` / `neural_policy.py` — measure the search-readiness gate; apply a transform.
 - `poke_engine_backend.py` — only if adopted as a fast backend (post equivalence spike).
 
@@ -231,8 +246,10 @@ first time we'd actually measure this.
    viability gate, not a checkbox.
 3. **1-ply single-pass → iterated loop / tree** — needed for genuine multi-rollout averaging (chance,
    simultaneous moves) and for depth on delayed-value lines; leaf-depth results are non-monotonic.
-4. **Determinization injection seam** — wiring the existing belief sampler into the branch env; PIMC
-   strategy-fusion persists (ISMCTS only if it bites).
+4. **Belief materialization seam** — the custom-game branch start override exists, but the existing
+   belief sampler still needs conversion into complete packed teams, including our known team and
+   plausible unrevealed opponent backline Pokémon; PIMC strategy-fusion persists (ISMCTS only if it
+   bites).
 5. **fpdistill prior over-narrowness** — needs a temperature knob that isn't built yet.
 6. **poke-engine Gen-3 equivalence** — unproven; blocks its use as a fast backend.
 7. **In-loop compute** for expert iteration — likely too slow at scale; keep E4 gated on E0.
