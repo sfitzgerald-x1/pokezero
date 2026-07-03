@@ -25,6 +25,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | **1-ply prior-weighted value *ranking*** (value-head leaf eval, optional leaf rollouts) | **built, but NOT a tree** | `search.py::puct_branch_search` — a **single-pass** scorer: each candidate is hard-coded `visits=1` (`_puct_candidate`), no selection→expansion→backup loop, no visit accumulation. "PUCT" is generous; it's 1-ply prior-weighted value ranking, not iterated MCTS. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
+| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Full-game smoke: 1.5M checkpoint root-PUCT vs foul-play, 24 searched decisions, 0 fallbacks. This is a harness validation, **not** a strength result. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
 | **Belief determinizer** `sample_opponent_determinizations` | **built, but NOT wired into search** | `belief.py` — emits concrete opponent realizations from the belief view; nothing injects them into the branch env yet (see "missing" #4). |
@@ -43,11 +44,12 @@ In priority order:
    miscalibrated leaf value makes 1-ply search **no better (or worse) than the net**. This gates
    everything → measure ECE + leaf ranking on held-out data for the candidate nets; apply a fit
    transform if it helps.
-2. **Strength validation — the go/no-go we don't have.** `search_benchmark.py` measures *how often
-   search changes the net's action* and *what it costs* — **not win rate vs net-alone**. So the
-   roadmap acceptance gate ("net+search beats net-alone by a clear margin") has **never been
-   demonstrated**. We need a head-to-head strength benchmark: net+search vs net-alone (and vs
-   foul-play). Until this exists we don't actually know the current search helps at all.
+2. **Strength validation — the go/no-go still pending.** `search_benchmark.py` measures *how often
+   search changes the net's action* and *what it costs* — **not win rate vs net-alone**. A new
+   controlled foul-play harness now exists for full-game external-opponent reads, but only smoke
+   evidence exists so far. The roadmap acceptance gate ("net+search beats net-alone by a clear
+   margin") still requires an adequately powered raw-vs-search read (≥300 games, fixed seeds).
+   Until that exists we don't actually know the current search helps.
 3. **Search depth.** It's **1-ply** (branch each root action, evaluate the immediate result). For the
    delayed-value lines that motivated this (setup sequences, hazard payoff over many switch-ins),
    1-ply + a myopic value head can't see the payoff. Levers: **deeper leaf rollouts** (already
@@ -166,15 +168,16 @@ ordering: **search(fpdistill) > fpdistill-alone > search(self-play net)** on fou
   (e.g. Pearson ≥ ~0.3) before trusting a head as a leaf evaluator. **Honesty note:** the roadmap
   records current independent Pearson ~0.12 — likely **not search-ready** — so E0 below is a *plumbing*
   run, not a strength read, until a head clears the bar. This gates everything.
-- **E0 — search(fpdistill) strength benchmark (needs a *new* harness).** Wire fpdistill as prior+value
-  into `select_action_with_context`. **Do not use the existing `search_benchmark` counterfactual mode
-  for strength** — it replays branches against the *recorded* opponent action (`search_benchmark.py:345`),
-  which leaks the opponent's real move (oracle info). Build a **full-game head-to-head** harness:
-  search-agent vs **foul-play (independent opponent)** as the headline metric; vs net-alone and
-  vs fpdistill-alone as diagnostics only (net-vs-net is inflated when the net is the search's opponent
-  model — thesis caveat). Fix games/seeds/variance up front (≥300 games; the roadmap has been burned
-  by 8–16-game reads). Re-run `hazard_probe`/`behavior_probe` on the search-augmented policy to see if
-  search now sets Spikes / uses setup. Fills gap #2 and tests the whole bet.
+- **E0 — search strength benchmark (harness built; result pending).** The full-game external-opponent
+  harness is now `scripts/root_puct_vs_foulplay.py`: foul-play stays out-of-process over a websocket,
+  while PokeZero owns a seeded BattleStream and can build the context required by
+  `select_action_with_context`. **Do not use the existing `search_benchmark` counterfactual mode for
+  strength** — it replays branches against the *recorded* opponent action (`search_benchmark.py:345`),
+  which leaks the opponent's real move (oracle info). Headline metric remains search-agent vs
+  **foul-play (independent opponent)**; raw checkpoint vs foul-play is the comparison. Fix
+  games/seeds/variance up front (≥300 games; the roadmap has been burned by 8–16-game reads). Re-run
+  `hazard_probe`/`behavior_probe` on the search-augmented policy to see if search now sets Spikes /
+  uses setup. Fills gap #2 and tests the whole bet.
 - **E2 — depth (gap #3).** Sweep leaf-rollout depth / policy; if 1-ply+rollouts underperforms on deep
   lines, prototype a multi-ply tree.
 - **E3 — determinization (gap #4).** Per-rollout opponent-set sampling (rejection-sampled randbats,
@@ -190,9 +193,9 @@ first time we'd actually measure this.
 - `search.py` — from the single-pass `visits=1` scorer toward an iterated loop / deeper rollouts.
 - `search_policy.py` — fpdistill prior+value into `select_action_with_context`; determinization-
   injection hook; a prior-**temperature** knob (currently absent).
-- `search_benchmark.py` — **add a NEW full-game head-to-head strength mode vs foul-play.** The existing
-  counterfactual mode replays branches against the *recorded* opponent action (`:345`) → don't use it
-  for strength.
+- `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — controlled full-game head-to-head strength
+  mode vs foul-play. The existing `search_benchmark.py` counterfactual mode replays branches against
+  the *recorded* opponent action (`:345`) → don't use it for strength.
 - `belief.py` — **already has** `sample_opponent_determinizations`; no new sampler. The seam is the
   branch/replay env accepting an injected determinization (likely `local_showdown.py` / `replay_branching.py`).
 - `value_calibration.py` / `neural_policy.py` — measure the search-readiness gate; apply a transform.
