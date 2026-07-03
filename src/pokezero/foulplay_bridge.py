@@ -87,6 +87,7 @@ class ControlledFoulPlayConfig:
     root_visit_budget: int | None = 16
     root_time_budget_ms: int | None = None
     root_opponent_action_scenarios: int = 1
+    root_opponent_action_candidate_scenarios: int = 4
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
@@ -135,6 +136,13 @@ class ControlledFoulPlayConfig:
             raise ValueError("root_time_budget_ms must be positive when set.")
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
+        if self.root_opponent_action_candidate_scenarios <= 0:
+            raise ValueError("root_opponent_action_candidate_scenarios must be positive.")
+        if self.root_opponent_action_candidate_scenarios < self.root_opponent_action_scenarios:
+            raise ValueError(
+                "root_opponent_action_candidate_scenarios must be greater than or equal to "
+                "root_opponent_action_scenarios."
+            )
         if self.leaf_rollout_rounds < 0:
             raise ValueError("leaf_rollout_rounds must be non-negative.")
         if self.leaf_rollout_sampling and self.leaf_rollout_rounds <= 0:
@@ -177,6 +185,7 @@ class ControlledFoulPlayGameResult:
     root_puct_effective_total_visits: int = 0
     root_puct_opponent_action_scenarios_generated: int = 0
     root_puct_opponent_action_scenarios_skipped: int = 0
+    root_puct_opponent_action_scenarios_unsearched: int = 0
     root_puct_selected_prior_action_changes: int = 0
     root_puct_pre_gate_prior_action_changes: int = 0
     root_puct_time_budget_exhaustions: int = 0
@@ -199,6 +208,7 @@ class ControlledFoulPlayGameResult:
             "root_puct_total_visits": self.root_puct_total_visits,
             "root_puct_opponent_action_scenarios_generated": self.root_puct_opponent_action_scenarios_generated,
             "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
+            "root_puct_opponent_action_scenarios_unsearched": self.root_puct_opponent_action_scenarios_unsearched,
             "root_puct_selected_prior_action_changes": self.root_puct_selected_prior_action_changes,
             "root_puct_pre_gate_prior_action_changes": self.root_puct_pre_gate_prior_action_changes,
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
@@ -244,6 +254,7 @@ class ControlledFoulPlayBenchmarkResult:
         root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
         root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
+        root_scenarios_unsearched = sum(game.root_puct_opponent_action_scenarios_unsearched for game in self.games)
         root_selected_prior_action_changes = sum(game.root_puct_selected_prior_action_changes for game in self.games)
         root_pre_gate_prior_action_changes = sum(game.root_puct_pre_gate_prior_action_changes for game in self.games)
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
@@ -284,6 +295,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "root_visit_budget": self.config.root_visit_budget,
                 "root_time_budget_ms": self.config.root_time_budget_ms,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
+                "root_opponent_action_candidate_scenarios": self.config.root_opponent_action_candidate_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
                 "belief_start_overrides": self.config.belief_start_overrides,
@@ -296,6 +308,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "total_visits": root_total_visits,
                 "opponent_action_scenarios_generated": root_scenarios_generated,
                 "opponent_action_scenarios_skipped": root_scenarios_skipped,
+                "opponent_action_scenarios_unsearched": root_scenarios_unsearched,
                 "selected_prior_action_changes": root_selected_prior_action_changes,
                 "pre_gate_prior_action_changes": root_pre_gate_prior_action_changes,
                 "time_budget_exhaustions": root_time_budget_exhaustions,
@@ -712,10 +725,10 @@ def _build_policy(
         )
 
     scenario_planner = None
-    if config.root_opponent_action_scenarios > 1:
+    if config.root_opponent_action_candidate_scenarios > 1:
         scenario_planner = prior_top_k_opponent_action_scenario_planner(
             opponent_prior_fn,
-            scenario_count=config.root_opponent_action_scenarios,
+            scenario_count=config.root_opponent_action_candidate_scenarios,
         )
 
     leaf_rollout_policy_factory = None
@@ -750,6 +763,7 @@ def _build_policy(
         root_time_budget_seconds=(
             None if config.root_time_budget_ms is None else config.root_time_budget_ms / 1000.0
         ),
+        max_opponent_action_scenarios=config.root_opponent_action_scenarios,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         start_override_planner=start_override_planner,
@@ -963,6 +977,11 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_scenarios_unsearched = sum(
+        int(decision.metadata.get("root_puct_opponent_action_scenarios_unsearched") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_selected_prior_action_changes = sum(
         1
         for decision in state.decisions
@@ -1009,6 +1028,7 @@ async def _run_single_game(
         root_puct_effective_total_visits=root_effective_total_visits,
         root_puct_opponent_action_scenarios_generated=root_scenarios_generated,
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
+        root_puct_opponent_action_scenarios_unsearched=root_scenarios_unsearched,
         root_puct_selected_prior_action_changes=root_selected_prior_action_changes,
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
@@ -1535,9 +1555,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "PokeZero-side wall-clock budget for extra post-sweep root visits. With multiple "
-            "opponent-action scenarios, the configured decision budget is split evenly across "
-            "scenario searches. The mandatory initial legal-action sweep is always completed and "
-            "can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
+            "opponent-action scenarios, each scenario receives the remaining decision budget at "
+            "the time it is searched. The mandatory initial legal-action sweep is always completed "
+            "and can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
         ),
     )
     parser.add_argument(
@@ -1545,6 +1565,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of checkpoint-prior opponent root-action scenarios to average.",
+    )
+    parser.add_argument(
+        "--root-opponent-action-candidate-scenarios",
+        type=int,
+        default=4,
+        help=(
+            "Number of checkpoint-prior opponent root-action candidates to try while searching "
+            "for replay-legal scenarios. The search stops after --root-opponent-action-scenarios "
+            "legal scenarios are accepted."
+        ),
     )
     parser.add_argument(
         "--leaf-rollout-rounds",
@@ -1625,6 +1655,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         root_visit_budget=args.root_visit_budget,
         root_time_budget_ms=args.root_time_budget_ms,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
+        root_opponent_action_candidate_scenarios=args.root_opponent_action_candidate_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         leaf_rollout_sampling=args.leaf_rollout_sampling,
         belief_start_overrides=args.belief_start_overrides,

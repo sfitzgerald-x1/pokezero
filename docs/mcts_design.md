@@ -22,10 +22,10 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Piece | Status | Where / caveat |
 |---|---|---|
 | Forking = **replay-from-root** | **built** | `replay_branching.py`, `search.py` |
-| Root PUCT with optional visit/time budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` supports an optional root visit budget and wall-clock budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits until the visit cap or time budget is exhausted. The mandatory first legal-action sweep is always completed and can exceed the configured time budget; the budget suppresses additional post-sweep visits once exhausted. Multi-scenario opponent planning splits the configured decision time budget across scenario searches, while the visit budget is per scenario. Repeated leaf rollouts use visit-specific rollout seeds, and the controlled foul-play harness can use sampled checkpoint policies inside leaf rollouts. The policy adapter now defaults to a **16-visit root budget** and final root action selection by **most visits**, with equal-visit ties resolved by policy prior before value; final `Q+U` PUCT-score selection remains available only as a diagnostic mode because the exploration bonus is for traversal, not deployment move choice. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
+| Root PUCT with optional visit/time budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` supports an optional root visit budget and wall-clock budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits until the visit cap or time budget is exhausted. The mandatory first legal-action sweep is always completed and can exceed the configured time budget; the budget suppresses additional post-sweep visits once exhausted. Multi-scenario opponent planning uses a per-scenario visit budget, while time-budgeted searches receive the remaining decision budget when each scenario is searched. Repeated leaf rollouts use visit-specific rollout seeds, and the controlled foul-play harness can use sampled checkpoint policies inside leaf rollouts. The policy adapter now defaults to a **16-visit root budget** and final root action selection by **most visits**, with equal-visit ties resolved by policy prior before value; final `Q+U` PUCT-score selection remains available only as a diagnostic mode because the exploration bonus is for traversal, not deployment move choice. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
-| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, replay-illegal opponent-scenario skip counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. Those skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
+| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, replay-illegal opponent-scenario skip counts, unsearched reserve scenario counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. The controlled harness now generates reserve opponent-action candidates by default (`--root-opponent-action-candidate-scenarios 4`) and stops after the configured accepted scenario count (`--root-opponent-action-scenarios`, default 1), reducing hidden-mode fallback storms without always averaging every reserve candidate. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. Replay-illegal skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
 | **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; generic replay audits can still check the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. Root search now validates the sampled world at the branch-point observation instead of every intermediate prefix observation, and reports the first mismatching observation field when sampled worlds drift. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
@@ -95,33 +95,20 @@ diagnosing and avoiding fallback storms, but it is **not** an oracle-free belief
 scenario is illegal for a decision it must still fall back. Privileged legal-mask mode remains useful
 as a diagnostic safety guard but not a headline hidden-info result.
 
-Latest hidden-mode smoke against `foul-play` using the 1.5M belief checkpoint remains a plumbing
-diagnostic, not strength evidence. A same-seed 5-game smoke before the current-state consistency
-change won `1/5`, searched 50 of 199 PokeZero decisions, fell back 149 times, skipped 283 of 375
-generated opponent-action scenarios, used 35 accepted start overrides, and spent 2401 start-override
-attempts. After switching root search to branch-point observation consistency and classifying
-request/illegal-action replay drift as retryable scenario rejection, a 3-game smoke over seeds
-`910001..910003` won `1/3`, searched 30 of 99 PokeZero decisions, fell back 69 times, skipped 129 of
-184 generated opponent-action scenarios, used 12 accepted start overrides, and spent 1088
-start-override attempts. Seed `910001` searched 27 of 27 decisions with zero fallbacks; seeds
-`910002` and `910003` still fell back heavily because all sampled worlds drifted in request shape or
-branch-point observation features by midgame. Adding public switch-slot constraints to the
-belief-backed start override, including Showdown's party-position swaps after switches, improved the
-same 3-game smoke's coverage but did not improve strength: it won `0/3`, searched 69 of 91 PokeZero
-decisions, fell back 22 times, skipped 43 of 167 generated opponent-action scenarios, used 67
-accepted start overrides, and spent 492 start-override attempts. A one-game retry on the hardest
-seed with 32 start-override attempts still searched only 8 of 30 decisions, so the remaining hidden
-fallbacks are structural replay drift rather than simple sampling scarcity. A perfect-root
-diagnostic without belief start overrides then separated replay coverage from search quality: with a
-250 ms decision budget it searched 220 of 221 decisions but exhausted the extra-visit budget on every
-search and won `0/5`; with the time budget removed and root visits completed, visits-mode searched
-83 decisions over 3 games with zero fallbacks and zero time exhaustions but still won `0/3`. This
-exposed that equal-visit ties were still leaking into value-mode style overrides, so visit selection
-now breaks equal-visit ties by policy prior before value. On the same 3-game perfect-root diagnostic,
-that suppressed all prior overrides (`0/70`) and still won `0/3`; enabling sampled leaf rollouts
-produced one real visit-count override over 72 searched decisions and still won `0/3`. This makes the
-next bottleneck search/value signal quality, not just replay fallback coverage or final-selection
-mechanics. No >=300-game MCTS strength claim is meaningful until both coverage and a plausible
+Latest hidden-mode smoke against `foul-play` using the 1.5M checkpoint remains a plumbing diagnostic,
+not strength evidence. A same-seed raw checkpoint read over seeds `941001..941005` won `0/5`. The
+root-PUCT read on the same seed band, with visits selection, 16 root visits, root prior temperature
+`4.0`, one opponent-action scenario, no leaf rollouts, and no score gate, also won `0/5`; it searched
+131 decisions, changed the checkpoint prior action 21 times, and fell back 21 times because the
+single hidden opponent-action scenario was replay-illegal. Adding a `0.0` score gate reduced the
+selected changes to 14 and fallbacks to 11, but still won `0/5`. After adding reserve opponent-action
+candidates with a one-scenario accepted cap, a two-game diagnostic over seeds `941001..941002` won
+`0/2`, but eliminated fallbacks entirely (`0/76` searches) while skipping 3 replay-illegal reserve
+candidates and leaving 198 reserve candidates unsearched after the cap was filled. Average
+PokeZero-side search cost was `0.90s` per searched decision, much closer to single-scenario cost than
+full four-scenario averaging. That is useful coverage evidence, not a strength signal: it shows the
+search can avoid the single-scenario fallback storm, but it does not yet show net+MCTS beating the raw
+checkpoint. No >=300-game MCTS strength claim is meaningful until both coverage and a plausible
 search-selection configuration are in place.
 
 ## Design principles / hard constraints
@@ -164,8 +151,10 @@ search-selection configuration are in place.
   PUCT now has a root-only prior-**temperature** knob, exposed as `--root-prior-temperature` on the
   full-game neural/foul-play harnesses. When omitted it preserves old behavior by falling back to
   `--temperature`; when set it softens only root action traversal priors, not opponent-action priors
-  or the raw fallback policy. `cpuct` defaults to 1.25. These are still tuning levers, not proven
-  strength improvements.
+  or the raw fallback policy. The foul-play harness also supports reserve opponent-action candidates
+  (`--root-opponent-action-candidate-scenarios`) that are replay-tested until the accepted scenario
+  cap is filled. `cpuct` defaults to 1.25. These are still tuning levers, not proven strength
+  improvements.
 - **Value head (WS-E):** measure calibration + ranking; improve targets / ranking loss / transform
   until search-ready. Verify the candidate net's head (incl. fpdistill's).
 

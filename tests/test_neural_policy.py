@@ -2420,13 +2420,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
                 requested_legal_action_masks={
                     "p1": LEGAL_TWO_ACTION_MASK,
-                    "p2": LEGAL_ACTION_ONE_TWO_MASK,
+                    "p2": (True, True, True, True, False, False, False, False, False),
                 },
             )
             scenarios = search_policy.opponent_action_scenario_planner(context, __import__("random").Random(1))
-            self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 2}, {"p2": 1}])
-            self.assertAlmostEqual(scenarios[0].weight, 0.7 / 0.9)
-            self.assertAlmostEqual(scenarios[1].weight, 0.2 / 0.9)
+            self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 2}, {"p2": 1}, {"p2": 0}])
+            self.assertAlmostEqual(scenarios[0].weight, 0.7 / 1.0)
+            self.assertAlmostEqual(scenarios[1].weight, 0.2 / 1.0)
+            self.assertAlmostEqual(scenarios[2].weight, 0.1 / 1.0)
             return FakeReport()
 
         stdout = io.StringIO()
@@ -2453,6 +2454,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "random-legal",
                     "--root-opponent-action-scenarios",
                     "2",
+                    "--root-opponent-action-candidate-scenarios",
+                    "3",
                     "--json",
                 ]
             )
@@ -2462,8 +2465,30 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         search_policy = matchups[2].p1_policy
         self.assertEqual(getattr(search_policy.opponent_action_planner, "planner_id"), "checkpoint")
         self.assertIsNotNone(search_policy.opponent_action_scenario_planner)
-        self.assertEqual(getattr(search_policy.opponent_action_scenario_planner, "planner_id"), "checkpoint-top2")
+        self.assertEqual(getattr(search_policy.opponent_action_scenario_planner, "planner_id"), "checkpoint-top3")
+        self.assertEqual(search_policy.max_opponent_action_scenarios, 2)
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_candidate_scenarios_below_accepted_count(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--root-opponent-action-scenarios",
+                    "2",
+                    "--root-opponent-action-candidate-scenarios",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("candidate scenarios", stderr.getvalue())
 
     def test_neural_cli_root_puct_play_benchmark_rejects_multi_scenarios_with_benchmark_root_opponent(self) -> None:
         if not torch_available():

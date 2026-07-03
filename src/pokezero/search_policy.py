@@ -222,6 +222,7 @@ class RootPUCTSearchPolicy:
     root_visit_budget: int | None = ACTION_COUNT + 7
     root_time_budget_seconds: float | None = None
     root_prior_temperature: float = 1.0
+    max_opponent_action_scenarios: int | None = None
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     start_override_planner: StartOverridePlanner | None = None
@@ -251,6 +252,8 @@ class RootPUCTSearchPolicy:
             raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
         if self.root_prior_temperature <= 0.0 or not math.isfinite(self.root_prior_temperature):
             raise ValueError("root_prior_temperature must be a finite positive value.")
+        if self.max_opponent_action_scenarios is not None and self.max_opponent_action_scenarios <= 0:
+            raise ValueError("max_opponent_action_scenarios must be positive when set.")
         if self.leaf_rollout_decision_rounds < 0:
             raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
         if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
@@ -336,14 +339,10 @@ class RootPUCTSearchPolicy:
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
             try:
-                scenario_root_time_budget_seconds = (
-                    None
-                    if self.root_time_budget_seconds is None
-                    else self.root_time_budget_seconds / len(opponent_scenarios)
-                )
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                 start_override_sources_used = 0
                 start_override_attempts_used = 0
+                unsearched_scenario_count = 0
                 for scenario_index, scenario in enumerate(opponent_scenarios):
                     scenario_search: PUCTBranchSearchResult | None = None
                     scenario_start_override: StartOverrideSource = None
@@ -360,6 +359,10 @@ class RootPUCTSearchPolicy:
                                 scenario_index,
                                 rng,
                             )
+                        )
+                        scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
+                            total_budget_seconds=self.root_time_budget_seconds,
+                            started_at=start,
                         )
                         try:
                             search = puct_branch_search(
@@ -402,12 +405,19 @@ class RootPUCTSearchPolicy:
                         scenario_search_pairs.append((scenario, scenario_search))
                         if scenario_start_override is not None:
                             start_override_sources_used += 1
+                        if (
+                            self.max_opponent_action_scenarios is not None
+                            and len(scenario_search_pairs) >= self.max_opponent_action_scenarios
+                        ):
+                            unsearched_scenario_count = len(opponent_scenarios) - scenario_index - 1
+                            break
                 if not scenario_search_pairs:
                     details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
                     metadata = _opponent_scenario_skip_metadata(
                         opponent_scenarios=opponent_scenarios,
                         used_scenarios=(),
                         skipped_scenarios=tuple(skipped_scenarios),
+                        unsearched_scenario_count=0,
                     )
                     if self.start_override_planner is not None:
                         metadata.update(
@@ -550,7 +560,9 @@ class RootPUCTSearchPolicy:
                     opponent_scenarios=opponent_scenarios,
                     used_scenarios=used_scenarios,
                     skipped_scenarios=tuple(skipped_scenarios),
+                    unsearched_scenario_count=unsearched_scenario_count,
                 ),
+                "root_puct_max_opponent_action_scenarios": self.max_opponent_action_scenarios,
                 "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
@@ -678,6 +690,18 @@ def _opponent_action_scenarios(
     )
 
 
+def _remaining_root_time_budget_seconds(
+    *,
+    total_budget_seconds: float | None,
+    started_at: float,
+) -> float | None:
+    if total_budget_seconds is None:
+        return None
+    elapsed = perf_counter() - started_at
+    return max(1e-9, total_budget_seconds - elapsed)
+
+
+
 def _top_prior_action_choices(
     context: PolicyContext,
     player: PlayerId,
@@ -796,10 +820,12 @@ def _opponent_scenario_skip_metadata(
     opponent_scenarios: Sequence[OpponentActionScenario],
     used_scenarios: Sequence[OpponentActionScenario],
     skipped_scenarios: Sequence[tuple[OpponentActionScenario, str]],
+    unsearched_scenario_count: int = 0,
 ) -> dict[str, object]:
     return {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
         "root_puct_opponent_action_scenarios_skipped": len(skipped_scenarios),
+        "root_puct_opponent_action_scenarios_unsearched": unsearched_scenario_count,
         "root_puct_opponent_action_scenarios": [
             _opponent_action_scenario_payload(scenario)
             for scenario in used_scenarios
