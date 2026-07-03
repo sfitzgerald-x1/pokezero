@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pokezero.actions import ACTION_COUNT
 from pokezero.foulplay_bridge import (
     ControlledFoulPlayBenchmarkResult,
     ControlledFoulPlayConfig,
@@ -237,12 +238,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertIsNone(config.root_prior_temperature)
         self.assertEqual(config.effective_root_prior_temperature, 1.0)
         self.assertEqual(config.root_opponent_action_scenarios, 1)
-        self.assertEqual(config.root_opponent_action_candidate_scenarios, 4)
+        self.assertEqual(config.root_opponent_action_candidate_scenarios, ACTION_COUNT)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
         self.assertEqual(args.root_opponent_action_scenarios, 1)
-        self.assertEqual(args.root_opponent_action_candidate_scenarios, 4)
+        self.assertEqual(args.root_opponent_action_candidate_scenarios, ACTION_COUNT)
 
         warmed_config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
