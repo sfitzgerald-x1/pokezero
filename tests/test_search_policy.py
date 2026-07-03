@@ -703,6 +703,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_start_override_attempts_used"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 4)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_skip_categories"],
+            {"start_override_observation_mismatch": 1},
+        )
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
         self.assertEqual(metadata["root_puct_opponent_action_groups_generated"], 2)
@@ -724,6 +728,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                         "start override does not reproduce recorded replay prefix observations "
                         "for decision round 0: p1."
                     ),
+                    "category": "start_override_observation_mismatch",
                 }
             ],
         )
@@ -792,6 +797,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_start_override_sources_used"], 0)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 2)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 2)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skip_categories"],
+            {"missing_sampled_world": 2},
+        )
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_used"], 0)
         self.assertEqual(decision.metadata["root_puct_opponent_action_groups_skipped"], 1)
@@ -803,12 +812,14 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     "weight": 0.5,
                     "actions": {"p2": 0},
                     "reason": "start override planner did not produce a sampled world",
+                    "category": "missing_sampled_world",
                 },
                 {
                     "label": "stay-in/belief-sample-2",
                     "weight": 0.5,
                     "actions": {"p2": 0},
                     "reason": "start override planner did not produce a sampled world",
+                    "category": "missing_sampled_world",
                 },
             ],
         )
@@ -871,6 +882,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skip_categories"],
+            {"missing_sampled_world": 1},
+        )
+        self.assertEqual(
             decision.metadata["root_puct_opponent_action_skipped_scenarios"],
             [
                 {
@@ -878,6 +893,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     "weight": 1.0,
                     "actions": {"p2": 0},
                     "reason": "start override source did not produce a sampled world.",
+                    "category": "missing_sampled_world",
                 }
             ],
         )
@@ -941,6 +957,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(branch_envs[0].all_step_calls, [])
         self.assertEqual(decision.metadata["root_puct_start_override_sources_used"], 0)
         self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skip_categories"],
+            {"missing_sampled_world": 1},
+        )
+        self.assertEqual(
             decision.metadata["root_puct_opponent_action_skipped_scenarios"],
             [
                 {
@@ -951,6 +971,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                         "start override planner did not produce a sampled world: "
                         "opponent belief could not be materialized"
                     ),
+                    "category": "missing_sampled_world",
                 }
             ],
         )
@@ -1069,6 +1090,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertFalse(metadata["root_puct_opponent_actions_legality_checked"])
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_skip_categories"],
+            {"illegal_action_for_current_request": 1},
+        )
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
         self.assertEqual(
             metadata["root_puct_opponent_action_scenarios"],
@@ -1082,6 +1107,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     "weight": 0.75,
                     "actions": {"p2": 2},
                     "reason": "p2: action_index 2 is not legal for the current request.",
+                    "category": "illegal_action_for_current_request",
                 }
             ],
         )
@@ -1251,6 +1277,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertTrue(metadata["root_puct_fallback"])
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 2)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_skip_categories"],
+            {
+                "missing_sampled_world": 1,
+                "start_override_observation_mismatch": 1,
+            },
+        )
         self.assertEqual(metadata["root_puct_start_override_sources_used"], 0)
         skip_reason = metadata["root_puct_opponent_action_skipped_scenarios"][0]["reason"]
         self.assertIn(
@@ -2122,10 +2155,14 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         )
         self.assertEqual(
             decision.metadata["root_puct_fallback_category"],
-            "all_opponent_scenarios_replay_illegal",
+            "illegal_action_for_current_request",
         )
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skip_categories"],
+            {"illegal_action_for_current_request": 1},
+        )
         self.assertEqual(
             decision.metadata["root_puct_opponent_action_skipped_scenarios"],
             [
@@ -2134,6 +2171,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     "weight": 1.0,
                     "actions": {"p2": 2},
                     "reason": "p2: action_index 2 is not legal for the current request.",
+                    "category": "illegal_action_for_current_request",
                 }
             ],
         )

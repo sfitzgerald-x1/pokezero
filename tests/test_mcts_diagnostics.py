@@ -30,6 +30,12 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.assertEqual(root_puct_fallback_category(reason), category)
 
+    def test_classifies_illegal_current_request_action(self) -> None:
+        self.assertEqual(
+            root_puct_fallback_category("p2: action_index 2 is not legal for the current request."),
+            "illegal_action_for_current_request",
+        )
+
     def test_classifies_mixed_replay_prefix_divergence(self) -> None:
         reason = (
             "all opponent action scenarios were replay-illegal: "
