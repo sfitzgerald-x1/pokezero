@@ -210,6 +210,7 @@ class RootPUCTSearchPolicy:
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
     minimum_override_prior_ratio: float | None = None
+    minimum_score_improvement: float | None = None
     selection_mode: str = "puct"
     root_visit_budget: int | None = None
     leaf_rollout_decision_rounds: int = 0
@@ -227,6 +228,10 @@ class RootPUCTSearchPolicy:
             self.minimum_override_prior_ratio < 0.0 or not math.isfinite(self.minimum_override_prior_ratio)
         ):
             raise ValueError("minimum_override_prior_ratio must be a finite non-negative value when set.")
+        if self.minimum_score_improvement is not None and (
+            self.minimum_score_improvement < 0.0 or not math.isfinite(self.minimum_score_improvement)
+        ):
+            raise ValueError("minimum_score_improvement must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.leaf_rollout_decision_rounds < 0:
@@ -399,6 +404,19 @@ class RootPUCTSearchPolicy:
                 "root_puct_prior_ratio_gate_used": prior_ratio_gate_used,
                 "root_puct_prior_ratio_gate_required_prior": required_prior,
             }
+        score_gate_metadata = {}
+        if self.minimum_score_improvement is not None:
+            score_gate_used = False
+            # This compares root-PUCT score (Q + exploration bonus), not pure leaf value.
+            required_score = prior_best.score + self.minimum_score_improvement
+            if best.action_index != prior_best.action_index and best.score < required_score:
+                best = prior_best
+                score_gate_used = True
+            score_gate_metadata = {
+                "root_puct_minimum_score_improvement": self.minimum_score_improvement,
+                "root_puct_score_gate_used": score_gate_used,
+                "root_puct_score_gate_required_score": required_score,
+            }
         leaf_metadata = _leaf_rollout_metadata(
             scenario_searches,
             configured_rounds=self.leaf_rollout_decision_rounds,
@@ -451,6 +469,7 @@ class RootPUCTSearchPolicy:
                 **planner_metadata,
                 **gate_metadata,
                 **prior_ratio_metadata,
+                **score_gate_metadata,
                 **visit_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
