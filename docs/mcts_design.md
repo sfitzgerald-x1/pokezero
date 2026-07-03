@@ -214,6 +214,15 @@ to the low-attempt shape diagnostic: searches rose from `6` to `15`, accepted sh
 attempts rose from `171` to `764`, and average elapsed time per searched decision rose from `0.44s`
 to `0.78s`. This is still coverage/cost evidence, not strength evidence.
 
+Shared start-override sampling now skips duplicate materialized packed teams before replaying them.
+On the same seed/default-attempt smoke, this skipped `16` duplicate materializations and nudged
+accepted shared samples from `19` to `21` and searches from `15` to `16`, while still leaving raw and
+root-PUCT at `0/1`. The gain is small but confirms duplicate sampled worlds were consuming retry
+budget without adding distinct belief-world coverage. This deliberately favors distinct-world
+coverage inside one decision over a pure with-replacement belief expectation; duplicate worlds do
+carry belief mass, so this should be treated as a coverage-efficiency diagnostic rather than an
+unbiased estimator of the belief-weighted root value.
+
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
 runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.

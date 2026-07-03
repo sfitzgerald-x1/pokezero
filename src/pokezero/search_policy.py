@@ -75,6 +75,7 @@ class _SharedStartOverrideSamples:
     overrides: tuple[BattleStartOverride | None, ...]
     rejection_reasons: tuple[str | None, ...]
     attempts_used: int
+    duplicate_attempts: int = 0
 
 
 StartOverridePlanner = Callable[
@@ -887,6 +888,8 @@ def _shared_start_override_samples(
     overrides: list[BattleStartOverride | None] = []
     rejection_reasons: list[str | None] = []
     attempts_used = 0
+    duplicate_attempts = 0
+    seen_override_keys: set[tuple[object, ...]] = set()
     for sample_index, sample_scenario in enumerate(sample_scenarios):
         sampled_override: BattleStartOverride | None = None
         sample_rejections: list[str] = []
@@ -909,6 +912,12 @@ def _shared_start_override_samples(
                     raise
                 sample_rejections.append(reason)
                 continue
+            override_key = _start_override_key(materialized_override)
+            if override_key in seen_override_keys:
+                duplicate_attempts += 1
+                sample_rejections.append("sampled start override duplicated an earlier materialized world")
+                continue
+            seen_override_keys.add(override_key)
             try:
                 replay_trajectory_prefix(
                     env,
@@ -938,6 +947,7 @@ def _shared_start_override_samples(
         overrides=tuple(overrides),
         rejection_reasons=tuple(rejection_reasons),
         attempts_used=attempts_used,
+        duplicate_attempts=duplicate_attempts,
     )
 
 
@@ -945,11 +955,22 @@ def _shared_start_override_metadata(samples: _SharedStartOverrideSamples | None)
     if samples is None:
         return {}
     accepted = sum(1 for override in samples.overrides if override is not None)
-    return {
+    metadata = {
         "root_puct_start_override_shared_samples": len(samples.overrides),
         "root_puct_start_override_shared_samples_accepted": accepted,
         "root_puct_start_override_shared_samples_rejected": len(samples.overrides) - accepted,
     }
+    if samples.duplicate_attempts:
+        metadata["root_puct_start_override_duplicate_attempts"] = samples.duplicate_attempts
+    return metadata
+
+
+def _start_override_key(start_override: BattleStartOverride) -> tuple[object, ...]:
+    return (
+        start_override.format_id,
+        start_override.observation_format_id,
+        tuple(sorted(start_override.player_teams.items())),
+    )
 
 
 def _remaining_root_time_budget_seconds(
