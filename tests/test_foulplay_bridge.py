@@ -257,12 +257,14 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(config.effective_root_prior_temperature, 1.0)
         self.assertEqual(config.root_opponent_action_scenarios, 1)
         self.assertEqual(config.root_opponent_action_candidate_scenarios, ACTION_COUNT)
+        self.assertEqual(config.start_override_attempts, 10)
         self.assertEqual(config.belief_start_override_samples, 1)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
         self.assertEqual(args.root_opponent_action_scenarios, 1)
         self.assertEqual(args.root_opponent_action_candidate_scenarios, ACTION_COUNT)
+        self.assertEqual(args.start_override_attempts, 10)
         self.assertEqual(args.belief_start_override_samples, 1)
         sampled_args = build_arg_parser().parse_args(
             [
