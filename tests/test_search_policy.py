@@ -538,6 +538,87 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(branch_envs[0].start_overrides, sampled_overrides)
         self.assertEqual(len(sampled_overrides), 3)
 
+    def test_root_puct_policy_expands_start_override_samples_as_weighted_scenarios(self) -> None:
+        branch_envs: list[StartOverrideOutcomeEnv] = []
+        planner_calls: list[tuple[str, int]] = []
+
+        def branch_env_factory() -> StartOverrideOutcomeEnv:
+            env = StartOverrideOutcomeEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (OpponentActionScenario(actions={"p2": 0}, weight=1.0, label="stay-in"),)
+
+        def start_override_planner(
+            context: PolicyContext,
+            scenario: OpponentActionScenario,
+            scenario_index: int,
+            rng: random.Random,
+        ):
+            del context, rng
+            planner_calls.append((scenario.label, scenario_index))
+
+            def sample_override() -> BattleStartOverride:
+                return BattleStartOverride(
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": f"Xatu||||Psychic|||||||{scenario_index}",
+                    }
+                )
+
+            return sample_override
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            cpuct=0.0,
+            root_visit_budget=2,
+            start_override_planner=start_override_planner,
+            start_override_samples_per_scenario=2,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        metadata = decision.metadata
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(
+            planner_calls,
+            [
+                ("stay-in/belief-sample-1", 0),
+                ("stay-in/belief-sample-2", 1),
+            ],
+        )
+        self.assertEqual(metadata["root_puct_start_override_sources_used"], 2)
+        self.assertEqual(metadata["root_puct_start_override_attempts"], 1)
+        self.assertEqual(metadata["root_puct_start_override_attempts_used"], 2)
+        self.assertEqual(metadata["root_puct_start_override_samples_per_scenario"], 2)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 2)
+        self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 2)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_scenarios"],
+            [
+                {"label": "stay-in/belief-sample-1", "weight": 0.5, "actions": {"p2": 0}},
+                {"label": "stay-in/belief-sample-2", "weight": 0.5, "actions": {"p2": 0}},
+            ],
+        )
+        self.assertEqual(len(branch_envs[0].start_overrides), 4)
+
     def test_root_puct_policy_skips_hidden_opponent_scenarios_replay_rejects(self) -> None:
         branch_envs: list[StrictOpponentActionEnv] = []
 
@@ -1531,6 +1612,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 start_override_attempts=0,
+            )
+
+    def test_root_puct_policy_rejects_invalid_start_override_samples_per_scenario(self) -> None:
+        with self.assertRaisesRegex(ValueError, "start_override_samples_per_scenario"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                start_override_samples_per_scenario=0,
             )
 
     def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:

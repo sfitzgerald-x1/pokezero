@@ -218,6 +218,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 start_override_attempts=0,
             )
+        with self.assertRaisesRegex(ValueError, "belief_start_override_samples"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                belief_start_override_samples=0,
+            )
+        with self.assertRaisesRegex(ValueError, "belief_start_override_samples"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                belief_start_override_samples=2,
+            )
         with self.assertRaisesRegex(ValueError, "foulplay_random_seed"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -245,11 +257,26 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(config.effective_root_prior_temperature, 1.0)
         self.assertEqual(config.root_opponent_action_scenarios, 1)
         self.assertEqual(config.root_opponent_action_candidate_scenarios, ACTION_COUNT)
+        self.assertEqual(config.belief_start_override_samples, 1)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
         self.assertEqual(args.root_opponent_action_scenarios, 1)
         self.assertEqual(args.root_opponent_action_candidate_scenarios, ACTION_COUNT)
+        self.assertEqual(args.belief_start_override_samples, 1)
+        sampled_args = build_arg_parser().parse_args(
+            [
+                "--checkpoint",
+                "checkpoint.pt",
+                "--showdown-root",
+                "/showdown",
+                "--belief-start-overrides",
+                "--belief-start-override-samples",
+                "3",
+            ]
+        )
+        self.assertTrue(sampled_args.belief_start_overrides)
+        self.assertEqual(sampled_args.belief_start_override_samples, 3)
 
         warmed_config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
@@ -288,6 +315,43 @@ class FoulPlayBridgeTest(unittest.TestCase):
             f"checkpoint-top{ACTION_COUNT}",
         )
         self.assertEqual(policy.max_opponent_action_scenarios, 1)
+        self.assertEqual(policy.start_override_samples_per_scenario, 1)
+
+    def test_build_policy_wires_belief_start_override_samples(self) -> None:
+        class FakePolicy:
+            def __init__(self, policy_id: str | None = None, **_: object) -> None:
+                self.policy_id = policy_id or "fake-transformer"
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            belief_start_overrides=True,
+            belief_start_override_samples=3,
+        )
+
+        with patch("pokezero.foulplay_bridge.TransformerSoftmaxPolicy", side_effect=FakePolicy), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ), patch(
+            "pokezero.foulplay_bridge.gen3_randbat_belief_start_override_planner",
+            return_value=lambda context, scenario, scenario_index, rng: None,
+        ):
+            policy = _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertEqual(policy.start_override_samples_per_scenario, 3)
+        self.assertEqual(policy.max_opponent_action_scenarios, 3)
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -389,6 +453,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             leaf_rollout_sampling=True,
             belief_start_overrides=True,
             start_override_attempts=7,
+            belief_start_override_samples=3,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -511,6 +576,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["root_opponent_action_candidate_scenarios"], 5)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertEqual(payload["root_puct"]["belief_start_overrides"], True)
+        self.assertEqual(payload["root_puct"]["belief_start_override_samples"], 3)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
 
     def test_comparison_payload_matches_common_seeds_and_marks_small_samples_diagnostic(self) -> None:

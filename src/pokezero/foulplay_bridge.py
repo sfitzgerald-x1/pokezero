@@ -98,6 +98,7 @@ class ControlledFoulPlayConfig:
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
     start_override_attempts: int = 1
+    belief_start_override_samples: int = 1
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -155,6 +156,10 @@ class ControlledFoulPlayConfig:
             raise ValueError("leaf_rollout_sampling requires positive leaf_rollout_rounds.")
         if self.start_override_attempts <= 0:
             raise ValueError("start_override_attempts must be positive.")
+        if self.belief_start_override_samples <= 0:
+            raise ValueError("belief_start_override_samples must be positive.")
+        if self.belief_start_override_samples > 1 and not self.belief_start_overrides:
+            raise ValueError("belief_start_override_samples requires belief_start_overrides.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
@@ -307,6 +312,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
                 "belief_start_overrides": self.config.belief_start_overrides,
                 "start_override_attempts": self.config.start_override_attempts,
+                "belief_start_override_samples": self.config.belief_start_override_samples,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -1147,6 +1153,9 @@ def _build_policy(
     if config.belief_start_overrides:
         set_source = load_gen3_randbat_source_cached(config.showdown_root)
         start_override_planner = gen3_randbat_belief_start_override_planner(set_source)
+    max_opponent_action_scenarios = config.root_opponent_action_scenarios
+    if start_override_planner is not None:
+        max_opponent_action_scenarios *= config.belief_start_override_samples
 
     return RootPUCTSearchPolicy(
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -1168,11 +1177,12 @@ def _build_policy(
         root_time_budget_seconds=(
             None if config.root_time_budget_ms is None else config.root_time_budget_ms / 1000.0
         ),
-        max_opponent_action_scenarios=config.root_opponent_action_scenarios,
+        max_opponent_action_scenarios=max_opponent_action_scenarios,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         start_override_planner=start_override_planner,
         start_override_attempts=config.start_override_attempts,
+        start_override_samples_per_scenario=config.belief_start_override_samples,
         leaf_rollout_metadata={
             "root_puct_leaf_rollout_opponent_policy": "checkpoint",
             "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
@@ -2012,6 +2022,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--belief-start-override-samples",
+        type=int,
+        default=1,
+        help=(
+            "Belief start-override samples to average per accepted opponent-action scenario. "
+            "Requires --belief-start-overrides. Values above 1 split each opponent-action "
+            "scenario across multiple sampled hidden worlds, increasing search cost."
+        ),
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -2103,6 +2123,7 @@ def _config_from_args(
         leaf_rollout_sampling=args.leaf_rollout_sampling,
         belief_start_overrides=args.belief_start_overrides,
         start_override_attempts=args.start_override_attempts,
+        belief_start_override_samples=args.belief_start_override_samples,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

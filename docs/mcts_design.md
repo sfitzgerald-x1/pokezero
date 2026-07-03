@@ -28,7 +28,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py`, `scripts/compare_root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, replay-illegal opponent-scenario skip counts, unsearched reserve scenario counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. The controlled harness now generates a full-action reserve opponent-action candidate list by default (`--root-opponent-action-candidate-scenarios 9`) and stops after the configured accepted scenario count (`--root-opponent-action-scenarios`, default 1), reducing hidden-mode fallback storms without always averaging every reserve candidate. The paired comparison wrapper defaults to `--comparison-mode per-seed`: for each seed it runs raw, then root-PUCT, restarting foul-play with a matching per-seed startup seed before advancing. It writes one combined summary, matches completed games by seed, reports marginal per-arm Wilson 95% intervals plus discordant same-seed counts, and marks reads below 300 paired games as diagnostic-only. `--comparison-mode per-arm` preserves the older raw-all-then-search-all order when process startup overhead matters more than useful partial progress. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. The comparison artifact records that the opponent is not deterministic and the win-rate delta is descriptive rather than a paired statistical test. Replay-illegal skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
-| **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; generic replay audits can still check the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. Root search now validates the sampled world at the branch-point observation instead of every intermediate prefix observation, and reports the first mismatching observation field when sampled worlds drift. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
+| **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; generic replay audits can still check the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. Root search now validates the sampled world at the branch-point observation instead of every intermediate prefix observation, and reports the first mismatching observation field when sampled worlds drift. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Root-PUCT can also split each opponent-action scenario across multiple sampled belief start overrides (`--belief-start-override-samples` in the foul-play harness), so one opponent switch action can be scored against multiple plausible hidden backline worlds instead of a single sampled team. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
 | poke-engine reversible backend | **probe only** | `engine_cli.py`, `poke_engine_backend.py` — apply/reverse smoke exists, but **Gen-3 outcome equivalence is unproven** (`poke_engine_assessment.md`); not a usable backend yet. |
 | Unit tests for search / search_policy / benchmark | **built** | `tests/test_search*.py` |
 
@@ -60,7 +60,12 @@ In priority order:
    payload/replay seam and a Gen 3 randbat belief-to-packed-team planner, but replay-from-root is
    still too brittle after public history has accumulated. Replay/search can pass a
    `BattleStartOverride` into `LocalShowdownEnv`, so branches can start from sampled packed teams
-   instead of the default random battle root. This seam is intentionally strict: arbitrary packed
+   instead of the default random battle root. Root-PUCT can now expand each accepted opponent-action
+   scenario into multiple weighted belief-world samples before aggregation; in the foul-play harness,
+   `--belief-start-override-samples N` multiplies the effective searched scenario cap by `N` when
+   `--belief-start-overrides` is enabled. This is still PIMC-style averaging, not an information-set
+   tree, but it makes hidden backline/switch-in uncertainty observable to search instead of locking
+   each action scenario to one sampled team. This seam is intentionally strict: arbitrary packed
    teams are only materialized through `gen3customgame`, both players' teams must be supplied, and
    strict replay audits can check the searched player's prefix observation features so a sampled
    world that no longer reproduces that player's recorded prefix fails loudly. Root search uses the
@@ -114,6 +119,14 @@ search cost to `1.90s` per searched decision. That is useful coverage evidence, 
 signal: it shows the search can avoid the single-scenario fallback storm, but it does not yet show
 net+MCTS beating the raw checkpoint. No >=300-game MCTS strength claim is meaningful until both
 coverage and a plausible search-selection configuration are in place.
+
+A one-game multi-belief start-override smoke over seed `952001` with
+`--belief-start-overrides`, `--belief-start-override-samples 2`, and
+`--start-override-attempts 2` completed end-to-end, but exposed the expected replay brittleness:
+raw and root-PUCT both won `0/1`; root-PUCT searched 19 decisions, used 31 start-override sources,
+spent 494 override attempts, changed the selected prior action once, and fell back 7 times because
+sampled worlds or sampled opponent-action scenarios failed replay validation. This proves the
+multi-belief path is wired, not that it is strong enough for a headline read.
 
 ## Design principles / hard constraints
 
@@ -251,8 +264,9 @@ first time we'd actually measure this.
 
 - `search.py` — from the single-pass `visits=1` scorer toward an iterated loop / deeper rollouts.
 - `search_policy.py` — fpdistill prior+value into `select_action_with_context`; determinization
-  planner hook; a root prior-**temperature** knob for decoupling traversal softness from raw-policy
-  and opponent-action temperatures.
+  planner hook; multi-sample start-override expansion for belief-world averaging; a root
+  prior-**temperature** knob for decoupling traversal softness from raw-policy and opponent-action
+  temperatures.
 - `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py`, `scripts/compare_root_puct_vs_foulplay.py`
   — controlled full-game head-to-head strength mode vs foul-play. Use the comparison wrapper for raw
   vs root-PUCT reads so tiny samples are explicitly labeled diagnostic and larger runs share a seed
