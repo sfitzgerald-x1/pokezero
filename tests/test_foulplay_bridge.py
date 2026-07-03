@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.foulplay_bridge import (
     ControlledFoulPlayBenchmarkResult,
@@ -17,6 +19,7 @@ from pokezero.foulplay_bridge import (
     _split_outgoing_showdown_message,
     _terminal_line_for_foulplay,
     _write_json,
+    run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
 
@@ -200,6 +203,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         payload = result.to_dict()
 
         self.assertEqual(payload["schema_version"], "pokezero.controlled-foulplay-benchmark.v1")
+        self.assertEqual(payload["status"], "complete")
+        self.assertEqual(payload["complete"], True)
         self.assertEqual(payload["wins"], 1)
         self.assertEqual(payload["completed_games"], 2)
         self.assertEqual(payload["win_rate"], 0.5)
@@ -231,6 +236,110 @@ class FoulPlayBridgeTest(unittest.TestCase):
             _write_json(path, {"b": 2, "a": 1})
 
             self.assertEqual(path.read_text(), '{\n  "a": 1,\n  "b": 2\n}\n')
+
+    def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
+        class FakeModelConfig:
+            policy_id = "checkpoint"
+            categorical_feature_count = 1
+            numeric_feature_count = 1
+
+        class FakeCheckpointResult:
+            model_config = FakeModelConfig()
+
+        class FakePolicy:
+            policy_id = "checkpoint+root-puct"
+
+        class FakeProcess:
+            stdout = None
+            stderr = None
+            returncode = 0
+
+            def terminate(self) -> None:
+                raise AssertionError("completed fake process should not be terminated")
+
+        class FakeServer:
+            def __init__(self, **_: object) -> None:
+                self.uri = "ws://127.0.0.1:1/showdown/websocket"
+
+            async def start(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        class FakeBridge:
+            def __init__(self, **_: object) -> None:
+                return None
+
+            async def start(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("showdown"),
+            games=2,
+        )
+        game_results = iter(
+            (
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-1",
+                    seed=1,
+                    winner="PokeZeroBot",
+                    pokezero_won=True,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+                ControlledFoulPlayGameResult(
+                    battle_id="battle-2",
+                    seed=2,
+                    winner="FoulPlayBot",
+                    pokezero_won=False,
+                    decision_rounds=1,
+                    pokezero_decisions=1,
+                    root_puct_searches=1,
+                    root_puct_fallbacks=0,
+                ),
+            )
+        )
+        progress_payloads: list[dict[str, object]] = []
+
+        async def wait_for_challenge(**_: object) -> None:
+            return None
+
+        async def run_single_game(**_: object) -> ControlledFoulPlayGameResult:
+            return next(game_results)
+
+        async def spawn_foulplay(*_: object, **__: object) -> FakeProcess:
+            return FakeProcess()
+
+        with (
+            patch("pokezero.foulplay_bridge._validate_external_paths"),
+            patch("pokezero.foulplay_bridge.load_transformer_checkpoint", return_value=(object(), FakeCheckpointResult())),
+            patch("pokezero.foulplay_bridge.gen3_category_vocabulary", return_value=object()),
+            patch("pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()),
+            patch("pokezero.foulplay_bridge._build_policy", return_value=FakePolicy()),
+            patch("pokezero.foulplay_bridge._FoulPlayWebsocketServer", FakeServer),
+            patch("pokezero.foulplay_bridge._BattleBridge", FakeBridge),
+            patch("pokezero.foulplay_bridge._spawn_foulplay", side_effect=spawn_foulplay),
+            patch("pokezero.foulplay_bridge._wait_for_foulplay_challenge_or_exit", side_effect=wait_for_challenge),
+            patch("pokezero.foulplay_bridge._run_single_game", side_effect=run_single_game),
+        ):
+            result = asyncio.run(
+                run_controlled_foulplay_benchmark(
+                    config,
+                    progress_callback=lambda partial: progress_payloads.append(partial.to_dict()),
+                )
+            )
+
+        self.assertEqual(result.completed_games, 2)
+        self.assertEqual([payload["completed_games"] for payload in progress_payloads], [1, 2])
+        self.assertEqual([payload["status"] for payload in progress_payloads], ["partial", "complete"])
+        self.assertEqual([payload["complete"] for payload in progress_payloads], [False, True])
 
 
 if __name__ == "__main__":

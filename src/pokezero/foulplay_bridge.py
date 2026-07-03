@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import random
 import sys
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .category_vocab import CategoryVocabulary
 from .dex import ShowdownDex, load_showdown_dex_cached
@@ -57,6 +57,7 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
 DEFAULT_FOULPLAY_ROOT = Path(__file__).resolve().parents[2] / "third_party" / "foul-play"
 DEFAULT_BATTLE_ID_PREFIX = "battle-gen3randombattle-controlled"
+ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,8 @@ class ControlledFoulPlayBenchmarkResult:
             "opponent_policy_id": "foul-play",
             "games": self.config.games,
             "completed_games": self.completed_games,
+            "complete": self.completed_games >= self.config.games,
+            "status": "complete" if self.completed_games >= self.config.games else "partial",
             "wins": self.wins,
             "win_rate": self.win_rate,
             "seed_start": self.config.seed_start,
@@ -460,6 +463,8 @@ class _ControlledBattleState:
 
 async def run_controlled_foulplay_benchmark(
     config: ControlledFoulPlayConfig,
+    *,
+    progress_callback: ControlledFoulPlayProgressCallback | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
@@ -491,6 +496,7 @@ async def run_controlled_foulplay_benchmark(
         rollout_config=rollout_config,
         policy_id=policy_id,
     )
+    benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
 
     server = _FoulPlayWebsocketServer(username=config.foulplay_username, host=config.websocket_host)
     bridge = _BattleBridge(showdown_root=config.showdown_root, node_binary=config.node_binary)
@@ -528,6 +534,14 @@ async def run_controlled_foulplay_benchmark(
                     foulplay_logs=foulplay_logs,
                 )
             )
+            if progress_callback is not None:
+                progress_callback(
+                    ControlledFoulPlayBenchmarkResult(
+                        config=config,
+                        policy_id=benchmark_policy_id,
+                        games=tuple(game_results),
+                    )
+                )
     finally:
         await bridge.close()
         if foulplay_process is not None and foulplay_process.returncode is None:
@@ -543,7 +557,7 @@ async def run_controlled_foulplay_benchmark(
 
     return ControlledFoulPlayBenchmarkResult(
         config=config,
-        policy_id=(policy.policy_id if hasattr(policy, "policy_id") else policy_id),
+        policy_id=benchmark_policy_id,
         games=tuple(game_results),
     )
 
@@ -1307,7 +1321,14 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         pokezero_username=args.pokezero_username,
         foulplay_username=args.foulplay_username,
     )
-    result = await run_controlled_foulplay_benchmark(config)
+    def write_progress(result: ControlledFoulPlayBenchmarkResult) -> None:
+        if args.summary_out is not None:
+            _write_json(args.summary_out, result.to_dict())
+
+    result = await run_controlled_foulplay_benchmark(
+        config,
+        progress_callback=write_progress if args.summary_out is not None else None,
+    )
     payload = result.to_dict()
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)
