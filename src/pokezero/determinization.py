@@ -32,8 +32,8 @@ def gen3_randbat_belief_start_override_planner(
 
     The returned planner is hidden-info safe: it reads the acting player's observation metadata,
     which contains the player's own request-known team plus public belief about the opponent. It
-    does not inspect the opponent's private observation or legal-action mask. Each branch visit can
-    call the returned source to sample a fresh complete world.
+    does not inspect the opponent's private observation or legal-action mask. Each scenario gets one
+    sampled world so all candidate root actions are scored against the same materialized battle.
     """
 
     if team_size <= 0:
@@ -48,14 +48,17 @@ def gen3_randbat_belief_start_override_planner(
         del scenario, scenario_index
         if not set_source.supports(context.format_id):
             return None
+        sampled_override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=set_source,
+            rng=rng,
+            team_size=team_size,
+        )
+        if sampled_override is None:
+            return None
 
         def sample_override() -> BattleStartOverride | None:
-            return gen3_randbat_belief_start_override(
-                context=context,
-                set_source=set_source,
-                rng=rng,
-                team_size=team_size,
-            )
+            return sampled_override
 
         sample_override.start_override_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
         return sample_override

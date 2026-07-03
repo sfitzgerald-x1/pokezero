@@ -166,7 +166,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         self.assertEqual(len(override.player_teams["p1"].split("]")), 3)
         self.assertEqual(override.player_teams["p1"].count("Xatu"), 1)
 
-    def test_planner_returns_resampling_source_for_supported_format(self) -> None:
+    def test_planner_returns_memoized_source_for_supported_format(self) -> None:
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
         context = _context(_metadata())
 
@@ -179,7 +179,10 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertTrue(callable(source))
         assert callable(source)
-        self.assertIsNotNone(source())
+        first = source()
+        second = source()
+        self.assertIsNotNone(first)
+        self.assertIs(first, second)
 
     def test_unsupported_format_disables_planner(self) -> None:
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)

@@ -313,6 +313,24 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                 branch_actions={"p1": 4, "p2": 3},
             )
 
+    def test_replay_trajectory_branch_checks_start_override_current_observation_at_zero_prefix(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        env = StartOverrideReplayEnv((("p1",),))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "decision round 0: p1"):
+            replay_trajectory_branch(
+                env,
+                trajectory,
+                prefix_decision_round_count=0,
+                branch_actions={"p1": 0},
+                start_override=start_override,
+                consistency_player_id="p1",
+                expected_current_observation=_observation(legal_action=2),
+            )
+
     def test_replay_trajectory_branch_rollout_continues_after_branch_action(self) -> None:
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
         trajectory.append(_step("p1", 0, 2))
