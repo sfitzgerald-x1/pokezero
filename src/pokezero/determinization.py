@@ -225,7 +225,8 @@ def _public_opponent_team_index_constraints(
         return None
     own_observations = _own_observations_by_decision_round(context)
     constraints: dict[str, int] = {}
-    active_index: int | None = None
+    current_order = list(range(team_size))
+    active_position: int | None = None
     active_species: str | None = None
     if own_observations:
         first_turn = min(own_observations)
@@ -239,7 +240,7 @@ def _public_opponent_team_index_constraints(
                     team_size=team_size,
                 ):
                     return None
-                active_index = 0
+                active_position = 0
 
     opponent_steps = sorted(
         (
@@ -251,10 +252,10 @@ def _public_opponent_team_index_constraints(
     )
     for step in opponent_steps:
         next_active = _public_opponent_active_species(own_observations.get(step.turn_index + 1))
-        if is_switch_action(step.action_index) and active_index is not None:
+        if is_switch_action(step.action_index) and active_position is not None:
             switch_slot = step.action_index - MOVE_ACTION_COUNT
             try:
-                switch_targets = canonical_switch_action_map(active_index, team_size=team_size)
+                switch_targets = canonical_switch_action_map(active_position, team_size=team_size)
             except ValueError:
                 switch_targets = ()
             if switch_slot < len(switch_targets):
@@ -265,7 +266,8 @@ def _public_opponent_team_index_constraints(
                     turn_index=step.turn_index,
                 )
                 if switch_species is not None:
-                    target_index = switch_targets[switch_slot]
+                    target_position = switch_targets[switch_slot]
+                    target_index = current_order[target_position]
                     if not _assign_team_index_constraint(
                         constraints,
                         species=switch_species,
@@ -273,8 +275,12 @@ def _public_opponent_team_index_constraints(
                         team_size=team_size,
                     ):
                         return None
+                    current_order[active_position], current_order[target_position] = (
+                        current_order[target_position],
+                        current_order[active_position],
+                    )
                     active_species = switch_species
-                    active_index = target_index
+                    active_position = 0
                     continue
 
         if next_active is None:
@@ -282,11 +288,35 @@ def _public_opponent_team_index_constraints(
         next_key = _normalize_id(next_active)
         if next_key in constraints:
             active_species = next_active
-            active_index = constraints[next_key]
+            active_position = _move_constrained_species_to_active_position(
+                current_order,
+                constraints[next_key],
+                active_position=active_position,
+            )
         elif active_species is not None and next_key != _normalize_id(active_species):
             active_species = next_active
-            active_index = None
+            active_position = None
     return constraints
+
+
+def _move_constrained_species_to_active_position(
+    current_order: list[int],
+    initial_index: int,
+    *,
+    active_position: int | None,
+) -> int | None:
+    try:
+        current_position = current_order.index(initial_index)
+    except ValueError:
+        return None
+    if active_position is None:
+        return None
+    if current_position != active_position:
+        current_order[active_position], current_order[current_position] = (
+            current_order[current_position],
+            current_order[active_position],
+        )
+    return 0
 
 
 def _assign_team_index_constraint(

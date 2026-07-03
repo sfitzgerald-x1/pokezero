@@ -862,6 +862,164 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
         self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
 
+    def test_public_switch_constraints_track_showdown_party_swaps(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Charizard",
+                    "details": "Charizard, L79",
+                    "moves": ["fireblast", "dragonclaw", "hiddenpowergrass", "substitute"],
+                    "ability": "Blaze",
+                    "item": "Petaya Berry",
+                    "stats": {"hp": 252, "atk": 139, "def": 169, "spa": 217, "spd": 180, "spe": 204},
+                },
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                },
+                {
+                    "showdown_slot": "p2",
+                    "species": "Snorlax",
+                    "details": "Snorlax, L75",
+                    "moves": ["return", "earthquake", "rest", "curse"],
+                    "ability": "Immunity",
+                    "item": "Leftovers",
+                },
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Xatu",
+                        "active": False,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "xatu-support",
+                                "source_set_id": "xatu-1",
+                                "role": "Support",
+                                "level": 84,
+                                "moves": ["psychic", "thunderwave", "wish", "protect"],
+                                "ability": "Synchronize",
+                                "item": "Leftovers",
+                            },
+                        ],
+                    },
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Arcanine",
+                        "active": False,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "arcanine-breaker",
+                                "source_set_id": "arcanine-1",
+                                "role": "Breaker",
+                                "level": 78,
+                                "moves": ["fireblast", "crunch", "extremespeed", "hiddenpowergrass"],
+                                "ability": "Flash Fire",
+                                "item": "Leftovers",
+                            },
+                        ],
+                    },
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Tauros",
+                        "active": True,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "tauros-breaker",
+                                "source_set_id": "tauros-1",
+                                "role": "Breaker",
+                                "level": 76,
+                                "moves": ["return", "earthquake", "doubleedge", "hiddenpowerghost"],
+                                "ability": "Intimidate",
+                                "item": "Choice Band",
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
+        context = _context(metadata)
+        switch_mask = tuple(index in {0, 4, 5} for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Tauros"},
+                "recent_public_events": [
+                    "|switch|opponenta: Tauros|Tauros, L76|100/100",
+                ],
+            },
+        )
+        round_2_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Arcanine"},
+                "recent_public_events": [
+                    "|switch|opponenta: Tauros|Tauros, L76|100/100",
+                    "|switch|opponenta: Arcanine|Arcanine, L78|100/100",
+                ],
+            },
+        )
+        for turn_index, observation, opponent_action in (
+            # With Xatu active at current position 0, action 5 targets current position 2.
+            (0, round_0_observation, 5),
+            # Showdown swaps Tauros into current position 0, so action 4 now targets current
+            # position 1, which corresponds to Arcanine's initial party index.
+            (1, round_1_observation, 4),
+        ):
+            context.trajectory.append(
+                TrajectoryStep(
+                    player_id="p2",
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=tuple(observation.legal_action_mask),
+                    action_index=0,
+                )
+            )
+            context.trajectory.append(
+                TrajectoryStep(
+                    player_id="p1",
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=tuple(observation.legal_action_mask),
+                    action_index=opponent_action,
+                )
+            )
+        context = replace(context, decision_round_index=2, observation=round_2_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
+        self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
+
     def test_conflicting_public_switch_team_slot_constraints_disable_override(self) -> None:
         metadata = _metadata()
         context = _context(metadata)

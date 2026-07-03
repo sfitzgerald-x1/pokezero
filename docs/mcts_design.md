@@ -106,14 +106,15 @@ request/illegal-action replay drift as retryable scenario rejection, a 3-game sm
 start-override attempts. Seed `910001` searched 27 of 27 decisions with zero fallbacks; seeds
 `910002` and `910003` still fell back heavily because all sampled worlds drifted in request shape or
 branch-point observation features by midgame. Adding public switch-slot constraints to the
-belief-backed start override materially improved the same 3-game smoke: it still won `1/3`, but
-searched 130 of 135 PokeZero decisions, fell back 5 times, skipped 9 of 256 generated opponent-action
-scenarios, used 33 accepted start overrides, and spent 352 start-override attempts. The remaining
-fallbacks are concentrated on seed `910002` and still involve request-shape drift plus action-candidate
-/ Pokémon-token mismatches around midgame. This makes the hidden-mode harness much less replay-brittle,
-but it is still coverage evidence, not strength evidence. The next gate is a wider raw-vs-MCTS
-seed-paired read only after verifying the remaining fallback cases are rare enough across more seeds;
-no >=300-game MCTS strength claim is meaningful until coverage remains high at that scale.
+belief-backed start override, including Showdown's party-position swaps after switches, improved the
+same 3-game smoke's coverage but did not improve strength: it won `0/3`, searched 69 of 91 PokeZero
+decisions, fell back 22 times, skipped 43 of 167 generated opponent-action scenarios, used 67
+accepted start overrides, and spent 492 start-override attempts. The remaining fallbacks are
+concentrated on seed `910002` and still involve request-shape drift plus action-candidate /
+Pokémon-token mismatches around midgame. This makes the hidden-mode harness less replay-brittle, but
+it is still coverage evidence, not strength evidence. The next gate is a wider coverage read and
+continued fallback reduction before any wider raw-vs-MCTS strength read; no >=300-game MCTS strength
+claim is meaningful until coverage remains high at that scale.
 
 ## Design principles / hard constraints
 
