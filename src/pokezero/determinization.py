@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import random
 import re
 from typing import Any, Mapping, Sequence
@@ -12,6 +13,7 @@ from .belief import (
     RevealedPokemonBelief,
 )
 from .env import BattleStartOverride
+from .observation import PokeZeroObservationV0
 from .policy import PolicyContext
 from .randbat import Gen3RandbatSource, Gen3RandbatVariant
 from .search import StartOverrideSource
@@ -122,6 +124,7 @@ def gen3_randbat_belief_start_override(
         format_id=context.format_id,
         rng=rng,
         team_size=team_size,
+        move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
     )
     if opponent_team is None:
         return None
@@ -149,6 +152,151 @@ def _root_self_team_payload(context: PolicyContext, *, team_size: int) -> Any:
         if len(rows) == team_size:
             return rows
     return None
+
+
+def _public_opponent_move_slot_constraints(
+    context: PolicyContext,
+    opponent_slot: str,
+) -> dict[str, dict[int, str]]:
+    """Map public opponent moves back to recorded move slots for replay-prefix fidelity.
+
+    Prefix replay must resubmit historic opponent choices by move slot. The slot index is part of the
+    recorded trajectory, but the move name is taken only from the acting player's public event log.
+    This avoids reading opponent-private request moves while still forcing already-revealed moves into
+    the slots needed to reproduce the public history.
+    """
+
+    own_observations = _own_observations_by_decision_round(context)
+    active_species_by_turn = {
+        turn_index: species
+        for turn_index, observation in own_observations.items()
+        if (species := _public_opponent_active_species(observation)) is not None
+    }
+    constraints: dict[str, dict[int, str]] = {}
+    for step in context.trajectory.steps:
+        if step.player_id != opponent_slot or not 0 <= step.action_index < 4:
+            continue
+        species = active_species_by_turn.get(step.turn_index)
+        if species is None:
+            continue
+        move = _public_move_after_decision_round(
+            own_observations,
+            opponent_slot=opponent_slot,
+            self_slot=context.player_id,
+            species=species,
+            turn_index=step.turn_index,
+        )
+        if move is None:
+            continue
+        species_key = _normalize_id(species)
+        slot_constraints = constraints.setdefault(species_key, {})
+        existing = slot_constraints.get(step.action_index)
+        if existing is not None and _normalize_id(existing) != _normalize_id(move):
+            continue
+        slot_constraints[step.action_index] = move
+    return constraints
+
+
+def _own_observations_by_decision_round(context: PolicyContext) -> dict[int, PokeZeroObservationV0]:
+    observations: dict[int, PokeZeroObservationV0] = {
+        context.decision_round_index: context.observation,
+    }
+    for step in context.trajectory.steps:
+        if step.player_id == context.player_id:
+            observations.setdefault(step.turn_index, step.observation)
+    return observations
+
+
+def _public_opponent_active_species(observation: PokeZeroObservationV0) -> str | None:
+    metadata = observation.metadata
+    if not isinstance(metadata, Mapping):
+        return None
+    active = metadata.get("opponent_active")
+    if not isinstance(active, Mapping):
+        return None
+    return _optional_text(active.get("species"))
+
+
+def _public_move_after_decision_round(
+    observations_by_turn: Mapping[int, PokeZeroObservationV0],
+    *,
+    opponent_slot: str,
+    self_slot: str,
+    species: str,
+    turn_index: int,
+) -> str | None:
+    next_observation = observations_by_turn.get(turn_index + 1)
+    if next_observation is None:
+        return None
+    # The public-event window is rolling, so the same active mon's older move can still be present.
+    # Walk backward through the next decision observation and take the newest matching move line.
+    for line in reversed(_recent_public_events(next_observation)):
+        move = _move_from_public_event_line(
+            line,
+            opponent_slot=opponent_slot,
+            self_slot=self_slot,
+            species=species,
+        )
+        if move is not None:
+            return move
+    return None
+
+
+def _recent_public_events(observation: PokeZeroObservationV0) -> tuple[str, ...]:
+    metadata = observation.metadata
+    if not isinstance(metadata, Mapping):
+        return ()
+    return tuple(str(line) for line in _as_sequence(metadata.get("recent_public_events")))
+
+
+def _move_from_public_event_line(
+    line: str,
+    *,
+    opponent_slot: str,
+    self_slot: str,
+    species: str,
+) -> str | None:
+    parts = str(line).split("|")
+    if len(parts) < 4 or parts[1] != "move":
+        return None
+    if _called_move_line(parts):
+        return None
+    actor = parts[2]
+    if not _public_actor_matches_slot(actor, slot=opponent_slot, self_slot=self_slot):
+        return None
+    actor_species = _species_from_public_actor(actor)
+    if actor_species is not None and _normalize_id(actor_species) != _normalize_id(species):
+        return None
+    return _optional_text(parts[3])
+
+
+def _called_move_line(parts: Sequence[str]) -> bool:
+    for token in parts[4:]:
+        text = str(token).strip()
+        if not text.startswith("[from]"):
+            continue
+        normalized = _normalize_id(text)
+        if "lockedmove" in normalized:
+            continue
+        return True
+    return False
+
+
+def _public_actor_matches_slot(actor: str, *, slot: str, self_slot: str) -> bool:
+    normalized = str(actor).strip().lower()
+    if normalized.startswith(slot.lower()):
+        return True
+    if normalized.startswith("opponent"):
+        return slot != self_slot
+    if normalized.startswith("self"):
+        return slot == self_slot
+    return False
+
+
+def _species_from_public_actor(actor: str) -> str | None:
+    if ":" not in actor:
+        return None
+    return _optional_text(actor.split(":", 1)[1])
 
 
 def player_belief_view_from_payload(payload: Any) -> PlayerBeliefView | None:
@@ -282,6 +430,7 @@ def _opponent_team_from_belief(
     format_id: str,
     rng: random.Random,
     team_size: int,
+    move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
 ) -> tuple[FixturePokemon, ...] | None:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
@@ -291,6 +440,7 @@ def _opponent_team_from_belief(
             set_source=set_source,
             format_id=format_id,
             rng=rng,
+            move_slot_constraints=move_slot_constraints,
         )
         if fixture is None:
             return None
@@ -316,6 +466,7 @@ def _sample_revealed_opponent_fixture(
     set_source: Gen3RandbatSource,
     format_id: str,
     rng: random.Random,
+    move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
 ) -> FixturePokemon | None:
     variants = pokemon.candidate_variants
     if not variants:
@@ -345,11 +496,28 @@ def _sample_revealed_opponent_fixture(
         if not hp_matched:
             return None
         variants = hp_matched
+    species_constraints = (move_slot_constraints or {}).get(_normalize_id(pokemon.species), {})
+    if species_constraints:
+        slot_matched = tuple(
+            variant
+            for variant in variants
+            if _fixture_from_variant_payload(
+                variant,
+                fallback_species=pokemon.species,
+                set_source=set_source,
+                move_slot_constraints=species_constraints,
+            )
+            is not None
+        )
+        if not slot_matched:
+            return None
+        variants = slot_matched
     variant = variants[rng.randrange(len(variants))]
     return _fixture_from_variant_payload(
         variant,
         fallback_species=pokemon.species,
         set_source=set_source,
+        move_slot_constraints=species_constraints,
     )
 
 
@@ -604,6 +772,7 @@ def _fixture_from_variant_payload(
     *,
     fallback_species: str,
     set_source: Gen3RandbatSource,
+    move_slot_constraints: Mapping[int, str] | None = None,
 ) -> FixturePokemon | None:
     moves = _moves_from_payload(payload.get("moves"))
     if not moves:
@@ -622,7 +791,7 @@ def _fixture_from_variant_payload(
     )
     if spread is None:
         return None
-    return FixturePokemon(
+    fixture = FixturePokemon(
         species=species,
         moves=moves,
         ability=_optional_text(payload.get("ability")),
@@ -631,6 +800,50 @@ def _fixture_from_variant_payload(
         evs=spread["evs"],
         ivs=spread["ivs"],
     )
+    if move_slot_constraints:
+        fixture = _fixture_with_move_slot_constraints(fixture, move_slot_constraints)
+    return fixture
+
+
+def _fixture_with_move_slot_constraints(
+    fixture: FixturePokemon,
+    move_slot_constraints: Mapping[int, str],
+) -> FixturePokemon | None:
+    moves = list(fixture.moves)
+    if not moves:
+        return None
+    assigned: list[str | None] = [None] * len(moves)
+    used: set[str] = set()
+    for slot, move in sorted(move_slot_constraints.items()):
+        if slot < 0 or slot >= len(assigned):
+            return None
+        actual_move = _fixture_move_for_public_constraint(moves, move)
+        if actual_move is None:
+            return None
+        normalized = _normalize_id(actual_move)
+        if normalized in used:
+            return None
+        assigned[slot] = actual_move
+        used.add(normalized)
+    remaining = [move for move in moves if _normalize_id(move) not in used]
+    for index, value in enumerate(assigned):
+        if value is None:
+            assigned[index] = remaining.pop(0)
+    return replace(fixture, moves=tuple(move for move in assigned if move is not None))
+
+
+def _fixture_move_for_public_constraint(moves: Sequence[str], public_move: str) -> str | None:
+    public_id = _normalize_id(public_move)
+    # Some request/public labels include the Gen 3 Hidden Power base power, e.g. Hidden Power Ice 70.
+    if public_id.endswith("70"):
+        public_id = public_id[:-2]
+    for move in moves:
+        move_id = _normalize_id(move)
+        if move_id == public_id:
+            return move
+        if public_id == "hiddenpower" and move_id.startswith("hiddenpower"):
+            return move
+    return None
 
 
 def _fixture_from_variant(
