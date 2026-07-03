@@ -409,6 +409,7 @@ class _ControlledBattleState:
     trajectory: BattleTrajectory | None = None
     decisions: list[PolicyDecision] = field(default_factory=list)
     next_foulplay_rqid: int = 1
+    foulplay_terminal_sent: bool = False
 
     def all_lines(self) -> list[str]:
         return [*self.public_lines, *self.request_lines.values()]
@@ -464,7 +465,12 @@ async def run_controlled_foulplay_benchmark(
         await bridge.start()
         for offset in range(config.games):
             seed = config.seed_start + offset
-            await server.wait_for_challenge(expected_target=config.pokezero_username)
+            await _wait_for_foulplay_challenge_or_exit(
+                server=server,
+                expected_target=config.pokezero_username,
+                process=foulplay_process,
+                logs=foulplay_logs,
+            )
             game_results.append(
                 await _run_single_game(
                     config=config,
@@ -727,6 +733,12 @@ async def _run_single_game(
             )
             break
 
+    await _notify_foulplay_terminal(
+        state=state,
+        server=server,
+        terminal=terminal,
+        config=config,
+    )
     winner_name = _winner_name(terminal, config)
     if state.trajectory is not None:
         state.trajectory.record_terminal(terminal)
@@ -775,6 +787,36 @@ async def _handle_stream_event(
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
                 await server.send_room_lines(state.battle_id, chunk)
+            if any(_is_terminal_protocol_line(line) for line in forwarded):
+                state.foulplay_terminal_sent = True
+
+
+async def _notify_foulplay_terminal(
+    *,
+    state: _ControlledBattleState,
+    server: _FoulPlayWebsocketServer,
+    terminal: TerminalState,
+    config: ControlledFoulPlayConfig,
+) -> None:
+    if state.foulplay_terminal_sent:
+        return
+    line = _terminal_line_for_foulplay(terminal, config)
+    await server.send_room_lines(state.battle_id, [line])
+    state.foulplay_terminal_sent = True
+
+
+def _terminal_line_for_foulplay(
+    terminal: TerminalState,
+    config: ControlledFoulPlayConfig,
+) -> str:
+    winner = _winner_name(terminal, config)
+    if winner is None:
+        return "|tie|"
+    return f"|win|{winner}"
+
+
+def _is_terminal_protocol_line(line: str) -> bool:
+    return line.startswith("|win|") or line == "|tie" or line.startswith("|tie|")
 
 
 def _line_for_foulplay(state: _ControlledBattleState, line: str) -> str:
@@ -934,6 +976,34 @@ async def _wait_for_foulplay_choice_or_exit(
         )
     finally:
         for task in (choice_task, process_task):
+            if not task.done():
+                task.cancel()
+
+
+async def _wait_for_foulplay_challenge_or_exit(
+    *,
+    server: _FoulPlayWebsocketServer,
+    expected_target: str,
+    process: asyncio.subprocess.Process,
+    logs: _ProcessLogBuffer,
+) -> None:
+    if process.returncode is not None:
+        raise RuntimeError(f"foul-play exited with status {process.returncode} before challenging.\n{logs.tail()}")
+    challenge_task = asyncio.create_task(server.wait_for_challenge(expected_target=expected_target))
+    process_task = asyncio.create_task(process.wait())
+    try:
+        done, pending = await asyncio.wait(
+            {challenge_task, process_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if challenge_task in done:
+            challenge_task.result()
+            return
+        raise RuntimeError(
+            f"foul-play exited with status {process.returncode} before challenging.\n{logs.tail()}"
+        )
+    finally:
+        for task in (challenge_task, process_task):
             if not task.done():
                 task.cancel()
 

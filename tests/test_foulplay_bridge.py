@@ -13,9 +13,12 @@ from pokezero.foulplay_bridge import (
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
     _requested_legal_action_masks_for_context,
+    _is_terminal_protocol_line,
     _split_outgoing_showdown_message,
+    _terminal_line_for_foulplay,
     _write_json,
 )
+from pokezero.env import TerminalState
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
@@ -94,6 +97,30 @@ class FoulPlayBridgeTest(unittest.TestCase):
             ),
             {"p1": (True, False), "p2": (False, True)},
         )
+
+    def test_terminal_line_for_foulplay_uses_configured_display_names(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+        )
+
+        self.assertEqual(
+            _terminal_line_for_foulplay(TerminalState(winner="p1", turn_count=10), config),
+            "|win|PokeZeroBot",
+        )
+        self.assertEqual(
+            _terminal_line_for_foulplay(TerminalState(winner="p2", turn_count=10), config),
+            "|win|FoulPlayBot",
+        )
+        self.assertEqual(
+            _terminal_line_for_foulplay(TerminalState(winner=None, turn_count=250, capped=True), config),
+            "|tie|",
+        )
+
+    def test_is_terminal_protocol_line_detects_win_and_tie(self) -> None:
+        self.assertTrue(_is_terminal_protocol_line("|win|PokeZeroBot"))
+        self.assertTrue(_is_terminal_protocol_line("|tie|"))
+        self.assertFalse(_is_terminal_protocol_line("|turn|2"))
 
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
