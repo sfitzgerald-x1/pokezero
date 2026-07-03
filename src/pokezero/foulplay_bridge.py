@@ -2321,7 +2321,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_START_OVERRIDE_ATTEMPTS,
         help=(
             "Replay-consistency attempts per opponent-action scenario when a start-override "
-            "planner is enabled. Defaults to 10 to match the randbat determinization recipe; "
+            "planner is enabled. Defaults to 10 to borrow the randbat determinization "
+            "recipe's rejection-sampling budget; "
             "lower values are useful for fast smoke diagnostics."
         ),
     )

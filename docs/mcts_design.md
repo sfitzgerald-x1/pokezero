@@ -206,12 +206,13 @@ same-seed `961001` one-game artifact showed `unexpected:p2=388` and
 `requested:p1|actions:p1,p2=388`, meaning sampled hidden-world replay reached positions where only
 PokeZero was requested while the recorded prefix still expected both players to act.
 
-The foul-play harness now defaults to `--start-override-attempts 10`, matching the cited randbat
-determinization recipe. On seed `961001`, omitting the attempts flag kept raw and root-PUCT at
-`0/1` but improved coverage relative to the low-attempt shape diagnostic: searches rose from `6` to
-`15`, accepted shared samples from `8` to `19`, skipped opponent-action scenarios fell from `360` to
-`275`, and average elapsed time per searched decision rose from `0.44s` to `0.78s`. This is still
-coverage/cost evidence, not strength evidence.
+The foul-play harness now defaults to `--start-override-attempts 10`, borrowing the cited randbat
+determinization recipe's retry budget while still sampling from PokeZero's belief engine. On seed
+`961001`, omitting the attempts flag kept raw and root-PUCT at `0/1` but improved coverage relative
+to the low-attempt shape diagnostic: searches rose from `6` to `15`, accepted shared samples from
+`8` to `19`, skipped opponent-action scenarios fell from `360` to `275`, total start-override
+attempts rose from `171` to `764`, and average elapsed time per searched decision rose from `0.44s`
+to `0.78s`. This is still coverage/cost evidence, not strength evidence.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
