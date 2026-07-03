@@ -260,6 +260,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
         context = _context(_metadata())
 
+        self.assertTrue(getattr(planner, "scenario_independent"))
         source = planner(
             context,
             OpponentActionScenario(actions={"p1": 0}),

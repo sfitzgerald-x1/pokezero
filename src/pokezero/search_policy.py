@@ -919,11 +919,11 @@ def _shared_start_override_samples(
 def _shared_start_override_metadata(samples: _SharedStartOverrideSamples | None) -> dict[str, int]:
     if samples is None:
         return {}
-    used = sum(1 for override in samples.overrides if override is not None)
+    accepted = sum(1 for override in samples.overrides if override is not None)
     return {
         "root_puct_start_override_shared_samples": len(samples.overrides),
-        "root_puct_start_override_shared_samples_used": used,
-        "root_puct_start_override_shared_samples_rejected": len(samples.overrides) - used,
+        "root_puct_start_override_shared_samples_accepted": accepted,
+        "root_puct_start_override_shared_samples_rejected": len(samples.overrides) - accepted,
     }
 
 

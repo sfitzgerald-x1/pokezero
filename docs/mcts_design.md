@@ -157,10 +157,11 @@ sampled worlds still have to reproduce the branch-point observation before they 
 
 On the same seed `961001` one-game diagnostic, shared belief-world samples kept raw and root-PUCT at
 `0/1`, searched only 2 decisions, and changed the prior action 0 times. The useful change was cost and
-diagnostic clarity: start-override attempts fell to `190`, with `96` shared samples prevalidated, `3`
-accepted, and `93` rejected. Replay materialization remains the blocker
-(`replay_request_unexpected_player=342`, `start_override_observation_mismatch=62`,
-`replay_request_missing_player=20`, `illegal_action_for_current_request=5`).
+diagnostic clarity: start-override attempts are now counted at the shared-sample prevalidation layer
+instead of per opponent-action/sample pair. One rerun yielded `146` attempts, `74` shared samples
+prevalidated, `3` accepted, and `71` rejected. Replay materialization remains the blocker
+(`replay_request_unexpected_player=270`, `start_override_observation_mismatch=57` in that artifact);
+these exact one-game counts are descriptive because foul-play is not fully deterministic.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
