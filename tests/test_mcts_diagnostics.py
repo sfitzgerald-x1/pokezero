@@ -8,6 +8,7 @@ from pokezero.mcts_diagnostics import (
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
     root_puct_replay_request_mismatch_player_counts,
+    root_puct_replay_request_mismatch_shape_counts,
     root_puct_start_override_mismatch_decision_round_counts,
 )
 from pokezero.replay_branching import ReplayActionRound, _require_requested_players
@@ -120,9 +121,11 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
     def test_extracts_request_mismatch_player_counts(self) -> None:
         reason = (
             "replay actions for decision round 12 do not match environment request "
-            "(missing requested players: p1; unexpected players: p2).; "
+            "(requested players: p1; action players: p2; "
+            "missing requested players: p1; unexpected players: p2).; "
             "replay actions for decision round 13 do not match environment request "
-            "(missing requested players: p1, p2)."
+            "(requested players: p1, p2; action players: none; "
+            "missing requested players: p1, p2)."
         )
 
         self.assertEqual(
@@ -133,11 +136,19 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
                 "unexpected:p2": 1,
             },
         )
+        self.assertEqual(
+            root_puct_replay_request_mismatch_shape_counts(reason),
+            {
+                "requested:p1|actions:p2": 1,
+                "requested:p1,p2|actions:none": 1,
+            },
+        )
 
     def test_request_mismatch_player_counts_ignore_unscoped_player_text(self) -> None:
         reason = "all opponent action scenarios were replay-illegal: unexpected players: p2."
 
         self.assertEqual(root_puct_replay_request_mismatch_player_counts(reason), {})
+        self.assertEqual(root_puct_replay_request_mismatch_shape_counts(reason), {})
 
     def test_request_mismatch_player_counts_match_replay_branching_producer(self) -> None:
         with self.assertRaises(ValueError) as error:
@@ -149,6 +160,10 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
         self.assertEqual(
             root_puct_replay_request_mismatch_player_counts(str(error.exception)),
             {"missing:p1": 1, "unexpected:p2": 1},
+        )
+        self.assertEqual(
+            root_puct_replay_request_mismatch_shape_counts(str(error.exception)),
+            {"requested:p1|actions:p2": 1},
         )
 
     def test_extracts_first_observation_mismatch_path_counts(self) -> None:

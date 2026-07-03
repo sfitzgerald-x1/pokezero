@@ -17,6 +17,7 @@ from .mcts_diagnostics import (
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
     root_puct_replay_request_mismatch_player_counts,
+    root_puct_replay_request_mismatch_shape_counts,
     root_puct_start_override_mismatch_decision_round_counts,
 )
 from .observation import PokeZeroObservationV0
@@ -1107,6 +1108,7 @@ def _opponent_scenario_skip_metadata(
     replay_rejection_decision_rounds: dict[str, int] = {}
     replay_request_mismatch_decision_rounds: dict[str, int] = {}
     replay_request_mismatch_players: dict[str, int] = {}
+    replay_request_mismatch_shapes: dict[str, int] = {}
     start_override_mismatch_decision_rounds: dict[str, int] = {}
     first_observation_mismatch_paths: dict[str, int] = {}
     for _scenario, reason in skipped_scenarios:
@@ -1123,6 +1125,10 @@ def _opponent_scenario_skip_metadata(
         _merge_counts(
             replay_request_mismatch_players,
             root_puct_replay_request_mismatch_player_counts(reason),
+        )
+        _merge_counts(
+            replay_request_mismatch_shapes,
+            root_puct_replay_request_mismatch_shape_counts(reason),
         )
         _merge_counts(
             start_override_mismatch_decision_rounds,
@@ -1162,6 +1168,10 @@ def _opponent_scenario_skip_metadata(
     if replay_request_mismatch_players:
         metadata["root_puct_opponent_action_replay_request_mismatch_players"] = dict(
             sorted(replay_request_mismatch_players.items())
+        )
+    if replay_request_mismatch_shapes:
+        metadata["root_puct_opponent_action_replay_request_mismatch_shapes"] = dict(
+            sorted(replay_request_mismatch_shapes.items())
         )
     if start_override_mismatch_decision_rounds:
         metadata["root_puct_opponent_action_start_override_mismatch_decision_rounds"] = dict(

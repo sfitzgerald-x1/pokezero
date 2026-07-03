@@ -213,6 +213,9 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_replay_request_mismatch_players: Mapping[str, int] = field(
         default_factory=dict
     )
+    root_puct_opponent_action_replay_request_mismatch_shapes: Mapping[str, int] = field(
+        default_factory=dict
+    )
     root_puct_opponent_action_start_override_mismatch_decision_rounds: Mapping[str, int] = field(
         default_factory=dict
     )
@@ -289,6 +292,10 @@ class ControlledFoulPlayGameResult:
             payload["root_puct_opponent_action_replay_request_mismatch_players"] = dict(
                 sorted(self.root_puct_opponent_action_replay_request_mismatch_players.items())
             )
+        if self.root_puct_opponent_action_replay_request_mismatch_shapes:
+            payload["root_puct_opponent_action_replay_request_mismatch_shapes"] = dict(
+                sorted(self.root_puct_opponent_action_replay_request_mismatch_shapes.items())
+            )
         if self.root_puct_opponent_action_start_override_mismatch_decision_rounds:
             payload["root_puct_opponent_action_start_override_mismatch_decision_rounds"] = dict(
                 sorted(
@@ -349,6 +356,7 @@ class ControlledFoulPlayBenchmarkResult:
         root_replay_rejection_decision_rounds: dict[str, int] = {}
         root_replay_request_mismatch_decision_rounds: dict[str, int] = {}
         root_replay_request_mismatch_players: dict[str, int] = {}
+        root_replay_request_mismatch_shapes: dict[str, int] = {}
         root_start_override_mismatch_decision_rounds: dict[str, int] = {}
         root_first_observation_mismatch_paths: dict[str, int] = {}
         for game in self.games:
@@ -367,6 +375,10 @@ class ControlledFoulPlayBenchmarkResult:
             _merge_count_mapping(
                 root_replay_request_mismatch_players,
                 game.root_puct_opponent_action_replay_request_mismatch_players,
+            )
+            _merge_count_mapping(
+                root_replay_request_mismatch_shapes,
+                game.root_puct_opponent_action_replay_request_mismatch_shapes,
             )
             _merge_count_mapping(
                 root_start_override_mismatch_decision_rounds,
@@ -487,6 +499,10 @@ class ControlledFoulPlayBenchmarkResult:
         if root_replay_request_mismatch_players:
             payload["root_puct"]["opponent_action_replay_request_mismatch_players"] = dict(
                 sorted(root_replay_request_mismatch_players.items())
+            )
+        if root_replay_request_mismatch_shapes:
+            payload["root_puct"]["opponent_action_replay_request_mismatch_shapes"] = dict(
+                sorted(root_replay_request_mismatch_shapes.items())
             )
         if root_start_override_mismatch_decision_rounds:
             payload["root_puct"]["opponent_action_start_override_mismatch_decision_rounds"] = dict(
@@ -1589,6 +1605,7 @@ async def _run_single_game(
     root_replay_rejection_decision_rounds: dict[str, int] = {}
     root_replay_request_mismatch_decision_rounds: dict[str, int] = {}
     root_replay_request_mismatch_players: dict[str, int] = {}
+    root_replay_request_mismatch_shapes: dict[str, int] = {}
     root_start_override_mismatch_decision_rounds: dict[str, int] = {}
     root_first_observation_mismatch_paths: dict[str, int] = {}
     for decision in state.decisions:
@@ -1609,6 +1626,10 @@ async def _run_single_game(
         _merge_count_mapping(
             root_replay_request_mismatch_players,
             decision.metadata.get("root_puct_opponent_action_replay_request_mismatch_players"),
+        )
+        _merge_count_mapping(
+            root_replay_request_mismatch_shapes,
+            decision.metadata.get("root_puct_opponent_action_replay_request_mismatch_shapes"),
         )
         _merge_count_mapping(
             root_start_override_mismatch_decision_rounds,
@@ -1709,6 +1730,9 @@ async def _run_single_game(
         ),
         root_puct_opponent_action_replay_request_mismatch_players=(
             root_replay_request_mismatch_players
+        ),
+        root_puct_opponent_action_replay_request_mismatch_shapes=(
+            root_replay_request_mismatch_shapes
         ),
         root_puct_opponent_action_start_override_mismatch_decision_rounds=(
             root_start_override_mismatch_decision_rounds
