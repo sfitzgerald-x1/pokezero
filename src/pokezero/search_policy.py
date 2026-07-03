@@ -627,7 +627,16 @@ def _most_visited_candidate(
 ) -> PUCTBranchSearchCandidate:
     if not candidates:
         raise ValueError("root PUCT search produced no candidates.")
-    return max(candidates, key=lambda candidate: (candidate.visits, candidate.value, candidate.score, -candidate.action_index))
+    return max(
+        candidates,
+        key=lambda candidate: (
+            candidate.visits,
+            candidate.prior,
+            candidate.value,
+            candidate.score,
+            -candidate.action_index,
+        ),
+    )
 
 
 def _selected_candidate(
