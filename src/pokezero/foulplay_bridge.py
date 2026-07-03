@@ -68,6 +68,7 @@ class ControlledFoulPlayConfig:
     foulplay_python: Path | None = None
     games: int = 1
     seed_start: int = 1
+    foulplay_random_seed: int | None = None
     search_time_ms: int = 1000
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
@@ -93,6 +94,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("games must be positive.")
         if self.seed_start < 0:
             raise ValueError("seed_start must be non-negative.")
+        if self.foulplay_random_seed is not None and self.foulplay_random_seed < 0:
+            raise ValueError("foulplay_random_seed must be non-negative when set.")
         if self.search_time_ms <= 0:
             raise ValueError("search_time_ms must be positive.")
         if self.max_decision_rounds <= 0:
@@ -119,6 +122,12 @@ class ControlledFoulPlayConfig:
         if self.foulplay_python is not None:
             return self.foulplay_python
         return self.foulplay_root / ".venv" / "bin" / "python"
+
+    @property
+    def resolved_foulplay_random_seed(self) -> int:
+        if self.foulplay_random_seed is not None:
+            return self.foulplay_random_seed
+        return self.seed_start
 
 
 @dataclass(frozen=True)
@@ -209,6 +218,7 @@ class ControlledFoulPlayBenchmarkResult:
             "wins": self.wins,
             "win_rate": self.win_rate,
             "seed_start": self.config.seed_start,
+            "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
             "root_puct": {
                 "cpuct": self.config.cpuct,
@@ -679,14 +689,41 @@ async def _spawn_foulplay(
     config: ControlledFoulPlayConfig,
     websocket_uri: str,
 ) -> asyncio.subprocess.Process:
-    env = {
+    env = _foulplay_env(config)
+    return await asyncio.create_subprocess_exec(
+        *_foulplay_command(config, websocket_uri),
+        cwd=str(config.foulplay_root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+
+def _foulplay_env(config: ControlledFoulPlayConfig) -> dict[str, str]:
+    seed = config.resolved_foulplay_random_seed
+    return {
         **os.environ,
         "FOULPLAY_LOCAL_NOSEC": "1",
         "PYTHONPATH": str(config.foulplay_root),
+        "POKEZERO_FOULPLAY_RANDOM_SEED": str(seed),
+        "PYTHONHASHSEED": str(seed % (2**32)),
     }
-    return await asyncio.create_subprocess_exec(
+
+
+def _foulplay_command(config: ControlledFoulPlayConfig, websocket_uri: str) -> tuple[str, ...]:
+    run_path = str(config.foulplay_root / "run.py")
+    seed_wrapper = (
+        "import os, random, runpy, sys; "
+        "random.seed(int(os.environ['POKEZERO_FOULPLAY_RANDOM_SEED'])); "
+        "script = sys.argv[1]; "
+        "sys.argv = sys.argv[1:]; "
+        "runpy.run_path(script, run_name='__main__')"
+    )
+    return (
         str(config.resolved_foulplay_python),
-        str(config.foulplay_root / "run.py"),
+        "-c",
+        seed_wrapper,
+        run_path,
         "--websocket-uri",
         websocket_uri,
         "--ps-username",
@@ -701,10 +738,6 @@ async def _spawn_foulplay(
         str(config.games),
         "--search-time-ms",
         str(config.search_time_ms),
-        cwd=str(config.foulplay_root),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
     )
 
 
@@ -1223,6 +1256,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--foulplay-python", type=Path, default=None, help="Python executable for foul-play.")
     parser.add_argument("--games", type=int, default=1, help="Number of games.")
     parser.add_argument("--seed-start", type=int, default=1, help="First deterministic BattleStream seed.")
+    parser.add_argument(
+        "--foulplay-random-seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for foul-play's Python random/hash startup state. Defaults to --seed-start. "
+            "This controls foul-play's random stream but does not make wall-clock MCTS fully deterministic."
+        ),
+    )
     parser.add_argument("--search-time-ms", type=int, default=1000, help="foul-play search time per move.")
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
@@ -1302,6 +1344,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         foulplay_python=args.foulplay_python,
         games=args.games,
         seed_start=args.seed_start,
+        foulplay_random_seed=args.foulplay_random_seed,
         search_time_ms=args.search_time_ms,
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,

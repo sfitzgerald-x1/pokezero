@@ -13,6 +13,8 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayGameResult,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
+    _foulplay_command,
+    _foulplay_env,
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
     _requested_legal_action_masks_for_context,
@@ -152,6 +154,49 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 leaf_rollout_sampling=True,
             )
+        with self.assertRaisesRegex(ValueError, "foulplay_random_seed"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                foulplay_random_seed=-1,
+            )
+
+    def test_foulplay_process_command_seeds_python_random(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            foulplay_root=Path("/foul-play"),
+            foulplay_python=Path("/python"),
+            seed_start=123,
+            foulplay_random_seed=456,
+            games=7,
+            search_time_ms=10,
+        )
+
+        command = _foulplay_command(config, "ws://127.0.0.1:1/showdown/websocket")
+        env = _foulplay_env(config)
+
+        self.assertEqual(command[0], "/python")
+        self.assertEqual(command[1], "-c")
+        self.assertIn("random.seed", command[2])
+        self.assertIn("runpy.run_path", command[2])
+        self.assertIn("/foul-play/run.py", command)
+        self.assertIn("--run-count", command)
+        self.assertEqual(command[command.index("--run-count") + 1], "7")
+        self.assertEqual(env["POKEZERO_FOULPLAY_RANDOM_SEED"], "456")
+        self.assertEqual(env["PYTHONHASHSEED"], "456")
+        self.assertEqual(env["FOULPLAY_LOCAL_NOSEC"], "1")
+
+    def test_foulplay_process_seed_defaults_to_seed_start(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            seed_start=321,
+        )
+
+        self.assertEqual(config.resolved_foulplay_random_seed, 321)
+        self.assertEqual(_foulplay_env(config)["POKEZERO_FOULPLAY_RANDOM_SEED"], "321")
+        self.assertEqual(_foulplay_env(config)["PYTHONHASHSEED"], "321")
 
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -210,6 +255,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["wins"], 1)
         self.assertEqual(payload["completed_games"], 2)
         self.assertEqual(payload["win_rate"], 0.5)
+        self.assertEqual(payload["foulplay_random_seed"], 1)
         self.assertEqual(payload["root_puct"]["searches"], 5)
         self.assertEqual(payload["root_puct"]["fallbacks"], 2)
         self.assertEqual(payload["root_puct"]["total_visits"], 40)
