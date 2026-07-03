@@ -334,47 +334,44 @@ class RootPUCTSearchPolicy:
                 )
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                 start_override_sources_used = 0
-                for scenario in opponent_scenarios:
+                for scenario_index, scenario in enumerate(opponent_scenarios):
                     start_override = (
                         None
                         if self.start_override_planner is None
                         else self.start_override_planner(
                             context,
                             scenario,
-                            len(scenario_search_pairs),
+                            scenario_index,
                             rng,
                         )
                     )
-                    if start_override is not None:
-                        start_override_sources_used += 1
                     try:
-                        scenario_search_pairs.append(
-                            (
-                                scenario,
-                                puct_branch_search(
-                                    env=env,
-                                    trajectory=search_trajectory,
-                                    player_id=context.player_id,
-                                    prefix_decision_round_count=context.decision_round_index,
-                                    legal_action_mask=context.observation.legal_action_mask,
-                                    opponent_actions=scenario.actions,
-                                    value_fn=self.value_fn,
-                                    action_priors=priors,
-                                    cpuct=self.cpuct,
-                                    leaf_rollout_policies=leaf_rollout_policies,
-                                    leaf_rollout_config=self.rollout_config,
-                                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
-                                    root_visit_budget=self.root_visit_budget,
-                                    root_time_budget_seconds=scenario_root_time_budget_seconds,
-                                    start_override=start_override,
-                                ),
-                            )
+                        search = puct_branch_search(
+                            env=env,
+                            trajectory=search_trajectory,
+                            player_id=context.player_id,
+                            prefix_decision_round_count=context.decision_round_index,
+                            legal_action_mask=context.observation.legal_action_mask,
+                            opponent_actions=scenario.actions,
+                            value_fn=self.value_fn,
+                            action_priors=priors,
+                            cpuct=self.cpuct,
+                            leaf_rollout_policies=leaf_rollout_policies,
+                            leaf_rollout_config=self.rollout_config,
+                            leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                            root_visit_budget=self.root_visit_budget,
+                            root_time_budget_seconds=scenario_root_time_budget_seconds,
+                            start_override=start_override,
                         )
                     except ValueError as exc:
                         reason = _opponent_scenario_replay_legality_error(exc, scenario)
                         if reason is None:
                             raise
                         skipped_scenarios.append((scenario, reason))
+                    else:
+                        scenario_search_pairs.append((scenario, search))
+                        if start_override is not None:
+                            start_override_sources_used += 1
                 if not scenario_search_pairs:
                     details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
                     raise _AllOpponentScenariosReplayIllegal(

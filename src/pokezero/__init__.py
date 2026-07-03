@@ -77,7 +77,14 @@ from .dataset import (
     training_batch_from_examples,
     write_training_cache_from_rollouts,
 )
-from .env import AsyncPokeZeroEnv, BattleStartOverride, PokeZeroEnv, StepResult, TerminalState
+from .env import (
+    AsyncPokeZeroEnv,
+    BattleStartOverride,
+    DEFAULT_BATTLE_START_OVERRIDE_FORMAT,
+    PokeZeroEnv,
+    StepResult,
+    TerminalState,
+)
 from .evaluation import (
     DEFAULT_MAX_BENCHMARK_CAPPED_RATE,
     DEFAULT_MAX_COLLECTION_CAPPED_RATE,
@@ -304,6 +311,7 @@ __all__ = [
     "ContextAwarePolicy",
     "DEFAULT_AUDIT_CALIBRATION_MARGIN",
     "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
+    "DEFAULT_BATTLE_START_OVERRIDE_FORMAT",
     "DEFAULT_BENCHMARK_GAMES",
     "DEFAULT_MAX_BENCHMARK_CAPPED_RATE",
     "DEFAULT_MAX_BENCHMARK_WIN_RATE_DROP",

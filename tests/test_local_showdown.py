@@ -20,6 +20,7 @@ from pokezero.env import BattleStartOverride
 from pokezero.policy import RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
 from pokezero.showdown import normalize_for_player, parse_showdown_replay, showdown_choice_for_action
+from pokezero.showdown_fixture import DEFAULT_GEN3_CUSTOM_FORMAT, FixturePokemon, pack_team
 
 
 def request_payload(
@@ -101,17 +102,24 @@ class LocalShowdownRequestTest(unittest.TestCase):
 
     def test_start_players_payload_injects_only_overridden_packed_teams(self) -> None:
         payload = _start_players_payload(
-            BattleStartOverride(player_teams={"p2": "Xatu||||Psychic|||||||"})
+            BattleStartOverride(player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"})
         )
 
-        self.assertEqual(payload["p1"], "PokeZero p1")
+        self.assertEqual(payload["p1"], {"name": "PokeZero p1", "team": "Charizard||||Tackle|||||||"})
         self.assertEqual(payload["p2"], {"name": "PokeZero p2", "team": "Xatu||||Psychic|||||||"})
 
-    def test_battle_start_override_rejects_unknown_players_and_empty_teams(self) -> None:
+    def test_battle_start_override_rejects_unknown_missing_empty_and_non_customgame_teams(self) -> None:
         with self.assertRaisesRegex(ValueError, "p1 or p2"):
-            BattleStartOverride(player_teams={"p3": "Xatu||||Psychic|||||||"})
+            BattleStartOverride(player_teams={"p1": "Charizard||||Tackle|||||||", "p3": "Xatu||||Psychic|||||||"})
+        with self.assertRaisesRegex(ValueError, "complete p1 and p2"):
+            BattleStartOverride(player_teams={"p2": "Xatu||||Psychic|||||||"})
         with self.assertRaisesRegex(ValueError, "non-empty"):
-            BattleStartOverride(player_teams={"p2": ""})
+            BattleStartOverride(player_teams={"p1": "Charizard||||Tackle|||||||", "p2": ""})
+        with self.assertRaisesRegex(ValueError, "gen3customgame"):
+            BattleStartOverride(
+                player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"},
+                format_id="gen3randombattle",
+            )
 
     def test_requested_players_from_normal_and_force_switch_requests(self) -> None:
         requests = {
@@ -202,6 +210,50 @@ class LocalShowdownRequestTest(unittest.TestCase):
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
 class LocalShowdownIntegrationTest(unittest.TestCase):
+    def test_reset_with_start_override_runs_custom_game_with_injected_teams(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=7, start_override=start_override)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+            env.step({"p1": 0, "p2": 0})
+            lines = env.protocol_lines
+
+        self.assertTrue(any(line.startswith("|switch|p1a: Charmander|") for line in lines))
+        self.assertTrue(any(line.startswith("|switch|p2a: Squirtle|") for line in lines))
+        self.assertIn("|move|p1a: Charmander|Ember|p2a: Squirtle", lines)
+        self.assertIn("|move|p2a: Squirtle|Water Gun|p1a: Charmander", lines)
+        self.assertFalse(any(line.startswith("|error|") for line in lines))
+
+    def test_reset_with_start_override_rejects_format_mismatch(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team((FixturePokemon(species="Charmander", moves=("Tackle",)),)),
+                "p2": pack_team((FixturePokemon(species="Squirtle", moves=("Tackle",)),)),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            with self.assertRaisesRegex(ValueError, DEFAULT_GEN3_CUSTOM_FORMAT):
+                env.reset_with_start_override(
+                    seed=7,
+                    format_id="gen3randombattle",
+                    start_override=start_override,
+                )
+
     def test_random_vs_random_rollout_reaches_terminal_or_cap_without_showdown_errors(self) -> None:
         config = integration_config()
         assert config is not None

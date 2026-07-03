@@ -133,11 +133,11 @@ class StartOverrideOutcomeEnv(ImmediateOutcomeEnv):
         self,
         *,
         seed: int,
-        format_id: str = "gen3randombattle",
+        format_id: str | None = None,
         start_override: BattleStartOverride,
     ) -> None:
         self.start_overrides.append(start_override)
-        self.reset(seed=seed, format_id=format_id)
+        self.reset(seed=seed, format_id=format_id or start_override.format_id)
 
 
 class TwoOpponentActionEnv(ImmediateOutcomeEnv):
@@ -477,7 +477,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
             def sample_override() -> BattleStartOverride:
                 override = BattleStartOverride(
-                    player_teams={"p2": f"Xatu||||Psychic|||||||{len(sampled_overrides)}"}
+                    player_teams={
+                        "p1": "Charizard||||Tackle|||||||",
+                        "p2": f"Xatu||||Psychic|||||||{len(sampled_overrides)}",
+                    }
                 )
                 sampled_overrides.append(override)
                 return override

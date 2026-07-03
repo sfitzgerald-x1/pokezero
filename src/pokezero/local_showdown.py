@@ -122,10 +122,16 @@ class LocalShowdownEnv:
         self,
         *,
         seed: int,
-        format_id: BattleFormat = "gen3randombattle",
+        format_id: BattleFormat | None = None,
         start_override: BattleStartOverride,
     ) -> None:
-        self._reset(seed=seed, format_id=format_id, start_override=start_override)
+        effective_format_id = start_override.format_id if format_id is None else str(format_id)
+        if effective_format_id != start_override.format_id:
+            raise ValueError(
+                "reset_with_start_override format_id must match "
+                f"start_override.format_id {start_override.format_id!r}."
+            )
+        self._reset(seed=seed, format_id=effective_format_id, start_override=start_override)
 
     def _reset(
         self,

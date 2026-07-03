@@ -7,6 +7,7 @@ from typing import Mapping
 
 from .actions import ACTION_COUNT
 from .env import BattleFormat, BattleStartOverride, PlayerId, PokeZeroEnv, StepResult, TerminalState
+from .observation import PokeZeroObservationV0
 from .policy import Policy
 from .rollout import RolloutConfig, RolloutResult, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory
@@ -18,6 +19,7 @@ class ReplayActionRound:
 
     turn_index: int
     actions: Mapping[PlayerId, int]
+    expected_observations: Mapping[PlayerId, PokeZeroObservationV0] | None = None
 
     def __post_init__(self) -> None:
         if self.turn_index < 0:
@@ -36,6 +38,21 @@ class ReplayActionRound:
         if invalid_actions:
             raise ValueError(f"action indices must be between 0 and {ACTION_COUNT - 1}.")
         object.__setattr__(self, "actions", normalized)
+        if self.expected_observations is not None:
+            normalized_observations = {
+                str(player): observation
+                for player, observation in sorted(
+                    self.expected_observations.items(),
+                    key=lambda item: str(item[0]),
+                )
+            }
+            unknown_observation_players = sorted(set(normalized_observations) - set(normalized))
+            if unknown_observation_players:
+                raise ValueError(
+                    "expected_observations must only include players with recorded actions; "
+                    f"unexpected: {', '.join(unknown_observation_players)}."
+                )
+            object.__setattr__(self, "expected_observations", normalized_observations)
 
 
 @dataclass(frozen=True)
@@ -80,6 +97,7 @@ def action_rounds_from_trajectory(
         raise ValueError("decision_round_count must be non-negative when set.")
 
     grouped: dict[int, dict[PlayerId, int]] = {}
+    observations_by_round: dict[int, dict[PlayerId, PokeZeroObservationV0]] = {}
     for step in trajectory.steps:
         if decision_round_count is not None and step.turn_index >= decision_round_count:
             continue
@@ -90,6 +108,7 @@ def action_rounds_from_trajectory(
                 f"at decision round {step.turn_index}."
             )
         actions[step.player_id] = step.action_index
+        observations_by_round.setdefault(step.turn_index, {})[step.player_id] = step.observation
 
     expected_turn = 0
     rounds: list[ReplayActionRound] = []
@@ -99,7 +118,13 @@ def action_rounds_from_trajectory(
                 f"trajectory action rounds must be contiguous from 0; "
                 f"missing decision round {expected_turn}."
             )
-        rounds.append(ReplayActionRound(turn_index=turn_index, actions=grouped[turn_index]))
+        rounds.append(
+            ReplayActionRound(
+                turn_index=turn_index,
+                actions=grouped[turn_index],
+                expected_observations=observations_by_round.get(turn_index),
+            )
+        )
         expected_turn += 1
     if decision_round_count is not None and len(rounds) != decision_round_count:
         raise ValueError(
@@ -136,6 +161,8 @@ def replay_action_rounds(
             action_round,
             requested_players=env.requested_players(),
         )
+        if start_override is not None:
+            _require_expected_observations(env, action_round)
         env.step(action_round.actions)
 
     return ReplayPrefixResult(
@@ -272,4 +299,19 @@ def _reset_env(
     resetter = getattr(env, "reset_with_start_override", None)
     if not callable(resetter):
         raise ValueError("environment does not support replay start overrides.")
-    resetter(seed=seed, format_id=format_id, start_override=start_override)
+    resetter(seed=seed, format_id=start_override.format_id, start_override=start_override)
+
+
+def _require_expected_observations(env: PokeZeroEnv, action_round: ReplayActionRound) -> None:
+    if not action_round.expected_observations:
+        return
+    mismatched_players = []
+    for player, expected in action_round.expected_observations.items():
+        actual = env.observe(player)
+        if actual != expected:
+            mismatched_players.append(player)
+    if mismatched_players:
+        raise ValueError(
+            "start override does not reproduce recorded replay prefix observations "
+            f"for decision round {action_round.turn_index}: {', '.join(mismatched_players)}."
+        )
