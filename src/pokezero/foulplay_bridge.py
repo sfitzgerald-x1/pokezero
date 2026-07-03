@@ -89,6 +89,7 @@ class ControlledFoulPlayConfig:
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
+    start_override_attempts: int = 1
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -133,6 +134,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("leaf_rollout_rounds must be non-negative.")
         if self.leaf_rollout_sampling and self.leaf_rollout_rounds <= 0:
             raise ValueError("leaf_rollout_sampling requires positive leaf_rollout_rounds.")
+        if self.start_override_attempts <= 0:
+            raise ValueError("start_override_attempts must be positive.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
@@ -167,6 +170,7 @@ class ControlledFoulPlayGameResult:
     root_puct_pre_gate_prior_action_changes: int = 0
     root_puct_time_budget_exhaustions: int = 0
     root_puct_start_override_sources_used: int = 0
+    root_puct_start_override_attempts_used: int = 0
     root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
@@ -188,6 +192,7 @@ class ControlledFoulPlayGameResult:
             "root_puct_pre_gate_prior_action_changes": self.root_puct_pre_gate_prior_action_changes,
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
             "root_puct_start_override_sources_used": self.root_puct_start_override_sources_used,
+            "root_puct_start_override_attempts_used": self.root_puct_start_override_attempts_used,
         }
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
@@ -232,6 +237,7 @@ class ControlledFoulPlayBenchmarkResult:
         root_pre_gate_prior_action_changes = sum(game.root_puct_pre_gate_prior_action_changes for game in self.games)
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
         root_start_override_sources_used = sum(game.root_puct_start_override_sources_used for game in self.games)
+        root_start_override_attempts_used = sum(game.root_puct_start_override_attempts_used for game in self.games)
         root_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
@@ -269,6 +275,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
                 "belief_start_overrides": self.config.belief_start_overrides,
+                "start_override_attempts": self.config.start_override_attempts,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -281,6 +288,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "pre_gate_prior_action_changes": root_pre_gate_prior_action_changes,
                 "time_budget_exhaustions": root_time_budget_exhaustions,
                 "start_override_sources_used": root_start_override_sources_used,
+                "start_override_attempts_used": root_start_override_attempts_used,
             },
             "game_results": [game.to_dict() for game in self.games],
         }
@@ -732,6 +740,7 @@ def _build_policy(
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         start_override_planner=start_override_planner,
+        start_override_attempts=config.start_override_attempts,
         leaf_rollout_metadata={
             "root_puct_leaf_rollout_opponent_policy": "checkpoint",
             "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
@@ -968,6 +977,11 @@ async def _run_single_game(
         if decision.metadata.get("policy_family") == "root-puct-search"
         and not decision.metadata.get("root_puct_fallback")
     )
+    root_start_override_attempts_used = sum(
+        int(decision.metadata.get("root_puct_start_override_attempts_used") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
@@ -986,6 +1000,7 @@ async def _run_single_game(
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
         root_puct_start_override_sources_used=root_start_override_sources_used,
+        root_puct_start_override_attempts_used=root_start_override_attempts_used,
         root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
@@ -1525,6 +1540,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--start-override-attempts",
+        type=int,
+        default=1,
+        help=(
+            "Replay-consistency attempts per opponent-action scenario when a start-override "
+            "planner is enabled. Higher values rejection-sample more hidden worlds before falling "
+            "back."
+        ),
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -1576,6 +1601,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         leaf_rollout_sampling=args.leaf_rollout_sampling,
         belief_start_overrides=args.belief_start_overrides,
+        start_override_attempts=args.start_override_attempts,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

@@ -80,6 +80,18 @@ class Gen3RandbatVocabTests(unittest.TestCase):
         self.assertGreaterEqual(row, 1)
         self.assertLess(row, oov_offset, "type:??? fell into the OOV band; it must be enumerated")
 
+    def test_dynamic_return_and_frustration_power_ids_alias_to_base_move_rows(self) -> None:
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+
+        vocab = gen3_category_vocabulary(SHOWDOWN_ROOT)
+        oov_offset = 1 + len(vocab.tokens)
+        for dynamic, base in (
+            ("move:return102", "move:return"),
+            ("move:return1", "move:return"),
+        ):
+            self.assertEqual(vocab.encode(dynamic), vocab.encode(base))
+            self.assertLess(vocab.encode(dynamic), oov_offset)
+
     def test_known_entities_map_into_vocab(self) -> None:
         vocab = set(build_gen3_randbat_category_vocabulary(SHOWDOWN_ROOT))
         # Display-name forms the encoder emits at play time.

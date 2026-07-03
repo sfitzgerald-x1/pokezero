@@ -18,6 +18,7 @@ class BattleStartOverride:
 
     player_teams: Mapping[PlayerId, str]
     format_id: BattleFormat = DEFAULT_BATTLE_START_OVERRIDE_FORMAT
+    observation_format_id: BattleFormat | None = None
 
     def __post_init__(self) -> None:
         format_id = str(self.format_id)
@@ -43,6 +44,8 @@ class BattleStartOverride:
             )
         object.__setattr__(self, "player_teams", normalized)
         object.__setattr__(self, "format_id", format_id)
+        if self.observation_format_id is not None:
+            object.__setattr__(self, "observation_format_id", str(self.observation_format_id))
 
 
 @dataclass(frozen=True)

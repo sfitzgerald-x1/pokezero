@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import random
 import re
 from typing import Any, Mapping, Sequence
@@ -10,7 +11,6 @@ from .belief import (
     BeliefEvidence,
     PlayerBeliefView,
     RevealedPokemonBelief,
-    sample_opponent_determinizations,
 )
 from .env import BattleStartOverride
 from .policy import PolicyContext
@@ -111,7 +111,7 @@ def gen3_randbat_belief_start_override(
     if view is None:
         return None
     self_team = _self_team_from_metadata(
-        metadata.get("self_team"),
+        _root_self_team_payload(context, team_size=team_size) or metadata.get("self_team"),
         team_size=team_size,
         set_source=set_source,
     )
@@ -123,6 +123,7 @@ def gen3_randbat_belief_start_override(
         format_id=context.format_id,
         rng=rng,
         team_size=team_size,
+        move_slot_constraints=_opponent_move_slot_constraints(context, view.opponent_slot),
     )
     if opponent_team is None:
         return None
@@ -132,8 +133,60 @@ def gen3_randbat_belief_start_override(
         player_teams={
             view.self_slot: pack_team(self_team),
             view.opponent_slot: pack_team(opponent_team),
-        }
+        },
+        observation_format_id=context.format_id,
     )
+
+
+def _root_self_team_payload(context: PolicyContext, *, team_size: int) -> Any:
+    """Return the earliest request-known self-team snapshot for root replay materialization."""
+
+    for step in context.trajectory.steps:
+        if step.player_id != context.player_id:
+            continue
+        metadata = step.observation.metadata
+        if not isinstance(metadata, Mapping):
+            continue
+        rows = _as_sequence(metadata.get("self_team"))
+        if len(rows) == team_size:
+            return rows
+    return None
+
+
+def _opponent_move_slot_constraints(
+    context: PolicyContext,
+    opponent_slot: str,
+) -> dict[str, dict[int, str]]:
+    """Map historically observed opponent move slots to move names for prefix replay.
+
+    Controlled/replay trajectories can contain the opponent's own request observation for prior
+    turns. When present, use it to keep sampled opponent fixtures' move ordering compatible with
+    already-recorded action indices. This only constrains past revealed actions; it does not add
+    unrevealed future moves.
+    """
+
+    constraints: dict[str, dict[int, str]] = {}
+    for step in context.trajectory.steps:
+        if step.player_id != opponent_slot or not 0 <= step.action_index < 4:
+            continue
+        metadata = step.observation.metadata
+        if not isinstance(metadata, Mapping):
+            continue
+        active = metadata.get("self_active")
+        if not isinstance(active, Mapping):
+            continue
+        species = _optional_text(active.get("species"))
+        moves = _moves_from_payload(active.get("moves"))
+        if species is None or step.action_index >= len(moves):
+            continue
+        move = moves[step.action_index]
+        species_key = _normalize_id(species)
+        slot_constraints = constraints.setdefault(species_key, {})
+        existing = slot_constraints.get(step.action_index)
+        if existing is not None and _normalize_id(existing) != _normalize_id(move):
+            continue
+        slot_constraints[step.action_index] = move
+    return constraints
 
 
 def player_belief_view_from_payload(payload: Any) -> PlayerBeliefView | None:
@@ -267,20 +320,17 @@ def _opponent_team_from_belief(
     format_id: str,
     rng: random.Random,
     team_size: int,
+    move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
 ) -> tuple[FixturePokemon, ...] | None:
-    sampled = sample_opponent_determinizations(view, sample_count=1, rng=rng)[0]
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
-    for belief, pokemon in zip(view.opponent_pokemon, sampled.opponent_pokemon, strict=True):
-        fixture = (
-            _fixture_from_determinized(pokemon, set_source=set_source)
-            if pokemon.resolved
-            else _sample_revealed_opponent_fixture(
-                belief,
-                set_source=set_source,
-                format_id=format_id,
-                rng=rng,
-            )
+    for belief in view.opponent_pokemon:
+        fixture = _sample_revealed_opponent_fixture(
+            belief,
+            set_source=set_source,
+            format_id=format_id,
+            rng=rng,
+            move_slot_constraints=move_slot_constraints,
         )
         if fixture is None:
             return None
@@ -306,6 +356,7 @@ def _sample_revealed_opponent_fixture(
     set_source: Gen3RandbatSource,
     format_id: str,
     rng: random.Random,
+    move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
 ) -> FixturePokemon | None:
     variants = pokemon.candidate_variants
     if not variants:
@@ -320,8 +371,82 @@ def _sample_revealed_opponent_fixture(
         variants = tuple(summary.candidate_variants) if summary is not None else ()
     if not variants:
         return None
+    public_max_hp = _condition_max_hp(pokemon.condition)
+    if public_max_hp is not None:
+        hp_matched = tuple(
+            variant
+            for variant in variants
+            if _variant_public_max_hp(
+                variant,
+                fallback_species=pokemon.species,
+                set_source=set_source,
+            )
+            == public_max_hp
+        )
+        if not hp_matched:
+            return None
+        variants = hp_matched
+    species_constraints = (move_slot_constraints or {}).get(_normalize_id(pokemon.species), {})
+    if species_constraints:
+        slot_matched = tuple(
+            variant
+            for variant in variants
+            if _fixture_from_variant_payload(
+                variant,
+                fallback_species=pokemon.species,
+                set_source=set_source,
+                move_slot_constraints=species_constraints,
+            )
+            is not None
+        )
+        if not slot_matched:
+            return None
+        variants = slot_matched
     variant = variants[rng.randrange(len(variants))]
-    return _fixture_from_variant_payload(variant, fallback_species=pokemon.species, set_source=set_source)
+    return _fixture_from_variant_payload(
+        variant,
+        fallback_species=pokemon.species,
+        set_source=set_source,
+        move_slot_constraints=species_constraints,
+    )
+
+
+def _condition_max_hp(condition: str | None) -> int | None:
+    if not condition:
+        return None
+    match = re.match(r"^\s*\d+\s*/\s*(\d+)\s*(?:\s|$)", condition)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _variant_public_max_hp(
+    payload: Mapping[str, Any],
+    *,
+    fallback_species: str,
+    set_source: Gen3RandbatSource,
+) -> int | None:
+    fixture = _fixture_from_variant_payload(
+        payload,
+        fallback_species=fallback_species,
+        set_source=set_source,
+    )
+    if fixture is None:
+        return None
+    base_stats = _base_stats_for_species(set_source, fixture.species)
+    if base_stats is None:
+        return None
+    ivs = fixture.ivs or {}
+    evs = fixture.evs or {}
+    return _hp_stat(
+        base_hp=base_stats["hp"],
+        iv=int(ivs.get("hp", 31)),
+        ev=int(evs.get("hp", 0)),
+        level=fixture.level,
+    )
 
 
 def _sample_hidden_backline(
@@ -440,10 +565,15 @@ def _should_minimize_confusion_damage(
 ) -> bool:
     if "transform" in normalized_moves:
         return False
-    return not any(
-        _gen3_move_category(move, move_metadata) == "Physical"
-        for move in normalized_moves
-    )
+    for move in normalized_moves:
+        metadata = move_metadata.get(_normalize_id(move), {})
+        # Showdown's random-team counter treats Seismic Toss/Night Shade/etc. as fixed-damage
+        # moves, not physical attacks, when deciding whether to minimize confusion damage.
+        if metadata.get("damage") or metadata.get("damageCallback"):
+            continue
+        if _gen3_move_category(move, move_metadata) == "Physical":
+            return False
+    return True
 
 
 def _gen3_move_category(
@@ -453,7 +583,12 @@ def _gen3_move_category(
     metadata = move_metadata.get(_normalize_id(move), {})
     if str(metadata.get("category") or "") == "Status":
         return "Status"
-    move_type = str(metadata.get("type") or "")
+    normalized_move = _normalize_id(move)
+    if normalized_move.startswith("hiddenpower") and len(normalized_move) > len("hiddenpower"):
+        raw_type = normalized_move[len("hiddenpower") :]
+        move_type = raw_type[:1].upper() + raw_type[1:]
+    else:
+        move_type = str(metadata.get("type") or "")
     if move_type in {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}:
         return "Physical"
     if move_type in {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}:
@@ -522,6 +657,7 @@ def _fixture_from_variant_payload(
     *,
     fallback_species: str,
     set_source: Gen3RandbatSource,
+    move_slot_constraints: Mapping[int, str] | None = None,
 ) -> FixturePokemon | None:
     moves = _moves_from_payload(payload.get("moves"))
     if not moves:
@@ -540,7 +676,7 @@ def _fixture_from_variant_payload(
     )
     if spread is None:
         return None
-    return FixturePokemon(
+    fixture = FixturePokemon(
         species=species,
         moves=moves,
         ability=_optional_text(payload.get("ability")),
@@ -549,6 +685,35 @@ def _fixture_from_variant_payload(
         evs=spread["evs"],
         ivs=spread["ivs"],
     )
+    if move_slot_constraints:
+        fixture = _fixture_with_move_slot_constraints(fixture, move_slot_constraints)
+    return fixture
+
+
+def _fixture_with_move_slot_constraints(
+    fixture: FixturePokemon,
+    move_slot_constraints: Mapping[int, str],
+) -> FixturePokemon | None:
+    moves = list(fixture.moves)
+    if not moves:
+        return None
+    normalized_to_move = {_normalize_id(move): move for move in moves}
+    assigned: list[str | None] = [None] * len(moves)
+    used: set[str] = set()
+    for slot, move in sorted(move_slot_constraints.items()):
+        if slot < 0 or slot >= len(assigned):
+            return None
+        normalized = _normalize_id(move)
+        actual_move = normalized_to_move.get(normalized)
+        if actual_move is None or normalized in used:
+            return None
+        assigned[slot] = actual_move
+        used.add(normalized)
+    remaining = [move for move in moves if _normalize_id(move) not in used]
+    for index, value in enumerate(assigned):
+        if value is None:
+            assigned[index] = remaining.pop(0)
+    return replace(fixture, moves=tuple(move for move in assigned if move is not None))
 
 
 def _fixture_from_variant(

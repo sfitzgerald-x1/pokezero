@@ -85,6 +85,7 @@ class LocalShowdownEnv:
         self._stderr_lines: list[str] = []
         self._battle_id = "local-showdown"
         self._format_id: BattleFormat = "gen3randombattle"
+        self._observation_format_id: BattleFormat = self._format_id
         self._lines: list[str] = []
         self._latest_requests: dict[PlayerId, Mapping[str, Any]] = {}
         self._latest_turn = 0
@@ -102,7 +103,7 @@ class LocalShowdownEnv:
             else None
         )
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id, set_source=self._belief_set_source
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -143,6 +144,11 @@ class LocalShowdownEnv:
         previous_token = self._battle_token
         self._battle_id = f"local-{format_id}-{seed}"
         self._format_id = format_id
+        self._observation_format_id = (
+            str(start_override.observation_format_id)
+            if start_override is not None and start_override.observation_format_id is not None
+            else format_id
+        )
         self._battle_counter += 1
         self._battle_token = f"b{self._battle_counter}"
         self._lines = []
@@ -152,7 +158,7 @@ class LocalShowdownEnv:
         self._last_step_had_error = False
         self._parser = _ReplayParser(self._battle_id)
         self._belief_engine = PublicBattleBeliefEngine(
-            format_id=self._format_id, set_source=self._belief_set_source
+            format_id=self._observation_format_id, set_source=self._belief_set_source
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
@@ -442,7 +448,7 @@ class LocalShowdownEnv:
             self._parser.snapshot(),
             player_id=player,
             configured_showdown_slot=player,
-            format_id=self._format_id,
+            format_id=self._observation_format_id,
             belief_engine=self._belief_engine,
         )
 

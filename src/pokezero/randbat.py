@@ -16,6 +16,7 @@ from .belief import CandidateSetSummary
 
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
+_SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v3"
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
 SPECIAL_TYPES = {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}
 STATUS_INFLICTING_MOVES = {"stunspore", "thunderwave", "toxic", "willowisp", "yawn"}
@@ -620,9 +621,12 @@ def _move_counters(
     for raw_move in moves:
         move = _normalize_move(raw_move)
         metadata = move_metadata.get(move, {})
-        move_type = str(metadata.get("type") or "")
-        category = _gen3_move_category(metadata)
-        counters[category] = counters.get(category, 0) + 1
+        move_type = _move_type(move, metadata)
+        if metadata.get("damage") or metadata.get("damageCallback"):
+            counters["damage"] = counters.get("damage", 0) + 1
+        else:
+            category = _gen3_move_category(move, metadata)
+            counters[category] = counters.get(category, 0) + 1
         if metadata.get("recoil") or move in {"doubleedge", "submission", "volttackle"}:
             counters["recoil"] = counters.get("recoil", 0) + 1
         if int(metadata.get("priority") or 0) > 0:
@@ -639,10 +643,10 @@ def _move_counters(
     return counters
 
 
-def _gen3_move_category(metadata: Mapping[str, Any]) -> str:
+def _gen3_move_category(move: str, metadata: Mapping[str, Any]) -> str:
     if str(metadata.get("category") or "") == "Status":
         return "Status"
-    move_type = str(metadata.get("type") or "")
+    move_type = _move_type(move, metadata)
     if move_type in PHYSICAL_TYPES:
         return "Physical"
     if move_type in SPECIAL_TYPES:
@@ -650,12 +654,18 @@ def _gen3_move_category(metadata: Mapping[str, Any]) -> str:
     return str(metadata.get("category") or "Status")
 
 
+def _move_type(move: str, metadata: Mapping[str, Any]) -> str:
+    if move.startswith("hiddenpower") and len(move) > len("hiddenpower"):
+        return _hidden_power_type_name(move[len("hiddenpower") :])
+    return str(metadata.get("type") or "")
+
+
 def _moves_have_stab(
     normalized_moves: Iterable[str],
     species_type: str,
     move_metadata: Mapping[str, Mapping[str, Any]],
 ) -> bool:
-    return any(str(move_metadata.get(move, {}).get("type") or "") == species_type for move in normalized_moves)
+    return any(_move_type(move, move_metadata.get(move, {})) == species_type for move in normalized_moves)
 
 
 def _movepool_has_stab(
@@ -663,7 +673,10 @@ def _movepool_has_stab(
     species_type: str,
     move_metadata: Mapping[str, Mapping[str, Any]],
 ) -> bool:
-    return any(str(move_metadata.get(_normalize_move(move), {}).get("type") or "") == species_type for move in movepool)
+    return any(
+        _move_type((move_id := _normalize_move(move)), move_metadata.get(move_id, {})) == species_type
+        for move in movepool
+    )
 
 
 def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: set[str]) -> bool:
@@ -699,28 +712,29 @@ def _base_stat(
 
 
 def _load_showdown_metadata(root: Path) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
-    moves_path = root / "dist" / "data" / "moves.js"
-    pokedex_path = root / "dist" / "data" / "pokedex.js"
-    if not moves_path.exists() or not pokedex_path.exists():
+    sim_index_path = root / "dist" / "sim" / "index.js"
+    if not sim_index_path.exists():
         return {}, {}
     script = """
 const root = process.argv[1];
-const {Moves} = require(root + '/dist/data/moves.js');
-const {Pokedex} = require(root + '/dist/data/pokedex.js');
+const {Dex} = require(root + '/dist/sim/index.js');
+const dex = Dex.mod('gen3');
 const out = {moves: {}, species: {}};
-for (const [id, move] of Object.entries(Moves)) {
-  out.moves[id] = {
+for (const move of dex.moves.all()) {
+  out.moves[move.id] = {
     name: move.name,
     type: move.type,
     category: move.category,
     basePower: move.basePower || 0,
     accuracy: move.accuracy,
     priority: move.priority || 0,
-    recoil: Boolean(move.recoil || move.hasCrashDamage)
+    recoil: Boolean(move.recoil || move.hasCrashDamage),
+    damage: move.damage || 0,
+    damageCallback: Boolean(move.damageCallback)
   };
 }
-for (const [id, species] of Object.entries(Pokedex)) {
-  out.species[id] = {name: species.name, types: species.types || [], baseStats: species.baseStats || {}};
+for (const species of dex.species.all()) {
+  out.species[species.id] = {name: species.name, types: species.types || [], baseStats: species.baseStats || {}};
 }
 console.log(JSON.stringify(out));
 """
@@ -745,6 +759,7 @@ console.log(JSON.stringify(out));
 
 def _source_hash(paths: Iterable[Path]) -> str:
     digest = hashlib.sha256()
+    digest.update(_SOURCE_CACHE_SCHEMA.encode("utf-8"))
     for path in sorted(paths, key=lambda item: str(item)):
         digest.update(str(path.name).encode("utf-8"))
         digest.update(path.read_bytes())
@@ -785,6 +800,11 @@ def _normalize_species(value: str) -> str:
 
 def _normalize_move(value: str) -> str:
     return _normalize_id(value)
+
+
+def _hidden_power_type_name(value: str) -> str:
+    normalized = _normalize_id(value)
+    return normalized[:1].upper() + normalized[1:]
 
 
 def _normalize_id(value: str) -> str:
