@@ -21,7 +21,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 
 | Piece | Status | Where / caveat |
 |---|---|---|
-| Forking = **replay-from-root** | **built** | `replay_branching.py`, `search.py` |
+| Forking = **replay-from-root plus accepted-prefix snapshot restore** | **built, still materialization-limited** | `replay_branching.py`, `search.py`, `local_showdown.py`, `scripts/battle_bridge.mjs` — search can still replay a sampled battle prefix from root, but `LocalShowdownEnv` now exposes a Showdown `Battle.toJSON()` / `Battle.fromJSON()` snapshot seam. When available, `value_branch_search` replays/materializes the prefix once, snapshots the accepted branch-point state, and restores it before each candidate branch/repeated root visit. This reduces repeated prefix replay cost for accepted worlds; it does **not** make live hidden-state snapshots acceptable for hidden-info search, because those contain oracle private state. |
 | Root PUCT with optional visit/time budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` supports an optional root visit budget and wall-clock budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits until the visit cap or time budget is exhausted. The mandatory first legal-action sweep is always completed and can exceed the configured time budget; the budget suppresses additional post-sweep visits once exhausted. Multi-scenario opponent planning uses a per-scenario visit budget, while time-budgeted searches receive the remaining decision budget when each scenario is searched. Repeated leaf rollouts use visit-specific rollout seeds, and the controlled foul-play harness can use sampled checkpoint policies inside leaf rollouts. The policy adapter now defaults to a **16-visit root budget** and final root action selection by **most visits**, with equal-visit ties resolved by policy prior before value; final `Q+U` PUCT-score selection remains available only as a diagnostic mode because the exploration bonus is for traversal, not deployment move choice. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
@@ -84,9 +84,12 @@ In priority order:
    controlled harness' recorded opponent action, while the move identity comes only from public event
    lines; this is a replay-fidelity mechanism, not a true ladder-time hidden-info signal. The
    remaining missing piece is proving this stays stable across many seeds and deeper histories, or
-   adding a way to branch from the **current public battle state** without relying on a sampled
-   full-team root replay to reproduce every prior damage roll, volatile, item interaction, and status
-   transition.
+   adding a hidden-info-safe way to materialize the **current public battle state** without relying on
+   a sampled full-team root replay to reproduce every prior damage roll, volatile, item interaction,
+   and status transition. The first snapshot seam now exists for accepted prefixes: after a sampled
+   world has already passed branch-point validation, search can restore that exact simulator state
+   before each candidate branch instead of replaying the prefix again. That is a forking/cost fix,
+   not a hidden-info materialization fix.
    Prefer the **belief-based** determinizer (the project's stated, better-founded basis) over MIT's
    randbats-prior rejection sampling; note the divergence from the literal recipe and why. Required
    for the ladder; controlled perfect-info benchmarks still need separate raw-vs-search strength
@@ -176,6 +179,11 @@ fix. The next materialization fix should either narrow sampled worlds from publi
 evidence or replace replay-from-root branch-point validation with a true current-state/snapshot
 contract.
 
+Showdown snapshot/restore is now exposed through the local bridge and used to fork accepted replay
+prefixes inside branch search. This should reduce repeated replay cost for root candidate evaluation,
+but it does not by itself resolve the diagnostic above: rejected sampled worlds still fail before
+there is a valid prefix to snapshot.
+
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
 runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.
@@ -196,12 +204,14 @@ runs are useful only as oracle diagnostics and must not be reported as real net+
 
 ## Component design (extending what exists)
 
-- **Forking (WS-C) + compute budget (the real viability gate):** keep **replay-from-root** (built).
+- **Forking (WS-C) + compute budget (the real viability gate):** keep **replay-from-root** as the
+  materialization path for now, but use **Showdown snapshot/restore** after an accepted prefix.
   MIT's budget is **1000–2000 rollouts/move at 10 s/move, and the env step — not GPU inference — is
   the bottleneck** (`mit_thesis_reference_config.md:78-80`). Replay-from-root re-simulates a full line
-  per rollout; the roadmap's measured search throughput is only **~2–3 decisions/s**, which at
-  MIT-scale rollout counts implies **minutes/move** — likely infeasible without snapshot/poke-engine
-  or a much smaller rollout budget. **Design decision to make explicit:** pick a target
+  per accepted sampled world, while candidate branches can now restore the accepted prefix snapshot
+  instead of replaying the full prefix again. This is still likely infeasible at MIT-scale rollout
+  counts without a stronger current-state materializer, poke-engine, or a much smaller rollout budget.
+  **Design decision to make explicit:** pick a target
   rollouts-or-leaf-depth budget tied to a measured per-move cost (from `search_benchmark`'s
   `average_elapsed_seconds`), and treat forking cost as the gating constraint, not a checkbox.
 - **Determinization:** finish wiring the **existing** `belief.sample_opponent_determinizations` into

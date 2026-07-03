@@ -110,7 +110,7 @@ from .evaluation_profiles import (
     EvaluationProfile,
     evaluation_profile,
 )
-from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError, LocalShowdownSnapshot
 from .linear_policy import (
     LINEAR_FEATURE_FINGERPRINT_VERSION,
     LINEAR_FEATURE_SCHEMA_VERSION,
@@ -363,6 +363,7 @@ __all__ = [
     "LocalShowdownConfig",
     "LocalShowdownEnv",
     "LocalShowdownError",
+    "LocalShowdownSnapshot",
     "LINEAR_FEATURE_FINGERPRINT_VERSION",
     "LINEAR_FEATURE_SCHEMA_VERSION",
     "LINEAR_POLICY_SCHEMA_VERSION",

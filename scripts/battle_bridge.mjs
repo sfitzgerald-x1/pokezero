@@ -29,8 +29,9 @@ if (!showdownRoot) {
 
 let BattleStream;
 let getPlayerStreams;
+let Battle;
 try {
-  ({ BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ Battle, BattleStream, getPlayerStreams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
 } catch (error) {
   emit({
     type: "error",
@@ -56,7 +57,14 @@ function battleIdOf(command) {
 }
 
 function newBattleState(battleId) {
-  return { battleId, streams: null, boundaryRequests: {}, readyScheduled: false, terminalScheduled: false };
+  return {
+    battleId,
+    battleStream: null,
+    streams: null,
+    boundaryRequests: {},
+    readyScheduled: false,
+    terminalScheduled: false,
+  };
 }
 
 function emitStreamChunk(battle, stream, chunk) {
@@ -171,6 +179,7 @@ async function startBattle(command) {
   const battle = newBattleState(battleId);
   battles.set(battleId, battle);
   const battleStream = new BattleStream();
+  battle.battleStream = battleStream;
   battle.streams = getPlayerStreams(battleStream);
   for (const name of ["omniscient", "p1", "p2"]) {
     listenToStream(battle, name, battle.streams[name]);
@@ -193,6 +202,48 @@ async function startBattle(command) {
       `>player p2 ${JSON.stringify(p2)}`
   );
   emit({ type: "started", battleId, formatid, seed: seed || null });
+}
+
+function snapshotBattle(command) {
+  const battle = requireBattle(command);
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  emit({
+    type: "snapshot",
+    battleId: battle.battleId,
+    snapshot: {
+      battle: battle.battleStream.battle.toJSON(),
+      boundaryRequests: battle.boundaryRequests,
+      terminalScheduled: battle.terminalScheduled,
+    },
+  });
+}
+
+function restoreBattle(command) {
+  const battle = requireBattle(command);
+  const snapshot = command.snapshot;
+  if (!snapshot || typeof snapshot !== "object" || !snapshot.battle) {
+    throw new Error("Restore requires a battle snapshot.");
+  }
+  if (!battle.battleStream?.battle) {
+    throw new Error(`No simulator state for battleId ${battle.battleId}.`);
+  }
+  const send = battle.battleStream.battle.send;
+  battle.battleStream.battle = Battle.fromJSON(snapshot.battle);
+  battle.battleStream.battle.restart(send);
+  battle.boundaryRequests =
+    snapshot.boundaryRequests && typeof snapshot.boundaryRequests === "object"
+      ? snapshot.boundaryRequests
+      : {};
+  battle.readyScheduled = false;
+  battle.terminalScheduled = Boolean(snapshot.terminalScheduled);
+  battle.tRecv = null;
+  emit({
+    type: "restored",
+    battleId: battle.battleId,
+    requested: ["p1", "p2"].filter(player => isActionableRequest(battle.boundaryRequests[player])),
+  });
 }
 
 // Player options accept either the legacy string form (just a name, used by random battles) or an
@@ -282,6 +333,12 @@ async function handleCommand(command) {
       break;
     case "choices":
       await sendChoices(command);
+      break;
+    case "snapshot":
+      snapshotBattle(command);
+      break;
+    case "restore":
+      restoreBattle(command);
       break;
     case "end":
       await endBattle(command);

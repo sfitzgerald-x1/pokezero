@@ -116,6 +116,21 @@ class ValueBranchEnv:
         return self._terminal
 
 
+class SnapshotValueBranchEnv(ValueBranchEnv):
+    def __init__(self, terminal_winners_by_action: dict[int, str | None] | None = None) -> None:
+        super().__init__(terminal_winners_by_action)
+        self.snapshot_calls = 0
+        self.restore_calls = 0
+
+    def snapshot(self):
+        self.snapshot_calls += 1
+        return self._requested, self._terminal
+
+    def restore(self, snapshot) -> None:
+        self.restore_calls += 1
+        self._requested, self._terminal = snapshot
+
+
 class StrictLegalValueBranchEnv(ValueBranchEnv):
     def __init__(self, legal_actions: set[int]) -> None:
         super().__init__()
@@ -348,6 +363,45 @@ class FlatBranchSearchTest(unittest.TestCase):
 
         self.assertEqual([candidate.action_index for candidate in result.candidates], [1])
         self.assertEqual(result.action_index, 1)
+
+    def test_value_branch_search_restores_replayed_prefix_when_env_supports_snapshots(self) -> None:
+        env = SnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=_observation(0),
+                legal_action_mask=_observation(0).legal_action_mask,
+                action_index=0,
+            )
+        )
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=_observation(0),
+                legal_action_mask=_observation(0).legal_action_mask,
+                action_index=0,
+            )
+        )
+
+        result = value_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=1,
+            legal_action_mask=(True, True, False, False, True, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+        )
+
+        self.assertEqual([candidate.action_index for candidate in result.candidates], [0, 1, 4])
+        self.assertEqual(len(env.reset_calls), 1)
+        self.assertEqual(env.snapshot_calls, 1)
+        self.assertEqual(env.restore_calls, 3)
+        self.assertEqual(len(env.all_step_calls), 4)
+        self.assertEqual(env.all_step_calls[0], {"p1": 0, "p2": 0})
 
     def test_value_branch_search_does_not_skip_opponent_illegal_action_errors(self) -> None:
         with self.assertRaisesRegex(ValueError, "p2: action_index 0"):

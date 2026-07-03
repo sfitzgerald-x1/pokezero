@@ -90,6 +90,10 @@ def integration_config() -> LocalShowdownConfig | None:
     return LocalShowdownConfig(showdown_root=root, read_timeout_seconds=10.0)
 
 
+def _without_timestamp_lines(lines: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(line for line in lines if not line.startswith("|t:|"))
+
+
 class LocalShowdownRequestTest(unittest.TestCase):
     def test_showdown_seed_from_int_is_four_part_deterministic_seed(self) -> None:
         seed = showdown_seed_from_int(123)
@@ -253,6 +257,37 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                     format_id="gen3randombattle",
                     start_override=start_override,
                 )
+
+    def test_snapshot_restore_replays_same_branch_from_request_boundary(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            snapshot = env.snapshot()
+            prefix_len = len(snapshot.protocol_lines)
+            env.step({"p1": 0, "p2": 1})
+            first_branch_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+            env.step({"p1": 1, "p2": 0})
+            self.assertGreater(len(env.protocol_lines), prefix_len + len(first_branch_suffix))
+
+            env.restore(snapshot)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+            env.step({"p1": 0, "p2": 1})
+            restored_branch_suffix = _without_timestamp_lines(env.protocol_lines[prefix_len:])
+
+        self.assertEqual(restored_branch_suffix, first_branch_suffix)
 
     def test_random_vs_random_rollout_reaches_terminal_or_cap_without_showdown_errors(self) -> None:
         config = integration_config()
