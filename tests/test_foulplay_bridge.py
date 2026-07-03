@@ -699,7 +699,71 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertIsNone(progress_payloads[0]["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"])
         self.assertEqual(progress_payloads[1]["comparison"]["paired_by_seed"]["games"], 1)
         self.assertEqual(progress_payloads[1]["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"], 1.0)
-        self.assertEqual(comparison.to_dict()["comparison"]["paired_by_seed"]["root_puct"]["wins"], 2)
+        payload = comparison.to_dict()
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 2)
+        self.assertEqual(payload["foulplay_random_seed_schedule"]["seeds"], [1, 2])
+        self.assertEqual(payload["runs"]["raw"]["foulplay_random_seed_schedule"]["seeds"], [1, 2])
+        self.assertEqual(payload["runs"]["root_puct"]["foulplay_random_seed_schedule"]["seeds"], [1, 2])
+
+    def test_run_controlled_foulplay_comparison_records_explicit_foulplay_seed_schedule(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=2,
+            seed_start=11,
+            foulplay_random_seed=456,
+        )
+        observed: list[tuple[str, int, int]] = []
+
+        async def fake_benchmark(
+            benchmark_config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayBenchmarkResult:
+            observed.append(
+                (
+                    benchmark_config.policy_mode,
+                    benchmark_config.seed_start,
+                    benchmark_config.resolved_foulplay_random_seed,
+                )
+            )
+            result = ControlledFoulPlayBenchmarkResult(
+                config=benchmark_config,
+                policy_id=f"checkpoint-{benchmark_config.policy_mode}",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id=f"battle-{benchmark_config.policy_mode}-{benchmark_config.seed_start}",
+                        seed=benchmark_config.seed_start,
+                        winner="FoulPlayBot",
+                        pokezero_won=False,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=1 if benchmark_config.policy_mode == "root-puct" else 0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+            if progress_callback is not None:
+                progress_callback(result)
+            return result
+
+        with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+            comparison = asyncio.run(run_controlled_foulplay_comparison(config))
+
+        self.assertEqual(
+            observed,
+            [
+                ("raw", 11, 456),
+                ("root-puct", 11, 456),
+                ("raw", 12, 457),
+                ("root-puct", 12, 457),
+            ],
+        )
+        payload = comparison.to_dict()
+        self.assertEqual(payload["foulplay_random_seed"], 456)
+        self.assertEqual(payload["foulplay_random_seed_schedule"]["seeds"], [456, 457])
+        self.assertEqual(payload["runs"]["raw"]["foulplay_random_seed_schedule"]["seeds"], [456, 457])
+        self.assertEqual(payload["runs"]["root_puct"]["foulplay_random_seed_schedule"]["seeds"], [456, 457])
 
     def test_run_controlled_foulplay_comparison_can_preserve_per_arm_order(self) -> None:
         config = ControlledFoulPlayConfig(

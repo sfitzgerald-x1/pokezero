@@ -240,6 +240,7 @@ class ControlledFoulPlayBenchmarkResult:
     config: ControlledFoulPlayConfig
     policy_id: str
     games: tuple[ControlledFoulPlayGameResult, ...]
+    foulplay_random_seed_schedule: tuple[int, ...] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -323,6 +324,10 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if self.foulplay_random_seed_schedule is not None:
+            payload["foulplay_random_seed_schedule"] = _foulplay_random_seed_schedule_payload(
+                self.foulplay_random_seed_schedule
+            )
         if elapsed_values:
             payload["root_puct"]["average_elapsed_seconds"] = sum(elapsed_values) / len(elapsed_values)
         if root_effective_total_visits:
@@ -363,6 +368,11 @@ class ControlledFoulPlayComparisonResult:
             "games": self.config.games,
             "seed_start": self.config.seed_start,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
+            "foulplay_random_seed_schedule": _comparison_foulplay_random_seed_schedule_payload(
+                self.config,
+                comparison_mode=self.comparison_mode,
+                count=self.config.games,
+            ),
             "comparison_mode": self.comparison_mode,
             "status": self.status,
             "complete": self.complete,
@@ -467,6 +477,44 @@ def _pairing_method_for_comparison_mode(comparison_mode: str) -> str:
     if comparison_mode == "per-seed":
         return "per_seed_shared_battlestream_seed_and_foulplay_start_seed"
     return "shared_battlestream_seed_only"
+
+
+def _comparison_foulplay_random_seed_schedule_payload(
+    config: ControlledFoulPlayConfig,
+    *,
+    comparison_mode: str,
+    count: int,
+) -> dict[str, Any]:
+    if comparison_mode == "per-seed":
+        return _foulplay_random_seed_schedule_payload(
+            _per_seed_foulplay_random_seed_schedule(config, count=count)
+        )
+    return _foulplay_random_seed_schedule_payload((config.resolved_foulplay_random_seed,))
+
+
+def _per_seed_foulplay_random_seed_schedule(
+    config: ControlledFoulPlayConfig,
+    *,
+    count: int,
+) -> tuple[int, ...]:
+    return tuple(
+        (
+            config.foulplay_random_seed + offset
+            if config.foulplay_random_seed is not None
+            else config.seed_start + offset
+        )
+        for offset in range(count)
+    )
+
+
+def _foulplay_random_seed_schedule_payload(seeds: tuple[int, ...]) -> dict[str, Any]:
+    return {
+        "count": len(seeds),
+        "first_seed": seeds[0] if seeds else None,
+        "last_seed": seeds[-1] if seeds else None,
+        "mode": "constant" if len(set(seeds)) <= 1 else "per_game_incrementing",
+        "seeds": list(seeds),
+    }
 
 
 def _games_by_seed(
@@ -937,6 +985,10 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="raw"),
             policy_id=raw_policy_id,
             games=tuple(raw_games),
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+                config,
+                count=len(raw_games),
+            ),
         )
 
     def root_puct_result() -> ControlledFoulPlayBenchmarkResult | None:
@@ -946,6 +998,10 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="root-puct"),
             policy_id=root_puct_policy_id,
             games=tuple(root_puct_games),
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+                config,
+                count=len(root_puct_games),
+            ),
         )
 
     def emit_progress() -> None:
