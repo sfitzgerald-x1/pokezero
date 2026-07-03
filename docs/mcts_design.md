@@ -129,6 +129,12 @@ spent 379 override attempts, changed no selected prior actions, and fell back 11
 sampled worlds or sampled opponent-action scenarios failed replay validation. This proves the
 multi-belief path is wired, not that it is strong enough for a headline read.
 
+A follow-up default-world fallback for rejected belief samples reran the same seed and preserved the
+`0/1` result, but removed the raw fallback storm: root-PUCT searched 57 decisions, fell back 0 times,
+used 53 belief start-override sources, spent 197 override attempts, and used the default replay world
+16 times when all sampled belief worlds for an accepted opponent action failed validation. That is a
+material robustness improvement for hidden-world search coverage, but still not strength evidence.
+
 ## Design principles / hard constraints
 
 - **Showdown is ground truth**; poke-engine only after a Gen-3 equivalence spike

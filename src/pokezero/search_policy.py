@@ -366,6 +366,7 @@ class RootPUCTSearchPolicy:
                 unsearched_action_group_count = 0
                 skipped_action_group_count = 0
                 searched_action_group_count = 0
+                start_override_default_world_fallbacks_used = 0
                 flat_scenario_index = 0
                 for group_index, scenario_group in enumerate(search_scenario_groups):
                     group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
@@ -434,8 +435,43 @@ class RootPUCTSearchPolicy:
                             if scenario_start_override is not None:
                                 start_override_sources_used += 1
                     if not group_search_pairs:
-                        skipped_action_group_count += 1
-                        continue
+                        if self.start_override_planner is None:
+                            skipped_action_group_count += 1
+                            continue
+                        default_world_scenario = _default_world_fallback_scenario(scenario_group.root)
+                        scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
+                            total_budget_seconds=self.root_time_budget_seconds,
+                            started_at=start,
+                        )
+                        try:
+                            search = puct_branch_search(
+                                env=env,
+                                trajectory=search_trajectory,
+                                player_id=context.player_id,
+                                prefix_decision_round_count=context.decision_round_index,
+                                legal_action_mask=context.observation.legal_action_mask,
+                                opponent_actions=default_world_scenario.actions,
+                                value_fn=self.value_fn,
+                                action_priors=priors,
+                                cpuct=self.cpuct,
+                                leaf_rollout_policies=leaf_rollout_policies,
+                                leaf_rollout_config=self.rollout_config,
+                                leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                root_visit_budget=self.root_visit_budget,
+                                root_time_budget_seconds=scenario_root_time_budget_seconds,
+                                start_override=None,
+                                expected_current_observation=context.observation,
+                            )
+                        except ValueError as exc:
+                            reason = _opponent_scenario_replay_legality_error(exc, default_world_scenario)
+                            if reason is None:
+                                raise
+                            skipped_scenarios.append((default_world_scenario, reason))
+                            skipped_action_group_count += 1
+                            continue
+                        else:
+                            group_search_pairs.append((default_world_scenario, search))
+                            start_override_default_world_fallbacks_used += 1
                     searched_action_group_count += 1
                     group_sample_weight = scenario_group.root.weight / len(group_search_pairs)
                     action_group_cap_reached = False
@@ -479,6 +515,9 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_attempts_used": start_override_attempts_used,
                                 "root_puct_start_override_samples_per_scenario": (
                                     self.start_override_samples_per_scenario
+                                ),
+                                "root_puct_start_override_default_world_fallbacks_used": (
+                                    start_override_default_world_fallbacks_used
                                 ),
                             }
                         )
@@ -578,6 +617,9 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_attempts": self.start_override_attempts,
                 "root_puct_start_override_attempts_used": start_override_attempts_used,
                 "root_puct_start_override_samples_per_scenario": self.start_override_samples_per_scenario,
+                "root_puct_start_override_default_world_fallbacks_used": (
+                    start_override_default_world_fallbacks_used
+                ),
             }
             if self.start_override_planner is not None
             else {}
@@ -783,6 +825,14 @@ def _flatten_scenario_groups(
     scenario_groups: Sequence[_OpponentActionScenarioGroup],
 ) -> tuple[OpponentActionScenario, ...]:
     return tuple(scenario for group in scenario_groups for scenario in group.samples)
+
+
+def _default_world_fallback_scenario(scenario: OpponentActionScenario) -> OpponentActionScenario:
+    return OpponentActionScenario(
+        actions=dict(scenario.actions),
+        weight=scenario.weight,
+        label=f"{scenario.label}/default-world-fallback",
+    )
 
 
 def _remaining_root_time_budget_seconds(

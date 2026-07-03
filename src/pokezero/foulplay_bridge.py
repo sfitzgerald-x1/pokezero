@@ -206,6 +206,7 @@ class ControlledFoulPlayGameResult:
     root_puct_time_budget_exhaustions: int = 0
     root_puct_start_override_sources_used: int = 0
     root_puct_start_override_attempts_used: int = 0
+    root_puct_start_override_default_world_fallbacks_used: int = 0
     root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
@@ -233,6 +234,9 @@ class ControlledFoulPlayGameResult:
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
             "root_puct_start_override_sources_used": self.root_puct_start_override_sources_used,
             "root_puct_start_override_attempts_used": self.root_puct_start_override_attempts_used,
+            "root_puct_start_override_default_world_fallbacks_used": (
+                self.root_puct_start_override_default_world_fallbacks_used
+            ),
         }
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
@@ -284,6 +288,9 @@ class ControlledFoulPlayBenchmarkResult:
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
         root_start_override_sources_used = sum(game.root_puct_start_override_sources_used for game in self.games)
         root_start_override_attempts_used = sum(game.root_puct_start_override_attempts_used for game in self.games)
+        root_start_override_default_world_fallbacks_used = sum(
+            game.root_puct_start_override_default_world_fallbacks_used for game in self.games
+        )
         root_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
@@ -343,6 +350,9 @@ class ControlledFoulPlayBenchmarkResult:
                 "time_budget_exhaustions": root_time_budget_exhaustions,
                 "start_override_sources_used": root_start_override_sources_used,
                 "start_override_attempts_used": root_start_override_attempts_used,
+                "start_override_default_world_fallbacks_used": (
+                    root_start_override_default_world_fallbacks_used
+                ),
             },
             "game_results": [game.to_dict() for game in self.games],
         }
@@ -1462,6 +1472,11 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_start_override_default_world_fallbacks_used = sum(
+        int(decision.metadata.get("root_puct_start_override_default_world_fallbacks_used") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
@@ -1486,6 +1501,9 @@ async def _run_single_game(
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
         root_puct_start_override_sources_used=root_start_override_sources_used,
         root_puct_start_override_attempts_used=root_start_override_attempts_used,
+        root_puct_start_override_default_world_fallbacks_used=(
+            root_start_override_default_world_fallbacks_used
+        ),
         root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),

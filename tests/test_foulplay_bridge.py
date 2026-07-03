@@ -482,6 +482,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_time_budget_exhaustions=2,
                     root_puct_start_override_sources_used=3,
                     root_puct_start_override_attempts_used=5,
+                    root_puct_start_override_default_world_fallbacks_used=1,
                     root_puct_prior_action_change_details=(
                         {
                             "decision_index": 1,
@@ -517,6 +518,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_time_budget_exhaustions=1,
                     root_puct_start_override_sources_used=1,
                     root_puct_start_override_attempts_used=4,
+                    root_puct_start_override_default_world_fallbacks_used=2,
                     root_puct_fallback_reasons={"search failed: boom": 2},
                     root_puct_average_elapsed_seconds=0.4,
                 ),
@@ -549,6 +551,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["start_override_sources_used"], 4)
         self.assertEqual(payload["root_puct"]["start_override_attempts"], 7)
         self.assertEqual(payload["root_puct"]["start_override_attempts_used"], 9)
+        self.assertEqual(payload["root_puct"]["start_override_default_world_fallbacks_used"], 3)
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
@@ -562,6 +565,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["game_results"][0]["root_puct_time_budget_exhaustions"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_sources_used"], 3)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_attempts_used"], 5)
+        self.assertEqual(
+            payload["game_results"][0]["root_puct_start_override_default_world_fallbacks_used"],
+            1,
+        )
         self.assertEqual(
             payload["game_results"][0]["root_puct_prior_action_change_details"],
             [
