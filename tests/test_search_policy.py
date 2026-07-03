@@ -2479,6 +2479,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 start_override_samples_per_scenario=2,
             )
 
+    def test_root_puct_policy_rejects_invalid_start_override_hp_fraction_tolerance(self) -> None:
+        with self.assertRaisesRegex(ValueError, "start_override_hp_fraction_tolerance"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                start_override_hp_fraction_tolerance=-0.01,
+            )
+
     def test_root_puct_policy_rejects_missing_opponent_action_planner_for_simultaneous_turn(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),

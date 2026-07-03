@@ -100,6 +100,7 @@ class ControlledFoulPlayConfig:
     belief_start_overrides: bool = False
     start_override_attempts: int = 1
     belief_start_override_samples: int = 1
+    start_override_hp_fraction_tolerance: float = 0.02
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -161,6 +162,10 @@ class ControlledFoulPlayConfig:
             raise ValueError("belief_start_override_samples must be positive.")
         if self.belief_start_override_samples > 1 and not self.belief_start_overrides:
             raise ValueError("belief_start_override_samples requires belief_start_overrides.")
+        if self.start_override_hp_fraction_tolerance < 0.0 or not math.isfinite(
+            self.start_override_hp_fraction_tolerance
+        ):
+            raise ValueError("start_override_hp_fraction_tolerance must be a finite non-negative value.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
@@ -422,6 +427,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "belief_start_overrides": self.config.belief_start_overrides,
                 "start_override_attempts": self.config.start_override_attempts,
                 "belief_start_override_samples": self.config.belief_start_override_samples,
+                "start_override_hp_fraction_tolerance": self.config.start_override_hp_fraction_tolerance,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -1342,6 +1348,7 @@ def _build_policy(
         start_override_planner=start_override_planner,
         start_override_attempts=config.start_override_attempts,
         start_override_samples_per_scenario=config.belief_start_override_samples,
+        start_override_hp_fraction_tolerance=config.start_override_hp_fraction_tolerance,
         leaf_rollout_metadata={
             "root_puct_leaf_rollout_opponent_policy": "checkpoint",
             "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
@@ -2281,6 +2288,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--start-override-hp-fraction-tolerance",
+        type=float,
+        default=0.02,
+        help=(
+            "Allowed branch-point HP-fraction drift when validating sampled start overrides. "
+            "Only self/opponent Pokemon HP-fraction numeric cells use this tolerance; request "
+            "shape, legal mask, action candidates, categorical state, status, and all other "
+            "numeric features remain exact."
+        ),
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -2373,6 +2391,7 @@ def _config_from_args(
         belief_start_overrides=args.belief_start_overrides,
         start_override_attempts=args.start_override_attempts,
         belief_start_override_samples=args.belief_start_override_samples,
+        start_override_hp_fraction_tolerance=args.start_override_hp_fraction_tolerance,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

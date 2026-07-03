@@ -251,6 +251,7 @@ class RootPUCTSearchPolicy:
     start_override_planner: StartOverridePlanner | None = None
     start_override_attempts: int = 1
     start_override_samples_per_scenario: int = 1
+    start_override_hp_fraction_tolerance: float = 0.02
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -288,6 +289,10 @@ class RootPUCTSearchPolicy:
             raise ValueError("start_override_samples_per_scenario must be positive.")
         if self.start_override_samples_per_scenario > 1 and self.start_override_planner is None:
             raise ValueError("start_override_samples_per_scenario requires start_override_planner.")
+        if self.start_override_hp_fraction_tolerance < 0.0 or not math.isfinite(
+            self.start_override_hp_fraction_tolerance
+        ):
+            raise ValueError("start_override_hp_fraction_tolerance must be a finite non-negative value.")
 
     def reset(self) -> None:
         reset = getattr(self.fallback_policy, "reset", None)
@@ -469,6 +474,11 @@ class RootPUCTSearchPolicy:
                                     root_time_budget_seconds=scenario_root_time_budget_seconds,
                                     start_override=start_override,
                                     expected_current_observation=context.observation,
+                                    replay_hp_fraction_tolerance=(
+                                        self.start_override_hp_fraction_tolerance
+                                        if start_override is not None
+                                        else 0.0
+                                    ),
                                 )
                             except ValueError as exc:
                                 reason = _opponent_scenario_replay_legality_error(exc, scenario)
@@ -538,6 +548,9 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_attempts_used": start_override_attempts_used,
                                 "root_puct_start_override_samples_per_scenario": (
                                     self.start_override_samples_per_scenario
+                                ),
+                                "root_puct_start_override_hp_fraction_tolerance": (
+                                    self.start_override_hp_fraction_tolerance
                                 ),
                                 **_shared_start_override_metadata(shared_start_override_samples),
                             }
@@ -638,6 +651,9 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_attempts": self.start_override_attempts,
                 "root_puct_start_override_attempts_used": start_override_attempts_used,
                 "root_puct_start_override_samples_per_scenario": self.start_override_samples_per_scenario,
+                "root_puct_start_override_hp_fraction_tolerance": (
+                    self.start_override_hp_fraction_tolerance
+                ),
                 **_shared_start_override_metadata(shared_start_override_samples),
             }
             if self.start_override_planner is not None
@@ -902,6 +918,7 @@ def _shared_start_override_samples(
                     # Shared sampled worlds need only prove the branch-point state. Earlier
                     # custom-game replay observations can drift for metadata-only reasons.
                     check_prefix_observations=False,
+                    hp_fraction_tolerance=policy.start_override_hp_fraction_tolerance,
                 )
             except ValueError as exc:
                 reason = _opponent_scenario_replay_legality_error(exc, sample_scenario)

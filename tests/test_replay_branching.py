@@ -80,6 +80,50 @@ def _observation_with_recent_event_token(*, legal_action: int = 0, recent_event_
     )
 
 
+def _observation_with_self_hp_fraction(*, legal_action: int = 0, hp_fraction: float = 1.0) -> PokeZeroObservationV0:
+    spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    token_index = FIELD_TOKEN_COUNT
+    categorical_ids = [[0] * spec.categorical_feature_count for _ in range(spec.token_count)]
+    numeric_features = [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+    token_type_ids = [0] * spec.token_count
+    attention_mask = [False] * spec.token_count
+    categorical_ids[token_index][0] = 1
+    numeric_features[token_index][0] = hp_fraction
+    attention_mask[token_index] = True
+    legal_action_mask = tuple(index == legal_action for index in range(ACTION_COUNT))
+    return PokeZeroObservationV0(
+        categorical_ids=tuple(tuple(row) for row in categorical_ids),
+        numeric_features=tuple(tuple(row) for row in numeric_features),
+        token_type_ids=tuple(token_type_ids),
+        attention_mask=tuple(attention_mask),
+        legal_action_mask=legal_action_mask,
+    )
+
+
+def _observation_with_action_candidate_hp_fraction(
+    *,
+    legal_action: int = 0,
+    hp_fraction: float = 1.0,
+) -> PokeZeroObservationV0:
+    spec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    token_index = FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT
+    categorical_ids = [[0] * spec.categorical_feature_count for _ in range(spec.token_count)]
+    numeric_features = [[0.0] * spec.numeric_feature_count for _ in range(spec.token_count)]
+    token_type_ids = [0] * spec.token_count
+    attention_mask = [False] * spec.token_count
+    categorical_ids[token_index][0] = 1
+    numeric_features[token_index][0] = hp_fraction
+    attention_mask[token_index] = True
+    legal_action_mask = tuple(index == legal_action for index in range(ACTION_COUNT))
+    return PokeZeroObservationV0(
+        categorical_ids=tuple(tuple(row) for row in categorical_ids),
+        numeric_features=tuple(tuple(row) for row in numeric_features),
+        token_type_ids=tuple(token_type_ids),
+        attention_mask=tuple(attention_mask),
+        legal_action_mask=legal_action_mask,
+    )
+
+
 def _step(player_id: str, turn_index: int, action_index: int) -> TrajectoryStep:
     return TrajectoryStep(
         player_id=player_id,
@@ -370,6 +414,88 @@ class ReplayBranchingUnitTest(unittest.TestCase):
         )
 
         self.assertEqual(env.submitted_actions, [{"p1": 0}])
+
+    def test_start_override_consistency_accepts_small_hp_fraction_drift_when_configured(self) -> None:
+        env = ObservationReplayEnv(
+            (("p1",),),
+            _observation_with_self_hp_fraction(hp_fraction=0.514),
+        )
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        replay_action_rounds(
+            env,
+            seed=17,
+            action_rounds=(
+                ReplayActionRound(
+                    turn_index=0,
+                    actions={"p1": 0},
+                    expected_observations={
+                        "p1": _observation_with_self_hp_fraction(hp_fraction=0.500),
+                    },
+                ),
+            ),
+            start_override=start_override,
+            consistency_player_id="p1",
+            hp_fraction_tolerance=0.02,
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 0}])
+
+    def test_start_override_consistency_rejects_action_candidate_hp_drift_with_tolerance(self) -> None:
+        env = ObservationReplayEnv(
+            (("p1",),),
+            _observation_with_action_candidate_hp_fraction(hp_fraction=0.514),
+        )
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "numeric_features/action_candidates"):
+            replay_action_rounds(
+                env,
+                seed=17,
+                action_rounds=(
+                    ReplayActionRound(
+                        turn_index=0,
+                        actions={"p1": 0},
+                        expected_observations={
+                            "p1": _observation_with_action_candidate_hp_fraction(hp_fraction=0.500),
+                        },
+                    ),
+                ),
+                start_override=start_override,
+                consistency_player_id="p1",
+                hp_fraction_tolerance=0.02,
+            )
+
+    def test_start_override_consistency_rejects_large_hp_fraction_drift_with_tolerance(self) -> None:
+        env = ObservationReplayEnv(
+            (("p1",),),
+            _observation_with_self_hp_fraction(hp_fraction=0.56),
+        )
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        with self.assertRaisesRegex(ValueError, "numeric_features/self_pokemon"):
+            replay_action_rounds(
+                env,
+                seed=17,
+                action_rounds=(
+                    ReplayActionRound(
+                        turn_index=0,
+                        actions={"p1": 0},
+                        expected_observations={
+                            "p1": _observation_with_self_hp_fraction(hp_fraction=0.500),
+                        },
+                    ),
+                ),
+                start_override=start_override,
+                consistency_player_id="p1",
+                hp_fraction_tolerance=0.02,
+            )
 
     def test_replay_action_rounds_rejects_request_mismatch(self) -> None:
         env = ScriptedReplayEnv((("p1",),))
