@@ -604,6 +604,65 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 1, "p2": 0},
         ])
 
+    def test_root_puct_policy_stops_after_max_replay_legal_opponent_scenarios(self) -> None:
+        branch_envs: list[StrictOpponentActionEnv] = []
+
+        def branch_env_factory() -> StrictOpponentActionEnv:
+            env = StrictOpponentActionEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 2}, weight=0.6, label="illegal-hidden"),
+                OpponentActionScenario(actions={"p2": 0}, weight=0.3, label="legal-hidden"),
+                OpponentActionScenario(actions={"p2": 0}, weight=0.1, label="reserve-unsearched"),
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            max_opponent_action_scenarios=1,
+            cpuct=0.0,
+            root_visit_budget=2,
+            root_time_budget_seconds=3.0,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        metadata = decision.metadata
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(metadata["root_puct_max_opponent_action_scenarios"], 1)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 3)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 1)
+        self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
+        self.assertEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 3.0)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_scenarios"],
+            [{"label": "legal-hidden", "weight": 1.0, "actions": {"p2": 0}}],
+        )
+        self.assertEqual(branch_envs[0].all_step_calls, [
+            {"p1": 0, "p2": 0},
+            {"p1": 1, "p2": 0},
+        ])
+
     def test_root_puct_policy_skips_start_override_consistency_mismatch_scenario(self) -> None:
         branch_envs: list[StartOverrideOutcomeEnv] = []
 
@@ -1398,6 +1457,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
                 root_prior_temperature=0.0,
+            )
+
+    def test_root_puct_policy_rejects_invalid_max_opponent_action_scenarios(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_opponent_action_scenarios"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                max_opponent_action_scenarios=0,
             )
 
     def test_root_puct_policy_rejects_leaf_rollouts_without_policy_factory(self) -> None:

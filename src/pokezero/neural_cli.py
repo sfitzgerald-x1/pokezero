@@ -665,6 +665,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument(
+        "--root-opponent-action-candidate-scenarios",
+        type=int,
+        default=None,
+        help=(
+            "Number of checkpoint-prior opponent root-action candidates to try while searching "
+            "for replay-legal scenarios. Defaults to --root-opponent-action-scenarios; values "
+            "above that provide hidden-mode reserve candidates without averaging more accepted "
+            "scenarios."
+        ),
+    )
+    root_puct_play.add_argument(
         "--selection-mode",
         choices=("puct", "value", "visits"),
         default="visits",
@@ -2348,9 +2359,26 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
     if args.root_opponent_action_scenarios <= 0:
         raise ValueError("root opponent action scenarios must be positive.")
+    root_opponent_action_candidate_scenarios = (
+        args.root_opponent_action_scenarios
+        if args.root_opponent_action_candidate_scenarios is None
+        else args.root_opponent_action_candidate_scenarios
+    )
+    if root_opponent_action_candidate_scenarios <= 0:
+        raise ValueError("root opponent action candidate scenarios must be positive.")
+    if root_opponent_action_candidate_scenarios < args.root_opponent_action_scenarios:
+        raise ValueError(
+            "root opponent action candidate scenarios must be greater than or equal to "
+            "root opponent action scenarios."
+        )
     if args.root_opponent_action_policy == "benchmark" and args.root_opponent_action_scenarios != 1:
         raise ValueError(
             "root opponent action scenarios above one require --root-opponent-action-policy checkpoint."
+        )
+    if args.root_opponent_action_policy == "benchmark" and root_opponent_action_candidate_scenarios != 1:
+        raise ValueError(
+            "root opponent action candidate scenarios above one require "
+            "--root-opponent-action-policy checkpoint."
         )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -2438,10 +2466,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             )
         else:
             opponent_action_planner = greedy_opponent_action_planner(opponent_prior_fn)
-            if args.root_opponent_action_scenarios > 1:
+            if root_opponent_action_candidate_scenarios > 1:
                 opponent_action_scenario_planner = prior_top_k_opponent_action_scenario_planner(
                     opponent_prior_fn,
-                    scenario_count=args.root_opponent_action_scenarios,
+                    scenario_count=root_opponent_action_candidate_scenarios,
                 )
         leaf_rollout_policy_factory = None
         leaf_rollout_metadata: Mapping[str, object] = {}
@@ -2477,6 +2505,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             root_prior_temperature=(
                 args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
             ),
+            max_opponent_action_scenarios=args.root_opponent_action_scenarios,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
             leaf_rollout_metadata=leaf_rollout_metadata,

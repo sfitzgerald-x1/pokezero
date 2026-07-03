@@ -186,6 +186,19 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 root_time_budget_ms=0,
             )
+        with self.assertRaisesRegex(ValueError, "root_opponent_action_candidate_scenarios"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_opponent_action_candidate_scenarios=0,
+            )
+        with self.assertRaisesRegex(ValueError, "root_opponent_action_candidate_scenarios"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_opponent_action_scenarios=2,
+                root_opponent_action_candidate_scenarios=1,
+            )
         with self.assertRaisesRegex(ValueError, "leaf_rollout_sampling"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -223,9 +236,13 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(config.root_visit_budget, 16)
         self.assertIsNone(config.root_prior_temperature)
         self.assertEqual(config.effective_root_prior_temperature, 1.0)
+        self.assertEqual(config.root_opponent_action_scenarios, 1)
+        self.assertEqual(config.root_opponent_action_candidate_scenarios, 4)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
+        self.assertEqual(args.root_opponent_action_scenarios, 1)
+        self.assertEqual(args.root_opponent_action_candidate_scenarios, 4)
 
         warmed_config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
@@ -328,6 +345,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
             root_prior_temperature=2.5,
             root_visit_budget=16,
             root_time_budget_ms=250,
+            root_opponent_action_scenarios=2,
+            root_opponent_action_candidate_scenarios=5,
             leaf_rollout_rounds=1,
             leaf_rollout_sampling=True,
             belief_start_overrides=True,
@@ -350,6 +369,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_effective_total_visits=18,
                     root_puct_opponent_action_scenarios_generated=9,
                     root_puct_opponent_action_scenarios_skipped=1,
+                    root_puct_opponent_action_scenarios_unsearched=2,
                     root_puct_selected_prior_action_changes=2,
                     root_puct_pre_gate_prior_action_changes=3,
                     root_puct_time_budget_exhaustions=2,
@@ -380,6 +400,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_effective_total_visits=12,
                     root_puct_opponent_action_scenarios_generated=6,
                     root_puct_opponent_action_scenarios_skipped=3,
+                    root_puct_opponent_action_scenarios_unsearched=1,
                     root_puct_selected_prior_action_changes=1,
                     root_puct_pre_gate_prior_action_changes=2,
                     root_puct_time_budget_exhaustions=1,
@@ -406,6 +427,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["effective_total_visits"], 30)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_generated"], 15)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_skipped"], 4)
+        self.assertEqual(payload["root_puct"]["opponent_action_scenarios_unsearched"], 3)
         self.assertEqual(payload["root_puct"]["selected_prior_action_changes"], 3)
         self.assertEqual(payload["root_puct"]["pre_gate_prior_action_changes"], 5)
         self.assertEqual(payload["root_puct"]["time_budget_exhaustions"], 3)
@@ -415,6 +437,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_unsearched"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_selected_prior_action_changes"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_pre_gate_prior_action_changes"], 3)
         self.assertEqual(payload["game_results"][0]["root_puct_time_budget_exhaustions"], 2)
@@ -446,6 +469,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["root_prior_temperature"], 2.5)
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertEqual(payload["root_puct"]["root_time_budget_ms"], 250)
+        self.assertEqual(payload["root_puct"]["root_opponent_action_scenarios"], 2)
+        self.assertEqual(payload["root_puct"]["root_opponent_action_candidate_scenarios"], 5)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertEqual(payload["root_puct"]["belief_start_overrides"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
