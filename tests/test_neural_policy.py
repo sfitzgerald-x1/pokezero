@@ -2149,7 +2149,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 }
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        fake_training_result = SimpleNamespace(
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle")
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             summary_path = Path(temp_dir) / "nested" / "root-puct-play-summary.json"
@@ -2219,7 +2221,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+        fake_training_result = SimpleNamespace(
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle")
+        )
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2335,6 +2339,60 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
+
+    def test_neural_cli_root_puct_play_benchmark_defaults_root_prior_temperature_to_temperature(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle")
+        )
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            search_policy = tuple(kwargs["matchups"])[2].p1_policy
+            self.assertEqual(search_policy.root_prior_temperature, 1.75)
+            self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
+            context = PolicyContext(
+                player_id="p1",
+                decision_round_index=0,
+                battle_id="search-play",
+                format_id="gen3randombattle",
+                seed=7,
+                observation=observation(1),
+                requested_players=("p1", "p2"),
+                trajectory=BattleTrajectory(battle_id="search-play", format_id="gen3randombattle", seed=7),
+            )
+            self.assertEqual(search_policy.opponent_action_planner(context, __import__("random").Random(1)), {"p2": 2})
+            return SimpleNamespace(to_dict=lambda: {"matchups": 4})
+
+        with (
+            patch("pokezero.neural_cli.load_transformer_checkpoint", return_value=(fake_model, fake_training_result)),
+            patch("pokezero.neural_cli.evaluate_transformer_observation_value", return_value=0.25),
+            patch("pokezero.neural_cli.evaluate_transformer_action_priors", return_value=(1.0,) + (0.0,) * 8) as prior_eval,
+            patch("pokezero.neural_cli.evaluate_transformer_opponent_action_priors", return_value=(0.1, 0.2, 0.7) + (0.0,) * 6) as opponent_eval,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--opponent-policy",
+                    "random-legal",
+                    "--temperature",
+                    "1.75",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured["games"], 20)
+        self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.0)
+        self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.75)
 
     def test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios(self) -> None:
         if not torch_available():

@@ -227,6 +227,13 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(args.root_visit_budget, 16)
         self.assertIsNone(args.root_prior_temperature)
 
+        warmed_config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            temperature=1.75,
+        )
+        self.assertEqual(warmed_config.effective_root_prior_temperature, 1.75)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
