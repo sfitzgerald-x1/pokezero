@@ -863,6 +863,14 @@ def _opponent_scenario_replay_legality_error(
     message = str(exc)
     if message.startswith("start override does not reproduce recorded replay prefix observations"):
         return message
+    if message.startswith("replay actions for decision round "):
+        return message
+    if message.startswith("cannot replay decision round "):
+        return message
+    if message == "cannot branch from a terminal replay prefix.":
+        return message
+    if "action_index " in message and message.endswith(" is not legal for the current request."):
+        return message
     for player, action_index in scenario.actions.items():
         unqualified = f"action_index {action_index} is not legal for the current request."
         if message == unqualified or message == f"{player}: {unqualified}":

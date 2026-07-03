@@ -254,7 +254,7 @@ class ReplayBranchingUnitTest(unittest.TestCase):
             player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
         )
 
-        with self.assertRaisesRegex(ValueError, "does not reproduce recorded replay prefix observations"):
+        with self.assertRaisesRegex(ValueError, "legal_action_mask"):
             replay_action_rounds(
                 env,
                 seed=17,
@@ -268,6 +268,36 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                 start_override=start_override,
                 consistency_player_id="p1",
             )
+
+    def test_replay_trajectory_branch_can_skip_prefix_observation_checks_for_current_state_search(self) -> None:
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=123)
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=_observation(legal_action=2),
+                legal_action_mask=tuple(index == 2 for index in range(ACTION_COUNT)),
+                action_index=2,
+            )
+        )
+        env = StartOverrideReplayEnv((("p1",), ("p1",)))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        result = replay_trajectory_branch(
+            env,
+            trajectory,
+            prefix_decision_round_count=1,
+            branch_actions={"p1": 0},
+            start_override=start_override,
+            consistency_player_id="p1",
+            expected_current_observation=_observation(legal_action=0),
+            check_prefix_observations=False,
+        )
+
+        self.assertEqual(result.prefix.replayed_round_count, 1)
+        self.assertEqual(env.submitted_actions, [{"p1": 2}, {"p1": 0}])
 
     def test_replay_action_rounds_start_override_consistency_ignores_metadata_only_differences(self) -> None:
         env = StartOverrideReplayEnv((("p1",),))
