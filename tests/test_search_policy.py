@@ -158,7 +158,8 @@ class RejectingStartOverrideOutcomeEnv(StartOverrideOutcomeEnv):
             self.rejected_start_overrides += 1
             raise ValueError(
                 "start override does not reproduce recorded replay prefix observations "
-                "for decision round 0: p1."
+                "for decision round 0: p1. "
+                "(categorical_ids/opponent_pokemon[8][11]: actual=76 expected=0)"
             )
         super().reset_with_start_override(
             seed=seed,
@@ -1097,6 +1098,14 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             metadata["root_puct_opponent_action_skip_categories"],
             {"start_override_observation_mismatch": 1},
         )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_replay_rejection_decision_rounds"],
+            {"0": 1},
+        )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_observation_mismatch_paths"],
+            {"categorical_ids/opponent_pokemon[8][11]": 1},
+        )
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_unsearched"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
         self.assertEqual(metadata["root_puct_opponent_action_groups_generated"], 2)
@@ -1116,7 +1125,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                     "actions": {"p2": 0},
                     "reason": (
                         "start override does not reproduce recorded replay prefix observations "
-                        "for decision round 0: p1."
+                        "for decision round 0: p1. "
+                        "(categorical_ids/opponent_pokemon[8][11]: actual=76 expected=0)"
                     ),
                     "category": "start_override_observation_mismatch",
                 }

@@ -11,7 +11,11 @@ from typing import Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .env import BattleStartOverride, PlayerId, PokeZeroEnv
-from .mcts_diagnostics import root_puct_fallback_category
+from .mcts_diagnostics import (
+    root_puct_fallback_category,
+    root_puct_observation_mismatch_path_counts,
+    root_puct_replay_rejection_decision_round_counts,
+)
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
 from .replay_branching import replay_trajectory_prefix
@@ -1080,9 +1084,19 @@ def _opponent_scenario_skip_metadata(
     unsearched_action_group_count: int | None = None,
 ) -> dict[str, object]:
     skip_categories: dict[str, int] = {}
+    replay_rejection_decision_rounds: dict[str, int] = {}
+    observation_mismatch_paths: dict[str, int] = {}
     for _scenario, reason in skipped_scenarios:
         category = root_puct_fallback_category(reason)
         skip_categories[category] = skip_categories.get(category, 0) + 1
+        _merge_counts(
+            replay_rejection_decision_rounds,
+            root_puct_replay_rejection_decision_round_counts(reason),
+        )
+        _merge_counts(
+            observation_mismatch_paths,
+            root_puct_observation_mismatch_path_counts(reason),
+        )
     metadata: dict[str, object] = {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
         "root_puct_opponent_action_scenarios_skipped": len(skipped_scenarios),
@@ -1102,6 +1116,14 @@ def _opponent_scenario_skip_metadata(
     }
     if skip_categories:
         metadata["root_puct_opponent_action_skip_categories"] = dict(sorted(skip_categories.items()))
+    if replay_rejection_decision_rounds:
+        metadata["root_puct_opponent_action_replay_rejection_decision_rounds"] = dict(
+            sorted(replay_rejection_decision_rounds.items(), key=lambda item: int(item[0]))
+        )
+    if observation_mismatch_paths:
+        metadata["root_puct_opponent_action_observation_mismatch_paths"] = dict(
+            sorted(observation_mismatch_paths.items())
+        )
     if opponent_action_group_count is not None:
         metadata.update(
             {
@@ -1112,6 +1134,11 @@ def _opponent_scenario_skip_metadata(
             }
         )
     return metadata
+
+
+def _merge_counts(target: dict[str, int], source: Mapping[str, int]) -> None:
+    for key, count in source.items():
+        target[str(key)] = target.get(str(key), 0) + int(count)
 
 
 def _leaf_rollout_metadata(

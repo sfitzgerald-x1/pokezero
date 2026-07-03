@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
+_DECISION_ROUND_RE = re.compile(r"\bdecision round\s+(\d+)\b", re.IGNORECASE)
+_OBSERVATION_MISMATCH_PATH_RE = re.compile(
+    r"\((?P<path>[^():]+(?:/[^():]+)?(?:\[[^\]]+\])*(?:\[[^\]]+\])?):\s+"
+    r"actual=.*?\s+expected=.*?\)",
+    re.IGNORECASE,
+)
+
 
 def root_puct_fallback_category(reason: object) -> str:
     """Return a stable, compact category for a verbose root-PUCT fallback reason."""
@@ -62,3 +71,29 @@ def root_puct_fallback_category(reason: object) -> str:
     if "search failed" in text:
         return "search_failed"
     return "other"
+
+
+def root_puct_replay_rejection_decision_round_counts(reason: object) -> dict[str, int]:
+    """Count decision rounds mentioned by a replay rejection reason.
+
+    A single skipped opponent scenario can include multiple retry failures, so this is a rejection
+    occurrence histogram rather than a skipped-scenario histogram.
+    """
+
+    counts: dict[str, int] = {}
+    for match in _DECISION_ROUND_RE.finditer(str(reason or "")):
+        key = match.group(1)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def root_puct_observation_mismatch_path_counts(reason: object) -> dict[str, int]:
+    """Count first-mismatch observation paths embedded in replay rejection reasons."""
+
+    counts: dict[str, int] = {}
+    for match in _OBSERVATION_MISMATCH_PATH_RE.finditer(str(reason or "")):
+        key = match.group("path").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return counts

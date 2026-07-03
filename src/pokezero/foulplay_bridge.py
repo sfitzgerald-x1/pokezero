@@ -29,7 +29,11 @@ from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
 from .local_showdown import BRIDGE_PATH, LocalShowdownConfig, LocalShowdownEnv, showdown_seed_from_int
-from .mcts_diagnostics import root_puct_fallback_category
+from .mcts_diagnostics import (
+    root_puct_fallback_category,
+    root_puct_observation_mismatch_path_counts,
+    root_puct_replay_rejection_decision_round_counts,
+)
 from .neural_policy import (
     TransformerSoftmaxPolicy,
     evaluate_transformer_action_priors,
@@ -199,6 +203,12 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_opponent_action_scenarios_unsearched: int = 0
     root_puct_opponent_action_skip_categories: Mapping[str, int] = field(default_factory=dict)
+    root_puct_opponent_action_replay_rejection_decision_rounds: Mapping[str, int] = field(
+        default_factory=dict
+    )
+    root_puct_opponent_action_observation_mismatch_paths: Mapping[str, int] = field(
+        default_factory=dict
+    )
     root_puct_opponent_action_groups_generated: int = 0
     root_puct_opponent_action_groups_used: int = 0
     root_puct_opponent_action_groups_skipped: int = 0
@@ -253,6 +263,17 @@ class ControlledFoulPlayGameResult:
             payload["root_puct_opponent_action_skip_categories"] = dict(
                 sorted(self.root_puct_opponent_action_skip_categories.items())
             )
+        if self.root_puct_opponent_action_replay_rejection_decision_rounds:
+            payload["root_puct_opponent_action_replay_rejection_decision_rounds"] = dict(
+                sorted(
+                    self.root_puct_opponent_action_replay_rejection_decision_rounds.items(),
+                    key=lambda item: int(item[0]),
+                )
+            )
+        if self.root_puct_opponent_action_observation_mismatch_paths:
+            payload["root_puct_opponent_action_observation_mismatch_paths"] = dict(
+                sorted(self.root_puct_opponent_action_observation_mismatch_paths.items())
+            )
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
         if self.root_puct_prior_action_change_details:
@@ -299,10 +320,20 @@ class ControlledFoulPlayBenchmarkResult:
         root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
         root_scenarios_unsearched = sum(game.root_puct_opponent_action_scenarios_unsearched for game in self.games)
         root_scenario_skip_categories: dict[str, int] = {}
+        root_replay_rejection_decision_rounds: dict[str, int] = {}
+        root_observation_mismatch_paths: dict[str, int] = {}
         for game in self.games:
             _merge_count_mapping(
                 root_scenario_skip_categories,
                 game.root_puct_opponent_action_skip_categories,
+            )
+            _merge_count_mapping(
+                root_replay_rejection_decision_rounds,
+                game.root_puct_opponent_action_replay_rejection_decision_rounds,
+            )
+            _merge_count_mapping(
+                root_observation_mismatch_paths,
+                game.root_puct_opponent_action_observation_mismatch_paths,
             )
         root_action_groups_generated = sum(game.root_puct_opponent_action_groups_generated for game in self.games)
         root_action_groups_used = sum(game.root_puct_opponent_action_groups_used for game in self.games)
@@ -402,6 +433,14 @@ class ControlledFoulPlayBenchmarkResult:
         if root_scenario_skip_categories:
             payload["root_puct"]["opponent_action_skip_categories"] = dict(
                 sorted(root_scenario_skip_categories.items())
+            )
+        if root_replay_rejection_decision_rounds:
+            payload["root_puct"]["opponent_action_replay_rejection_decision_rounds"] = dict(
+                sorted(root_replay_rejection_decision_rounds.items(), key=lambda item: int(item[0]))
+            )
+        if root_observation_mismatch_paths:
+            payload["root_puct"]["opponent_action_observation_mismatch_paths"] = dict(
+                sorted(root_observation_mismatch_paths.items())
             )
         if root_fallback_reasons:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
@@ -1492,13 +1531,41 @@ async def _run_single_game(
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
     root_scenario_skip_categories: dict[str, int] = {}
+    root_replay_rejection_decision_rounds: dict[str, int] = {}
+    root_observation_mismatch_paths: dict[str, int] = {}
     for decision in state.decisions:
         if decision.metadata.get("policy_family") != "root-puct-search":
             continue
+        replay_rounds = decision.metadata.get("root_puct_opponent_action_replay_rejection_decision_rounds")
+        mismatch_paths = decision.metadata.get("root_puct_opponent_action_observation_mismatch_paths")
         _merge_count_mapping(
             root_scenario_skip_categories,
             decision.metadata.get("root_puct_opponent_action_skip_categories"),
         )
+        _merge_count_mapping(root_replay_rejection_decision_rounds, replay_rounds)
+        _merge_count_mapping(root_observation_mismatch_paths, mismatch_paths)
+        skipped_scenarios = decision.metadata.get("root_puct_opponent_action_skipped_scenarios")
+        should_parse_replay_rounds = not isinstance(replay_rounds, Mapping)
+        should_parse_mismatch_paths = not isinstance(mismatch_paths, Mapping)
+        if (
+            (should_parse_replay_rounds or should_parse_mismatch_paths)
+            and isinstance(skipped_scenarios, Sequence)
+            and not isinstance(skipped_scenarios, (str, bytes))
+        ):
+            for skipped in skipped_scenarios:
+                if not isinstance(skipped, Mapping):
+                    continue
+                reason = skipped.get("reason")
+                if should_parse_replay_rounds:
+                    _merge_count_mapping(
+                        root_replay_rejection_decision_rounds,
+                        root_puct_replay_rejection_decision_round_counts(reason),
+                    )
+                if should_parse_mismatch_paths:
+                    _merge_count_mapping(
+                        root_observation_mismatch_paths,
+                        root_puct_observation_mismatch_path_counts(reason),
+                    )
     root_action_groups_generated = sum(
         int(decision.metadata.get("root_puct_opponent_action_groups_generated") or 0)
         for decision in state.decisions
@@ -1582,6 +1649,10 @@ async def _run_single_game(
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_opponent_action_scenarios_unsearched=root_scenarios_unsearched,
         root_puct_opponent_action_skip_categories=root_scenario_skip_categories,
+        root_puct_opponent_action_replay_rejection_decision_rounds=(
+            root_replay_rejection_decision_rounds
+        ),
+        root_puct_opponent_action_observation_mismatch_paths=root_observation_mismatch_paths,
         root_puct_opponent_action_groups_generated=root_action_groups_generated,
         root_puct_opponent_action_groups_used=root_action_groups_used,
         root_puct_opponent_action_groups_skipped=root_action_groups_skipped,

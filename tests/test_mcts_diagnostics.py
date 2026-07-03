@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from pokezero.mcts_diagnostics import root_puct_fallback_category
+from pokezero.mcts_diagnostics import (
+    root_puct_fallback_category,
+    root_puct_observation_mismatch_path_counts,
+    root_puct_replay_rejection_decision_round_counts,
+)
 
 
 class RootPUCTFallbackCategoryTests(unittest.TestCase):
@@ -84,6 +88,42 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
                 "for decision round 3: p1."
             ),
             "start_override_observation_mismatch",
+        )
+
+    def test_extracts_replay_rejection_decision_round_counts(self) -> None:
+        reason = (
+            "replay actions for decision round 12 do not match environment request "
+            "(unexpected players: p2). (2 attempts); "
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 3: p1.; "
+            "replay actions for decision round 12 do not match environment request "
+            "(unexpected players: p2)."
+        )
+
+        self.assertEqual(
+            root_puct_replay_rejection_decision_round_counts(reason),
+            {"3": 1, "12": 2},
+        )
+
+    def test_extracts_observation_mismatch_path_counts(self) -> None:
+        reason = (
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 3: p1. "
+            "(categorical_ids/opponent_pokemon[8][11]: actual=76 expected=0); "
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 4: p1. "
+            "(numeric_features/self_pokemon[2][0]: actual=0.5 expected=1.0); "
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 5: p1. "
+            "(categorical_ids/opponent_pokemon[8][11]: actual=76 expected=0)"
+        )
+
+        self.assertEqual(
+            root_puct_observation_mismatch_path_counts(reason),
+            {
+                "categorical_ids/opponent_pokemon[8][11]": 2,
+                "numeric_features/self_pokemon[2][0]": 1,
+            },
         )
 
 

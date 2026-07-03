@@ -163,6 +163,17 @@ prevalidated, `3` accepted, and `71` rejected. Replay materialization remains th
 (`replay_request_unexpected_player=270`, `start_override_observation_mismatch=57` in that artifact);
 these exact one-game counts are descriptive because foul-play is not fully deterministic.
 
+The next replay-localization diagnostic keeps raw and root-PUCT at `0/1` on seed `961001`, with
+root-PUCT searching only 2 decisions, falling back 46 times, and skipping 429 opponent-action
+scenarios. It now records replay rejection rounds and first observation mismatch paths. In one run the
+largest replay-round concentrations were early or mid-prefix (`2`, `3`, and `12`), while observation
+mismatches concentrated in opponent belief/item and HP features
+(`categorical_ids/opponent_pokemon[8][11]`, `numeric_features/opponent_pokemon[8][0]`) plus our own
+active HP (`numeric_features/self_pokemon[1][0]`). That points at full-prefix public-state divergence
+from sampled damage/item/ability histories, not a PUCT selection knob. The next materialization fix
+should either narrow sampled worlds from public damage/effect evidence or replace replay-from-root
+branch-point validation with a true current-state/snapshot contract.
+
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
 runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.
