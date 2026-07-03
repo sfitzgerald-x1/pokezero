@@ -30,11 +30,29 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.assertEqual(root_puct_fallback_category(reason), category)
 
+    def test_classifies_illegal_current_request_action(self) -> None:
+        self.assertEqual(
+            root_puct_fallback_category("p2: action_index 2 is not legal for the current request."),
+            "illegal_action_for_current_request",
+        )
+
     def test_classifies_mixed_replay_prefix_divergence(self) -> None:
         reason = (
             "all opponent action scenarios were replay-illegal: "
             "replay actions for decision round 12 do not match environment request "
             "(unexpected players: p2); "
+            "start override does not reproduce recorded replay prefix observations "
+            "for decision round 28: p1."
+        )
+
+        self.assertEqual(root_puct_fallback_category(reason), "mixed_replay_prefix_divergence")
+
+    def test_mixed_replay_prefix_divergence_is_not_masked_by_illegal_action(self) -> None:
+        reason = (
+            "all opponent action scenarios were replay-illegal: "
+            "replay actions for decision round 12 do not match environment request "
+            "(unexpected players: p2); "
+            "p2: action_index 2 is not legal for the current request.; "
             "start override does not reproduce recorded replay prefix observations "
             "for decision round 28: p1."
         )

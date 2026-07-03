@@ -931,6 +931,10 @@ def _opponent_scenario_skip_metadata(
     skipped_action_group_count: int | None = None,
     unsearched_action_group_count: int | None = None,
 ) -> dict[str, object]:
+    skip_categories: dict[str, int] = {}
+    for _scenario, reason in skipped_scenarios:
+        category = root_puct_fallback_category(reason)
+        skip_categories[category] = skip_categories.get(category, 0) + 1
     metadata: dict[str, object] = {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
         "root_puct_opponent_action_scenarios_skipped": len(skipped_scenarios),
@@ -943,10 +947,13 @@ def _opponent_scenario_skip_metadata(
             {
                 **_opponent_action_scenario_payload(scenario),
                 "reason": reason,
+                "category": root_puct_fallback_category(reason),
             }
             for scenario, reason in skipped_scenarios
         ],
     }
+    if skip_categories:
+        metadata["root_puct_opponent_action_skip_categories"] = dict(sorted(skip_categories.items()))
     if opponent_action_group_count is not None:
         metadata.update(
             {

@@ -45,6 +45,8 @@ def root_puct_fallback_category(reason: object) -> str:
         if has_missing_world:
             return "missing_sampled_world"
         return "all_opponent_scenarios_replay_illegal"
+    if "action_index " in text and " is not legal for the current request" in text:
+        return "illegal_action_for_current_request"
     if "did not produce a sampled world" in text or "sampled world" in text:
         return "missing_sampled_world"
     if "unexpected players" in text:
