@@ -525,6 +525,29 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(len(env.all_step_calls), 5)
         self.assertEqual(result.action_index, 0)
 
+    def test_puct_branch_search_reuses_initial_value_sweep_prefix_snapshot(self) -> None:
+        env = SnapshotValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: float(_only_legal_action(history[-1])),
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(len(env.reset_calls), 1)
+        self.assertEqual(env.snapshot_calls, 1)
+        self.assertEqual(env.restore_calls, 5)
+        self.assertEqual(len(env.all_step_calls), 5)
+
     def test_puct_branch_search_accumulates_until_root_time_budget_expires(self) -> None:
         env = ValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)

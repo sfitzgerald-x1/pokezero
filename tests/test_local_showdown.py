@@ -289,6 +289,32 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
 
         self.assertEqual(restored_branch_suffix, first_branch_suffix)
 
+    def test_snapshot_restore_after_terminal_branch_keeps_stream_usable(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Mewtwo", ability="Pressure", moves=("Psychic", "Recover")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Caterpie", ability="Shield Dust", moves=("Tackle",), level=1),)
+                ),
+            },
+        )
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=23, start_override=start_override)
+            snapshot = env.snapshot()
+            terminal_branch = env.step({"p1": 0, "p2": 0})
+            self.assertIsNotNone(terminal_branch.terminal)
+
+            env.restore(snapshot)
+            self.assertEqual(env.requested_players(), ("p1", "p2"))
+            restored_branch = env.step({"p1": 1, "p2": 0})
+
+        self.assertIsNone(restored_branch.terminal)
+
     def test_random_vs_random_rollout_reaches_terminal_or_cap_without_showdown_errors(self) -> None:
         config = integration_config()
         assert config is not None

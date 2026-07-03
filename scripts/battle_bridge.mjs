@@ -178,7 +178,7 @@ async function startBattle(command) {
   }
   const battle = newBattleState(battleId);
   battles.set(battleId, battle);
-  const battleStream = new BattleStream();
+  const battleStream = new BattleStream({ keepAlive: true });
   battle.battleStream = battleStream;
   battle.streams = getPlayerStreams(battleStream);
   for (const name of ["omniscient", "p1", "p2"]) {

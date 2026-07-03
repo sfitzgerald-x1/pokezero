@@ -227,6 +227,38 @@ def value_branch_search(
     start_override: StartOverrideSource = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
 ) -> ValueBranchSearchResult:
+    result, _restorable_prefix = _value_branch_search_with_prefix(
+        env=env,
+        trajectory=trajectory,
+        player_id=player_id,
+        prefix_decision_round_count=prefix_decision_round_count,
+        legal_action_mask=legal_action_mask,
+        opponent_actions=opponent_actions,
+        value_fn=value_fn,
+        leaf_rollout_policies=leaf_rollout_policies,
+        leaf_rollout_config=leaf_rollout_config,
+        leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        start_override=start_override,
+        expected_current_observation=expected_current_observation,
+    )
+    return result
+
+
+def _value_branch_search_with_prefix(
+    *,
+    env: PokeZeroEnv,
+    trajectory: BattleTrajectory,
+    player_id: PlayerId,
+    prefix_decision_round_count: int,
+    legal_action_mask: tuple[bool, ...],
+    opponent_actions: Mapping[PlayerId, int],
+    value_fn: ObservationValueFunction,
+    leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
+    leaf_rollout_config: RolloutConfig | None = None,
+    leaf_rollout_decision_rounds: int = 0,
+    start_override: StartOverrideSource = None,
+    expected_current_observation: PokeZeroObservationV0 | None = None,
+) -> tuple[ValueBranchSearchResult, _RestorablePrefix | None]:
     """Enumerate legal root actions and score branch leaves.
 
     The default path is the original one-ply evaluator: branch once and score the
@@ -314,12 +346,13 @@ def value_branch_search(
     if not candidates:
         raise ValueError("value branch search found no replay-legal root actions.")
 
-    return ValueBranchSearchResult(
+    result = ValueBranchSearchResult(
         player_id=player_id,
         prefix_decision_round_count=prefix_decision_round_count,
         opponent_actions=dict(opponent_actions),
         candidates=tuple(candidates),
     )
+    return result, restorable_prefix
 
 
 def puct_branch_search(
@@ -360,7 +393,7 @@ def puct_branch_search(
     ):
         raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
     time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
-    value_search = value_branch_search(
+    value_search, restorable_prefix = _value_branch_search_with_prefix(
         env=env,
         trajectory=trajectory,
         player_id=player_id,
@@ -394,14 +427,6 @@ def puct_branch_search(
         trajectory,
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
-    )
-    restorable_prefix = _restorable_prefix_snapshot(
-        env=env,
-        trajectory=trajectory,
-        player_id=player_id,
-        prefix_decision_round_count=prefix_decision_round_count,
-        start_override=start_override,
-        expected_current_observation=expected_current_observation,
     )
     time_budget_exhausted = False
     while True:
