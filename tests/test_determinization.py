@@ -325,8 +325,15 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
 
         self.assertIsNotNone(registeel_spread)
         self.assertIsNotNone(umbreon_spread)
+        assert registeel_spread is not None
+        assert umbreon_spread is not None
+        self.assertEqual(registeel_spread["evs"]["atk"], 0)
+        self.assertEqual(registeel_spread["ivs"]["atk"], 0)
+        self.assertEqual(umbreon_spread["ivs"]["spa"], 30)
+        self.assertEqual(umbreon_spread["ivs"]["spd"], 30)
+        self.assertEqual(umbreon_spread["ivs"]["atk"], 31)
 
-    def test_revealed_opponent_public_hp_filters_sampled_variants(self) -> None:
+    def test_revealed_opponent_absolute_hp_filters_sampled_variants(self) -> None:
         metadata = {
             "self_team": [
                 {
@@ -374,12 +381,43 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         }
 
         context = _context(metadata)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(1),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        self.assertIn("PetayaBerry", override.player_teams["p1"])
+        self.assertIn("substitute", override.player_teams["p1"].lower())
+        self.assertNotIn("Leftovers", override.player_teams["p1"])
+
+    def test_revealed_opponent_percentage_condition_does_not_filter_by_absolute_hp(self) -> None:
+        metadata = _metadata()
+        opponent = metadata["belief_view"]["opponent_pokemon"][0]
+        opponent["condition"] = "70/100"
+
+        override = gen3_randbat_belief_start_override(
+            context=_context(metadata),
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+
+    def test_opponent_private_trajectory_moves_do_not_constrain_sampled_variants(self) -> None:
+        metadata = _metadata()
+        context = _context(metadata)
         opponent_observation = replace(
             context.observation,
             metadata={
                 "self_active": {
-                    "species": "Charizard",
-                    "moves": ["hiddenpowergrass", "dragonclaw", "fireblast", "substitute"],
+                    "species": "Xatu",
+                    "moves": ["impossiblemove", "psychic", "wish", "protect"],
                 }
             },
         )
@@ -396,17 +434,13 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         override = gen3_randbat_belief_start_override(
             context=context,
             set_source=_source(),
-            rng=random.Random(1),
-            team_size=1,
+            rng=random.Random(7),
+            team_size=3,
         )
 
         self.assertIsNotNone(override)
         assert override is not None
-        self.assertIn("PetayaBerry", override.player_teams["p1"])
-        self.assertIn("substitute", override.player_teams["p1"].lower())
-        self.assertNotIn("Leftovers", override.player_teams["p1"])
-        moves_field = override.player_teams["p1"].split("|")[4]
-        self.assertTrue(moves_field.startswith("hiddenpowergrass,"))
+        self.assertIn("Xatu", override.player_teams["p1"])
 
     def test_replay_root_uses_initial_self_team_snapshot(self) -> None:
         initial_metadata = _metadata()
