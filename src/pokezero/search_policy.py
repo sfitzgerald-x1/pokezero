@@ -138,6 +138,7 @@ def prior_top_k_opponent_action_scenario_planner(
         raise ValueError("scenario_count must be positive.")
 
     def planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+        del rng
         requested_opponents = tuple(player for player in context.requested_players if player != context.player_id)
         if not requested_opponents:
             return (OpponentActionScenario(actions={}, weight=1.0, label="no-opponent"),)
@@ -150,7 +151,16 @@ def prior_top_k_opponent_action_scenario_planner(
         priors = tuple(float(value) for value in prior_fn(history))
         _validate_action_prior_vector(priors, name="opponent action priors")
         choices_by_player = tuple(
-            (player, _top_prior_action_choices(context, player, priors, limit=scenario_count, rng=rng))
+            (
+                player,
+                _top_prior_action_choices(
+                    context,
+                    player,
+                    priors,
+                    limit=scenario_count,
+                    rng=_opponent_action_choice_rng(context, player),
+                ),
+            )
             for player in requested_opponents
         )
         scenarios: list[OpponentActionScenario] = []
@@ -1008,6 +1018,20 @@ def _top_prior_action_choices(
         uniform = 1.0 / len(ranked)
         return tuple((index, uniform) for index, _weight in ranked)
     return tuple((index, weight / total) for index, weight in ranked)
+
+
+def _opponent_action_choice_rng(context: PolicyContext, player: PlayerId) -> random.Random:
+    """Return an independent RNG for hidden-mask replay handles.
+
+    Opponent-action planning runs before belief start-override sampling. Keep this stream separate
+    so choosing a concrete replay handle for an abstract switch bucket does not shift downstream
+    determinization samples.
+    """
+
+    return random.Random(
+        f"{context.seed}|{context.battle_id}|{context.decision_round_index}|"
+        f"{context.player_id}|{player}|hidden-switch-handle"
+    )
 
 
 def _hidden_mask_prior_action_choices(

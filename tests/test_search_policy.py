@@ -334,10 +334,32 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         scenarios = planner(context, random.Random(1))
 
-        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 5}, {"p2": 0}, {"p2": 1}])
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 8}, {"p2": 0}, {"p2": 1}])
         self.assertAlmostEqual(scenarios[0].weight, 0.54 / 0.69)
         self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.69)
         self.assertAlmostEqual(scenarios[2].weight, 0.05 / 0.69)
+
+    def test_hidden_switch_handle_does_not_consume_caller_rng(self) -> None:
+        planner = prior_top_k_opponent_action_scenario_planner(
+            lambda history: (0.10, 0.05, 0.04, 0.03, 0.07, 0.08, 0.09, 0.10, 0.20),
+            scenario_count=3,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="planner",
+            format_id="gen3randombattle",
+            seed=7,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="planner", format_id="gen3randombattle", seed=7),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        first = planner(context, random.Random(1))
+        second = planner(context, random.Random(999))
+
+        self.assertEqual([dict(scenario.actions) for scenario in first], [dict(scenario.actions) for scenario in second])
 
     def test_prior_top_k_opponent_action_scenario_planner_preserves_legal_switch_slots(self) -> None:
         planner = prior_top_k_opponent_action_scenario_planner(

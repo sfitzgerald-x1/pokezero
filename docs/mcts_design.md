@@ -225,13 +225,16 @@ unbiased estimator of the belief-weighted root value.
 
 The hidden opponent switch bucket no longer always replays through switch action `4`. The bucket
 still represents "some switch" with the summed switch prior mass, but its concrete replay handle is
-sampled from the switch-slot prior mass. This is closer to the intended exchangeable-backline model:
-unrevealed switch slots remain one abstract action family, while repeated determinizations can test
-different concrete backline positions. On the same seed/default-attempt smoke, raw and root-PUCT
-again stayed `0/1`, but replay volume improved: fallbacks fell from `32` to `27`, skipped
-opponent-action scenarios from `315` to `266`, and average elapsed time per searched decision from
-`0.81s` to `0.72s`, with searched decisions unchanged at `16`. This is still coverage/cost evidence,
-not strength evidence.
+sampled from the switch-slot prior mass by an independent per-decision RNG. This is closer to the
+intended exchangeable-backline model: unrevealed switch slots remain one abstract action family,
+while different decisions can test different concrete backline positions without shifting the
+downstream belief-determinization RNG stream. On the same seed/default-attempt smoke, raw and
+root-PUCT again stayed `0/1`; in that run, searches rose from `16` to `19`, accepted shared samples
+from `21` to `25`, fallbacks fell from `32` to `29`, and skipped opponent-action scenarios from
+`315` to `291`, while average elapsed time per searched decision rose slightly from `0.81s` to
+`0.85s`. This is still coverage/cost evidence, not strength evidence. A replay-illegal
+representative can still drop the whole abstract switch bucket, so this is not yet a full
+switch-bucket retry system.
 
 Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
 uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
