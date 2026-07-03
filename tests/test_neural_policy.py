@@ -2108,6 +2108,103 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.assertIn(f"benchmark_summary: {summary_path}", stderr.getvalue())
             print_report.assert_called_once_with(report)
 
+    def test_neural_cli_root_puct_play_benchmark_summary_out_persists_json(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {
+                    "schema_version": "fixture.root-puct-play.v1",
+                    "matchups": 4,
+                    "head_to_heads": [
+                        {
+                            "first_policy_id": "neural-smoke",
+                            "second_policy_id": "random-legal",
+                            "games": 4,
+                            "first_policy_wins": 1,
+                            "second_policy_wins": 3,
+                            "ties": 0,
+                            "capped_games": 0,
+                            "first_policy_win_rate": 0.25,
+                            "second_policy_win_rate": 0.75,
+                        },
+                        {
+                            "first_policy_id": "neural-smoke+root-puct",
+                            "second_policy_id": "random-legal",
+                            "games": 4,
+                            "first_policy_wins": 2,
+                            "second_policy_wins": 2,
+                            "ties": 0,
+                            "capped_games": 1,
+                            "first_policy_win_rate": 0.5,
+                            "second_policy_win_rate": 0.5,
+                        },
+                    ],
+                }
+
+        fake_model = object()
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary_path = Path(temp_dir) / "nested" / "root-puct-play-summary.json"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            report = FakeReport()
+            with (
+                patch(
+                    "pokezero.neural_cli.load_transformer_checkpoint",
+                    return_value=(fake_model, fake_training_result),
+                ),
+                patch("pokezero.neural_cli.benchmark_rollouts", return_value=report),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "root-puct-play-benchmark",
+                        "--checkpoint",
+                        "checkpoint.pt",
+                        "--games",
+                        "2",
+                        "--opponent-policy",
+                        "random-legal",
+                        "--summary-out",
+                        str(summary_path),
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            expected = {
+                **report.to_dict(),
+                "root_puct_play_comparisons": [
+                    {
+                        "opponent_policy_id": "random-legal",
+                        "raw_policy_id": "neural-smoke",
+                        "search_policy_id": "neural-smoke+root-puct",
+                        "raw": {
+                            "games": 4,
+                            "wins": 1,
+                            "win_rate": 0.25,
+                            "ties": 0,
+                            "capped_games": 0,
+                        },
+                        "search": {
+                            "games": 4,
+                            "wins": 2,
+                            "win_rate": 0.5,
+                            "ties": 0,
+                            "capped_games": 1,
+                        },
+                        "search_minus_raw_win_rate": 0.25,
+                    }
+                ],
+            }
+            self.assertEqual(json.loads(summary_path.read_text()), expected)
+            self.assertIn(f"root_puct_play_benchmark_summary: {summary_path}", stderr.getvalue())
+            self.assertEqual(json.loads(stdout.getvalue()), expected)
+
     def test_neural_cli_root_puct_play_benchmark_wires_raw_and_search_matchups(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")

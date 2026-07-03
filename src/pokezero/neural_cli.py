@@ -690,6 +690,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Disable fallback to the raw checkpoint action when root-PUCT branch search fails.",
     )
     root_puct_play.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
+    root_puct_play.add_argument(
+        "--summary-out",
+        type=Path,
+        default=None,
+        help="Optional JSON path where the root-PUCT full-game benchmark report is persisted.",
+    )
     root_puct_play.set_defaults(func=_root_puct_play_benchmark)
 
     root_puct = subparsers.add_parser(
@@ -2347,6 +2353,10 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         if tag_leaf_policy_ids:
             return f"{raw_policy_id}+root-puct-leaf{leaf_rollout_rounds}"
         return f"{raw_policy_id}+root-puct"
+    search_policy_ids = tuple(
+        search_policy_id_for(leaf_rollout_rounds)
+        for leaf_rollout_rounds in leaf_rollout_rounds_values
+    )
 
     def make_raw_policy(policy_id: str | None = None) -> TransformerSoftmaxPolicy:
         return TransformerSoftmaxPolicy(
@@ -2504,11 +2514,110 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         matchups=tuple(matchups),
     )
+    payload = _root_puct_play_payload(
+        report,
+        raw_policy_id=raw_policy_id,
+        search_policy_ids=search_policy_ids,
+    )
+    if args.summary_out is not None:
+        _write_json(args.summary_out, payload)
+        print(f"root_puct_play_benchmark_summary: {args.summary_out}", file=sys.stderr)
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_benchmark_report(report)
     return 0
+
+
+def _root_puct_play_payload(
+    report: Any,
+    *,
+    raw_policy_id: str,
+    search_policy_ids: Sequence[str],
+) -> dict[str, Any]:
+    payload = dict(report.to_dict())
+    comparisons = _root_puct_play_comparisons(
+        payload,
+        raw_policy_id=raw_policy_id,
+        search_policy_ids=tuple(search_policy_ids),
+    )
+    if comparisons:
+        payload["root_puct_play_comparisons"] = comparisons
+    return payload
+
+
+def _root_puct_play_comparisons(
+    payload: Mapping[str, Any],
+    *,
+    raw_policy_id: str,
+    search_policy_ids: Sequence[str],
+) -> list[dict[str, Any]]:
+    head_to_heads = tuple(_mapping(item) for item in _sequence(payload.get("head_to_heads", ())))
+    opponents: list[str] = []
+    for result in head_to_heads:
+        first = str(result.get("first_policy_id", ""))
+        second = str(result.get("second_policy_id", ""))
+        if first == raw_policy_id and second and second not in opponents:
+            opponents.append(second)
+        elif second == raw_policy_id and first and first not in opponents:
+            opponents.append(first)
+
+    comparisons: list[dict[str, Any]] = []
+    for opponent_policy_id in opponents:
+        raw = _policy_pair_readout(
+            head_to_heads,
+            policy_id=raw_policy_id,
+            opponent_policy_id=opponent_policy_id,
+        )
+        if raw is None:
+            continue
+        for search_policy_id in search_policy_ids:
+            search = _policy_pair_readout(
+                head_to_heads,
+                policy_id=search_policy_id,
+                opponent_policy_id=opponent_policy_id,
+            )
+            if search is None:
+                continue
+            comparisons.append(
+                {
+                    "opponent_policy_id": opponent_policy_id,
+                    "raw_policy_id": raw_policy_id,
+                    "search_policy_id": search_policy_id,
+                    "raw": raw,
+                    "search": search,
+                    "search_minus_raw_win_rate": search["win_rate"] - raw["win_rate"],
+                }
+            )
+    return comparisons
+
+
+def _policy_pair_readout(
+    head_to_heads: Sequence[Mapping[str, Any]],
+    *,
+    policy_id: str,
+    opponent_policy_id: str,
+) -> dict[str, Any] | None:
+    for result in head_to_heads:
+        first = str(result.get("first_policy_id", ""))
+        second = str(result.get("second_policy_id", ""))
+        if {first, second} != {policy_id, opponent_policy_id}:
+            continue
+        games = int(result.get("games", 0))
+        if first == policy_id:
+            wins = int(result.get("first_policy_wins", 0))
+            win_rate = float(result.get("first_policy_win_rate", 0.0))
+        else:
+            wins = int(result.get("second_policy_wins", 0))
+            win_rate = float(result.get("second_policy_win_rate", 0.0))
+        return {
+            "games": games,
+            "wins": wins,
+            "win_rate": win_rate,
+            "ties": int(result.get("ties", 0)),
+            "capped_games": int(result.get("capped_games", 0)),
+        }
+    return None
 
 
 def _root_puct_leaf_rollout_rounds_values(args: argparse.Namespace) -> tuple[int, ...]:
