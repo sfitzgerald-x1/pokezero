@@ -23,7 +23,7 @@ from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
 ActionPriorVector = tuple[float, ...]
-StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride | None] | None
+StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
 
 
 @dataclass(frozen=True)
