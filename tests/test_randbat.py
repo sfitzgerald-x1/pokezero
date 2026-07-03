@@ -67,6 +67,16 @@ GEN3_FIXTURE = {
             }
         ],
     },
+    "unown": {
+        "level": 100,
+        "sets": [
+            {
+                "role": "Fast Attacker",
+                "movepool": ["hiddenpowerpsychic"],
+                "abilities": ["Levitate"],
+            }
+        ],
+    },
 }
 
 
@@ -80,6 +90,7 @@ MOVE_METADATA = {
     "hiddenpowerfire": {"type": "Fire", "category": "Special", "basePower": 70},
     "hiddenpowergrass": {"type": "Grass", "category": "Special", "basePower": 70},
     "hiddenpowerghost": {"type": "Ghost", "category": "Physical", "basePower": 70},
+    "hiddenpowerpsychic": {"type": "Psychic", "category": "Special", "basePower": 70},
     "nightshade": {"type": "Ghost", "category": "Physical", "basePower": 0},
     "protect": {"type": "Normal", "category": "Status", "basePower": 0},
     "psychic": {"type": "Psychic", "category": "Special", "basePower": 90},
@@ -96,6 +107,7 @@ SPECIES_METADATA = {
     "charizard": {"types": ["Fire", "Flying"], "baseStats": {"spe": 100}},
     "xatu": {"types": ["Psychic", "Flying"], "baseStats": {"spe": 95}},
     "tauros": {"types": ["Normal"], "baseStats": {"spe": 110}},
+    "unown": {"types": ["Psychic"], "baseStats": {"spe": 48}},
 }
 
 
@@ -167,6 +179,24 @@ class Gen3RandbatSourceTest(unittest.TestCase):
         self.assertIsNotNone(summary)
         self.assertEqual(summary.candidate_count, 1)
         self.assertIn("hiddenpowerghost", summary.possible_moves)
+
+    def test_unown_cosmetic_formes_use_base_universe(self) -> None:
+        set_source = source()
+        base = set_source.universe_for("Unown")
+        forme = set_source.universe_for("Unown-Z")
+
+        self.assertIsNotNone(base)
+        self.assertIs(forme, base)
+        summary = set_source.summarize(
+            format_id="gen3randombattle",
+            species="Unown-Z",
+            revealed_moves=("Hidden Power",),
+        )
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary.species, "Unown")
+        self.assertEqual(summary.candidate_count, 1)
+        self.assertEqual(summary.possible_abilities, ("Levitate",))
 
     def test_from_showdown_root_requires_built_dist_generator(self) -> None:
         temp_dir = Path(tempfile.mkdtemp())

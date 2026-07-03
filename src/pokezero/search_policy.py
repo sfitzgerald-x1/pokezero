@@ -1020,6 +1020,8 @@ def _opponent_scenario_replay_legality_error(
     message = str(exc)
     if message.startswith("start override does not reproduce recorded replay prefix observations"):
         return message
+    if message.startswith("start override planner did not produce a sampled world:"):
+        return message
     if message == START_OVERRIDE_MISSING_WORLD_MESSAGE:
         return message
     if message.startswith("replay actions for decision round "):

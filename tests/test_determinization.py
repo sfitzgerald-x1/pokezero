@@ -36,6 +36,7 @@ MOVE_METADATA = {
     "hiddenpowerghost": {"type": "Ghost", "category": "Physical", "basePower": 70},
     "hiddenpowerground": {"type": "Ground", "category": "Physical", "basePower": 70},
     "hiddenpowergrass": {"type": "Grass", "category": "Special", "basePower": 70},
+    "hiddenpowerpsychic": {"type": "Psychic", "category": "Special", "basePower": 70},
     "protect": {"type": "Normal", "category": "Status", "basePower": 0},
     "psychic": {"type": "Psychic", "category": "Special", "basePower": 90},
     "rest": {"type": "Psychic", "category": "Status", "basePower": 0},
@@ -54,6 +55,7 @@ SPECIES_METADATA = {
     "registeel": {"baseStats": {"hp": 80, "atk": 75, "def": 150, "spa": 75, "spd": 150, "spe": 50}},
     "snorlax": {"baseStats": {"hp": 160, "atk": 110, "def": 65, "spa": 65, "spd": 110, "spe": 30}},
     "tauros": {"baseStats": {"hp": 75, "atk": 100, "def": 95, "spa": 40, "spd": 70, "spe": 110}},
+    "unown": {"baseStats": {"hp": 48, "atk": 72, "def": 48, "spa": 72, "spd": 48, "spe": 48}},
     "umbreon": {"baseStats": {"hp": 95, "atk": 65, "def": 110, "spa": 60, "spd": 130, "spe": 65}},
     "xatu": {"baseStats": {"hp": 65, "atk": 75, "def": 70, "spa": 95, "spd": 70, "spe": 95}},
 }
@@ -103,6 +105,16 @@ def _source() -> Gen3RandbatSource:
                         "role": "Breaker",
                         "movepool": ["return", "earthquake", "doubleedge", "hiddenpowerghost"],
                         "abilities": ["Intimidate"],
+                    }
+                ],
+            },
+            "unown": {
+                "level": 100,
+                "sets": [
+                    {
+                        "role": "Fast Attacker",
+                        "movepool": ["hiddenpowerpsychic"],
+                        "abilities": ["Levitate"],
                     }
                 ],
             },
@@ -261,6 +273,53 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         second = source()
         self.assertIsNotNone(first)
         self.assertIs(first, second)
+
+    def test_planner_returns_reason_bearing_missing_source_for_supported_failure(self) -> None:
+        planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
+        metadata = _metadata()
+        metadata.pop("self_team")
+
+        source = planner(
+            _context(metadata),
+            OpponentActionScenario(actions={"p1": 0}),
+            0,
+            random.Random(3),
+        )
+
+        self.assertTrue(callable(source))
+        assert callable(source)
+        with self.assertRaisesRegex(ValueError, "self_team"):
+            source()
+
+    def test_unown_cosmetic_form_belief_materializes_from_base_universe(self) -> None:
+        metadata = _metadata()
+        metadata["belief_view"] = {
+            "self_slot": "p2",
+            "opponent_slot": "p1",
+            "self_pokemon": [],
+            "opponent_pokemon": [
+                {
+                    "showdown_slot": "p1",
+                    "species": "Unown-Z",
+                    "condition": "100/100",
+                    "active": True,
+                    "revealed_moves": ["Hidden Power"],
+                },
+            ],
+        }
+
+        override = gen3_randbat_belief_start_override(
+            context=_context(metadata),
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=3,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        self.assertIn("Unown-Z", override.player_teams["p1"])
+        self.assertIn("Levitate", override.player_teams["p1"])
+        self.assertEqual(override.player_teams["p1"].count("Unown-Z"), 1)
 
     def test_unsupported_format_disables_planner(self) -> None:
         planner = gen3_randbat_belief_start_override_planner(_source(), team_size=3)
@@ -861,6 +920,177 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         assert override is not None
         opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
         self.assertEqual(opponent_species_order, ["Xatu", "Arcanine", "Tauros"])
+
+    def test_public_switch_constraints_force_missing_revealed_species_into_hidden_backline(self) -> None:
+        metadata = _metadata()
+        metadata["self_team"] = metadata["self_team"][:2]
+        metadata["belief_view"] = {
+            "self_slot": "p2",
+            "opponent_slot": "p1",
+            "self_pokemon": [],
+            "opponent_pokemon": [
+                {
+                    "showdown_slot": "p1",
+                    "species": "Arcanine",
+                    "active": True,
+                    "candidate_variants": [
+                        {
+                            "variant_id": "arcanine-breaker",
+                            "source_set_id": "arcanine-1",
+                            "role": "Breaker",
+                            "level": 78,
+                            "moves": ["fireblast", "crunch", "extremespeed", "hiddenpowergrass"],
+                            "ability": "Flash Fire",
+                            "item": "Leftovers",
+                        },
+                    ],
+                },
+            ],
+        }
+        context = _context(metadata)
+        switch_mask = tuple(index in {0, 4} for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            legal_action_mask=switch_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Arcanine"},
+                "recent_public_events": [
+                    "|switch|opponenta: Arcanine|Arcanine, L78|100/100",
+                ],
+            },
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p2",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                action_index=0,
+            )
+        )
+        context.trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=round_0_observation,
+                legal_action_mask=tuple(round_0_observation.legal_action_mask),
+                action_index=4,
+            )
+        )
+        context = replace(context, decision_round_index=1, observation=round_1_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=2,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        opponent_species_order = [packed.split("|", 1)[0] for packed in override.player_teams["p1"].split("]")]
+        self.assertEqual(opponent_species_order, ["Xatu", "Arcanine"])
+
+    def test_forced_hidden_backline_species_respects_public_move_slot_constraints(self) -> None:
+        metadata = _metadata()
+        metadata["self_team"] = metadata["self_team"][:2]
+        metadata["belief_view"] = {
+            "self_slot": "p2",
+            "opponent_slot": "p1",
+            "self_pokemon": [],
+            "opponent_pokemon": [
+                {
+                    "showdown_slot": "p1",
+                    "species": "Arcanine",
+                    "active": True,
+                    "candidate_variants": [
+                        {
+                            "variant_id": "arcanine-breaker",
+                            "source_set_id": "arcanine-1",
+                            "role": "Breaker",
+                            "level": 78,
+                            "moves": ["fireblast", "crunch", "extremespeed", "hiddenpowergrass"],
+                            "ability": "Flash Fire",
+                            "item": "Leftovers",
+                        },
+                    ],
+                },
+            ],
+        }
+        context = _context(metadata)
+        action_mask = tuple(index in {0, 1, 4} for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=action_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            legal_action_mask=action_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Xatu"},
+                "recent_public_events": [
+                    "|move|opponenta: Xatu|Thunder Wave|p2a: Charizard",
+                ],
+            },
+        )
+        round_2_observation = replace(
+            context.observation,
+            legal_action_mask=action_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Arcanine"},
+                "recent_public_events": [
+                    "|switch|opponenta: Arcanine|Arcanine, L78|100/100",
+                ],
+            },
+        )
+        for player_id, turn_index, action_index, observation in (
+            ("p2", 0, 0, round_0_observation),
+            ("p1", 0, 1, round_0_observation),
+            ("p2", 1, 0, round_1_observation),
+            ("p1", 1, 4, round_1_observation),
+        ):
+            context.trajectory.append(
+                TrajectoryStep(
+                    player_id=player_id,
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=tuple(observation.legal_action_mask),
+                    action_index=action_index,
+                )
+            )
+        context = replace(context, decision_round_index=2, observation=round_2_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=2,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        xatu = override.player_teams["p1"].split("]")[0]
+        packed_parts = xatu.split("|")
+        self.assertEqual(packed_parts[0], "Xatu")
+        self.assertEqual(packed_parts[3], "Synchronize")
+        self.assertEqual(packed_parts[4].split(",")[1], "thunderwave")
 
     def test_public_switch_constraints_track_showdown_party_swaps(self) -> None:
         metadata = {
