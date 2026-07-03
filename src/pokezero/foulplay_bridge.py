@@ -146,6 +146,7 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_selected_prior_action_changes: int = 0
     root_puct_pre_gate_prior_action_changes: int = 0
+    root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
 
@@ -169,6 +170,11 @@ class ControlledFoulPlayGameResult:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
+        if self.root_puct_prior_action_change_details:
+            payload["root_puct_prior_action_change_details"] = [
+                dict(detail)
+                for detail in self.root_puct_prior_action_change_details
+            ]
         if self.root_puct_fallback_reasons:
             payload["root_puct_fallback_reasons"] = dict(sorted(self.root_puct_fallback_reasons.items()))
         return payload
@@ -907,6 +913,7 @@ async def _run_single_game(
         and not decision.metadata.get("root_puct_fallback")
         and decision.metadata.get("root_puct_pre_gate_changed_prior_action")
     )
+    root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -922,9 +929,63 @@ async def _run_single_game(
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_selected_prior_action_changes=root_selected_prior_action_changes,
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
+        root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
     )
+
+
+def _root_puct_prior_action_change_details(
+    decisions: Sequence[PolicyDecision],
+) -> tuple[Mapping[str, Any], ...]:
+    details: list[dict[str, Any]] = []
+    for decision_index, decision in enumerate(decisions):
+        metadata = decision.metadata
+        if metadata.get("policy_family") != "root-puct-search":
+            continue
+        if metadata.get("root_puct_fallback"):
+            continue
+        if not (
+            metadata.get("root_puct_selected_changed_prior_action")
+            or metadata.get("root_puct_pre_gate_changed_prior_action")
+        ):
+            continue
+        details.append(
+            {
+                "decision_index": decision_index,
+                "selected_action": decision.action_index,
+                "search_action": _optional_int(metadata.get("root_puct_search_action")),
+                "prior_action": _optional_int(metadata.get("root_puct_prior_action")),
+                "selected_changed_prior_action": bool(metadata.get("root_puct_selected_changed_prior_action")),
+                "pre_gate_changed_prior_action": bool(metadata.get("root_puct_pre_gate_changed_prior_action")),
+                "selected_value": _optional_float(metadata.get("root_puct_selected_value")),
+                "search_value": _optional_float(metadata.get("root_puct_search_action_value")),
+                "prior_value": _optional_float(metadata.get("root_puct_prior_value")),
+                "selected_score": _optional_float(metadata.get("root_puct_selected_score")),
+                "search_score": _optional_float(metadata.get("root_puct_search_action_score")),
+                "prior_score": _optional_float(metadata.get("root_puct_prior_score")),
+                "selected_action_prior": _optional_float(metadata.get("root_puct_selected_action_prior")),
+                "search_action_prior": _optional_float(metadata.get("root_puct_search_action_prior")),
+                "prior_action_prior": _optional_float(metadata.get("root_puct_prior_action_prior")),
+                "selected_visits": _optional_int(metadata.get("root_puct_selected_action_visits")),
+                "search_visits": _optional_int(metadata.get("root_puct_search_action_visits")),
+                "prior_visits": _optional_int(metadata.get("root_puct_prior_action_visits")),
+                "value_gate_used": bool(metadata.get("root_puct_value_gate_used", False)),
+            }
+        )
+    return tuple(details)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 async def _handle_stream_event(

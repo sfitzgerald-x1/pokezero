@@ -20,6 +20,7 @@ from pokezero.foulplay_bridge import (
     _foulplay_env,
     _line_for_foulplay,
     _line_chunks_safe_for_foulplay,
+    _root_puct_prior_action_change_details,
     _requested_legal_action_masks_for_context,
     _is_terminal_protocol_line,
     _split_outgoing_showdown_message,
@@ -29,6 +30,7 @@ from pokezero.foulplay_bridge import (
     run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
+from pokezero.policy import PolicyDecision
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
@@ -276,6 +278,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_opponent_action_scenarios_skipped=1,
                     root_puct_selected_prior_action_changes=2,
                     root_puct_pre_gate_prior_action_changes=3,
+                    root_puct_prior_action_change_details=(
+                        {
+                            "decision_index": 1,
+                            "selected_action": 4,
+                            "search_action": 4,
+                            "prior_action": 0,
+                            "selected_changed_prior_action": True,
+                            "pre_gate_changed_prior_action": True,
+                        },
+                    ),
                     root_puct_average_elapsed_seconds=0.2,
                 ),
                 ControlledFoulPlayGameResult(
@@ -322,6 +334,19 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["game_results"][0]["root_puct_selected_prior_action_changes"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_pre_gate_prior_action_changes"], 3)
         self.assertEqual(
+            payload["game_results"][0]["root_puct_prior_action_change_details"],
+            [
+                {
+                    "decision_index": 1,
+                    "selected_action": 4,
+                    "search_action": 4,
+                    "prior_action": 0,
+                    "selected_changed_prior_action": True,
+                    "pre_gate_changed_prior_action": True,
+                },
+            ],
+        )
+        self.assertEqual(
             payload["game_results"][1]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},
         )
@@ -340,6 +365,101 @@ class FoulPlayBridgeTest(unittest.TestCase):
             _write_json(path, {"b": 2, "a": 1})
 
             self.assertEqual(path.read_text(), '{\n  "a": 1,\n  "b": 2\n}\n')
+
+    def test_root_puct_prior_action_change_details_extracts_changed_non_fallback_decisions(self) -> None:
+        decisions = (
+            PolicyDecision(
+                action_index=0,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": False,
+                    "root_puct_selected_changed_prior_action": False,
+                    "root_puct_pre_gate_changed_prior_action": False,
+                },
+            ),
+            PolicyDecision(
+                action_index=4,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": False,
+                    "root_puct_selected_changed_prior_action": True,
+                    "root_puct_pre_gate_changed_prior_action": True,
+                    "root_puct_search_action": 4,
+                    "root_puct_prior_action": 0,
+                    "root_puct_selected_value": 0.25,
+                    "root_puct_search_action_value": 0.25,
+                    "root_puct_prior_value": 0.1,
+                    "root_puct_selected_score": 1.5,
+                    "root_puct_search_action_score": 1.5,
+                    "root_puct_prior_score": 0.9,
+                    "root_puct_selected_action_prior": 0.2,
+                    "root_puct_search_action_prior": 0.2,
+                    "root_puct_prior_action_prior": 0.8,
+                    "root_puct_selected_action_visits": 4,
+                    "root_puct_search_action_visits": 4,
+                    "root_puct_prior_action_visits": 2,
+                },
+            ),
+            PolicyDecision(
+                action_index=2,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": False,
+                    "root_puct_selected_changed_prior_action": False,
+                    "root_puct_pre_gate_changed_prior_action": True,
+                    "root_puct_value_gate_used": True,
+                    "root_puct_search_action": 4,
+                    "root_puct_prior_action": 2,
+                    "root_puct_selected_value": 0.1,
+                    "root_puct_search_action_value": 0.2,
+                    "root_puct_prior_value": 0.1,
+                    "root_puct_selected_score": 0.8,
+                    "root_puct_search_action_score": 0.9,
+                    "root_puct_prior_score": 0.8,
+                    "root_puct_selected_action_prior": 0.7,
+                    "root_puct_search_action_prior": 0.3,
+                    "root_puct_prior_action_prior": 0.7,
+                    "root_puct_selected_action_visits": 3,
+                    "root_puct_search_action_visits": 4,
+                    "root_puct_prior_action_visits": 3,
+                },
+            ),
+            PolicyDecision(
+                action_index=2,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": True,
+                    "root_puct_selected_changed_prior_action": True,
+                    "root_puct_search_action": 2,
+                    "root_puct_prior_action": 0,
+                },
+            ),
+        )
+
+        details = _root_puct_prior_action_change_details(decisions)
+
+        self.assertEqual(len(details), 2)
+        self.assertEqual(details[0]["decision_index"], 1)
+        self.assertEqual(details[0]["selected_action"], 4)
+        self.assertEqual(details[0]["search_action"], 4)
+        self.assertEqual(details[0]["prior_action"], 0)
+        self.assertEqual(details[0]["selected_value"], 0.25)
+        self.assertEqual(details[0]["prior_action_prior"], 0.8)
+        self.assertEqual(details[0]["selected_visits"], 4)
+        self.assertFalse(details[0]["value_gate_used"])
+        self.assertEqual(details[1]["decision_index"], 2)
+        self.assertEqual(details[1]["selected_action"], 2)
+        self.assertEqual(details[1]["search_action"], 4)
+        self.assertEqual(details[1]["prior_action"], 2)
+        self.assertFalse(details[1]["selected_changed_prior_action"])
+        self.assertTrue(details[1]["pre_gate_changed_prior_action"])
+        self.assertTrue(details[1]["value_gate_used"])
+        self.assertEqual(details[1]["selected_action_prior"], 0.7)
+        self.assertEqual(details[1]["search_action_prior"], 0.3)
 
     def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
         class FakeModelConfig:
