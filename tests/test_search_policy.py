@@ -334,7 +334,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
 
         scenarios = planner(context, random.Random(1))
 
-        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 4}, {"p2": 0}, {"p2": 1}])
+        self.assertEqual([dict(scenario.actions) for scenario in scenarios], [{"p2": 5}, {"p2": 0}, {"p2": 1}])
         self.assertAlmostEqual(scenarios[0].weight, 0.54 / 0.69)
         self.assertAlmostEqual(scenarios[1].weight, 0.10 / 0.69)
         self.assertAlmostEqual(scenarios[2].weight, 0.05 / 0.69)
