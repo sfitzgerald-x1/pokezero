@@ -79,7 +79,7 @@ class ControlledFoulPlayConfig:
     device: str | None = None
     temperature: float = 1.0
     cpuct: float = 1.25
-    selection_mode: str = "puct"
+    selection_mode: str = "visits"
     minimum_value_improvement: float | None = None
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
@@ -1462,8 +1462,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--selection-mode",
         choices=("puct", "value", "visits"),
-        default="puct",
-        help="Root search candidate selection rule.",
+        default="visits",
+        help=(
+            "Root search candidate selection rule. Defaults to 'visits', which uses PUCT's "
+            "exploration term for traversal but selects the most-visited root action. 'puct' "
+            "selects by final Q+U score and should be treated as diagnostic."
+        ),
     )
     parser.add_argument(
         "--minimum-value-improvement",

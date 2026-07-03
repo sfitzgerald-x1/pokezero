@@ -667,11 +667,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct_play.add_argument(
         "--selection-mode",
         choices=("puct", "value", "visits"),
-        default="puct",
+        default="visits",
         help=(
-            "Root candidate selector for the search policy. 'puct' preserves current PUCT-score "
-            "selection; 'value' selects the highest value-evaluated branch from the same candidates; "
-            "'visits' selects the most-visited action after the root visit budget is spent."
+            "Root candidate selector for the search policy. Defaults to 'visits', which uses PUCT "
+            "for root traversal and selects the most-visited action after the root visit budget is "
+            "spent. 'value' selects the highest value-evaluated branch; 'puct' selects by final "
+            "Q+U score and is diagnostic."
         ),
     )
     root_puct_play.add_argument(

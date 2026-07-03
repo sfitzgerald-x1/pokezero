@@ -17,7 +17,12 @@ from pokezero import neural_policy as neural_policy_module
 from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import TrajectoryDatasetConfig, write_training_cache_from_rollouts
 from pokezero.env import TerminalState
-from pokezero.neural_cli import _input_data_paths_byte_size, _training_cache_lifecycle, main as neural_cli_main
+from pokezero.neural_cli import (
+    _input_data_paths_byte_size,
+    _training_cache_lifecycle,
+    build_arg_parser as build_neural_arg_parser,
+    main as neural_cli_main,
+)
 from pokezero.neural_policy import (
     DEFAULT_TOKEN_TYPE_VOCAB_SIZE,
     MIT_THESIS_LEARNING_RATE_SCHEDULE,
@@ -2312,6 +2317,19 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
+
+    def test_neural_cli_root_puct_play_benchmark_defaults_to_visit_selection(self) -> None:
+        parser = build_neural_arg_parser()
+
+        args = parser.parse_args(
+            [
+                "root-puct-play-benchmark",
+                "--checkpoint",
+                "checkpoint.pt",
+            ]
+        )
+
+        self.assertEqual(args.selection_mode, "visits")
 
     def test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios(self) -> None:
         if not torch_available():

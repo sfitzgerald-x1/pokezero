@@ -28,6 +28,7 @@ from pokezero.foulplay_bridge import (
     _terminal_line_for_foulplay,
     _write_json,
     async_main,
+    build_arg_parser,
     run_controlled_foulplay_benchmark,
 )
 from pokezero.env import TerminalState
@@ -197,6 +198,23 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 foulplay_random_seed=-1,
             )
+
+    def test_controlled_foulplay_defaults_to_visit_selection(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+        )
+        args = build_arg_parser().parse_args(
+            [
+                "--checkpoint",
+                "checkpoint.pt",
+                "--showdown-root",
+                "/showdown",
+            ]
+        )
+
+        self.assertEqual(config.selection_mode, "visits")
+        self.assertEqual(args.selection_mode, "visits")
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(

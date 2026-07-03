@@ -83,9 +83,10 @@ the current recipe readout before making another recipe change.
   keeps the raw policy-prior action unless the configured root-selected action beats it by a configurable
   value margin; aggregate diagnostics report gate uses/checks so M0 runs can tell whether the knob
   is actually changing decisions.
-  The same benchmark can now switch root selection between current PUCT-score selection and pure
-  branch-value selection (`--selection-mode puct|value`), which isolates whether the near-term M0
-  issue is the branch value signal or the PUCT prior/score mixer.
+  The same benchmark can now switch root selection between visit-count, PUCT-score, and pure
+  branch-value selection (`--selection-mode visits|puct|value`). Visit-count selection is the
+  default because PUCT's exploration bonus is for traversal, not final deployment move choice;
+  PUCT-score selection remains useful as a diagnostic for the prior/score mixer.
   It can also run opt-in bounded leaf continuations (`--leaf-rollout-rounds`) before evaluating a
   root candidate, using real simulator steps to test whether short rollout leaves produce a better
   root value signal than immediate one-ply value-head evaluation. Leaf continuations default to raw
