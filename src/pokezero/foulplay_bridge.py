@@ -66,6 +66,7 @@ _WILSON_95_Z = 1.959963984540054
 _MIN_STRENGTH_SAMPLE_GAMES = 300
 ControlledFoulPlayProgressCallback = Callable[["ControlledFoulPlayBenchmarkResult"], None]
 ControlledFoulPlayComparisonProgressCallback = Callable[["ControlledFoulPlayComparisonResult"], None]
+_COMPARISON_MODES = {"per-seed", "per-arm"}
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,7 @@ class ControlledFoulPlayBenchmarkResult:
     config: ControlledFoulPlayConfig
     policy_id: str
     games: tuple[ControlledFoulPlayGameResult, ...]
+    foulplay_random_seed_schedule: tuple[int, ...] | None = None
 
     @property
     def completed_games(self) -> int:
@@ -322,6 +324,10 @@ class ControlledFoulPlayBenchmarkResult:
             },
             "game_results": [game.to_dict() for game in self.games],
         }
+        if self.foulplay_random_seed_schedule is not None:
+            payload["foulplay_random_seed_schedule"] = _foulplay_random_seed_schedule_payload(
+                self.foulplay_random_seed_schedule
+            )
         if elapsed_values:
             payload["root_puct"]["average_elapsed_seconds"] = sum(elapsed_values) / len(elapsed_values)
         if root_effective_total_visits:
@@ -336,6 +342,7 @@ class ControlledFoulPlayComparisonResult:
     config: ControlledFoulPlayConfig
     raw: ControlledFoulPlayBenchmarkResult | None
     root_puct: ControlledFoulPlayBenchmarkResult | None
+    comparison_mode: str = "per-seed"
 
     @property
     def complete(self) -> bool:
@@ -361,19 +368,31 @@ class ControlledFoulPlayComparisonResult:
             "games": self.config.games,
             "seed_start": self.config.seed_start,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
+            "foulplay_random_seed_schedule": _comparison_foulplay_random_seed_schedule_payload(
+                self.config,
+                comparison_mode=self.comparison_mode,
+                count=self.config.games,
+            ),
+            "comparison_mode": self.comparison_mode,
             "status": self.status,
             "complete": self.complete,
             "runs": {
                 "raw": self.raw.to_dict() if self.raw is not None else None,
                 "root_puct": self.root_puct.to_dict() if self.root_puct is not None else None,
             },
-            "comparison": _comparison_readout(self.raw, self.root_puct),
+            "comparison": _comparison_readout(
+                self.raw,
+                self.root_puct,
+                comparison_mode=self.comparison_mode,
+            ),
         }
 
 
 def _comparison_readout(
     raw: ControlledFoulPlayBenchmarkResult | None,
     root_puct: ControlledFoulPlayBenchmarkResult | None,
+    *,
+    comparison_mode: str,
 ) -> dict[str, Any]:
     raw_by_seed = _games_by_seed(raw)
     search_by_seed = _games_by_seed(root_puct)
@@ -428,7 +447,7 @@ def _comparison_readout(
             ),
         },
         "paired_by_seed": {
-            "pairing_method": "shared_battlestream_seed_only",
+            "pairing_method": _pairing_method_for_comparison_mode(comparison_mode),
             "opponent_deterministic": False,
             "paired_counterfactual": False,
             "interval_method": "marginal_wilson_per_arm_not_paired_delta",
@@ -451,6 +470,50 @@ def _comparison_readout(
             "first_seed": matched_seeds[0] if matched_seeds else None,
             "last_seed": matched_seeds[-1] if matched_seeds else None,
         },
+    }
+
+
+def _pairing_method_for_comparison_mode(comparison_mode: str) -> str:
+    if comparison_mode == "per-seed":
+        return "per_seed_shared_battlestream_seed_and_foulplay_start_seed"
+    return "shared_battlestream_seed_only"
+
+
+def _comparison_foulplay_random_seed_schedule_payload(
+    config: ControlledFoulPlayConfig,
+    *,
+    comparison_mode: str,
+    count: int,
+) -> dict[str, Any]:
+    if comparison_mode == "per-seed":
+        return _foulplay_random_seed_schedule_payload(
+            _per_seed_foulplay_random_seed_schedule(config, count=count)
+        )
+    return _foulplay_random_seed_schedule_payload((config.resolved_foulplay_random_seed,))
+
+
+def _per_seed_foulplay_random_seed_schedule(
+    config: ControlledFoulPlayConfig,
+    *,
+    count: int,
+) -> tuple[int, ...]:
+    return tuple(
+        (
+            config.foulplay_random_seed + offset
+            if config.foulplay_random_seed is not None
+            else config.seed_start + offset
+        )
+        for offset in range(count)
+    )
+
+
+def _foulplay_random_seed_schedule_payload(seeds: tuple[int, ...]) -> dict[str, Any]:
+    return {
+        "count": len(seeds),
+        "first_seed": seeds[0] if seeds else None,
+        "last_seed": seeds[-1] if seeds else None,
+        "mode": "constant" if len(set(seeds)) <= 1 else "per_game_incrementing",
+        "seeds": list(seeds),
     }
 
 
@@ -840,10 +903,30 @@ async def run_controlled_foulplay_benchmark(
 async def run_controlled_foulplay_comparison(
     config: ControlledFoulPlayConfig,
     *,
+    comparison_mode: str = "per-seed",
     progress_callback: ControlledFoulPlayComparisonProgressCallback | None = None,
 ) -> ControlledFoulPlayComparisonResult:
     """Run raw checkpoint and root-PUCT against foul-play over the same seed band."""
 
+    if comparison_mode not in _COMPARISON_MODES:
+        raise ValueError(f"comparison_mode must be one of {sorted(_COMPARISON_MODES)!r}.")
+
+    if comparison_mode == "per-seed":
+        return await _run_controlled_foulplay_comparison_per_seed(
+            config,
+            progress_callback=progress_callback,
+        )
+    return await _run_controlled_foulplay_comparison_per_arm(
+        config,
+        progress_callback=progress_callback,
+    )
+
+
+async def _run_controlled_foulplay_comparison_per_arm(
+    config: ControlledFoulPlayConfig,
+    *,
+    progress_callback: ControlledFoulPlayComparisonProgressCallback | None = None,
+) -> ControlledFoulPlayComparisonResult:
     raw_result: ControlledFoulPlayBenchmarkResult | None = None
     root_puct_result: ControlledFoulPlayBenchmarkResult | None = None
 
@@ -855,6 +938,7 @@ async def run_controlled_foulplay_comparison(
                 config=config,
                 raw=raw_result,
                 root_puct=root_puct_result,
+                comparison_mode="per-arm",
             )
         )
 
@@ -880,6 +964,94 @@ async def run_controlled_foulplay_comparison(
         config=config,
         raw=raw_result,
         root_puct=root_puct_result,
+        comparison_mode="per-arm",
+    )
+
+
+async def _run_controlled_foulplay_comparison_per_seed(
+    config: ControlledFoulPlayConfig,
+    *,
+    progress_callback: ControlledFoulPlayComparisonProgressCallback | None = None,
+) -> ControlledFoulPlayComparisonResult:
+    raw_games: list[ControlledFoulPlayGameResult] = []
+    root_puct_games: list[ControlledFoulPlayGameResult] = []
+    raw_policy_id: str | None = None
+    root_puct_policy_id: str | None = None
+
+    def raw_result() -> ControlledFoulPlayBenchmarkResult | None:
+        if raw_policy_id is None:
+            return None
+        return ControlledFoulPlayBenchmarkResult(
+            config=replace(config, policy_mode="raw"),
+            policy_id=raw_policy_id,
+            games=tuple(raw_games),
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+                config,
+                count=len(raw_games),
+            ),
+        )
+
+    def root_puct_result() -> ControlledFoulPlayBenchmarkResult | None:
+        if root_puct_policy_id is None:
+            return None
+        return ControlledFoulPlayBenchmarkResult(
+            config=replace(config, policy_mode="root-puct"),
+            policy_id=root_puct_policy_id,
+            games=tuple(root_puct_games),
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+                config,
+                count=len(root_puct_games),
+            ),
+        )
+
+    def emit_progress() -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            ControlledFoulPlayComparisonResult(
+                config=config,
+                raw=raw_result(),
+                root_puct=root_puct_result(),
+                comparison_mode="per-seed",
+            )
+        )
+
+    for offset in range(config.games):
+        seed = config.seed_start + offset
+        single_config = _single_seed_comparison_config(config, seed=seed, offset=offset)
+
+        raw_single = await run_controlled_foulplay_benchmark(replace(single_config, policy_mode="raw"))
+        raw_policy_id = raw_single.policy_id
+        raw_games.extend(raw_single.games)
+        emit_progress()
+
+        root_puct_single = await run_controlled_foulplay_benchmark(
+            replace(single_config, policy_mode="root-puct")
+        )
+        root_puct_policy_id = root_puct_single.policy_id
+        root_puct_games.extend(root_puct_single.games)
+        emit_progress()
+
+    return ControlledFoulPlayComparisonResult(
+        config=config,
+        raw=raw_result(),
+        root_puct=root_puct_result(),
+        comparison_mode="per-seed",
+    )
+
+
+def _single_seed_comparison_config(
+    config: ControlledFoulPlayConfig,
+    *,
+    seed: int,
+    offset: int,
+) -> ControlledFoulPlayConfig:
+    foulplay_seed = config.foulplay_random_seed + offset if config.foulplay_random_seed is not None else seed
+    return replace(
+        config,
+        games=1,
+        seed_start=seed,
+        foulplay_random_seed=foulplay_seed,
     )
 
 
@@ -1865,6 +2037,17 @@ def build_comparison_arg_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     _remove_optional_argument(parser, "--policy-mode")
     parser.set_defaults(policy_mode="root-puct")
+    parser.add_argument(
+        "--comparison-mode",
+        choices=tuple(sorted(_COMPARISON_MODES)),
+        default="per-seed",
+        help=(
+            "Comparison execution order. 'per-seed' runs raw and root-PUCT for each seed before "
+            "advancing, restarting foul-play with a matching per-seed startup seed and producing "
+            "paired partial progress earlier. 'per-arm' preserves the older raw-all-then-root-PUCT "
+            "order and is mainly useful when process startup overhead dominates."
+        ),
+    )
     parser.description = (
         "Run paired controlled BattleStream benchmarks: raw checkpoint and root-PUCT "
         "against external foul-play over the same seed band."
@@ -1977,6 +2160,7 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
 
     result = await run_controlled_foulplay_comparison(
         config,
+        comparison_mode=args.comparison_mode,
         progress_callback=write_progress if args.summary_out is not None else None,
     )
     payload = result.to_dict()
@@ -2003,7 +2187,7 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
             f"{int(root_puct.get('wins', 0))}/{int(root_puct.get('games', 0))} "
             "vs raw "
             f"{int(raw.get('wins', 0))}/{int(raw.get('games', 0))} "
-            "on paired foul-play seeds "
+            f"on paired foul-play seeds ({args.comparison_mode}) "
             f"(descriptive_delta={delta_text})"
         )
         if isinstance(sample, Mapping) and sample.get("status") == "diagnostic_only":
