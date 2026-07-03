@@ -691,7 +691,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     root_puct_play.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
-    root_puct_play.add_argument("--temperature", type=float, default=1.0, help="Softmax temperature for policy and opponent-action priors.")
+    root_puct_play.add_argument("--temperature", type=float, default=1.0, help="Softmax temperature for raw policy, leaf policy, and opponent-action priors.")
+    root_puct_play.add_argument(
+        "--root-prior-temperature",
+        type=float,
+        default=None,
+        help=(
+            "Temperature applied only to root-PUCT action priors. Defaults to --temperature, "
+            "so existing invocations keep their prior softness unless overridden."
+        ),
+    )
     root_puct_play.add_argument(
         "--no-search-fallback",
         action="store_true",
@@ -2400,7 +2409,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             model=model,
             result=result,
             observations=history,
-            temperature=args.temperature,
+            temperature=1.0,
             device=args.device,
         )
 
@@ -2465,6 +2474,9 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
             root_visit_budget=args.root_visit_budget,
+            root_prior_temperature=(
+                args.temperature if args.root_prior_temperature is None else args.root_prior_temperature
+            ),
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
             leaf_rollout_metadata=leaf_rollout_metadata,

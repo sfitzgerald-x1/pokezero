@@ -945,6 +945,30 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.metadata["root_puct_prior_action_visits"], 1)
         self.assertFalse(step.metadata["root_puct_selected_changed_prior_action"])
 
+    def test_root_puct_policy_applies_root_prior_temperature(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            selection_mode="visits",
+            root_visit_budget=2,
+            root_prior_temperature=2.0,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=96, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.metadata["root_puct_root_prior_temperature"], 2.0)
+        self.assertEqual(step.metadata["root_puct_prior_action"], 0)
+        self.assertAlmostEqual(step.metadata["root_puct_prior_action_prior"], 0.75)
+
     def test_root_puct_multi_scenario_no_budget_preserves_synthetic_one_visit_per_action(self) -> None:
         search_1 = puct_branch_search(
             env=ImmediateOutcomeEnv(label="scenario-1"),
@@ -1364,6 +1388,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
                 root_time_budget_seconds=0.0,
+            )
+
+    def test_root_puct_policy_rejects_invalid_root_prior_temperature(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_prior_temperature"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_prior_temperature=0.0,
             )
 
     def test_root_puct_policy_rejects_leaf_rollouts_without_policy_factory(self) -> None:

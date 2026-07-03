@@ -174,6 +174,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 root_visit_budget=0,
             )
+        with self.assertRaisesRegex(ValueError, "root_prior_temperature"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_prior_temperature=0.0,
+            )
         with self.assertRaisesRegex(ValueError, "root_time_budget_ms"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -215,8 +221,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
 
         self.assertEqual(config.selection_mode, "visits")
         self.assertEqual(config.root_visit_budget, 16)
+        self.assertIsNone(config.root_prior_temperature)
+        self.assertEqual(config.effective_root_prior_temperature, 1.0)
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
+        self.assertIsNone(args.root_prior_temperature)
+
+        warmed_config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            temperature=1.75,
+        )
+        self.assertEqual(warmed_config.effective_root_prior_temperature, 1.75)
 
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -309,6 +325,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             minimum_value_improvement=0.25,
             minimum_override_prior_ratio=0.5,
             minimum_score_improvement=0.1,
+            root_prior_temperature=2.5,
             root_visit_budget=16,
             root_time_budget_ms=250,
             leaf_rollout_rounds=1,
@@ -426,6 +443,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
         self.assertEqual(payload["root_puct"]["minimum_override_prior_ratio"], 0.5)
         self.assertEqual(payload["root_puct"]["minimum_score_improvement"], 0.1)
+        self.assertEqual(payload["root_puct"]["root_prior_temperature"], 2.5)
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertEqual(payload["root_puct"]["root_time_budget_ms"], 250)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
