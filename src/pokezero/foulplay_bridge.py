@@ -1446,16 +1446,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--root-visit-budget",
         type=int,
         default=None,
-        help="Total root visits per searched decision; defaults to one visit per legal action.",
+        help=(
+            "Root visits per opponent-action scenario; defaults to one visit per legal action. "
+            "With multiple scenarios, total decision visits scale by the searched scenario count."
+        ),
     )
     parser.add_argument(
         "--root-time-budget-ms",
         type=int,
         default=None,
         help=(
-            "PokeZero-side root search wall-clock budget per decision. With multiple opponent-action "
-            "scenarios, the budget is split evenly across scenario searches. The mandatory initial "
-            "legal-action sweep is always completed; --root-visit-budget remains an optional hard cap."
+            "PokeZero-side wall-clock budget for extra post-sweep root visits. With multiple "
+            "opponent-action scenarios, the configured decision budget is split evenly across "
+            "scenario searches. The mandatory initial legal-action sweep is always completed and "
+            "can exceed the configured budget; --root-visit-budget remains a per-scenario hard cap."
         ),
     )
     parser.add_argument(

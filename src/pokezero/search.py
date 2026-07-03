@@ -316,7 +316,8 @@ def puct_branch_search(
     When ``root_visit_budget`` or ``root_time_budget_seconds`` permit more than
     the initial one visit per legal root action, the search repeatedly selects
     the current highest-PUCT action, re-evaluates that branch, and backs the
-    value up into root visit statistics.
+    value up into root visit statistics. The mandatory initial sweep is always
+    completed; the time budget controls only additional post-sweep visits.
     """
 
     if cpuct < 0.0 or not math.isfinite(cpuct):

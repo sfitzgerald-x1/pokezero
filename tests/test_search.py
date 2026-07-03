@@ -466,7 +466,7 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(result.root_time_budget_seconds, 0.5)
         self.assertIsNone(result.root_visit_budget)
 
-    def test_puct_branch_search_counts_initial_sweep_against_root_time_budget(self) -> None:
+    def test_puct_branch_search_suppresses_extra_visits_when_initial_sweep_exceeds_time_budget(self) -> None:
         env = ValueBranchEnv()
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
 
