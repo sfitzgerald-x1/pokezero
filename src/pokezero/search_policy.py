@@ -366,11 +366,11 @@ class RootPUCTSearchPolicy:
         )
         raw_total_visits = sum(scenario_search.total_visits for scenario_search in scenario_searches)
         search_best = _selected_candidate(search, mode=self.selection_mode)
+        prior_best = _best_prior_candidate(search.candidates)
         best = search_best
         gate_metadata = {}
         if self.minimum_value_improvement is not None:
             value_gate_used = False
-            prior_best = _best_prior_candidate(search.candidates)
             if (
                 search_best.action_index != prior_best.action_index
                 and search_best.value < prior_best.value + self.minimum_value_improvement
@@ -381,9 +381,6 @@ class RootPUCTSearchPolicy:
                 "root_puct_minimum_value_improvement": self.minimum_value_improvement,
                 "root_puct_value_gate_used": value_gate_used,
                 "root_puct_pre_gate_action": search_best.action_index,
-                "root_puct_prior_action": prior_best.action_index,
-                "root_puct_prior_value": prior_best.value,
-                "root_puct_prior_score": prior_best.score,
             }
         leaf_metadata = _leaf_rollout_metadata(
             scenario_searches,
@@ -410,6 +407,20 @@ class RootPUCTSearchPolicy:
                 "root_puct_selection_mode": self.selection_mode,
                 "root_puct_selected_value": best.value,
                 "root_puct_selected_score": best.score,
+                "root_puct_selected_action_prior": best.prior,
+                "root_puct_selected_action_visits": best.visits,
+                "root_puct_search_action": search_best.action_index,
+                "root_puct_search_action_value": search_best.value,
+                "root_puct_search_action_score": search_best.score,
+                "root_puct_search_action_prior": search_best.prior,
+                "root_puct_search_action_visits": search_best.visits,
+                "root_puct_prior_action": prior_best.action_index,
+                "root_puct_prior_value": prior_best.value,
+                "root_puct_prior_score": prior_best.score,
+                "root_puct_prior_action_prior": prior_best.prior,
+                "root_puct_prior_action_visits": prior_best.visits,
+                "root_puct_search_changed_prior_action": best.action_index != prior_best.action_index,
+                "root_puct_pre_gate_changed_prior_action": search_best.action_index != prior_best.action_index,
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
                 "root_puct_opponent_actions": dict(used_scenarios[0].actions),

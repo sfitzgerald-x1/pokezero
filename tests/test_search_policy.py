@@ -349,6 +349,12 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["policy_id"], "root-puct-search")
         self.assertFalse(metadata["root_puct_fallback"])
         self.assertEqual(metadata["root_puct_candidate_count"], 2)
+        self.assertEqual(metadata["root_puct_search_action"], 1)
+        self.assertEqual(metadata["root_puct_prior_action"], 0)
+        self.assertTrue(metadata["root_puct_search_changed_prior_action"])
+        self.assertTrue(metadata["root_puct_pre_gate_changed_prior_action"])
+        self.assertEqual(metadata["root_puct_selected_action_visits"], 1)
+        self.assertEqual(metadata["root_puct_prior_action_visits"], 1)
         self.assertEqual(metadata["root_puct_opponent_actions"], {"p2": 0})
         self.assertTrue(metadata["root_puct_opponent_actions_legality_checked"])
         self.assertEqual(live_env.step_calls, [{"p1": 1, "p2": 0}])
@@ -517,7 +523,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.action_index, 0)
         self.assertTrue(step.metadata["root_puct_value_gate_used"])
         self.assertEqual(step.metadata["root_puct_pre_gate_action"], 1)
+        self.assertEqual(step.metadata["root_puct_search_action"], 1)
         self.assertEqual(step.metadata["root_puct_prior_action"], 0)
+        self.assertFalse(step.metadata["root_puct_search_changed_prior_action"])
+        self.assertTrue(step.metadata["root_puct_pre_gate_changed_prior_action"])
         self.assertEqual(step.metadata["root_puct_minimum_value_improvement"], 3.0)
 
     def test_root_puct_policy_default_selection_mode_uses_puct_score(self) -> None:

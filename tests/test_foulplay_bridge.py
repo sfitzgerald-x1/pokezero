@@ -274,6 +274,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_effective_total_visits=18,
                     root_puct_opponent_action_scenarios_generated=9,
                     root_puct_opponent_action_scenarios_skipped=1,
+                    root_puct_prior_action_changes=2,
+                    root_puct_pre_gate_prior_action_changes=3,
                     root_puct_average_elapsed_seconds=0.2,
                 ),
                 ControlledFoulPlayGameResult(
@@ -289,6 +291,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_effective_total_visits=12,
                     root_puct_opponent_action_scenarios_generated=6,
                     root_puct_opponent_action_scenarios_skipped=3,
+                    root_puct_prior_action_changes=1,
+                    root_puct_pre_gate_prior_action_changes=2,
                     root_puct_fallback_reasons={"search failed: boom": 2},
                     root_puct_average_elapsed_seconds=0.4,
                 ),
@@ -310,9 +314,13 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["effective_total_visits"], 30)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_generated"], 15)
         self.assertEqual(payload["root_puct"]["opponent_action_scenarios_skipped"], 4)
+        self.assertEqual(payload["root_puct"]["prior_action_changes"], 3)
+        self.assertEqual(payload["root_puct"]["pre_gate_prior_action_changes"], 5)
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(payload["game_results"][0]["root_puct_prior_action_changes"], 2)
+        self.assertEqual(payload["game_results"][0]["root_puct_pre_gate_prior_action_changes"], 3)
         self.assertEqual(
             payload["game_results"][1]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},
