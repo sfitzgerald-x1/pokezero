@@ -129,6 +129,14 @@ class TwoOpponentActionEnv(ImmediateOutcomeEnv):
         return _observation(0, 1)
 
 
+class StrictOpponentActionEnv(ImmediateOutcomeEnv):
+    def step(self, actions: dict[str, int]) -> StepResult:
+        p2_action = int(actions["p2"])
+        if p2_action != 0:
+            raise ValueError(f"p2: action_index {p2_action} is not legal for the current request.")
+        return super().step(actions)
+
+
 class DelayedOutcomeEnv:
     def __init__(self, winners_after_branch: dict[int, str | None]) -> None:
         self.winners_after_branch = winners_after_branch
@@ -420,6 +428,72 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             {"p1": 1, "p2": 0},
             {"p1": 0, "p2": 1},
             {"p1": 1, "p2": 1},
+        ])
+
+    def test_root_puct_policy_skips_hidden_opponent_scenarios_replay_rejects(self) -> None:
+        branch_envs: list[StrictOpponentActionEnv] = []
+
+        def branch_env_factory() -> StrictOpponentActionEnv:
+            env = StrictOpponentActionEnv(label=f"branch-{len(branch_envs)}")
+            branch_envs.append(env)
+            return env
+
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 2}, weight=0.75, label="illegal-hidden"),
+                OpponentActionScenario(actions={"p2": 0}, weight=0.25, label="legal-hidden"),
+            )
+
+        scenario_planner.planner_id = "test-hidden-top2"  # type: ignore[attr-defined]
+        policy = RootPUCTSearchPolicy(
+            env_factory=branch_env_factory,
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.5, 0.5) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_scenario_planner=scenario_planner,
+            cpuct=0.0,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=91,
+            observation=_observation(0, 1),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=91),
+            requested_legal_action_masks={"p1": _mask(0, 1)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        metadata = decision.metadata
+        self.assertFalse(metadata["root_puct_fallback"])
+        self.assertEqual(metadata["root_puct_opponent_action_policy"], "test-hidden-top2")
+        self.assertFalse(metadata["root_puct_opponent_actions_legality_checked"])
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 2)
+        self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 1)
+        self.assertEqual(
+            metadata["root_puct_opponent_action_scenarios"],
+            [{"label": "legal-hidden", "weight": 1.0, "actions": {"p2": 0}}],
+        )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_skipped_scenarios"],
+            [
+                {
+                    "label": "illegal-hidden",
+                    "weight": 0.75,
+                    "actions": {"p2": 2},
+                    "reason": "p2: action_index 2 is not legal for the current request.",
+                }
+            ],
+        )
+        self.assertEqual(branch_envs[0].all_step_calls, [
+            {"p1": 0, "p2": 0},
+            {"p1": 1, "p2": 0},
         ])
 
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
@@ -765,6 +839,97 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertIn("illegal action for p2", step.metadata["root_puct_fallback_reason"])
         self.assertEqual(step.metadata["fallback_policy_id"], "fallback-fixed")
         self.assertEqual(step.value_estimate, 0.25)
+
+    def test_root_puct_policy_falls_back_when_all_hidden_opponent_scenarios_are_replay_rejected(self) -> None:
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 2}, weight=1.0, label="illegal-hidden"),
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: StrictOpponentActionEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            opponent_action_scenario_planner=scenario_planner,
+            fallback_policy=FixedPolicy(1, policy_id="fallback-fixed", value_estimate=0.25),
+            allow_fallback=True,
+            cpuct=0.0,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=93,
+            observation=_observation(0),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=93),
+            requested_legal_action_masks={"p1": _mask(0)},
+        )
+
+        decision = policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertIn(
+            "all opponent action scenarios were replay-illegal",
+            decision.metadata["root_puct_fallback_reason"],
+        )
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
+        self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 1)
+        self.assertEqual(
+            decision.metadata["root_puct_opponent_action_skipped_scenarios"],
+            [
+                {
+                    "label": "illegal-hidden",
+                    "weight": 1.0,
+                    "actions": {"p2": 2},
+                    "reason": "p2: action_index 2 is not legal for the current request.",
+                }
+            ],
+        )
+        self.assertEqual(decision.metadata["fallback_policy_id"], "fallback-fixed")
+
+    def test_root_puct_policy_no_fallback_reports_clean_all_hidden_scenarios_rejected_error(self) -> None:
+        def scenario_planner(context: PolicyContext, rng: random.Random) -> tuple[OpponentActionScenario, ...]:
+            del context, rng
+            return (
+                OpponentActionScenario(actions={"p2": 2}, weight=1.0, label="illegal-hidden"),
+            )
+
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: StrictOpponentActionEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+            opponent_action_scenario_planner=scenario_planner,
+            allow_fallback=False,
+            cpuct=0.0,
+        )
+        context = PolicyContext(
+            player_id="p1",
+            decision_round_index=0,
+            battle_id="search-policy",
+            format_id="gen3randombattle",
+            seed=93,
+            observation=_observation(0),
+            requested_players=("p1", "p2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=93),
+            requested_legal_action_masks={"p1": _mask(0)},
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            (
+                "root PUCT search cannot select an action: all opponent action scenarios "
+                "were replay-illegal"
+            ),
+        ) as raised:
+            policy.select_action_with_context(context, rng=random.Random(1))
+
+        self.assertNotIn("search failed: root PUCT search cannot select", str(raised.exception))
 
     def test_root_puct_policy_can_fallback_when_context_is_missing(self) -> None:
         policy = RootPUCTSearchPolicy(
