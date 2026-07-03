@@ -141,6 +141,7 @@ def replay_action_rounds(
     format_id: BattleFormat = "gen3randombattle",
     action_rounds: tuple[ReplayActionRound, ...],
     start_override: BattleStartOverride | None = None,
+    consistency_player_id: PlayerId | None = None,
 ) -> ReplayPrefixResult:
     """Reset ``env`` and replay a recorded action prefix from the battle root."""
 
@@ -161,8 +162,8 @@ def replay_action_rounds(
             action_round,
             requested_players=env.requested_players(),
         )
-        if start_override is not None:
-            _require_expected_observations(env, action_round)
+        if start_override is not None and consistency_player_id is not None:
+            _require_expected_observation(env, action_round, player_id=consistency_player_id)
         env.step(action_round.actions)
 
     return ReplayPrefixResult(
@@ -178,6 +179,7 @@ def replay_trajectory_prefix(
     *,
     decision_round_count: int,
     start_override: BattleStartOverride | None = None,
+    consistency_player_id: PlayerId | None = None,
 ) -> ReplayPrefixResult:
     """Replay the first N decision rounds from a trajectory into ``env``."""
 
@@ -190,6 +192,7 @@ def replay_trajectory_prefix(
             decision_round_count=decision_round_count,
         ),
         start_override=start_override,
+        consistency_player_id=consistency_player_id,
     )
 
 
@@ -200,6 +203,7 @@ def replay_trajectory_branch(
     prefix_decision_round_count: int,
     branch_actions: Mapping[PlayerId, int],
     start_override: BattleStartOverride | None = None,
+    consistency_player_id: PlayerId | None = None,
 ) -> ReplayBranchResult:
     """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
 
@@ -208,6 +212,7 @@ def replay_trajectory_branch(
         trajectory,
         decision_round_count=prefix_decision_round_count,
         start_override=start_override,
+        consistency_player_id=consistency_player_id,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -238,6 +243,7 @@ def replay_trajectory_branch_rollout(
     battle_id: str = "replay-branch-rollout",
     reset_policies: bool = True,
     start_override: BattleStartOverride | None = None,
+    consistency_player_id: PlayerId | None = None,
 ) -> ReplayBranchRolloutResult:
     """Replay, branch once, then continue the rollout with policies until terminal or cap."""
 
@@ -247,6 +253,7 @@ def replay_trajectory_branch_rollout(
         prefix_decision_round_count=prefix_decision_round_count,
         branch_actions=branch_actions,
         start_override=start_override,
+        consistency_player_id=consistency_player_id,
     )
     continuation = continue_rollout_from_current_state(
         env=env,
@@ -302,16 +309,32 @@ def _reset_env(
     resetter(seed=seed, format_id=start_override.format_id, start_override=start_override)
 
 
-def _require_expected_observations(env: PokeZeroEnv, action_round: ReplayActionRound) -> None:
+def _require_expected_observation(
+    env: PokeZeroEnv,
+    action_round: ReplayActionRound,
+    *,
+    player_id: PlayerId,
+) -> None:
     if not action_round.expected_observations:
         return
-    mismatched_players = []
-    for player, expected in action_round.expected_observations.items():
-        actual = env.observe(player)
-        if actual != expected:
-            mismatched_players.append(player)
-    if mismatched_players:
+    expected = action_round.expected_observations.get(player_id)
+    if expected is None:
+        return
+    actual = env.observe(player_id)
+    if not _observations_match_for_replay(actual, expected):
         raise ValueError(
             "start override does not reproduce recorded replay prefix observations "
-            f"for decision round {action_round.turn_index}: {', '.join(mismatched_players)}."
+            f"for decision round {action_round.turn_index}: {player_id}."
         )
+
+
+def _observations_match_for_replay(actual: PokeZeroObservationV0, expected: PokeZeroObservationV0) -> bool:
+    return (
+        actual.schema_version == expected.schema_version
+        and actual.categorical_ids == expected.categorical_ids
+        and actual.numeric_features == expected.numeric_features
+        and actual.token_type_ids == expected.token_type_ids
+        and actual.attention_mask == expected.attention_mask
+        and tuple(actual.legal_action_mask) == tuple(expected.legal_action_mask)
+        and actual.perspective == expected.perspective
+    )

@@ -256,6 +256,7 @@ def value_branch_search(
                 prefix_decision_round_count=prefix_decision_round_count,
                 branch_actions=branch_actions,
                 start_override=_materialize_start_override(start_override),
+                consistency_player_id=player_id,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -391,6 +392,7 @@ def puct_branch_search(
             prefix_decision_round_count=prefix_decision_round_count,
             branch_actions=branch_actions,
             start_override=_materialize_start_override(start_override),
+            consistency_player_id=player_id,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -484,6 +486,7 @@ def flat_branch_search(
             rollout_config=rollout_config,
             battle_id=f"flat-branch-search-{player_id}-{prefix_decision_round_count}-{action_index}",
             start_override=_materialize_start_override(start_override),
+            consistency_player_id=player_id,
         )
         terminal = rollout.continuation.terminal
         candidates.append(

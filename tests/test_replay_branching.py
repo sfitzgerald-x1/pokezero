@@ -1,5 +1,6 @@
 import unittest
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 
@@ -221,7 +222,56 @@ class ReplayBranchingUnitTest(unittest.TestCase):
                     ),
                 ),
                 start_override=start_override,
+                consistency_player_id="p1",
             )
+
+    def test_replay_action_rounds_start_override_consistency_ignores_metadata_only_differences(self) -> None:
+        env = StartOverrideReplayEnv((("p1",),))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+        expected = replace(_observation(legal_action=0), metadata={"battle_id": "recorded"})
+
+        replay_action_rounds(
+            env,
+            seed=17,
+            action_rounds=(
+                ReplayActionRound(
+                    turn_index=0,
+                    actions={"p1": 0},
+                    expected_observations={"p1": expected},
+                ),
+            ),
+            start_override=start_override,
+            consistency_player_id="p1",
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 0}])
+
+    def test_replay_action_rounds_start_override_consistency_checks_only_selected_player(self) -> None:
+        env = StartOverrideReplayEnv((("p1", "p2"),))
+        start_override = BattleStartOverride(
+            player_teams={"p1": "Charizard||||Tackle|||||||", "p2": "Xatu||||Psychic|||||||"}
+        )
+
+        replay_action_rounds(
+            env,
+            seed=17,
+            action_rounds=(
+                ReplayActionRound(
+                    turn_index=0,
+                    actions={"p1": 0, "p2": 0},
+                    expected_observations={
+                        "p1": _observation(legal_action=0),
+                        "p2": _observation(legal_action=2),
+                    },
+                ),
+            ),
+            start_override=start_override,
+            consistency_player_id="p1",
+        )
+
+        self.assertEqual(env.submitted_actions, [{"p1": 0, "p2": 0}])
 
     def test_replay_action_rounds_rejects_request_mismatch(self) -> None:
         env = ScriptedReplayEnv((("p1",),))
