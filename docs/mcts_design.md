@@ -160,10 +160,12 @@ search-selection configuration are in place.
   enough to recover delayed-value lines? Note the roadmap's own leaf-depth results are **non-monotonic**
   (leaf-2 sometimes worse than leaf-1), so "prototype rollout-depth first" is a real experiment, not a
   clean win.
-- **Net integration:** leaf value = the (calibrated) value head via the pluggable `value_fn`. A prior
-  **temperature** knob is desirable (soft prior so exploration can override a peaked prior) but is
-  **not built** — the current path just renormalizes the prior over legal actions
-  (`_normalized_legal_priors`); `cpuct` defaults to 1.25. Both are unbuilt/untuned levers.
+- **Net integration:** leaf value = the (calibrated) value head via the pluggable `value_fn`. Root
+  PUCT now has a root-only prior-**temperature** knob, exposed as `--root-prior-temperature` on the
+  full-game neural/foul-play harnesses. When omitted it preserves old behavior by falling back to
+  `--temperature`; when set it softens only root action traversal priors, not opponent-action priors
+  or the raw fallback policy. `cpuct` defaults to 1.25. These are still tuning levers, not proven
+  strength improvements.
 - **Value head (WS-E):** measure calibration + ranking; improve targets / ranking loss / transform
   until search-ready. Verify the candidate net's head (incl. fpdistill's).
 
@@ -250,7 +252,8 @@ first time we'd actually measure this.
 
 - `search.py` — from the single-pass `visits=1` scorer toward an iterated loop / deeper rollouts.
 - `search_policy.py` — fpdistill prior+value into `select_action_with_context`; determinization
-  planner hook; a prior-**temperature** knob (currently absent).
+  planner hook; a root prior-**temperature** knob for decoupling traversal softness from raw-policy
+  and opponent-action temperatures.
 - `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — controlled full-game head-to-head strength
   mode vs foul-play. The existing `search_benchmark.py` counterfactual mode replays branches against
   the *recorded* opponent action (`:345`) → don't use it for strength.
@@ -285,7 +288,9 @@ first time we'd actually measure this.
    belief sampler still needs conversion into complete packed teams, including our known team and
    plausible unrevealed opponent backline Pokémon; PIMC strategy-fusion persists (ISMCTS only if it
    bites).
-5. **fpdistill prior over-narrowness** — needs a temperature knob that isn't built yet.
+5. **fpdistill prior over-narrowness** — root prior temperature is now built; it still needs a sweep
+   against foul-play to determine whether softening the prior gives search enough room to improve on
+   the raw checkpoint.
 6. **poke-engine Gen-3 equivalence** — unproven; blocks its use as a fast backend.
 7. **In-loop compute** for expert iteration — likely too slow at scale; keep E4 gated on E0.
 

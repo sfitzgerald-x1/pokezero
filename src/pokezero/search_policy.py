@@ -221,6 +221,7 @@ class RootPUCTSearchPolicy:
     selection_mode: str = "visits"
     root_visit_budget: int | None = ACTION_COUNT + 7
     root_time_budget_seconds: float | None = None
+    root_prior_temperature: float = 1.0
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     start_override_planner: StartOverridePlanner | None = None
@@ -248,6 +249,8 @@ class RootPUCTSearchPolicy:
             self.root_time_budget_seconds <= 0.0 or not math.isfinite(self.root_time_budget_seconds)
         ):
             raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
+        if self.root_prior_temperature <= 0.0 or not math.isfinite(self.root_prior_temperature):
+            raise ValueError("root_prior_temperature must be a finite positive value.")
         if self.leaf_rollout_decision_rounds < 0:
             raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
         if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
@@ -319,7 +322,10 @@ class RootPUCTSearchPolicy:
             player_id=context.player_id,
             through_decision_round=context.decision_round_index,
         )
-        priors = self.prior_fn(history)
+        priors = _temperature_scale_action_priors(
+            self.prior_fn(history),
+            temperature=self.root_prior_temperature,
+        )
         leaf_rollout_policies = (
             _leaf_rollout_policies(context, self.leaf_rollout_policy_factory)
             if self.leaf_rollout_decision_rounds
@@ -519,6 +525,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_fallback": False,
                 "root_puct_cpuct": self.cpuct,
                 "root_puct_selection_mode": self.selection_mode,
+                "root_puct_root_prior_temperature": self.root_prior_temperature,
                 "root_puct_selected_value": best.value,
                 "root_puct_selected_score": best.score,
                 "root_puct_selected_action_prior": best.prior,
@@ -937,6 +944,25 @@ def _validate_action_prior_vector(priors: tuple[float, ...], *, name: str) -> No
         raise ValueError(f"{name} must contain {ACTION_COUNT} values.")
     if any(value < 0.0 or not math.isfinite(value) for value in priors):
         raise ValueError(f"{name} must contain finite non-negative values.")
+
+
+def _temperature_scale_action_priors(
+    priors: Sequence[float],
+    *,
+    temperature: float,
+) -> tuple[float, ...]:
+    if temperature <= 0.0 or not math.isfinite(temperature):
+        raise ValueError("root_prior_temperature must be a finite positive value.")
+    normalized = tuple(float(value) for value in priors)
+    _validate_action_prior_vector(normalized, name="action priors")
+    if temperature == 1.0:
+        return normalized
+    exponent = 1.0 / temperature
+    scaled = tuple(0.0 if value <= 0.0 else value**exponent for value in normalized)
+    total = sum(scaled)
+    if total <= 0.0:
+        return scaled
+    return tuple(value / total for value in scaled)
 
 
 def _trajectory_with_current_observation(context: PolicyContext) -> BattleTrajectory:

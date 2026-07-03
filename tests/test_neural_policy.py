@@ -2228,6 +2228,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             search_policy = matchups[2].p1_policy
             self.assertEqual(search_policy.value_fn((observation(1),)), 0.25)
             self.assertEqual(search_policy.prior_fn((observation(1),)), (1.0,) + (0.0,) * 8)
+            self.assertEqual(search_policy.root_prior_temperature, 2.5)
             context = PolicyContext(
                 player_id="p1",
                 decision_round_index=0,
@@ -2280,6 +2281,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "cpu",
                     "--temperature",
                     "1.5",
+                    "--root-prior-temperature",
+                    "2.5",
                     "--json",
                 ]
             )
@@ -2314,7 +2317,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertTrue(matchups[2].p1_policy.allow_fallback)
         self.assertEqual(value_eval.call_args.kwargs["model"], fake_model)
         self.assertEqual(value_eval.call_args.kwargs["device"], "cpu")
-        self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.5)
+        self.assertEqual(prior_eval.call_args.kwargs["temperature"], 1.0)
         self.assertEqual(opponent_eval.call_args.kwargs["temperature"], 1.5)
         self.assertEqual(json.loads(stdout.getvalue()), {"matchups": 4})
 
@@ -2331,6 +2334,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(args.selection_mode, "visits")
         self.assertEqual(args.root_visit_budget, 16)
+        self.assertIsNone(args.root_prior_temperature)
 
     def test_neural_cli_root_puct_play_benchmark_can_average_checkpoint_opponent_action_scenarios(self) -> None:
         if not torch_available():

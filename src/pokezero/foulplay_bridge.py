@@ -80,6 +80,7 @@ class ControlledFoulPlayConfig:
     temperature: float = 1.0
     cpuct: float = 1.25
     selection_mode: str = "visits"
+    root_prior_temperature: float | None = None
     minimum_value_improvement: float | None = None
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
@@ -112,6 +113,10 @@ class ControlledFoulPlayConfig:
             raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
         if self.selection_mode not in {"puct", "value", "visits"}:
             raise ValueError("selection_mode must be 'puct', 'value', or 'visits'.")
+        if self.root_prior_temperature is not None and (
+            self.root_prior_temperature <= 0.0 or not math.isfinite(self.root_prior_temperature)
+        ):
+            raise ValueError("root_prior_temperature must be a finite positive value when set.")
         if self.minimum_value_improvement is not None and (
             self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement)
         ):
@@ -150,6 +155,12 @@ class ControlledFoulPlayConfig:
         if self.foulplay_random_seed is not None:
             return self.foulplay_random_seed
         return self.seed_start
+
+    @property
+    def effective_root_prior_temperature(self) -> float:
+        if self.root_prior_temperature is not None:
+            return self.root_prior_temperature
+        return self.temperature
 
 
 @dataclass(frozen=True)
@@ -266,6 +277,7 @@ class ControlledFoulPlayBenchmarkResult:
             "root_puct": {
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
+                "root_prior_temperature": self.config.effective_root_prior_temperature,
                 "minimum_value_improvement": self.config.minimum_value_improvement,
                 "minimum_override_prior_ratio": self.config.minimum_override_prior_ratio,
                 "minimum_score_improvement": self.config.minimum_score_improvement,
@@ -686,7 +698,7 @@ def _build_policy(
             model=model,
             result=result,
             observations=history,
-            temperature=config.temperature,
+            temperature=1.0,
             device=config.device,
         )
 
@@ -730,6 +742,7 @@ def _build_policy(
         policy_id=search_policy_id,
         cpuct=config.cpuct,
         selection_mode=config.selection_mode,
+        root_prior_temperature=config.effective_root_prior_temperature,
         minimum_value_improvement=config.minimum_value_improvement,
         minimum_override_prior_ratio=config.minimum_override_prior_ratio,
         minimum_score_improvement=config.minimum_score_improvement,
@@ -1470,6 +1483,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--root-prior-temperature",
+        type=float,
+        default=None,
+        help=(
+            "Temperature applied only to root-PUCT action priors. Defaults to --temperature, "
+            "while opponent-action priors and fallback policy continue using --temperature."
+        ),
+    )
+    parser.add_argument(
         "--minimum-value-improvement",
         type=float,
         default=None,
@@ -1596,6 +1618,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         temperature=args.temperature,
         cpuct=args.cpuct,
         selection_mode=args.selection_mode,
+        root_prior_temperature=args.root_prior_temperature,
         minimum_value_improvement=args.minimum_value_improvement,
         minimum_override_prior_ratio=args.minimum_override_prior_ratio,
         minimum_score_improvement=args.minimum_score_improvement,
