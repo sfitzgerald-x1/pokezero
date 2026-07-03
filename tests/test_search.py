@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
@@ -437,6 +438,81 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(len(env.all_step_calls), 5)
         self.assertEqual(result.action_index, 0)
 
+    def test_puct_branch_search_accumulates_until_root_time_budget_expires(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
+            return {0: 0.1, 1: 0.2}[_only_legal_action(history[-1])]
+
+        times = iter((0.0, 0.1, 0.2, 0.6))
+        with patch("pokezero.search.perf_counter", side_effect=lambda: next(times)):
+            result = puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=value_fn,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_time_budget_seconds=0.5,
+            )
+
+        self.assertEqual(result.total_visits, 4)
+        self.assertEqual(len(env.all_step_calls), 4)
+        self.assertTrue(result.time_budget_exhausted)
+        self.assertEqual(result.root_time_budget_seconds, 0.5)
+        self.assertIsNone(result.root_visit_budget)
+
+    def test_puct_branch_search_suppresses_extra_visits_when_initial_sweep_exceeds_time_budget(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        times = iter((0.0, 1.0))
+        with patch("pokezero.search.perf_counter", side_effect=lambda: next(times)):
+            result = puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_time_budget_seconds=0.5,
+            )
+
+        self.assertEqual(result.total_visits, 2)
+        self.assertEqual(len(env.all_step_calls), 2)
+        self.assertTrue(result.time_budget_exhausted)
+
+    def test_puct_branch_search_visit_budget_caps_root_time_budget(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        times = iter((0.0, 0.1))
+        with patch("pokezero.search.perf_counter", side_effect=lambda: next(times)):
+            result = puct_branch_search(
+                env=env,
+                trajectory=trajectory,
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                cpuct=2.0,
+                root_visit_budget=3,
+                root_time_budget_seconds=10.0,
+            )
+
+        self.assertEqual(result.total_visits, 3)
+        self.assertEqual(len(env.all_step_calls), 3)
+        self.assertFalse(result.time_budget_exhausted)
+
     def test_puct_branch_search_varies_leaf_rollout_rng_across_repeated_visits(self) -> None:
         env = ContinuationOutcomeEnv({0: None, 1: None})
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
@@ -519,6 +595,20 @@ class FlatBranchSearchTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 action_priors=(0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                 root_visit_budget=1,
+            )
+
+    def test_puct_branch_search_rejects_invalid_time_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_time_budget_seconds"):
+            puct_branch_search(
+                env=ValueBranchEnv(),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                root_time_budget_seconds=0.0,
             )
 
     def test_puct_branch_search_falls_back_to_uniform_when_legal_prior_mass_is_zero(self) -> None:
