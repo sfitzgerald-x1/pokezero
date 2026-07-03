@@ -129,6 +129,8 @@ class ControlledFoulPlayGameResult:
     root_puct_fallbacks: int
     root_puct_total_visits: int = 0
     root_puct_effective_total_visits: int = 0
+    root_puct_opponent_action_scenarios_generated: int = 0
+    root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
 
@@ -143,6 +145,8 @@ class ControlledFoulPlayGameResult:
             "root_puct_searches": self.root_puct_searches,
             "root_puct_fallbacks": self.root_puct_fallbacks,
             "root_puct_total_visits": self.root_puct_total_visits,
+            "root_puct_opponent_action_scenarios_generated": self.root_puct_opponent_action_scenarios_generated,
+            "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
         }
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
@@ -176,6 +180,8 @@ class ControlledFoulPlayBenchmarkResult:
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
         root_total_visits = sum(game.root_puct_total_visits for game in self.games)
         root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
+        root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
+        root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
         root_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
@@ -211,6 +217,8 @@ class ControlledFoulPlayBenchmarkResult:
                 "searches": root_searches,
                 "fallbacks": root_fallbacks,
                 "total_visits": root_total_visits,
+                "opponent_action_scenarios_generated": root_scenarios_generated,
+                "opponent_action_scenarios_skipped": root_scenarios_skipped,
             },
             "game_results": [game.to_dict() for game in self.games],
         }
@@ -806,6 +814,16 @@ async def _run_single_game(
         if decision.metadata.get("policy_family") == "root-puct-search"
         and not decision.metadata.get("root_puct_fallback")
     )
+    root_scenarios_generated = sum(
+        int(decision.metadata.get("root_puct_opponent_action_scenarios_generated") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_scenarios_skipped = sum(
+        int(decision.metadata.get("root_puct_opponent_action_scenarios_skipped") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -817,6 +835,8 @@ async def _run_single_game(
         root_puct_fallbacks=root_fallbacks,
         root_puct_total_visits=root_total_visits,
         root_puct_effective_total_visits=root_effective_total_visits,
+        root_puct_opponent_action_scenarios_generated=root_scenarios_generated,
+        root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
     )

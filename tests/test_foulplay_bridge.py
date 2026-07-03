@@ -166,6 +166,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_fallbacks=0,
                     root_puct_total_visits=24,
                     root_puct_effective_total_visits=18,
+                    root_puct_opponent_action_scenarios_generated=9,
+                    root_puct_opponent_action_scenarios_skipped=1,
                     root_puct_average_elapsed_seconds=0.2,
                 ),
                 ControlledFoulPlayGameResult(
@@ -179,6 +181,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_fallbacks=2,
                     root_puct_total_visits=16,
                     root_puct_effective_total_visits=12,
+                    root_puct_opponent_action_scenarios_generated=6,
+                    root_puct_opponent_action_scenarios_skipped=3,
                     root_puct_fallback_reasons={"search failed: boom": 2},
                     root_puct_average_elapsed_seconds=0.4,
                 ),
@@ -195,7 +199,11 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["fallbacks"], 2)
         self.assertEqual(payload["root_puct"]["total_visits"], 40)
         self.assertEqual(payload["root_puct"]["effective_total_visits"], 30)
+        self.assertEqual(payload["root_puct"]["opponent_action_scenarios_generated"], 15)
+        self.assertEqual(payload["root_puct"]["opponent_action_scenarios_skipped"], 4)
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
+        self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(
             payload["game_results"][1]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},

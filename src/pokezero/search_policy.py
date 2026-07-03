@@ -301,25 +301,55 @@ class RootPUCTSearchPolicy:
         )
         start = perf_counter()
         env = self.env_factory()
+        skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
             try:
-                scenario_searches = tuple(
-                    puct_branch_search(
-                        env=env,
-                        trajectory=search_trajectory,
-                        player_id=context.player_id,
-                        prefix_decision_round_count=context.decision_round_index,
-                        legal_action_mask=context.observation.legal_action_mask,
-                        opponent_actions=scenario.actions,
-                        value_fn=self.value_fn,
-                        action_priors=priors,
-                        cpuct=self.cpuct,
-                        leaf_rollout_policies=leaf_rollout_policies,
-                        leaf_rollout_config=self.rollout_config,
-                        leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
-                        root_visit_budget=self.root_visit_budget,
+                scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
+                for scenario in opponent_scenarios:
+                    try:
+                        scenario_search_pairs.append(
+                            (
+                                scenario,
+                                puct_branch_search(
+                                    env=env,
+                                    trajectory=search_trajectory,
+                                    player_id=context.player_id,
+                                    prefix_decision_round_count=context.decision_round_index,
+                                    legal_action_mask=context.observation.legal_action_mask,
+                                    opponent_actions=scenario.actions,
+                                    value_fn=self.value_fn,
+                                    action_priors=priors,
+                                    cpuct=self.cpuct,
+                                    leaf_rollout_policies=leaf_rollout_policies,
+                                    leaf_rollout_config=self.rollout_config,
+                                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                    root_visit_budget=self.root_visit_budget,
+                                ),
+                            )
+                        )
+                    except ValueError as exc:
+                        reason = _opponent_scenario_replay_legality_error(exc, scenario)
+                        if reason is None:
+                            raise
+                        skipped_scenarios.append((scenario, reason))
+                if not scenario_search_pairs:
+                    details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
+                    raise _AllOpponentScenariosReplayIllegal(
+                        details=details,
+                        metadata=_opponent_scenario_skip_metadata(
+                            opponent_scenarios=opponent_scenarios,
+                            used_scenarios=(),
+                            skipped_scenarios=tuple(skipped_scenarios),
+                        ),
                     )
-                    for scenario in opponent_scenarios
+                used_scenarios = _normalize_scenarios(tuple(scenario for scenario, _search in scenario_search_pairs))
+                scenario_searches = tuple(search for _scenario, search in scenario_search_pairs)
+            except _AllOpponentScenariosReplayIllegal as exc:
+                return self._fallback(
+                    context,
+                    rng=rng,
+                    reason=str(exc),
+                    extra_metadata=exc.metadata,
                 )
             except Exception as exc:
                 return self._fallback(context, rng=rng, reason=f"search failed: {exc}")
@@ -331,7 +361,7 @@ class RootPUCTSearchPolicy:
 
         search = _aggregate_scenario_searches(
             scenario_searches,
-            opponent_scenarios=opponent_scenarios,
+            opponent_scenarios=used_scenarios,
             cpuct=self.cpuct,
         )
         raw_total_visits = sum(scenario_search.total_visits for scenario_search in scenario_searches)
@@ -382,12 +412,13 @@ class RootPUCTSearchPolicy:
                 "root_puct_selected_score": best.score,
                 "root_puct_candidate_count": len(search.candidates),
                 "root_puct_elapsed_seconds": elapsed_seconds,
-                "root_puct_opponent_actions": dict(opponent_scenarios[0].actions),
-                "root_puct_opponent_action_scenario_count": len(opponent_scenarios),
-                "root_puct_opponent_action_scenarios": [
-                    _opponent_action_scenario_payload(scenario)
-                    for scenario in opponent_scenarios
-                ],
+                "root_puct_opponent_actions": dict(used_scenarios[0].actions),
+                "root_puct_opponent_action_scenario_count": len(used_scenarios),
+                **_opponent_scenario_skip_metadata(
+                    opponent_scenarios=opponent_scenarios,
+                    used_scenarios=used_scenarios,
+                    skipped_scenarios=tuple(skipped_scenarios),
+                ),
                 "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
@@ -397,7 +428,14 @@ class RootPUCTSearchPolicy:
             },
         )
 
-    def _fallback(self, context: PolicyContext, *, rng: random.Random, reason: str) -> PolicyDecision:
+    def _fallback(
+        self,
+        context: PolicyContext,
+        *,
+        rng: random.Random,
+        reason: str,
+        extra_metadata: Mapping[str, object] | None = None,
+    ) -> PolicyDecision:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
         decision = self.fallback_policy.select_action(context.observation, rng=rng)
@@ -412,6 +450,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_fallback": True,
                 "root_puct_fallback_reason": reason,
                 "fallback_policy_id": decision.policy_id,
+                **dict(extra_metadata or {}),
             },
         )
 
@@ -604,6 +643,29 @@ def _opponent_action_scenario_payload(scenario: OpponentActionScenario) -> dict[
     }
 
 
+def _opponent_scenario_skip_metadata(
+    *,
+    opponent_scenarios: Sequence[OpponentActionScenario],
+    used_scenarios: Sequence[OpponentActionScenario],
+    skipped_scenarios: Sequence[tuple[OpponentActionScenario, str]],
+) -> dict[str, object]:
+    return {
+        "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
+        "root_puct_opponent_action_scenarios_skipped": len(skipped_scenarios),
+        "root_puct_opponent_action_scenarios": [
+            _opponent_action_scenario_payload(scenario)
+            for scenario in used_scenarios
+        ],
+        "root_puct_opponent_action_skipped_scenarios": [
+            {
+                **_opponent_action_scenario_payload(scenario),
+                "reason": reason,
+            }
+            for scenario, reason in skipped_scenarios
+        ],
+    }
+
+
 def _leaf_rollout_metadata(
     search: PUCTBranchSearchResult | Sequence[PUCTBranchSearchResult],
     *,
@@ -635,6 +697,12 @@ class _OpponentActionLegalityReport:
     error: str | None = None
 
 
+class _AllOpponentScenariosReplayIllegal(ValueError):
+    def __init__(self, *, details: str, metadata: Mapping[str, object]) -> None:
+        super().__init__(f"all opponent action scenarios were replay-illegal: {details}")
+        self.metadata = dict(metadata)
+
+
 def _opponent_action_legality_report(
     context: PolicyContext,
     opponent_actions: Mapping[PlayerId, int],
@@ -654,6 +722,18 @@ def _opponent_action_legality_report(
                 ),
             )
     return _OpponentActionLegalityReport(checked=checked)
+
+
+def _opponent_scenario_replay_legality_error(
+    exc: ValueError,
+    scenario: OpponentActionScenario,
+) -> str | None:
+    message = str(exc)
+    for player, action_index in scenario.actions.items():
+        unqualified = f"action_index {action_index} is not legal for the current request."
+        if message == unqualified or message == f"{player}: {unqualified}":
+            return message
+    return None
 
 
 def _requested_legal_action_indices_for_player(

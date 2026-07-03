@@ -25,7 +25,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Root PUCT with optional visit budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` now supports an optional root visit budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
-| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, and fallback reasons. This is harness validation, **not** a strength result. |
+| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, and replay-illegal opponent-scenario skip counts. Those skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
 | **Belief determinizer** `sample_opponent_determinizations` | **built, but NOT wired into search** | `belief.py` — emits concrete opponent realizations from the belief view; nothing injects them into the branch env yet (see "missing" #4). |
@@ -73,9 +73,12 @@ Current root visit accumulation allows multiple root visits, but without determi
 stochastic leaf variation it can still re-evaluate the same branch deterministically. Chance handling
 (damage rolls), simultaneous-move uncertainty, and opponent hidden legal-action uncertainty are
 therefore **not yet** adequately covered. Hidden-mode foul-play smokes make this concrete: when the
-opponent private legal mask is withheld, the opponent-action prior can choose illegal opponent actions
-and the benchmark reports fallbacks. Privileged legal-mask mode is useful as a diagnostic safety guard
-but not a headline hidden-info result.
+opponent private legal mask is withheld, the opponent-action prior can still propose illegal opponent
+actions. The searcher now skips replay-illegal opponent-action scenarios and reports skip counts, but
+that skip is learned by probing replay legality against the real branch state. It is useful for
+diagnosing and avoiding fallback storms, but it is **not** an oracle-free belief substitute. If every
+scenario is illegal for a decision it must still fall back. Privileged legal-mask mode remains useful
+as a diagnostic safety guard but not a headline hidden-info result.
 
 ## Design principles / hard constraints
 
