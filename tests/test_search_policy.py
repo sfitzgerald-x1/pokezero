@@ -696,6 +696,34 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.metadata["root_puct_pre_gate_action"], 1)
         self.assertEqual(step.metadata["root_puct_prior_action"], 0)
 
+    def test_root_puct_policy_prior_ratio_gate_keeps_low_prior_override_at_prior_action(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=0.0,
+            selection_mode="value",
+            minimum_override_prior_ratio=0.5,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=97, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 0)
+        self.assertEqual(step.metadata["root_puct_search_action"], 1)
+        self.assertEqual(step.metadata["root_puct_prior_action"], 0)
+        self.assertTrue(step.metadata["root_puct_prior_ratio_gate_used"])
+        self.assertEqual(step.metadata["root_puct_minimum_override_prior_ratio"], 0.5)
+        self.assertAlmostEqual(step.metadata["root_puct_prior_ratio_gate_required_prior"], 0.45)
+        self.assertFalse(step.metadata["root_puct_selected_changed_prior_action"])
+        self.assertTrue(step.metadata["root_puct_pre_gate_changed_prior_action"])
+
     def test_root_puct_policy_can_use_bounded_leaf_rollouts_for_branch_values(self) -> None:
         branch_envs: list[DelayedOutcomeEnv] = []
 
@@ -776,6 +804,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 minimum_value_improvement=-0.1,
+            )
+
+    def test_root_puct_policy_rejects_invalid_prior_ratio_gate(self) -> None:
+        with self.assertRaisesRegex(ValueError, "minimum_override_prior_ratio"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
+                minimum_override_prior_ratio=-0.1,
             )
 
     def test_root_puct_policy_rejects_invalid_selection_mode(self) -> None:

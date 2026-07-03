@@ -209,6 +209,7 @@ class RootPUCTSearchPolicy:
     fallback_policy: Policy = field(default_factory=RandomLegalPolicy)
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
+    minimum_override_prior_ratio: float | None = None
     selection_mode: str = "puct"
     root_visit_budget: int | None = None
     leaf_rollout_decision_rounds: int = 0
@@ -222,6 +223,10 @@ class RootPUCTSearchPolicy:
             self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement)
         ):
             raise ValueError("minimum_value_improvement must be a finite non-negative value when set.")
+        if self.minimum_override_prior_ratio is not None and (
+            self.minimum_override_prior_ratio < 0.0 or not math.isfinite(self.minimum_override_prior_ratio)
+        ):
+            raise ValueError("minimum_override_prior_ratio must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.leaf_rollout_decision_rounds < 0:
@@ -382,6 +387,18 @@ class RootPUCTSearchPolicy:
                 "root_puct_value_gate_used": value_gate_used,
                 "root_puct_pre_gate_action": search_best.action_index,
             }
+        prior_ratio_metadata = {}
+        if self.minimum_override_prior_ratio is not None:
+            prior_ratio_gate_used = False
+            required_prior = prior_best.prior * self.minimum_override_prior_ratio
+            if best.action_index != prior_best.action_index and best.prior < required_prior:
+                best = prior_best
+                prior_ratio_gate_used = True
+            prior_ratio_metadata = {
+                "root_puct_minimum_override_prior_ratio": self.minimum_override_prior_ratio,
+                "root_puct_prior_ratio_gate_used": prior_ratio_gate_used,
+                "root_puct_prior_ratio_gate_required_prior": required_prior,
+            }
         leaf_metadata = _leaf_rollout_metadata(
             scenario_searches,
             configured_rounds=self.leaf_rollout_decision_rounds,
@@ -433,6 +450,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
+                **prior_ratio_metadata,
                 **visit_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,

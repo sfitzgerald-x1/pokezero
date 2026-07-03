@@ -147,6 +147,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 minimum_value_improvement=-0.1,
             )
+        with self.assertRaisesRegex(ValueError, "minimum_override_prior_ratio"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                minimum_override_prior_ratio=-0.1,
+            )
+        with self.assertRaisesRegex(ValueError, "minimum_override_prior_ratio"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                minimum_override_prior_ratio=float("nan"),
+            )
         with self.assertRaisesRegex(ValueError, "root_visit_budget"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -255,6 +267,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             games=2,
             selection_mode="visits",
             minimum_value_improvement=0.25,
+            minimum_override_prior_ratio=0.5,
             root_visit_budget=16,
             leaf_rollout_rounds=1,
             leaf_rollout_sampling=True,
@@ -354,6 +367,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)
         self.assertEqual(payload["root_puct"]["selection_mode"], "visits")
         self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
+        self.assertEqual(payload["root_puct"]["minimum_override_prior_ratio"], 0.5)
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
@@ -428,6 +442,33 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 },
             ),
             PolicyDecision(
+                action_index=1,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
+                    "root_puct_fallback": False,
+                    "root_puct_selected_changed_prior_action": False,
+                    "root_puct_pre_gate_changed_prior_action": True,
+                    "root_puct_prior_ratio_gate_used": True,
+                    "root_puct_minimum_override_prior_ratio": 0.5,
+                    "root_puct_prior_ratio_gate_required_prior": 0.35,
+                    "root_puct_search_action": 0,
+                    "root_puct_prior_action": 1,
+                    "root_puct_selected_value": 0.1,
+                    "root_puct_search_action_value": 0.3,
+                    "root_puct_prior_value": 0.1,
+                    "root_puct_selected_score": 0.7,
+                    "root_puct_search_action_score": 0.8,
+                    "root_puct_prior_score": 0.7,
+                    "root_puct_selected_action_prior": 0.7,
+                    "root_puct_search_action_prior": 0.2,
+                    "root_puct_prior_action_prior": 0.7,
+                    "root_puct_selected_action_visits": 3,
+                    "root_puct_search_action_visits": 4,
+                    "root_puct_prior_action_visits": 3,
+                },
+            ),
+            PolicyDecision(
                 action_index=2,
                 policy_id="root-puct",
                 metadata={
@@ -442,7 +483,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
 
         details = _root_puct_prior_action_change_details(decisions)
 
-        self.assertEqual(len(details), 2)
+        self.assertEqual(len(details), 3)
         self.assertEqual(details[0]["decision_index"], 1)
         self.assertEqual(details[0]["selected_action"], 4)
         self.assertEqual(details[0]["search_action"], 4)
@@ -460,6 +501,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(details[1]["value_gate_used"])
         self.assertEqual(details[1]["selected_action_prior"], 0.7)
         self.assertEqual(details[1]["search_action_prior"], 0.3)
+        self.assertEqual(details[2]["decision_index"], 3)
+        self.assertEqual(details[2]["selected_action"], 1)
+        self.assertEqual(details[2]["search_action"], 0)
+        self.assertEqual(details[2]["prior_action"], 1)
+        self.assertFalse(details[2]["selected_changed_prior_action"])
+        self.assertTrue(details[2]["pre_gate_changed_prior_action"])
+        self.assertFalse(details[2]["value_gate_used"])
+        self.assertTrue(details[2]["prior_ratio_gate_used"])
+        self.assertEqual(details[2]["minimum_override_prior_ratio"], 0.5)
+        self.assertEqual(details[2]["prior_ratio_gate_required_prior"], 0.35)
 
     def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
         class FakeModelConfig:
