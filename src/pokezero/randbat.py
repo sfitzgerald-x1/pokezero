@@ -17,6 +17,7 @@ from .belief import CandidateSetSummary
 
 GEN3_RANDBAT_FORMATS = {"gen3randombattle", "[Gen 3] Random Battle"}
 _SOURCE_CACHE_SCHEMA = "gen3-randbat-source-v3"
+_UNOWN_COSMETIC_FORM_SUFFIXES = frozenset("abcdefghijklmnopqrstuvwxyz") | {"exclamation", "question"}
 PHYSICAL_TYPES = {"Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel"}
 SPECIAL_TYPES = {"Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"}
 STATUS_INFLICTING_MOVES = {"stunspore", "thunderwave", "toxic", "willowisp", "yawn"}
@@ -794,8 +795,19 @@ def _optional_string(value: Any) -> Optional[str]:
     return str(value) if value not in {None, ""} else None
 
 
+def canonical_gen3_randbat_species_id(value: str) -> str:
+    """Return the Gen 3 randbat source id for a possibly cosmetic public species name."""
+
+    normalized = _normalize_id(value)
+    if normalized.startswith("unown"):
+        suffix = normalized[len("unown") :]
+        if suffix in _UNOWN_COSMETIC_FORM_SUFFIXES:
+            return "unown"
+    return normalized
+
+
 def _normalize_species(value: str) -> str:
-    return _normalize_id(value)
+    return canonical_gen3_randbat_species_id(value)
 
 
 def _normalize_move(value: str) -> str:

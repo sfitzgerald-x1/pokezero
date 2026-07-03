@@ -16,7 +16,7 @@ from .belief import (
 from .env import BattleStartOverride
 from .observation import PokeZeroObservationV0
 from .policy import PolicyContext
-from .randbat import Gen3RandbatSource, Gen3RandbatVariant
+from .randbat import Gen3RandbatSource, Gen3RandbatVariant, canonical_gen3_randbat_species_id
 from .search import StartOverrideSource
 from .search_policy import OpponentActionScenario, StartOverridePlanner
 from .showdown_fixture import FixturePokemon, pack_team
@@ -70,16 +70,22 @@ def gen3_randbat_belief_start_override_planner(
         del scenario, scenario_index
         if not set_source.supports(context.format_id):
             return None
-        sampled_override = gen3_randbat_belief_start_override(
+        sampled_override, failure_reason = _gen3_randbat_belief_start_override_result(
             context=context,
             set_source=set_source,
             rng=rng,
             team_size=team_size,
         )
         if sampled_override is None:
-            return None
+            reason = failure_reason or "unknown reason"
 
-        def sample_override() -> BattleStartOverride | None:
+            def missing_override() -> BattleStartOverride:
+                raise ValueError(f"start override planner did not produce a sampled world: {reason}")
+
+            missing_override.start_override_id = "gen3-randbat-belief-missing"  # type: ignore[attr-defined]
+            return missing_override
+
+        def sample_override() -> BattleStartOverride:
             return sampled_override
 
         sample_override.start_override_id = "gen3-randbat-belief"  # type: ignore[attr-defined]
@@ -101,32 +107,49 @@ def gen3_randbat_belief_start_override(
     Returns ``None`` when the current observation lacks enough request-known self-team data to build
     a faithful packed team. Replay consistency checks then keep bad sampled worlds from being scored.
     """
+    override, _reason = _gen3_randbat_belief_start_override_result(
+        context=context,
+        set_source=set_source,
+        rng=rng,
+        team_size=team_size,
+    )
+    return override
+
+
+def _gen3_randbat_belief_start_override_result(
+    *,
+    context: PolicyContext,
+    set_source: Gen3RandbatSource,
+    rng: random.Random,
+    team_size: int = DEFAULT_RANDBAT_TEAM_SIZE,
+) -> tuple[BattleStartOverride | None, str | None]:
+    """Return a sampled start override plus a public-data failure reason for diagnostics."""
 
     if team_size <= 0:
         raise ValueError("team_size must be positive.")
     if not set_source.supports(context.format_id):
-        return None
+        return None, "unsupported format"
     metadata = context.observation.metadata
     if not isinstance(metadata, Mapping):
-        return None
+        return None, "observation metadata is missing"
     view = player_belief_view_from_payload(metadata.get("belief_view"))
     if view is None:
-        return None
+        return None, "belief_view is missing or invalid"
     self_team = _self_team_from_metadata(
         _root_self_team_payload(context, team_size=team_size) or metadata.get("self_team"),
         team_size=team_size,
         set_source=set_source,
     )
     if self_team is None:
-        return None
+        return None, "request-known self_team is missing or inconsistent"
     team_index_constraints = _public_opponent_team_index_constraints(
         context,
         opponent_slot=view.opponent_slot,
         team_size=team_size,
     )
     if team_index_constraints is None:
-        return None
-    opponent_team = _opponent_team_from_belief(
+        return None, "public opponent switch constraints are inconsistent"
+    opponent_team, opponent_team_failure = _opponent_team_from_belief_result(
         view,
         set_source=set_source,
         format_id=context.format_id,
@@ -136,15 +159,18 @@ def gen3_randbat_belief_start_override(
         team_index_constraints=team_index_constraints,
     )
     if opponent_team is None:
-        return None
+        return None, opponent_team_failure or "opponent belief could not be materialized"
     if view.self_slot not in {"p1", "p2"} or view.opponent_slot not in {"p1", "p2"}:
-        return None
-    return BattleStartOverride(
-        player_teams={
-            view.self_slot: pack_team(self_team),
-            view.opponent_slot: pack_team(opponent_team),
-        },
-        observation_format_id=context.format_id,
+        return None, "belief_view player slots are invalid"
+    return (
+        BattleStartOverride(
+            player_teams={
+                view.self_slot: pack_team(self_team),
+                view.opponent_slot: pack_team(opponent_team),
+            },
+            observation_format_id=context.format_id,
+        ),
+        None,
     )
 
 
@@ -197,7 +223,7 @@ def _public_opponent_move_slot_constraints(
         )
         if move is None:
             continue
-        species_key = _normalize_id(species)
+        species_key = _normalize_species_id(species)
         slot_constraints = constraints.setdefault(species_key, {})
         existing = slot_constraints.get(step.action_index)
         if existing is not None and _normalize_id(existing) != _normalize_id(move):
@@ -285,7 +311,7 @@ def _public_opponent_team_index_constraints(
 
         if next_active is None:
             continue
-        next_key = _normalize_id(next_active)
+        next_key = _normalize_species_id(next_active)
         if next_key in constraints:
             active_species = next_active
             active_position = _move_constrained_species_to_active_position(
@@ -293,7 +319,7 @@ def _public_opponent_team_index_constraints(
                 constraints[next_key],
                 active_position=active_position,
             )
-        elif active_species is not None and next_key != _normalize_id(active_species):
+        elif active_species is not None and next_key != _normalize_species_id(active_species):
             active_species = next_active
             active_position = None
     return constraints
@@ -328,7 +354,7 @@ def _assign_team_index_constraint(
 ) -> bool:
     if team_index < 0 or team_index >= team_size:
         return False
-    species_key = _normalize_id(species)
+    species_key = _normalize_species_id(species)
     existing = constraints.get(species_key)
     if existing is not None:
         return existing == team_index
@@ -449,7 +475,7 @@ def _move_from_public_event_line(
     if not _public_actor_matches_slot(actor, slot=opponent_slot, self_slot=self_slot):
         return None
     actor_species = _species_from_public_actor(actor)
-    if actor_species is not None and _normalize_id(actor_species) != _normalize_id(species):
+    if actor_species is not None and _normalize_species_id(actor_species) != _normalize_species_id(species):
         return None
     return _optional_text(parts[3])
 
@@ -617,6 +643,28 @@ def _opponent_team_from_belief(
     move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
     team_index_constraints: Mapping[str, int] | None = None,
 ) -> tuple[FixturePokemon, ...] | None:
+    team, _reason = _opponent_team_from_belief_result(
+        view,
+        set_source=set_source,
+        format_id=format_id,
+        rng=rng,
+        team_size=team_size,
+        move_slot_constraints=move_slot_constraints,
+        team_index_constraints=team_index_constraints,
+    )
+    return team
+
+
+def _opponent_team_from_belief_result(
+    view: PlayerBeliefView,
+    *,
+    set_source: Gen3RandbatSource,
+    format_id: str,
+    rng: random.Random,
+    team_size: int,
+    move_slot_constraints: Mapping[str, Mapping[int, str]] | None = None,
+    team_index_constraints: Mapping[str, int] | None = None,
+) -> tuple[tuple[FixturePokemon, ...] | None, str | None]:
     team: list[FixturePokemon] = []
     used_species: set[str] = set()
     for belief in view.opponent_pokemon:
@@ -628,12 +676,23 @@ def _opponent_team_from_belief(
             move_slot_constraints=move_slot_constraints,
         )
         if fixture is None:
-            return None
+            return None, f"opponent {belief.species} could not be sampled from public belief"
         team.append(fixture)
-        used_species.add(_normalize_id(fixture.species))
+        used_species.add(_normalize_species_id(fixture.species))
     hidden_needed = team_size - len(team)
     if hidden_needed < 0:
-        return None
+        return None, "opponent belief has more revealed pokemon than team slots"
+    constrained_hidden = _sample_constrained_hidden_backline(
+        set_source,
+        used_species=used_species,
+        team_index_constraints=team_index_constraints or {},
+        count_limit=hidden_needed,
+        rng=rng,
+    )
+    if constrained_hidden is None:
+        return None, "public constrained hidden opponent species could not be sampled"
+    team.extend(constrained_hidden)
+    hidden_needed = team_size - len(team)
     hidden = _sample_hidden_backline(
         set_source,
         used_species=used_species,
@@ -641,12 +700,15 @@ def _opponent_team_from_belief(
         rng=rng,
     )
     if hidden is None:
-        return None
-    return _fixture_team_with_index_constraints(
+        return None, "random hidden opponent backline could not be sampled"
+    constrained_team = _fixture_team_with_index_constraints(
         tuple(team + list(hidden)),
         team_index_constraints or {},
         team_size=team_size,
     )
+    if constrained_team is None:
+        return None, "sampled opponent team could not satisfy public team slot constraints"
+    return constrained_team, None
 
 
 def _fixture_team_with_index_constraints(
@@ -662,7 +724,7 @@ def _fixture_team_with_index_constraints(
     slots: list[FixturePokemon | None] = [None] * team_size
     unconstrained: list[FixturePokemon] = []
     for fixture in team:
-        species_key = _normalize_id(fixture.species)
+        species_key = _normalize_species_id(fixture.species)
         target_index = constraints.get(species_key)
         if target_index is None:
             unconstrained.append(fixture)
@@ -670,7 +732,7 @@ def _fixture_team_with_index_constraints(
         if target_index < 0 or target_index >= team_size or slots[target_index] is not None:
             return None
         slots[target_index] = fixture
-    constrained_species = {_normalize_id(fixture.species) for fixture in team}
+    constrained_species = {_normalize_species_id(fixture.species) for fixture in team}
     missing_constraints = set(constraints) - constrained_species
     if missing_constraints:
         return None
@@ -722,7 +784,7 @@ def _sample_revealed_opponent_fixture(
         if not hp_matched:
             return None
         variants = hp_matched
-    species_constraints = (move_slot_constraints or {}).get(_normalize_id(pokemon.species), {})
+    species_constraints = (move_slot_constraints or {}).get(_normalize_species_id(pokemon.species), {})
     if species_constraints:
         slot_matched = tuple(
             variant
@@ -790,6 +852,35 @@ def _variant_public_max_hp(
     )
 
 
+def _sample_constrained_hidden_backline(
+    set_source: Gen3RandbatSource,
+    *,
+    used_species: set[str],
+    team_index_constraints: Mapping[str, int],
+    count_limit: int,
+    rng: random.Random,
+) -> tuple[FixturePokemon, ...] | None:
+    required_species = [
+        species
+        for species, _index in sorted(team_index_constraints.items(), key=lambda item: (item[1], item[0]))
+        if species not in used_species
+    ]
+    if len(required_species) > count_limit:
+        return None
+    fixtures: list[FixturePokemon] = []
+    for species in required_species:
+        universe = set_source.universe_for(species)
+        if universe is None or not universe.variants:
+            return None
+        variant = universe.variants[rng.randrange(len(universe.variants))]
+        fixture = _fixture_from_variant(variant, set_source=set_source)
+        if fixture is None:
+            return None
+        used_species.add(_normalize_species_id(fixture.species))
+        fixtures.append(fixture)
+    return tuple(fixtures)
+
+
 def _sample_hidden_backline(
     set_source: Gen3RandbatSource,
     *,
@@ -800,7 +891,7 @@ def _sample_hidden_backline(
     candidates = [
         universe
         for universe in set_source.universes.values()
-        if universe.variants and _normalize_id(universe.species) not in used_species
+        if universe.variants and _normalize_species_id(universe.species) not in used_species
     ]
     team: list[FixturePokemon] = []
     for _ in range(count):
@@ -809,7 +900,7 @@ def _sample_hidden_backline(
         universe_index = rng.randrange(len(candidates))
         universe = candidates.pop(universe_index)
         variant = universe.variants[rng.randrange(len(universe.variants))]
-        used_species.add(_normalize_id(universe.species))
+        used_species.add(_normalize_species_id(universe.species))
         fixture = _fixture_from_variant(variant, set_source=set_source)
         if fixture is None:
             return None
@@ -828,7 +919,7 @@ def _base_stats_for_species(
     set_source: Gen3RandbatSource,
     species: str,
 ) -> dict[str, int] | None:
-    raw = set_source.species_metadata.get(_normalize_id(species))
+    raw = set_source.species_metadata.get(_normalize_species_id(species))
     if not isinstance(raw, Mapping):
         return None
     base_stats = raw.get("baseStats")
@@ -1184,3 +1275,7 @@ def _level_from_details(details: str | None) -> int | None:
 
 def _normalize_id(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def _normalize_species_id(value: str) -> str:
+    return canonical_gen3_randbat_species_id(value)
