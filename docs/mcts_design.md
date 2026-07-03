@@ -53,8 +53,13 @@ In priority order:
    Deciding 1-ply-with-rollouts vs a real tree is the core design question.
 4. **Determinization for hidden-info ladder play.** Search currently has **no belief-set sampling**
    (`grep` finds none in `search.py`/`search_policy.py`). Fine for perfect-info self-play/benchmark;
-   required for real ladder play (hidden opponent set). Wire `belief.py`/`Gen3RandbatSource` to sample
-   K opponent worlds at the root and average.
+   required for real ladder play (hidden opponent set). Recipe-faithful wiring (thesis §3.2): sample a
+   *concrete* full opponent team **per rollout** (not just K fixed root worlds) by **rejection-sampling
+   Showdown's randbats generator** against observed facts — draw a team, reject if inconsistent with
+   revealed moves/items/ability (~10 attempts, then force the known traits) — so each rollout is a
+   fresh (near) perfect-information instance and the search averages over the belief distribution
+   across its budget. We have the belief distribution; the missing piece is emitting concrete sampled
+   teams from it. See **Determinization: recipe fidelity + theory** below.
 
 Not blocking: chance handling (replay re-simulates real RNG; averaging rollouts approximates the
 distribution — explicit KO/no-KO grouping is an optimization), simultaneous moves (handled by the
@@ -66,6 +71,10 @@ opponent planners for 1-ply; DUCT only matters for a deep tree).
   ([`poke_engine_assessment.md`](poke_engine_assessment.md)).
 - **foul-play is GPL** → benchmark / behavior source only; never imported.
 - **Value quality bounds search quality** — WS-E is a prerequisite, not a nicety.
+- **Benchmark search against an *independent* opponent.** If the net is *both* the search's opponent
+  model and the eval opponent, net+search-vs-net-alone is **inflated** (the thesis explicitly flags
+  this). The honest strength read is vs an independent opponent (**foul-play**); net-vs-net is
+  diagnostic only.
 - **North-star lanes.** Searchless self-play + **test-time** search = recipe-faithful **flagship**.
   fpdistill-seeded search and any **in-loop** search (AlphaZero-style) = **sanctioned parallel arm**,
   kept off the flagship so the clean baseline stays measurable ([`goals.md`](goals.md)).
@@ -74,7 +83,9 @@ opponent planners for 1-ply; DUCT only matters for a deep tree).
 
 - **Forking (WS-C):** keep **replay-from-root** (built); validate per-move cost against the target
   search budget; escalate to snapshot or poke-engine only if the budget demands.
-- **Determinization:** add root belief-set sampling (K worlds, average) — the main *new* wiring.
+- **Determinization:** add **per-rollout** opponent-set sampling (matching the thesis; closer to
+  ISMCTS than fixed root-K-worlds) via rejection sampling from the randbats generator against observed
+  facts — the main *new* wiring. See the theory note below.
 - **Search core (WS-D):** the extension question — is **1-ply + deeper leaf rollouts** enough to
   recover delayed-value lines, or do we build a **multi-ply PUCT tree**? Prototype rollout-depth
   first (cheap, already supported), escalate to a tree if depth-1 underperforms.
@@ -82,6 +93,31 @@ opponent planners for 1-ply; DUCT only matters for a deep tree).
   a peaked prior); leaf value = the (calibrated) value head via the pluggable `value_fn`.
 - **Value head (WS-E):** measure calibration + ranking; improve targets / ranking loss / transform
   until search-ready. Verify the candidate net's head (incl. fpdistill's).
+
+## Determinization: recipe fidelity + theory (PIMC vs ISMCTS)
+
+**Recipe (MIT §3.2).** Determinize **per rollout**: at the start of each of the ~1000–2000 rollouts,
+sample one concrete possibility for all unknown opponent info using **Showdown's exact randbats
+generator + rejection sampling** (≈10 attempts to match revealed moves/items/ability, then force the
+known traits), restore the **Markov property** via multi-turn-effect duration encodings, and let the
+net policy play the opponent inside the tree. Per-rollout re-sampling — rather than a fixed set of K
+root worlds — makes the search average over the belief distribution more finely, i.e. closer to
+Information-Set-MCTS behavior.
+
+**Theory / why this shape.** MIT's method is textbook **PIMC** (Perfect-Information Monte Carlo):
+determinize → search the perfect-information game → average. PIMC works well in practice (bridge,
+Skat) despite two known flaws:
+- **Strategy fusion** — the search implicitly "cheats" by choosing *different* actions in worlds it
+  actually cannot distinguish (they share an information set), because it solves each determinized
+  world independently.
+- **Non-locality** — a node's true value depends on the opponent's beliefs/strategy elsewhere in the
+  tree, which determinization ignores.
+
+The principled alternative is **Information-Set MCTS** (Cowling, Powley & Whitehouse, 2012): keep one
+tree keyed on *information sets* and re-determinize per iteration, so the policy can't fuse strategies
+across indistinguishable worlds. **Plan:** ship **PIMC with per-rollout averaging first**
+(recipe-faithful, simple, proven), and escalate to **ISMCTS only if determinization artifacts
+measurably bite**.
 
 ## The fpdistill-seeded bootstrap / expert-iteration track (parallel arm)
 
@@ -101,16 +137,18 @@ ordering: **search(fpdistill) > fpdistill-alone > search(self-play net)** on fou
 ## Experiment sequence
 
 - **E0 — search(fpdistill) strength benchmark (cheapest, runnable now).** Wire fpdistill as
-  prior+value into the *existing* `search_policy`; **build the missing strength benchmark** (win rate
-  vs net-alone, vs fpdistill-alone, vs foul-play). Re-run `hazard_probe`/`behavior_probe` on the
+  prior+value into the *existing* `search_policy`; **build the missing strength benchmark**. Headline
+  metric is win rate **vs foul-play (an independent opponent)** — net+search-vs-net-alone is inflated
+  when the net is also the search's opponent model (thesis caveat), so treat it as diagnostic, not the
+  strength number. Also report vs fpdistill-alone. Re-run `hazard_probe`/`behavior_probe` on the
   search-augmented policy to see if search now sets Spikes / uses setup. This simultaneously (a) fills
   gap #2, and (b) tests the whole search bet.
 - **E1 — value-head search-readiness (WS-E, gap #1).** Calibration + ranking audit on self-play-1.5M
   and fpdistill; apply transform if it helps. Gates E0's interpretation.
 - **E2 — depth (gap #3).** Sweep leaf-rollout depth / policy; if 1-ply+rollouts underperforms on deep
   lines, prototype a multi-ply tree.
-- **E3 — determinization (gap #4).** Root belief-set sampling for hidden-info play; needed before
-  ladder.
+- **E3 — determinization (gap #4).** Per-rollout opponent-set sampling (rejection-sampled randbats,
+  force known traits) for hidden-info play; needed before ladder. ISMCTS only if PIMC artifacts bite.
 - **E4 — (optional parallel arm) expert-iteration loop.** Only if E0 shows a large search win and the
   forking budget supports in-loop generation.
 
@@ -120,9 +158,10 @@ first time we'd actually measure this.
 ## Files (mostly *extend*, not new)
 
 - `search.py` — extend depth (rollout config or a tree) if 1-ply underperforms.
-- `search_policy.py` — fpdistill prior+value wiring; belief-determinization hook.
-- `search_benchmark.py` — **add a win-rate-vs-net strength mode** (currently behavior/cost only).
-- `belief.py` — opponent-set determinization sampler for the searcher.
+- `search_policy.py` — fpdistill prior+value wiring; per-rollout belief-determinization hook.
+- `search_benchmark.py` — **add a strength mode vs an independent opponent (foul-play)** (currently
+  behavior/cost only; net-vs-net is inflated).
+- `belief.py` — **per-rollout** opponent-team sampler (rejection-sampled randbats, force known traits).
 - `value_calibration.py` / `neural_policy.py` — apply/verify a calibration transform for leaf eval.
 - `poke_engine_backend.py` — only if adopted as a fast backend (post equivalence spike).
 
