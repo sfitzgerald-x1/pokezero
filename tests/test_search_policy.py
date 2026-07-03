@@ -11,6 +11,7 @@ from pokezero.search_policy import (
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
+    _opponent_scenario_skip_metadata,
     _opponent_scenario_replay_legality_error,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
@@ -1815,6 +1816,31 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(
             _opponent_scenario_replay_legality_error(ValueError(message), scenario),
             message,
+        )
+
+    def test_opponent_scenario_skip_metadata_counts_request_mismatch_players(self) -> None:
+        scenario = OpponentActionScenario(actions={"p2": 0}, label="stay-in")
+        metadata = _opponent_scenario_skip_metadata(
+            opponent_scenarios=(scenario,),
+            used_scenarios=(),
+            skipped_scenarios=(
+                (
+                    scenario,
+                    (
+                        "replay actions for decision round 4 do not match environment request "
+                        "(missing requested players: p1; unexpected players: p2)."
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            metadata["root_puct_opponent_action_replay_request_mismatch_decision_rounds"],
+            {"4": 1},
+        )
+        self.assertEqual(
+            metadata["root_puct_opponent_action_replay_request_mismatch_players"],
+            {"missing:p1": 1, "unexpected:p2": 1},
         )
 
     def test_opponent_scenario_replay_legality_classifies_illegal_prefix_action(self) -> None:

@@ -9,6 +9,11 @@ _REQUEST_MISMATCH_ROUND_RE = re.compile(
     r"\breplay actions for decision round\s+(\d+)\s+do not match environment request\b",
     re.IGNORECASE,
 )
+_REQUEST_MISMATCH_DETAIL_RE = re.compile(
+    r"\breplay actions for decision round\s+\d+\s+do not match environment request\s*"
+    r"\((?P<details>[^)]*)\)",
+    re.IGNORECASE,
+)
 _START_OVERRIDE_OBSERVATION_MISMATCH_ROUND_RE = re.compile(
     r"\bstart override does not reproduce recorded replay prefix observations\s+"
     r"for decision round\s+(\d+)\b",
@@ -97,6 +102,22 @@ def root_puct_replay_request_mismatch_decision_round_counts(reason: object) -> d
     return _decision_round_counts(_REQUEST_MISMATCH_ROUND_RE, reason)
 
 
+def root_puct_replay_request_mismatch_player_counts(reason: object) -> dict[str, int]:
+    """Count missing/unexpected players in replay request-shape mismatch diagnostics."""
+
+    counts: dict[str, int] = {}
+    for match in _REQUEST_MISMATCH_DETAIL_RE.finditer(str(reason or "")):
+        details = match.group("details")
+        for chunk in details.split(";"):
+            label, players_text = _request_mismatch_detail_parts(chunk)
+            if not label:
+                continue
+            for player in re.findall(r"\bp[12]\b", players_text, flags=re.IGNORECASE):
+                key = f"{label}:{player.lower()}"
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def root_puct_start_override_mismatch_decision_round_counts(reason: object) -> dict[str, int]:
     """Count rounds where a sampled world failed branch-point observation validation."""
 
@@ -125,3 +146,12 @@ def _decision_round_counts(pattern: re.Pattern[str], reason: object) -> dict[str
         key = match.group(1)
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _request_mismatch_detail_parts(chunk: str) -> tuple[str | None, str]:
+    normalized = chunk.strip().lower()
+    if normalized.startswith("missing requested players:"):
+        return "missing", chunk.split(":", 1)[1]
+    if normalized.startswith("unexpected players:"):
+        return "unexpected", chunk.split(":", 1)[1]
+    return None, ""

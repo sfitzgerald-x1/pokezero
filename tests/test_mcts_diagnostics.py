@@ -7,6 +7,7 @@ from pokezero.mcts_diagnostics import (
     root_puct_fallback_category,
     root_puct_replay_rejection_decision_round_counts,
     root_puct_replay_request_mismatch_decision_round_counts,
+    root_puct_replay_request_mismatch_player_counts,
     root_puct_start_override_mismatch_decision_round_counts,
 )
 
@@ -114,6 +115,28 @@ class RootPUCTFallbackCategoryTests(unittest.TestCase):
             root_puct_start_override_mismatch_decision_round_counts(reason),
             {"3": 1},
         )
+
+    def test_extracts_request_mismatch_player_counts(self) -> None:
+        reason = (
+            "replay actions for decision round 12 do not match environment request "
+            "(missing requested players: p1; unexpected players: p2).; "
+            "replay actions for decision round 13 do not match environment request "
+            "(missing requested players: p1, p2)."
+        )
+
+        self.assertEqual(
+            root_puct_replay_request_mismatch_player_counts(reason),
+            {
+                "missing:p1": 2,
+                "missing:p2": 1,
+                "unexpected:p2": 1,
+            },
+        )
+
+    def test_request_mismatch_player_counts_ignore_unscoped_player_text(self) -> None:
+        reason = "all opponent action scenarios were replay-illegal: unexpected players: p2."
+
+        self.assertEqual(root_puct_replay_request_mismatch_player_counts(reason), {})
 
     def test_extracts_first_observation_mismatch_path_counts(self) -> None:
         reason = (
