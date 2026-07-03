@@ -407,6 +407,31 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 policy_id="root-puct",
                 metadata={
                     "policy_family": "root-puct-search",
+                    "root_puct_fallback": False,
+                    "root_puct_selected_changed_prior_action": False,
+                    "root_puct_pre_gate_changed_prior_action": True,
+                    "root_puct_value_gate_used": True,
+                    "root_puct_search_action": 4,
+                    "root_puct_prior_action": 2,
+                    "root_puct_selected_value": 0.1,
+                    "root_puct_search_action_value": 0.2,
+                    "root_puct_prior_value": 0.1,
+                    "root_puct_selected_score": 0.8,
+                    "root_puct_search_action_score": 0.9,
+                    "root_puct_prior_score": 0.8,
+                    "root_puct_selected_action_prior": 0.7,
+                    "root_puct_search_action_prior": 0.3,
+                    "root_puct_prior_action_prior": 0.7,
+                    "root_puct_selected_action_visits": 3,
+                    "root_puct_search_action_visits": 4,
+                    "root_puct_prior_action_visits": 3,
+                },
+            ),
+            PolicyDecision(
+                action_index=2,
+                policy_id="root-puct",
+                metadata={
+                    "policy_family": "root-puct-search",
                     "root_puct_fallback": True,
                     "root_puct_selected_changed_prior_action": True,
                     "root_puct_search_action": 2,
@@ -417,15 +442,24 @@ class FoulPlayBridgeTest(unittest.TestCase):
 
         details = _root_puct_prior_action_change_details(decisions)
 
-        self.assertEqual(len(details), 1)
+        self.assertEqual(len(details), 2)
         self.assertEqual(details[0]["decision_index"], 1)
         self.assertEqual(details[0]["selected_action"], 4)
         self.assertEqual(details[0]["search_action"], 4)
         self.assertEqual(details[0]["prior_action"], 0)
         self.assertEqual(details[0]["selected_value"], 0.25)
-        self.assertEqual(details[0]["prior_prior"], 0.8)
+        self.assertEqual(details[0]["prior_action_prior"], 0.8)
         self.assertEqual(details[0]["selected_visits"], 4)
         self.assertFalse(details[0]["value_gate_used"])
+        self.assertEqual(details[1]["decision_index"], 2)
+        self.assertEqual(details[1]["selected_action"], 2)
+        self.assertEqual(details[1]["search_action"], 4)
+        self.assertEqual(details[1]["prior_action"], 2)
+        self.assertFalse(details[1]["selected_changed_prior_action"])
+        self.assertTrue(details[1]["pre_gate_changed_prior_action"])
+        self.assertTrue(details[1]["value_gate_used"])
+        self.assertEqual(details[1]["selected_action_prior"], 0.7)
+        self.assertEqual(details[1]["search_action_prior"], 0.3)
 
     def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
         class FakeModelConfig:
