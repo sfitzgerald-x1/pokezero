@@ -225,16 +225,20 @@ def _public_move_after_decision_round(
     species: str,
     turn_index: int,
 ) -> str | None:
-    for later_turn in sorted(turn for turn in observations_by_turn if turn > turn_index):
-        for line in _recent_public_events(observations_by_turn[later_turn]):
-            move = _move_from_public_event_line(
-                line,
-                opponent_slot=opponent_slot,
-                self_slot=self_slot,
-                species=species,
-            )
-            if move is not None:
-                return move
+    next_observation = observations_by_turn.get(turn_index + 1)
+    if next_observation is None:
+        return None
+    # The public-event window is rolling, so the same active mon's older move can still be present.
+    # Walk backward through the next decision observation and take the newest matching move line.
+    for line in reversed(_recent_public_events(next_observation)):
+        move = _move_from_public_event_line(
+            line,
+            opponent_slot=opponent_slot,
+            self_slot=self_slot,
+            species=species,
+        )
+        if move is not None:
+            return move
     return None
 
 
@@ -830,6 +834,7 @@ def _fixture_with_move_slot_constraints(
 
 def _fixture_move_for_public_constraint(moves: Sequence[str], public_move: str) -> str | None:
     public_id = _normalize_id(public_move)
+    # Some request/public labels include the Gen 3 Hidden Power base power, e.g. Hidden Power Ice 70.
     if public_id.endswith("70"):
         public_id = public_id[:-2]
     for move in moves:

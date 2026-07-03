@@ -616,6 +616,113 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         moves_field = override.player_teams["p1"].split("|")[4]
         self.assertTrue(moves_field.startswith("hiddenpowergrass,"))
 
+    def test_consecutive_public_moves_use_next_round_not_oldest_rolling_event(self) -> None:
+        metadata = {
+            "self_team": [
+                {
+                    "showdown_slot": "p2",
+                    "species": "Blissey",
+                    "details": "Blissey, L75",
+                    "moves": ["seismictoss", "softboiled", "toxic", "thunderwave"],
+                    "ability": "Natural Cure",
+                    "item": "Leftovers",
+                }
+            ],
+            "belief_view": {
+                "self_slot": "p2",
+                "opponent_slot": "p1",
+                "self_pokemon": [],
+                "opponent_pokemon": [
+                    {
+                        "showdown_slot": "p1",
+                        "species": "Charizard",
+                        "active": True,
+                        "candidate_variants": [
+                            {
+                                "variant_id": "charizard-two-public-moves",
+                                "source_set_id": "charizard-1",
+                                "role": "Berry Sweeper",
+                                "level": 79,
+                                "moves": ["substitute", "fireblast", "hiddenpowergrass", "dragonclaw"],
+                                "ability": "Blaze",
+                                "item": "Petaya Berry",
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+        context = _context(metadata)
+        move_mask = tuple(index < 4 for index in range(ACTION_COUNT))
+        round_0_observation = replace(
+            context.observation,
+            legal_action_mask=move_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [],
+            },
+        )
+        round_1_observation = replace(
+            context.observation,
+            legal_action_mask=move_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [
+                    "|move|opponenta: Charizard|Fire Blast|selfa: Blissey",
+                ],
+            },
+        )
+        round_2_observation = replace(
+            context.observation,
+            legal_action_mask=move_mask,
+            metadata={
+                **metadata,
+                "opponent_active": {"species": "Charizard"},
+                "recent_public_events": [
+                    "|move|opponenta: Charizard|Fire Blast|selfa: Blissey",
+                    "|-damage|selfa: Blissey|70/100",
+                    "|move|opponenta: Charizard|Dragon Claw|selfa: Blissey",
+                ],
+            },
+        )
+        for turn_index, observation, opponent_action in (
+            (0, round_0_observation, 1),
+            (1, round_1_observation, 3),
+        ):
+            context.trajectory.append(
+                TrajectoryStep(
+                    player_id="p2",
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=tuple(observation.legal_action_mask),
+                    action_index=0,
+                )
+            )
+            context.trajectory.append(
+                TrajectoryStep(
+                    player_id="p1",
+                    turn_index=turn_index,
+                    observation=observation,
+                    legal_action_mask=tuple(observation.legal_action_mask),
+                    action_index=opponent_action,
+                )
+            )
+        context = replace(context, decision_round_index=2, observation=round_2_observation)
+
+        override = gen3_randbat_belief_start_override(
+            context=context,
+            set_source=_source(),
+            rng=random.Random(7),
+            team_size=1,
+        )
+
+        self.assertIsNotNone(override)
+        assert override is not None
+        moves_field = override.player_teams["p1"].split("|")[4]
+        self.assertTrue(moves_field.startswith("substitute,fireblast,hiddenpowergrass,dragonclaw"))
+
     def test_called_public_move_events_do_not_constrain_replay_move_slots(self) -> None:
         metadata = _metadata()
         context = _context(metadata)
