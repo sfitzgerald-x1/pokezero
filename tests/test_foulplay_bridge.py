@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 import random
@@ -609,8 +610,26 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["comparison"]["aggregate"]["raw"]["games"], 3)
         self.assertAlmostEqual(payload["comparison"]["aggregate"]["raw"]["win_rate"], 1 / 3)
         self.assertEqual(payload["comparison"]["paired_by_seed"]["games"], 2)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["pairing_method"], "shared_battlestream_seed_only")
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["opponent_deterministic"], False)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["paired_counterfactual"], False)
+        self.assertEqual(
+            payload["comparison"]["paired_by_seed"]["interval_method"],
+            "marginal_wilson_per_arm_not_paired_delta",
+        )
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["delta_interpretation"], "descriptive_only")
         self.assertEqual(payload["comparison"]["paired_by_seed"]["raw"]["wins"], 0)
         self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["raw"]["interval_method"], "wilson_score_marginal_95")
+        self.assertEqual(
+            payload["comparison"]["paired_by_seed"]["discordant_pairs"],
+            {
+                "both_won": 0,
+                "raw_only_won": 0,
+                "root_puct_only_won": 1,
+                "neither_won": 1,
+            },
+        )
         self.assertEqual(payload["comparison"]["paired_by_seed"]["first_seed"], 11)
         self.assertEqual(payload["comparison"]["paired_by_seed"]["last_seed"], 12)
         self.assertAlmostEqual(payload["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"], 0.5)
@@ -624,7 +643,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             policy_mode="raw",
         )
         observed_modes: list[str] = []
-        progress_statuses: list[str] = []
+        progress_payloads: list[dict[str, object]] = []
 
         async def fake_benchmark(
             benchmark_config: ControlledFoulPlayConfig,
@@ -656,14 +675,16 @@ class FoulPlayBridgeTest(unittest.TestCase):
             comparison = asyncio.run(
                 run_controlled_foulplay_comparison(
                     config,
-                    progress_callback=lambda result: progress_statuses.append(result.status),
+                    progress_callback=lambda result: progress_payloads.append(result.to_dict()),
                 )
             )
 
         self.assertEqual(observed_modes, ["raw", "root-puct"])
         self.assertEqual(comparison.raw.config.policy_mode, "raw")
         self.assertEqual(comparison.root_puct.config.policy_mode, "root-puct")
-        self.assertIn("partial", progress_statuses)
+        self.assertEqual(progress_payloads[0]["runs"]["root_puct"], None)
+        self.assertIsNone(progress_payloads[0]["comparison"]["aggregate"]["root_puct_minus_raw_win_rate"])
+        self.assertIsNone(progress_payloads[0]["comparison"]["paired_by_seed"]["root_puct_minus_raw_win_rate"])
         self.assertEqual(comparison.to_dict()["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
 
     def test_comparison_cli_writes_summary_out(self) -> None:
@@ -739,7 +760,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             with patch(
                 "pokezero.foulplay_bridge.run_controlled_foulplay_comparison",
                 side_effect=fake_comparison,
-            ):
+            ), patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = asyncio.run(async_comparison_main(argv))
 
             payload = json.loads(summary_path.read_text())
@@ -748,6 +769,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "pokezero.controlled-foulplay-comparison.v1")
         self.assertEqual(payload["comparison"]["paired_by_seed"]["root_puct"]["wins"], 1)
         self.assertEqual(build_comparison_arg_parser().parse_args(argv).games, 1)
+        self.assertIn("DIAGNOSTIC RESULT", stdout.getvalue())
+        self.assertIn("descriptive_delta=100.0%", stdout.getvalue())
 
     def test_observation_with_search_metadata_adds_belief_view_without_mutating_original(self) -> None:
         class BeliefView:

@@ -380,6 +380,26 @@ def _comparison_readout(
     matched_seeds = tuple(sorted(raw_by_seed.keys() & search_by_seed.keys()))
     raw_paired_wins = sum(1 for seed in matched_seeds if raw_by_seed[seed].pokezero_won)
     search_paired_wins = sum(1 for seed in matched_seeds if search_by_seed[seed].pokezero_won)
+    both_won = sum(
+        1
+        for seed in matched_seeds
+        if raw_by_seed[seed].pokezero_won and search_by_seed[seed].pokezero_won
+    )
+    raw_only_won = sum(
+        1
+        for seed in matched_seeds
+        if raw_by_seed[seed].pokezero_won and not search_by_seed[seed].pokezero_won
+    )
+    root_puct_only_won = sum(
+        1
+        for seed in matched_seeds
+        if search_by_seed[seed].pokezero_won and not raw_by_seed[seed].pokezero_won
+    )
+    neither_won = sum(
+        1
+        for seed in matched_seeds
+        if not raw_by_seed[seed].pokezero_won and not search_by_seed[seed].pokezero_won
+    )
     paired_games = len(matched_seeds)
     raw_completed_games = raw.completed_games if raw is not None else 0
     search_completed_games = root_puct.completed_games if root_puct is not None else 0
@@ -393,17 +413,41 @@ def _comparison_readout(
             "status": "strength_sized" if paired_games >= _MIN_STRENGTH_SAMPLE_GAMES else "diagnostic_only",
         },
         "aggregate": {
+            "analysis_method": "completed_prefix_marginal_rates",
             "raw": _rate_readout(raw_wins, raw_completed_games),
             "root_puct": _rate_readout(search_wins, search_completed_games),
-            "root_puct_minus_raw_win_rate": _rate(search_wins, search_completed_games)
-            - _rate(raw_wins, raw_completed_games),
+            "root_puct_minus_raw_win_rate": _delta_rate(
+                search_wins,
+                search_completed_games,
+                raw_wins,
+                raw_completed_games,
+                require_equal_games=True,
+            ),
+            "delta_interpretation": (
+                "descriptive_only_when_both_prefixes_have_equal_nonzero_completed_games"
+            ),
         },
         "paired_by_seed": {
+            "pairing_method": "shared_battlestream_seed_only",
+            "opponent_deterministic": False,
+            "paired_counterfactual": False,
+            "interval_method": "marginal_wilson_per_arm_not_paired_delta",
+            "delta_interpretation": "descriptive_only",
             "games": paired_games,
             "raw": _rate_readout(raw_paired_wins, paired_games),
             "root_puct": _rate_readout(search_paired_wins, paired_games),
-            "root_puct_minus_raw_win_rate": _rate(search_paired_wins, paired_games)
-            - _rate(raw_paired_wins, paired_games),
+            "root_puct_minus_raw_win_rate": _delta_rate(
+                search_paired_wins,
+                paired_games,
+                raw_paired_wins,
+                paired_games,
+            ),
+            "discordant_pairs": {
+                "both_won": both_won,
+                "raw_only_won": raw_only_won,
+                "root_puct_only_won": root_puct_only_won,
+                "neither_won": neither_won,
+            },
             "first_seed": matched_seeds[0] if matched_seeds else None,
             "last_seed": matched_seeds[-1] if matched_seeds else None,
         },
@@ -423,6 +467,7 @@ def _rate_readout(wins: int, games: int) -> dict[str, Any]:
         "games": games,
         "wins": wins,
         "win_rate": _rate(wins, games),
+        "interval_method": "wilson_score_marginal_95",
     }
     if games:
         lower, upper = _wilson_interval(wins, games, z=_WILSON_95_Z)
@@ -434,6 +479,21 @@ def _rate_readout(wins: int, games: int) -> dict[str, Any]:
 
 def _rate(wins: int, games: int) -> float:
     return wins / games if games else 0.0
+
+
+def _delta_rate(
+    first_wins: int,
+    first_games: int,
+    second_wins: int,
+    second_games: int,
+    *,
+    require_equal_games: bool = False,
+) -> float | None:
+    if first_games <= 0 or second_games <= 0:
+        return None
+    if require_equal_games and first_games != second_games:
+        return None
+    return _rate(first_wins, first_games) - _rate(second_wins, second_games)
 
 
 def _wilson_interval(wins: int, games: int, *, z: float) -> tuple[float, float]:
@@ -1930,15 +1990,22 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
         paired = comparison["paired_by_seed"] if isinstance(comparison, Mapping) else {}
         raw = paired.get("raw", {}) if isinstance(paired, Mapping) else {}
         root_puct = paired.get("root_puct", {}) if isinstance(paired, Mapping) else {}
+        sample = comparison["sample_size"] if isinstance(comparison, Mapping) else {}
+        result_label = (
+            "DIAGNOSTIC RESULT"
+            if isinstance(sample, Mapping) and sample.get("status") == "diagnostic_only"
+            else "RESULT"
+        )
+        delta = paired.get("root_puct_minus_raw_win_rate") if isinstance(paired, Mapping) else None
+        delta_text = "n/a" if delta is None else f"{float(delta):.1%}"
         print(
-            "RESULT: root-PUCT "
+            f"{result_label}: root-PUCT "
             f"{int(root_puct.get('wins', 0))}/{int(root_puct.get('games', 0))} "
             "vs raw "
             f"{int(raw.get('wins', 0))}/{int(raw.get('games', 0))} "
             "on paired foul-play seeds "
-            f"(delta={float(paired.get('root_puct_minus_raw_win_rate', 0.0)):.1%})"
+            f"(descriptive_delta={delta_text})"
         )
-        sample = comparison["sample_size"] if isinstance(comparison, Mapping) else {}
         if isinstance(sample, Mapping) and sample.get("status") == "diagnostic_only":
             print(
                 "sample-size: diagnostic_only "
