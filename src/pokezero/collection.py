@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Te
 from urllib.parse import parse_qsl, urlencode
 
 from .env import PokeZeroEnv, TerminalState
+from .mcts_diagnostics import root_puct_fallback_category
 from .policy import MaxDamagePolicy, Policy, RandomLegalPolicy, ScriptedTeacherPolicy, SimpleLegalPolicy
 from .rollout import RolloutConfig, RolloutDriver, RolloutResult
 from .trajectory import BattleTrajectory, trajectory_from_dict, trajectory_to_dict
@@ -986,6 +987,7 @@ class _PolicyDecisionAccumulator:
     root_puct_value_gate_checks: int = 0
     root_puct_value_gate_uses: int = 0
     root_puct_fallback_reasons: dict[str, int] = field(default_factory=dict)
+    root_puct_fallback_categories: dict[str, int] = field(default_factory=dict)
     root_puct_selection_modes: dict[str, int] = field(default_factory=dict)
     root_puct_opponent_action_policies: dict[str, int] = field(default_factory=dict)
     root_puct_opponent_action_scenario_counts: dict[str, int] = field(default_factory=dict)
@@ -1003,6 +1005,13 @@ class _PolicyDecisionAccumulator:
             reason = str(metadata.get("root_puct_fallback_reason") or "unknown")
             self.root_puct_fallback_reasons[reason] = (
                 self.root_puct_fallback_reasons.get(reason, 0) + 1
+            )
+            category = str(
+                metadata.get("root_puct_fallback_category")
+                or root_puct_fallback_category(reason)
+            )
+            self.root_puct_fallback_categories[category] = (
+                self.root_puct_fallback_categories.get(category, 0) + 1
             )
             return
         self.root_puct_searches += 1
@@ -1127,6 +1136,10 @@ class _PolicyDecisionAccumulator:
             if self.root_puct_fallback_reasons:
                 result["root_puct_fallback_reasons"] = dict(
                     sorted(self.root_puct_fallback_reasons.items())
+                )
+            if self.root_puct_fallback_categories:
+                result["root_puct_fallback_categories"] = dict(
+                    sorted(self.root_puct_fallback_categories.items())
                 )
         return result
 

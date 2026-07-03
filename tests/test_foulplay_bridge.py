@@ -550,6 +550,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["start_override_attempts"], 7)
         self.assertEqual(payload["root_puct"]["start_override_attempts_used"], 9)
         self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
+        self.assertEqual(payload["root_puct"]["fallback_categories"], {"search_failed": 2})
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_generated"], 9)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(payload["game_results"][0]["root_puct_opponent_action_scenarios_unsearched"], 2)
@@ -578,6 +579,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(
             payload["game_results"][1]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},
+        )
+        self.assertEqual(
+            payload["game_results"][1]["root_puct_fallback_categories"],
+            {"search_failed": 2},
         )
         self.assertEqual(payload["root_puct"]["opponent_legal_mask_mode"], "hidden")
         self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)

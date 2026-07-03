@@ -11,6 +11,7 @@ from typing import Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import PlayerId, PokeZeroEnv
+from .mcts_diagnostics import root_puct_fallback_category
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, legal_action_indices
 from .rollout import RolloutConfig, _reset_unique_policies
@@ -301,6 +302,7 @@ class RootPUCTSearchPolicy:
                 "policy_family": "root-puct-search",
                 "root_puct_fallback": True,
                 "root_puct_fallback_reason": "missing policy context",
+                "root_puct_fallback_category": root_puct_fallback_category("missing policy context"),
                 "fallback_policy_id": decision.policy_id,
             },
         )
@@ -653,6 +655,7 @@ class RootPUCTSearchPolicy:
         if not self.allow_fallback:
             raise ValueError(f"root PUCT search cannot select an action: {reason}")
         decision = self.fallback_policy.select_action(context.observation, rng=rng)
+        category = root_puct_fallback_category(reason)
         return PolicyDecision(
             action_index=decision.action_index,
             policy_id=self.policy_id,
@@ -663,6 +666,7 @@ class RootPUCTSearchPolicy:
                 "policy_family": "root-puct-search",
                 "root_puct_fallback": True,
                 "root_puct_fallback_reason": reason,
+                "root_puct_fallback_category": category,
                 "fallback_policy_id": decision.policy_id,
                 **dict(extra_metadata or {}),
             },
