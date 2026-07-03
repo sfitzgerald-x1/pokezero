@@ -23,7 +23,8 @@ from .trajectory import BattleTrajectory
 
 ObservationValueFunction = Callable[[tuple[PokeZeroObservationV0, ...]], float]
 ActionPriorVector = tuple[float, ...]
-StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride | None] | None
+StartOverrideSource = BattleStartOverride | Callable[[], BattleStartOverride] | None
+START_OVERRIDE_MISSING_WORLD_MESSAGE = "start override source did not produce a sampled world."
 
 
 @dataclass(frozen=True)
@@ -642,7 +643,10 @@ def _value_branch_candidate(
 
 def _materialize_start_override(start_override: StartOverrideSource) -> BattleStartOverride | None:
     if callable(start_override):
-        return start_override()
+        sampled_override = start_override()
+        if sampled_override is None:
+            raise ValueError(START_OVERRIDE_MISSING_WORLD_MESSAGE)
+        return sampled_override
     return start_override
 
 

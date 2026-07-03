@@ -19,6 +19,7 @@ from .search import (
     ObservationValueFunction,
     PUCTBranchSearchCandidate,
     PUCTBranchSearchResult,
+    START_OVERRIDE_MISSING_WORLD_MESSAGE,
     StartOverrideSource,
     _puct_candidate,
     player_observation_history,
@@ -388,6 +389,11 @@ class RootPUCTSearchPolicy:
                                     rng,
                                 )
                             )
+                            if self.start_override_planner is not None and start_override is None:
+                                replay_rejection_reasons.append(
+                                    "start override planner did not produce a sampled world"
+                                )
+                                continue
                             scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
                                 total_budget_seconds=self.root_time_budget_seconds,
                                 started_at=start,
@@ -1013,6 +1019,8 @@ def _opponent_scenario_replay_legality_error(
 ) -> str | None:
     message = str(exc)
     if message.startswith("start override does not reproduce recorded replay prefix observations"):
+        return message
+    if message == START_OVERRIDE_MISSING_WORLD_MESSAGE:
         return message
     if message.startswith("replay actions for decision round "):
         return message

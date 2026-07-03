@@ -318,6 +318,20 @@ class FlatBranchSearchTest(unittest.TestCase):
                 start_override=_start_override(),
             )
 
+    def test_value_branch_search_rejects_callable_start_override_that_returns_none(self) -> None:
+        with self.assertRaisesRegex(ValueError, "start override source did not produce a sampled world"):
+            value_branch_search(
+                env=ValueBranchEnv({0: "p1"}),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                start_override=lambda: None,
+                expected_current_observation=_observation(0),
+            )
+
     def test_value_branch_search_skips_candidate_actions_rejected_by_replay(self) -> None:
         env = StrictLegalValueBranchEnv({1})
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
