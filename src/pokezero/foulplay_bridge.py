@@ -29,6 +29,7 @@ from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
 from .local_showdown import BRIDGE_PATH, LocalShowdownConfig, LocalShowdownEnv, showdown_seed_from_int
+from .mcts_diagnostics import root_puct_fallback_category
 from .neural_policy import (
     TransformerSoftmaxPolicy,
     evaluate_transformer_action_priors,
@@ -208,6 +209,7 @@ class ControlledFoulPlayGameResult:
     root_puct_start_override_attempts_used: int = 0
     root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
+    root_puct_fallback_categories: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -245,6 +247,12 @@ class ControlledFoulPlayGameResult:
             ]
         if self.root_puct_fallback_reasons:
             payload["root_puct_fallback_reasons"] = dict(sorted(self.root_puct_fallback_reasons.items()))
+        fallback_categories = _fallback_categories_from_reasons(
+            self.root_puct_fallback_reasons,
+            self.root_puct_fallback_categories,
+        )
+        if fallback_categories:
+            payload["root_puct_fallback_categories"] = dict(sorted(fallback_categories.items()))
         return payload
 
 
@@ -285,9 +293,15 @@ class ControlledFoulPlayBenchmarkResult:
         root_start_override_sources_used = sum(game.root_puct_start_override_sources_used for game in self.games)
         root_start_override_attempts_used = sum(game.root_puct_start_override_attempts_used for game in self.games)
         root_fallback_reasons: dict[str, int] = {}
+        root_fallback_categories: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
                 root_fallback_reasons[reason] = root_fallback_reasons.get(reason, 0) + count
+            for category, count in _fallback_categories_from_reasons(
+                game.root_puct_fallback_reasons,
+                game.root_puct_fallback_categories,
+            ).items():
+                root_fallback_categories[category] = root_fallback_categories.get(category, 0) + count
         elapsed_values = [
             game.root_puct_average_elapsed_seconds
             for game in self.games
@@ -356,6 +370,8 @@ class ControlledFoulPlayBenchmarkResult:
             payload["root_puct"]["effective_total_visits"] = root_effective_total_visits
         if root_fallback_reasons:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
+        if root_fallback_categories:
+            payload["root_puct"]["fallback_categories"] = dict(sorted(root_fallback_categories.items()))
         return payload
 
 
@@ -499,6 +515,19 @@ def _pairing_method_for_comparison_mode(comparison_mode: str) -> str:
     if comparison_mode == "per-seed":
         return "per_seed_shared_battlestream_seed_and_foulplay_start_seed"
     return "shared_battlestream_seed_only"
+
+
+def _fallback_categories_from_reasons(
+    reasons: Mapping[str, int],
+    categories: Mapping[str, int],
+) -> dict[str, int]:
+    result = {str(category): int(count) for category, count in categories.items()}
+    if result:
+        return result
+    for reason, count in reasons.items():
+        category = root_puct_fallback_category(reason)
+        result[category] = result.get(category, 0) + int(count)
+    return result
 
 
 def _comparison_foulplay_random_seed_schedule_payload(
@@ -1378,11 +1407,17 @@ async def _run_single_game(
     )
     root_fallbacks = sum(1 for decision in state.decisions if decision.metadata.get("root_puct_fallback"))
     root_fallback_reasons: dict[str, int] = {}
+    root_fallback_categories: dict[str, int] = {}
     for decision in state.decisions:
         if not decision.metadata.get("root_puct_fallback"):
             continue
         reason = str(decision.metadata.get("root_puct_fallback_reason") or "unknown")
         root_fallback_reasons[reason] = root_fallback_reasons.get(reason, 0) + 1
+        category = str(
+            decision.metadata.get("root_puct_fallback_category")
+            or root_puct_fallback_category(reason)
+        )
+        root_fallback_categories[category] = root_fallback_categories.get(category, 0) + 1
     root_total_visits = sum(
         int(decision.metadata.get("root_puct_total_visits") or 0)
         for decision in state.decisions
@@ -1488,6 +1523,7 @@ async def _run_single_game(
         root_puct_start_override_attempts_used=root_start_override_attempts_used,
         root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
+        root_puct_fallback_categories=root_fallback_categories,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
     )
 

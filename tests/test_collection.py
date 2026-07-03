@@ -471,6 +471,10 @@ class CollectionTest(unittest.TestCase):
             summary["root-puct-fallback"]["root_puct_fallback_reasons"],
             {"search failed: boom": 2},
         )
+        self.assertEqual(
+            summary["root-puct-fallback"]["root_puct_fallback_categories"],
+            {"search_failed": 2},
+        )
 
     def test_benchmark_rollouts_summarizes_root_puct_value_gate_checks_without_uses(self) -> None:
         report = benchmark_rollouts(

@@ -2120,6 +2120,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             "all opponent action scenarios were replay-illegal",
             decision.metadata["root_puct_fallback_reason"],
         )
+        self.assertEqual(
+            decision.metadata["root_puct_fallback_category"],
+            "all_opponent_scenarios_replay_illegal",
+        )
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_generated"], 1)
         self.assertEqual(decision.metadata["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(
@@ -2189,6 +2193,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.action_index, 0)
         self.assertEqual(decision.policy_id, "root-puct-search")
         self.assertTrue(decision.metadata["root_puct_fallback"])
+        self.assertEqual(decision.metadata["root_puct_fallback_category"], "missing_policy_context")
         self.assertEqual(decision.metadata["fallback_policy_id"], "fallback-random")
 
 
