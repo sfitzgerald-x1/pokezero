@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import math
+from time import perf_counter
 from typing import Callable, Mapping
 
 from .actions import ACTION_COUNT
@@ -139,6 +140,9 @@ class PUCTBranchSearchResult:
     total_visits: int
     candidates: tuple[PUCTBranchSearchCandidate, ...]
     value_search: ValueBranchSearchResult
+    root_visit_budget: int | None = None
+    root_time_budget_seconds: float | None = None
+    time_budget_exhausted: bool = False
 
     @property
     def best_candidate(self) -> PUCTBranchSearchCandidate:
@@ -158,6 +162,9 @@ class PUCTBranchSearchResult:
             "opponent_actions": dict(self.opponent_actions),
             "cpuct": self.cpuct,
             "total_visits": self.total_visits,
+            "root_visit_budget": self.root_visit_budget,
+            "root_time_budget_seconds": self.root_time_budget_seconds,
+            "time_budget_exhausted": self.time_budget_exhausted,
             "selected_action_index": best.action_index,
             "selected_value": best.value,
             "selected_score": best.score,
@@ -301,19 +308,26 @@ def puct_branch_search(
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
     root_visit_budget: int | None = None,
+    root_time_budget_seconds: float | None = None,
 ) -> PUCTBranchSearchResult:
     """Score root replay branches with PUCT-style policy-prior exploration.
 
     By default this preserves the original one-visit-per-legal-action behavior.
-    When ``root_visit_budget`` is larger than the number of legal root actions,
-    the search repeatedly selects the current highest-PUCT action, re-evaluates
-    that branch, and backs the value up into root visit statistics.
+    When ``root_visit_budget`` or ``root_time_budget_seconds`` permit more than
+    the initial one visit per legal root action, the search repeatedly selects
+    the current highest-PUCT action, re-evaluates that branch, and backs the
+    value up into root visit statistics.
     """
 
     if cpuct < 0.0 or not math.isfinite(cpuct):
         raise ValueError("cpuct must be a finite non-negative value.")
     if root_visit_budget is not None and root_visit_budget <= 0:
         raise ValueError("root_visit_budget must be positive when set.")
+    if root_time_budget_seconds is not None and (
+        root_time_budget_seconds <= 0.0 or not math.isfinite(root_time_budget_seconds)
+    ):
+        raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
+    time_budget_start = perf_counter() if root_time_budget_seconds is not None else None
     value_search = value_branch_search(
         env=env,
         trajectory=trajectory,
@@ -332,7 +346,7 @@ def puct_branch_search(
         action_priors,
         legal_action_indices=tuple(candidate.action_index for candidate in value_search.candidates),
     )
-    visit_budget = root_visit_budget or len(value_search.candidates)
+    visit_budget = root_visit_budget
     accumulators = {
         candidate.action_index: _PUCTRootAccumulator(
             value_candidate=candidate,
@@ -347,7 +361,16 @@ def puct_branch_search(
         player_id=player_id,
         through_decision_round=prefix_decision_round_count,
     )
-    for _ in range(len(value_search.candidates), visit_budget):
+    time_budget_exhausted = False
+    while True:
+        current_visits = sum(accumulator.visits for accumulator in accumulators.values())
+        if visit_budget is not None and current_visits >= visit_budget:
+            break
+        if root_time_budget_seconds is None and visit_budget is None:
+            break
+        if time_budget_start is not None and perf_counter() - time_budget_start >= root_time_budget_seconds:
+            time_budget_exhausted = True
+            break
         action_index = _select_root_accumulator(
             tuple(accumulators.values()),
             cpuct=cpuct,
@@ -411,6 +434,9 @@ def puct_branch_search(
         total_visits=total_visits,
         candidates=candidates,
         value_search=value_search,
+        root_visit_budget=root_visit_budget,
+        root_time_budget_seconds=root_time_budget_seconds,
+        time_budget_exhausted=time_budget_exhausted,
     )
 
 

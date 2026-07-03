@@ -406,6 +406,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 scenario_count=2,
             ),
             cpuct=0.0,
+            root_visit_budget=2,
+            root_time_budget_seconds=8.0,
         )
         live_env = TwoOpponentActionEnv(label="live")
 
@@ -422,6 +424,8 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertFalse(metadata["root_puct_fallback"])
         self.assertEqual(metadata["root_puct_opponent_action_policy"], "checkpoint-top2")
         self.assertEqual(metadata["root_puct_opponent_action_scenario_count"], 2)
+        self.assertEqual(metadata["root_puct_root_time_budget_seconds"], 8.0)
+        self.assertEqual(metadata["root_puct_root_scenario_time_budget_seconds"], 4.0)
         self.assertEqual(
             metadata["root_puct_opponent_action_scenarios"],
             [
@@ -1003,6 +1007,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
                 root_visit_budget=0,
+            )
+
+    def test_root_puct_policy_rejects_invalid_root_time_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_time_budget_seconds"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_time_budget_seconds=0.0,
             )
 
     def test_root_puct_policy_rejects_leaf_rollouts_without_policy_factory(self) -> None:

@@ -213,6 +213,7 @@ class RootPUCTSearchPolicy:
     minimum_score_improvement: float | None = None
     selection_mode: str = "puct"
     root_visit_budget: int | None = None
+    root_time_budget_seconds: float | None = None
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
@@ -234,6 +235,10 @@ class RootPUCTSearchPolicy:
             raise ValueError("minimum_score_improvement must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
+        if self.root_time_budget_seconds is not None and (
+            self.root_time_budget_seconds <= 0.0 or not math.isfinite(self.root_time_budget_seconds)
+        ):
+            raise ValueError("root_time_budget_seconds must be a finite positive value when set.")
         if self.leaf_rollout_decision_rounds < 0:
             raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
         if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
@@ -314,6 +319,11 @@ class RootPUCTSearchPolicy:
         skipped_scenarios: list[tuple[OpponentActionScenario, str]] = []
         try:
             try:
+                scenario_root_time_budget_seconds = (
+                    None
+                    if self.root_time_budget_seconds is None
+                    else self.root_time_budget_seconds / len(opponent_scenarios)
+                )
                 scenario_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
                 for scenario in opponent_scenarios:
                     try:
@@ -334,6 +344,7 @@ class RootPUCTSearchPolicy:
                                     leaf_rollout_config=self.rollout_config,
                                     leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
                                     root_visit_budget=self.root_visit_budget,
+                                    root_time_budget_seconds=scenario_root_time_budget_seconds,
                                 ),
                             )
                         )
@@ -431,6 +442,13 @@ class RootPUCTSearchPolicy:
         visit_metadata: dict[str, int] = {"root_puct_total_visits": raw_total_visits}
         if search.total_visits != raw_total_visits:
             visit_metadata["root_puct_effective_total_visits"] = search.total_visits
+        budget_metadata: dict[str, object] = {}
+        if self.root_time_budget_seconds is not None:
+            budget_metadata = {
+                "root_puct_root_time_budget_seconds": self.root_time_budget_seconds,
+                "root_puct_root_scenario_time_budget_seconds": scenario_searches[0].root_time_budget_seconds,
+                "root_puct_time_budget_exhausted": any(search.time_budget_exhausted for search in scenario_searches),
+            }
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -471,6 +489,7 @@ class RootPUCTSearchPolicy:
                 **prior_ratio_metadata,
                 **score_gate_metadata,
                 **visit_metadata,
+                **budget_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
             },
@@ -680,6 +699,9 @@ def _aggregate_scenario_searches(
         total_visits=total_visits,
         candidates=tuple(aggregated_candidates),
         value_search=first.value_search,
+        root_visit_budget=first.root_visit_budget,
+        root_time_budget_seconds=first.root_time_budget_seconds,
+        time_budget_exhausted=any(search.time_budget_exhausted for search in scenario_searches),
     )
 
 

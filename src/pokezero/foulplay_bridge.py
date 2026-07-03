@@ -82,6 +82,7 @@ class ControlledFoulPlayConfig:
     minimum_override_prior_ratio: float | None = None
     minimum_score_improvement: float | None = None
     root_visit_budget: int | None = None
+    root_time_budget_ms: int | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
     leaf_rollout_sampling: bool = False
@@ -121,6 +122,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("minimum_score_improvement must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
+        if self.root_time_budget_ms is not None and self.root_time_budget_ms <= 0:
+            raise ValueError("root_time_budget_ms must be positive when set.")
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.leaf_rollout_rounds < 0:
@@ -159,6 +162,7 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_selected_prior_action_changes: int = 0
     root_puct_pre_gate_prior_action_changes: int = 0
+    root_puct_time_budget_exhaustions: int = 0
     root_puct_prior_action_change_details: tuple[Mapping[str, Any], ...] = ()
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
@@ -178,6 +182,7 @@ class ControlledFoulPlayGameResult:
             "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
             "root_puct_selected_prior_action_changes": self.root_puct_selected_prior_action_changes,
             "root_puct_pre_gate_prior_action_changes": self.root_puct_pre_gate_prior_action_changes,
+            "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
         }
         if self.root_puct_effective_total_visits:
             payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
@@ -220,6 +225,7 @@ class ControlledFoulPlayBenchmarkResult:
         root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
         root_selected_prior_action_changes = sum(game.root_puct_selected_prior_action_changes for game in self.games)
         root_pre_gate_prior_action_changes = sum(game.root_puct_pre_gate_prior_action_changes for game in self.games)
+        root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
         root_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
@@ -252,6 +258,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "minimum_override_prior_ratio": self.config.minimum_override_prior_ratio,
                 "minimum_score_improvement": self.config.minimum_score_improvement,
                 "root_visit_budget": self.config.root_visit_budget,
+                "root_time_budget_ms": self.config.root_time_budget_ms,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
@@ -265,6 +272,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "opponent_action_scenarios_skipped": root_scenarios_skipped,
                 "selected_prior_action_changes": root_selected_prior_action_changes,
                 "pre_gate_prior_action_changes": root_pre_gate_prior_action_changes,
+                "time_budget_exhaustions": root_time_budget_exhaustions,
             },
             "game_results": [game.to_dict() for game in self.games],
         }
@@ -705,6 +713,9 @@ def _build_policy(
         minimum_override_prior_ratio=config.minimum_override_prior_ratio,
         minimum_score_improvement=config.minimum_score_improvement,
         root_visit_budget=config.root_visit_budget,
+        root_time_budget_seconds=(
+            None if config.root_time_budget_ms is None else config.root_time_budget_ms / 1000.0
+        ),
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         leaf_rollout_metadata={
@@ -930,6 +941,13 @@ async def _run_single_game(
         and not decision.metadata.get("root_puct_fallback")
         and decision.metadata.get("root_puct_pre_gate_changed_prior_action")
     )
+    root_time_budget_exhaustions = sum(
+        1
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+        and not decision.metadata.get("root_puct_fallback")
+        and decision.metadata.get("root_puct_time_budget_exhausted")
+    )
     root_prior_action_change_details = _root_puct_prior_action_change_details(state.decisions)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
@@ -946,6 +964,7 @@ async def _run_single_game(
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_selected_prior_action_changes=root_selected_prior_action_changes,
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
+        root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
         root_puct_prior_action_change_details=root_prior_action_change_details,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
@@ -1430,6 +1449,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Total root visits per searched decision; defaults to one visit per legal action.",
     )
     parser.add_argument(
+        "--root-time-budget-ms",
+        type=int,
+        default=None,
+        help=(
+            "PokeZero-side root search wall-clock budget per decision. With multiple opponent-action "
+            "scenarios, the budget is split evenly across scenario searches. The mandatory initial "
+            "legal-action sweep is always completed; --root-visit-budget remains an optional hard cap."
+        ),
+    )
+    parser.add_argument(
         "--root-opponent-action-scenarios",
         type=int,
         default=1,
@@ -1493,6 +1522,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         minimum_override_prior_ratio=args.minimum_override_prior_ratio,
         minimum_score_improvement=args.minimum_score_improvement,
         root_visit_budget=args.root_visit_budget,
+        root_time_budget_ms=args.root_time_budget_ms,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         leaf_rollout_sampling=args.leaf_rollout_sampling,
