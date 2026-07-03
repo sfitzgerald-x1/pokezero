@@ -210,17 +210,20 @@ class RootPUCTSearchPolicy:
     allow_fallback: bool = False
     minimum_value_improvement: float | None = None
     selection_mode: str = "puct"
+    root_visit_budget: int | None = None
     leaf_rollout_decision_rounds: int = 0
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.selection_mode not in {"puct", "value"}:
-            raise ValueError("selection_mode must be 'puct' or 'value'.")
+        if self.selection_mode not in {"puct", "value", "visits"}:
+            raise ValueError("selection_mode must be 'puct', 'value', or 'visits'.")
         if self.minimum_value_improvement is not None and (
             self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement)
         ):
             raise ValueError("minimum_value_improvement must be a finite non-negative value when set.")
+        if self.root_visit_budget is not None and self.root_visit_budget <= 0:
+            raise ValueError("root_visit_budget must be positive when set.")
         if self.leaf_rollout_decision_rounds < 0:
             raise ValueError("leaf_rollout_decision_rounds must be non-negative.")
         if self.leaf_rollout_decision_rounds and self.leaf_rollout_policy_factory is None:
@@ -314,6 +317,7 @@ class RootPUCTSearchPolicy:
                         leaf_rollout_policies=leaf_rollout_policies,
                         leaf_rollout_config=self.rollout_config,
                         leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                        root_visit_budget=self.root_visit_budget,
                     )
                     for scenario in opponent_scenarios
                 )
@@ -330,6 +334,7 @@ class RootPUCTSearchPolicy:
             opponent_scenarios=opponent_scenarios,
             cpuct=self.cpuct,
         )
+        raw_total_visits = sum(scenario_search.total_visits for scenario_search in scenario_searches)
         search_best = _selected_candidate(search, mode=self.selection_mode)
         best = search_best
         gate_metadata = {}
@@ -361,6 +366,9 @@ class RootPUCTSearchPolicy:
             if planner_id is not None
             else {}
         )
+        visit_metadata: dict[str, int] = {"root_puct_total_visits": raw_total_visits}
+        if search.total_visits != raw_total_visits:
+            visit_metadata["root_puct_effective_total_visits"] = search.total_visits
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -383,6 +391,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
+                **visit_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
             },
@@ -445,6 +454,14 @@ def _best_value_candidate(
     return max(candidates, key=lambda candidate: (candidate.value, -candidate.action_index))
 
 
+def _most_visited_candidate(
+    candidates: tuple[PUCTBranchSearchCandidate, ...],
+) -> PUCTBranchSearchCandidate:
+    if not candidates:
+        raise ValueError("root PUCT search produced no candidates.")
+    return max(candidates, key=lambda candidate: (candidate.visits, candidate.value, candidate.score, -candidate.action_index))
+
+
 def _selected_candidate(
     search: PUCTBranchSearchResult,
     *,
@@ -454,7 +471,9 @@ def _selected_candidate(
         return search.best_candidate
     if mode == "value":
         return _best_value_candidate(search.candidates)
-    raise ValueError("selection mode must be 'puct' or 'value'.")
+    if mode == "visits":
+        return _most_visited_candidate(search.candidates)
+    raise ValueError("selection mode must be 'puct', 'value', or 'visits'.")
 
 
 def _opponent_action_scenarios(
@@ -530,11 +549,11 @@ def _aggregate_scenario_searches(
     action_order = tuple(candidate.action_index for candidate in first.candidates)
     if not action_order:
         raise ValueError("root PUCT search produced no candidates.")
-    total_visits = len(action_order)
-    sqrt_total = math.sqrt(total_visits)
-    aggregated_candidates: list[PUCTBranchSearchCandidate] = []
+    aggregate_inputs: list[tuple[PUCTBranchSearchCandidate, int, float]] = []
+    total_visits = 0
     for action_index in action_order:
         weighted_value = 0.0
+        weighted_visits = 0.0
         first_candidate: PUCTBranchSearchCandidate | None = None
         for scenario, search in zip(scenarios, scenario_searches, strict=True):
             by_action = {candidate.action_index: candidate for candidate in search.candidates}
@@ -543,17 +562,26 @@ def _aggregate_scenario_searches(
                 raise ValueError("scenario searches produced mismatched root action candidates.")
             if first_candidate is None:
                 first_candidate = candidate
+            weighted_visits += scenario.weight * candidate.visits
             weighted_value += scenario.weight * candidate.value
         if first_candidate is None:
             raise ValueError("root PUCT search produced no candidates.")
+        visits = max(1, int(round(weighted_visits)))
+        total_visits += visits
+        aggregate_inputs.append((first_candidate, visits, weighted_value))
+
+    sqrt_total = math.sqrt(total_visits)
+    aggregated_candidates: list[PUCTBranchSearchCandidate] = []
+    for first_candidate, visits, weighted_value in aggregate_inputs:
         value_candidate = replace(first_candidate.value_candidate, value=weighted_value)
-        prior = first_candidate.prior
         aggregated_candidates.append(
             _puct_candidate(
                 value_candidate=value_candidate,
-                prior=prior,
+                prior=first_candidate.prior,
                 cpuct=cpuct,
                 sqrt_total_visits=sqrt_total,
+                visits=visits,
+                total_value=weighted_value * visits,
             )
         )
 

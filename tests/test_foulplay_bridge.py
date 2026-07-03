@@ -135,14 +135,21 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 minimum_value_improvement=-0.1,
             )
+        with self.assertRaisesRegex(ValueError, "root_visit_budget"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                root_visit_budget=0,
+            )
 
     def test_benchmark_payload_summarizes_root_puct_metrics(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
             showdown_root=Path("/showdown"),
             games=2,
-            selection_mode="value",
+            selection_mode="visits",
             minimum_value_improvement=0.25,
+            root_visit_budget=16,
         )
         result = ControlledFoulPlayBenchmarkResult(
             config=config,
@@ -157,6 +164,8 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     pokezero_decisions=3,
                     root_puct_searches=3,
                     root_puct_fallbacks=0,
+                    root_puct_total_visits=24,
+                    root_puct_effective_total_visits=18,
                     root_puct_average_elapsed_seconds=0.2,
                 ),
                 ControlledFoulPlayGameResult(
@@ -168,6 +177,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     pokezero_decisions=4,
                     root_puct_searches=2,
                     root_puct_fallbacks=2,
+                    root_puct_total_visits=16,
+                    root_puct_effective_total_visits=12,
+                    root_puct_fallback_reasons={"search failed: boom": 2},
                     root_puct_average_elapsed_seconds=0.4,
                 ),
             ),
@@ -181,10 +193,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["win_rate"], 0.5)
         self.assertEqual(payload["root_puct"]["searches"], 5)
         self.assertEqual(payload["root_puct"]["fallbacks"], 2)
+        self.assertEqual(payload["root_puct"]["total_visits"], 40)
+        self.assertEqual(payload["root_puct"]["effective_total_visits"], 30)
+        self.assertEqual(payload["root_puct"]["fallback_reasons"], {"search failed: boom": 2})
+        self.assertEqual(
+            payload["game_results"][1]["root_puct_fallback_reasons"],
+            {"search failed: boom": 2},
+        )
         self.assertEqual(payload["root_puct"]["opponent_legal_mask_mode"], "hidden")
         self.assertEqual(payload["root_puct"]["foulplay_search_time_ms"], 1000)
-        self.assertEqual(payload["root_puct"]["selection_mode"], "value")
+        self.assertEqual(payload["root_puct"]["selection_mode"], "visits")
         self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
+        self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
 
     def test_write_json_creates_parent_directory_atomically(self) -> None:

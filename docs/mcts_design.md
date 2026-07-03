@@ -22,10 +22,10 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Piece | Status | Where / caveat |
 |---|---|---|
 | Forking = **replay-from-root** | **built** | `replay_branching.py`, `search.py` |
-| **1-ply prior-weighted value *ranking*** (value-head leaf eval, optional leaf rollouts) | **built, but NOT a tree** | `search.py::puct_branch_search` — a **single-pass** scorer: each candidate is hard-coded `visits=1` (`_puct_candidate`), no selection→expansion→backup loop, no visit accumulation. "PUCT" is generous; it's 1-ply prior-weighted value ranking, not iterated MCTS. |
+| Root PUCT with optional visit budget (value-head leaf eval, optional leaf rollouts) | **built, but root-only** | `search.py::puct_branch_search` now supports an optional root visit budget: legal root actions are evaluated once, then PUCT selection/backup accumulates additional root visits. This is still **not a multi-ply tree**: selection/backup happens at the root only, and each visit replays/evaluates a root branch leaf. |
 | Opponent modeling (greedy / top-k prior / policy planners, weighted scenarios) | **built** | `search_policy.py` |
 | Net+search **Policy adapter** | **built** | `RootPUCTSearchPolicy` via **`select_action_with_context`**; plain `select_action` only runs the *fallback* (no context → no search). |
-| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smoke: 1.5M checkpoint root-PUCT vs foul-play, 38 searched decisions, 1 fallback. This is a harness validation, **not** a strength result. |
+| Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, and fallback reasons. This is harness validation, **not** a strength result. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
 | **Belief determinizer** `sample_opponent_determinizations` | **built, but NOT wired into search** | `belief.py` — emits concrete opponent realizations from the belief view; nothing injects them into the branch env yet (see "missing" #4). |
@@ -50,11 +50,12 @@ In priority order:
    evidence exists so far. The roadmap acceptance gate ("net+search beats net-alone by a clear
    margin") still requires an adequately powered raw-vs-search read (≥300 games, fixed seeds).
    Until that exists we don't actually know the current search helps.
-3. **Search depth.** It's **1-ply** (branch each root action, evaluate the immediate result). For the
+3. **Search depth.** Current search has root visit accumulation, but it is still **root-only**: branch
+   each root action, evaluate the immediate/leaf-rolled result, back up to root visits. For the
    delayed-value lines that motivated this (setup sequences, hazard payoff over many switch-ins),
-   1-ply + a myopic value head can't see the payoff. Levers: **deeper leaf rollouts** (already
-   supported via `leaf_rollout_*`) with a decent rollout policy, or extend to a **multi-ply tree**.
-   Deciding 1-ply-with-rollouts vs a real tree is the core design question.
+   root-only search + a myopic value head may still miss the payoff. Levers: **deeper leaf rollouts**
+   (already supported via `leaf_rollout_*`) with a decent rollout policy, or extend to a **multi-ply
+   tree**. Deciding root-only-with-rollouts vs a real tree remains the core design question.
 4. **Determinization *injection* for hidden-info ladder play.** The searcher never substitutes a
    hidden opponent set: replay-from-root re-runs the *real* recorded battle (perfect-info by
    construction in benchmarks), and leaf rollouts use the branch's real observations. The **sampler
@@ -68,11 +69,13 @@ In priority order:
    randbats-prior rejection sampling; note the divergence from the literal recipe and why. Required
    for the ladder; not needed for perfect-info benchmarking.
 
-Only "not blocking" *once real multi-rollout averaging exists*: with today's single-pass `visits=1`
-scorer there is **no averaging over multiple rollouts**, so chance handling (damage rolls) and
-simultaneous-move handling are **not yet** adequately covered — each branch is scored against one RNG
-draw and one opponent action (itself a strategy-fusion at the opponent node). These become real
-design work the moment we move past the 1-ply single-pass scorer.
+Current root visit accumulation allows multiple root visits, but without determinization injection or
+stochastic leaf variation it can still re-evaluate the same branch deterministically. Chance handling
+(damage rolls), simultaneous-move uncertainty, and opponent hidden legal-action uncertainty are
+therefore **not yet** adequately covered. Hidden-mode foul-play smokes make this concrete: when the
+opponent private legal mask is withheld, the opponent-action prior can choose illegal opponent actions
+and the benchmark reports fallbacks. Privileged legal-mask mode is useful as a diagnostic safety guard
+but not a headline hidden-info result.
 
 ## Design principles / hard constraints
 

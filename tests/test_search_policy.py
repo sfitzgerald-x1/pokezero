@@ -6,8 +6,11 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision, RandomLegalPolicy
 from pokezero.rollout import RolloutConfig, RolloutDriver
+from pokezero.search import puct_branch_search
 from pokezero.search_policy import (
+    OpponentActionScenario,
     RootPUCTSearchPolicy,
+    _aggregate_scenario_searches,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
@@ -487,6 +490,104 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(step.metadata["root_puct_selected_value"], 1.0)
         self.assertNotIn("root_puct_leaf_rollout_rounds", step.metadata)
 
+    def test_root_puct_policy_visits_selection_mode_uses_most_visited_branch(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=8.0,
+            selection_mode="visits",
+            root_visit_budget=5,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=96, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 0)
+        self.assertEqual(step.metadata["root_puct_selection_mode"], "visits")
+        self.assertEqual(step.metadata["root_puct_total_visits"], 5)
+
+    def test_root_puct_multi_scenario_no_budget_preserves_synthetic_one_visit_per_action(self) -> None:
+        search_1 = puct_branch_search(
+            env=ImmediateOutcomeEnv(label="scenario-1"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0, 1),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            cpuct=2.0,
+        )
+        search_2 = puct_branch_search(
+            env=ImmediateOutcomeEnv(label="scenario-2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0, 1),
+            opponent_actions={"p2": 1},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            cpuct=2.0,
+        )
+
+        aggregate = _aggregate_scenario_searches(
+            (search_1, search_2),
+            opponent_scenarios=(
+                OpponentActionScenario(actions={"p2": 0}, weight=0.25, label="low"),
+                OpponentActionScenario(actions={"p2": 1}, weight=0.75, label="high"),
+            ),
+            cpuct=2.0,
+        )
+
+        self.assertEqual(aggregate.total_visits, 2)
+        self.assertEqual([candidate.visits for candidate in aggregate.candidates], [1, 1])
+
+    def test_root_puct_multi_scenario_visit_counts_are_weighted(self) -> None:
+        search_prior_zero = puct_branch_search(
+            env=ImmediateOutcomeEnv(label="scenario-1"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0, 1),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+            cpuct=8.0,
+            root_visit_budget=5,
+        )
+        search_prior_one = puct_branch_search(
+            env=ImmediateOutcomeEnv(label="scenario-2"),
+            trajectory=BattleTrajectory(battle_id="search-policy", format_id="gen3randombattle", seed=7),
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=_mask(0, 1),
+            opponent_actions={"p2": 1},
+            value_fn=lambda history: 0.0,
+            action_priors=(0.1, 0.9) + (0.0,) * (ACTION_COUNT - 2),
+            cpuct=8.0,
+            root_visit_budget=5,
+        )
+
+        aggregate = _aggregate_scenario_searches(
+            (search_prior_zero, search_prior_one),
+            opponent_scenarios=(
+                OpponentActionScenario(actions={"p2": 0}, weight=0.8, label="likely"),
+                OpponentActionScenario(actions={"p2": 1}, weight=0.2, label="unlikely"),
+            ),
+            cpuct=8.0,
+        )
+
+        visits_by_action = {candidate.action_index: candidate.visits for candidate in aggregate.candidates}
+        self.assertEqual(visits_by_action, {0: 3, 1: 2})
+        self.assertEqual(aggregate.total_visits, 5)
+
     def test_root_puct_policy_value_selection_mode_can_be_gated_back_to_prior(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
@@ -602,6 +703,16 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 value_fn=lambda history: 0.0,
                 prior_fn=lambda history: (1.0,) + (0.0,) * (ACTION_COUNT - 1),
                 selection_mode="unknown",
+            )
+
+    def test_root_puct_policy_rejects_invalid_root_visit_budget(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_visit_budget"):
+            RootPUCTSearchPolicy(
+                env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+                rollout_config=RolloutConfig(max_decision_rounds=3),
+                value_fn=lambda history: 0.0,
+                prior_fn=lambda history: (0.9, 0.1) + (0.0,) * (ACTION_COUNT - 2),
+                root_visit_budget=0,
             )
 
     def test_root_puct_policy_rejects_leaf_rollouts_without_policy_factory(self) -> None:

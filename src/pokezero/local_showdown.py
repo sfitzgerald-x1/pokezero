@@ -187,10 +187,12 @@ class LocalShowdownEnv:
         }
         self._last_step_had_error = False
         self._latest_requests = {}
-        choices = {
-            player: showdown_choice_for_action(states[player], actions[player])
-            for player in requested
-        }
+        choices = {}
+        for player in requested:
+            try:
+                choices[player] = showdown_choice_for_action(states[player], actions[player])
+            except ValueError as exc:
+                raise ValueError(f"{player}: {exc}") from exc
         self._send_command({"type": "choices", "battleId": self._battle_token, "choices": choices})
         self._read_until_boundary()
         if self._last_step_had_error:
