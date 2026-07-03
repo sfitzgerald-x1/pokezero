@@ -159,6 +159,12 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 minimum_override_prior_ratio=float("nan"),
             )
+        with self.assertRaisesRegex(ValueError, "minimum_score_improvement"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                minimum_score_improvement=-0.1,
+            )
         with self.assertRaisesRegex(ValueError, "root_visit_budget"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("checkpoint.pt"),
@@ -268,6 +274,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             selection_mode="visits",
             minimum_value_improvement=0.25,
             minimum_override_prior_ratio=0.5,
+            minimum_score_improvement=0.1,
             root_visit_budget=16,
             leaf_rollout_rounds=1,
             leaf_rollout_sampling=True,
@@ -368,6 +375,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["selection_mode"], "visits")
         self.assertEqual(payload["root_puct"]["minimum_value_improvement"], 0.25)
         self.assertEqual(payload["root_puct"]["minimum_override_prior_ratio"], 0.5)
+        self.assertEqual(payload["root_puct"]["minimum_score_improvement"], 0.1)
         self.assertEqual(payload["root_puct"]["root_visit_budget"], 16)
         self.assertEqual(payload["root_puct"]["leaf_rollout_sampling"], True)
         self.assertAlmostEqual(payload["root_puct"]["average_elapsed_seconds"], 0.3)
@@ -452,6 +460,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     "root_puct_prior_ratio_gate_used": True,
                     "root_puct_minimum_override_prior_ratio": 0.5,
                     "root_puct_prior_ratio_gate_required_prior": 0.35,
+                    "root_puct_score_gate_used": True,
+                    "root_puct_minimum_score_improvement": 0.1,
+                    "root_puct_score_gate_required_score": 0.8,
                     "root_puct_search_action": 0,
                     "root_puct_prior_action": 1,
                     "root_puct_selected_value": 0.1,
@@ -511,6 +522,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(details[2]["prior_ratio_gate_used"])
         self.assertEqual(details[2]["minimum_override_prior_ratio"], 0.5)
         self.assertEqual(details[2]["prior_ratio_gate_required_prior"], 0.35)
+        self.assertTrue(details[2]["score_gate_used"])
+        self.assertEqual(details[2]["minimum_score_improvement"], 0.1)
+        self.assertEqual(details[2]["score_gate_required_score"], 0.8)
 
     def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
         class FakeModelConfig:
