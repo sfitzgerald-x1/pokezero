@@ -247,7 +247,7 @@ def value_branch_search(
                 branch_actions=branch_actions,
             )
         except ValueError as exc:
-            if _is_candidate_illegal_action_error(exc, action_index=action_index):
+            if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
                 continue
             raise
         candidates.append(
@@ -591,9 +591,10 @@ def _finite_value(value: float) -> float:
     return result
 
 
-def _is_candidate_illegal_action_error(exc: ValueError, *, action_index: int) -> bool:
+def _is_candidate_illegal_action_error(exc: ValueError, *, player_id: PlayerId, action_index: int) -> bool:
     message = str(exc)
-    return message == f"action_index {action_index} is not legal for the current request."
+    unqualified = f"action_index {action_index} is not legal for the current request."
+    return message == unqualified or message == f"{player_id}: {unqualified}"
 
 
 def player_observation_history(

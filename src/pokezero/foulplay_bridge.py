@@ -128,6 +128,7 @@ class ControlledFoulPlayGameResult:
     root_puct_searches: int
     root_puct_fallbacks: int
     root_puct_total_visits: int = 0
+    root_puct_effective_total_visits: int = 0
     root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
 
@@ -143,6 +144,8 @@ class ControlledFoulPlayGameResult:
             "root_puct_fallbacks": self.root_puct_fallbacks,
             "root_puct_total_visits": self.root_puct_total_visits,
         }
+        if self.root_puct_effective_total_visits:
+            payload["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
         if self.root_puct_fallback_reasons:
@@ -172,6 +175,7 @@ class ControlledFoulPlayBenchmarkResult:
         root_searches = sum(game.root_puct_searches for game in self.games)
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
         root_total_visits = sum(game.root_puct_total_visits for game in self.games)
+        root_effective_total_visits = sum(game.root_puct_effective_total_visits for game in self.games)
         root_fallback_reasons: dict[str, int] = {}
         for game in self.games:
             for reason, count in game.root_puct_fallback_reasons.items():
@@ -212,6 +216,8 @@ class ControlledFoulPlayBenchmarkResult:
         }
         if elapsed_values:
             payload["root_puct"]["average_elapsed_seconds"] = sum(elapsed_values) / len(elapsed_values)
+        if root_effective_total_visits:
+            payload["root_puct"]["effective_total_visits"] = root_effective_total_visits
         if root_fallback_reasons:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
         return payload
@@ -794,6 +800,12 @@ async def _run_single_game(
         if decision.metadata.get("policy_family") == "root-puct-search"
         and not decision.metadata.get("root_puct_fallback")
     )
+    root_effective_total_visits = sum(
+        int(decision.metadata.get("root_puct_effective_total_visits") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+        and not decision.metadata.get("root_puct_fallback")
+    )
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -804,6 +816,7 @@ async def _run_single_game(
         root_puct_searches=root_searches,
         root_puct_fallbacks=root_fallbacks,
         root_puct_total_visits=root_total_visits,
+        root_puct_effective_total_visits=root_effective_total_visits,
         root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
     )

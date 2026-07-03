@@ -974,6 +974,7 @@ class _PolicyDecisionAccumulator:
     root_puct_searches: int = 0
     root_puct_fallbacks: int = 0
     root_puct_total_visits: int = 0
+    root_puct_effective_total_visits: int = 0
     root_puct_elapsed_seconds_total: float = 0.0
     root_puct_elapsed_seconds_samples: int = 0
     root_puct_candidate_count_total: int = 0
@@ -1008,6 +1009,9 @@ class _PolicyDecisionAccumulator:
         total_visits = _metadata_optional_int(metadata.get("root_puct_total_visits"))
         if total_visits is not None:
             self.root_puct_total_visits += total_visits
+        effective_total_visits = _metadata_optional_int(metadata.get("root_puct_effective_total_visits"))
+        if effective_total_visits is not None:
+            self.root_puct_effective_total_visits += effective_total_visits
         elapsed_seconds = _metadata_optional_float(metadata.get("root_puct_elapsed_seconds"))
         if elapsed_seconds is not None:
             self.root_puct_elapsed_seconds_total += elapsed_seconds
@@ -1073,6 +1077,8 @@ class _PolicyDecisionAccumulator:
                     "root_puct_total_visits": self.root_puct_total_visits,
                 }
             )
+            if self.root_puct_effective_total_visits:
+                result["root_puct_effective_total_visits"] = self.root_puct_effective_total_visits
             if self.root_puct_elapsed_seconds_samples:
                 result["root_puct_average_elapsed_seconds"] = (
                     self.root_puct_elapsed_seconds_total / self.root_puct_elapsed_seconds_samples

@@ -334,6 +334,7 @@ class RootPUCTSearchPolicy:
             opponent_scenarios=opponent_scenarios,
             cpuct=self.cpuct,
         )
+        raw_total_visits = sum(scenario_search.total_visits for scenario_search in scenario_searches)
         search_best = _selected_candidate(search, mode=self.selection_mode)
         best = search_best
         gate_metadata = {}
@@ -365,6 +366,9 @@ class RootPUCTSearchPolicy:
             if planner_id is not None
             else {}
         )
+        visit_metadata: dict[str, int] = {"root_puct_total_visits": raw_total_visits}
+        if search.total_visits != raw_total_visits:
+            visit_metadata["root_puct_effective_total_visits"] = search.total_visits
         return PolicyDecision(
             action_index=best.action_index,
             policy_id=self.policy_id,
@@ -374,7 +378,6 @@ class RootPUCTSearchPolicy:
                 "root_puct_fallback": False,
                 "root_puct_cpuct": self.cpuct,
                 "root_puct_selection_mode": self.selection_mode,
-                "root_puct_total_visits": search.total_visits,
                 "root_puct_selected_value": best.value,
                 "root_puct_selected_score": best.score,
                 "root_puct_candidate_count": len(search.candidates),
@@ -388,6 +391,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions_legality_checked": legality_checked,
                 **planner_metadata,
                 **gate_metadata,
+                **visit_metadata,
                 **dict(self.leaf_rollout_metadata),
                 **leaf_metadata,
             },
@@ -549,7 +553,7 @@ def _aggregate_scenario_searches(
     total_visits = 0
     for action_index in action_order:
         weighted_value = 0.0
-        visits = 0
+        weighted_visits = 0.0
         first_candidate: PUCTBranchSearchCandidate | None = None
         for scenario, search in zip(scenarios, scenario_searches, strict=True):
             by_action = {candidate.action_index: candidate for candidate in search.candidates}
@@ -558,10 +562,11 @@ def _aggregate_scenario_searches(
                 raise ValueError("scenario searches produced mismatched root action candidates.")
             if first_candidate is None:
                 first_candidate = candidate
-            visits += candidate.visits
+            weighted_visits += scenario.weight * candidate.visits
             weighted_value += scenario.weight * candidate.value
         if first_candidate is None:
             raise ValueError("root PUCT search produced no candidates.")
+        visits = max(1, int(round(weighted_visits)))
         total_visits += visits
         aggregate_inputs.append((first_candidate, visits, weighted_value))
 

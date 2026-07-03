@@ -117,8 +117,14 @@ class StrictLegalValueBranchEnv(ValueBranchEnv):
     def step(self, actions: dict[str, int]) -> StepResult:
         p1_action = int(actions["p1"])
         if p1_action not in self.strict_legal_actions:
-            raise ValueError(f"action_index {p1_action} is not legal for the current request.")
+            raise ValueError(f"p1: action_index {p1_action} is not legal for the current request.")
         return super().step(actions)
+
+
+class OpponentIllegalActionEnv(ValueBranchEnv):
+    def step(self, actions: dict[str, int]) -> StepResult:
+        p2_action = int(actions["p2"])
+        raise ValueError(f"p2: action_index {p2_action} is not legal for the current request.")
 
 
 class FixedPolicy:
@@ -296,6 +302,18 @@ class FlatBranchSearchTest(unittest.TestCase):
 
         self.assertEqual([candidate.action_index for candidate in result.candidates], [1])
         self.assertEqual(result.action_index, 1)
+
+    def test_value_branch_search_does_not_skip_opponent_illegal_action_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "p2: action_index 0"):
+            value_branch_search(
+                env=OpponentIllegalActionEnv(),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, False, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.25,
+            )
 
     def test_value_branch_search_can_score_bounded_leaf_rollout_terminals(self) -> None:
         env = ContinuationOutcomeEnv({0: "p2", 1: "p1"})
