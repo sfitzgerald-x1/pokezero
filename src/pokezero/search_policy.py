@@ -407,6 +407,7 @@ class RootPUCTSearchPolicy:
         score_gate_metadata = {}
         if self.minimum_score_improvement is not None:
             score_gate_used = False
+            # This compares root-PUCT score (Q + exploration bonus), not pure leaf value.
             required_score = prior_best.score + self.minimum_score_improvement
             if best.action_index != prior_best.action_index and best.score < required_score:
                 best = prior_best

@@ -813,7 +813,43 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertTrue(step.metadata["root_puct_pre_gate_changed_prior_action"])
         self.assertFalse(step.metadata["root_puct_selected_changed_prior_action"])
 
-    def test_root_puct_policy_score_gate_allows_score_improving_override(self) -> None:
+    def test_root_puct_policy_score_gate_suppresses_lower_score_visits_override(self) -> None:
+        policy = RootPUCTSearchPolicy(
+            env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
+            rollout_config=RolloutConfig(max_decision_rounds=3),
+            value_fn=lambda history: 0.0,
+            prior_fn=lambda history: (0.51, 0.49) + (0.0,) * (ACTION_COUNT - 2),
+            opponent_action_planner=lambda context, rng: {"p2": 0},
+            cpuct=2.0,
+            selection_mode="visits",
+            root_visit_budget=20,
+            minimum_score_improvement=0.0,
+        )
+
+        result = RolloutDriver(
+            env=ImmediateOutcomeEnv(label="live"),
+            policies={"p1": policy, "p2": FixedPolicy(0, policy_id="fixed-p2")},
+            config=RolloutConfig(max_decision_rounds=3),
+        ).run(seed=97, battle_id="search-policy")
+
+        step = result.trajectory.steps_for_player("p1")[0]
+        self.assertEqual(step.action_index, 0)
+        self.assertEqual(step.metadata["root_puct_selection_mode"], "visits")
+        self.assertEqual(step.metadata["root_puct_search_action"], 1)
+        self.assertEqual(step.metadata["root_puct_prior_action"], 0)
+        self.assertGreater(
+            step.metadata["root_puct_search_action_visits"],
+            step.metadata["root_puct_prior_action_visits"],
+        )
+        self.assertTrue(step.metadata["root_puct_score_gate_used"])
+        self.assertLess(
+            step.metadata["root_puct_search_action_score"],
+            step.metadata["root_puct_score_gate_required_score"],
+        )
+        self.assertTrue(step.metadata["root_puct_pre_gate_changed_prior_action"])
+        self.assertFalse(step.metadata["root_puct_selected_changed_prior_action"])
+
+    def test_root_puct_policy_score_gate_allows_score_improving_override_with_positive_margin(self) -> None:
         policy = RootPUCTSearchPolicy(
             env_factory=lambda: ImmediateOutcomeEnv(label="branch"),
             rollout_config=RolloutConfig(max_decision_rounds=3),
@@ -822,7 +858,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             opponent_action_planner=lambda context, rng: {"p2": 0},
             cpuct=0.0,
             selection_mode="value",
-            minimum_score_improvement=0.0,
+            minimum_score_improvement=1.5,
         )
 
         result = RolloutDriver(
@@ -838,7 +874,7 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertFalse(step.metadata["root_puct_score_gate_used"])
         self.assertEqual(
             step.metadata["root_puct_score_gate_required_score"],
-            step.metadata["root_puct_prior_score"],
+            step.metadata["root_puct_prior_score"] + 1.5,
         )
         self.assertGreaterEqual(
             step.metadata["root_puct_search_action_score"],
