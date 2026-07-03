@@ -98,6 +98,7 @@ class ControlledFoulPlayConfig:
     leaf_rollout_sampling: bool = False
     belief_start_overrides: bool = False
     start_override_attempts: int = 1
+    belief_start_override_samples: int = 1
     opponent_legal_mask_mode: str = "hidden"
     allow_search_fallback: bool = True
     node_binary: str = "node"
@@ -155,6 +156,10 @@ class ControlledFoulPlayConfig:
             raise ValueError("leaf_rollout_sampling requires positive leaf_rollout_rounds.")
         if self.start_override_attempts <= 0:
             raise ValueError("start_override_attempts must be positive.")
+        if self.belief_start_override_samples <= 0:
+            raise ValueError("belief_start_override_samples must be positive.")
+        if self.belief_start_override_samples > 1 and not self.belief_start_overrides:
+            raise ValueError("belief_start_override_samples requires belief_start_overrides.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
 
@@ -192,6 +197,10 @@ class ControlledFoulPlayGameResult:
     root_puct_opponent_action_scenarios_generated: int = 0
     root_puct_opponent_action_scenarios_skipped: int = 0
     root_puct_opponent_action_scenarios_unsearched: int = 0
+    root_puct_opponent_action_groups_generated: int = 0
+    root_puct_opponent_action_groups_used: int = 0
+    root_puct_opponent_action_groups_skipped: int = 0
+    root_puct_opponent_action_groups_unsearched: int = 0
     root_puct_selected_prior_action_changes: int = 0
     root_puct_pre_gate_prior_action_changes: int = 0
     root_puct_time_budget_exhaustions: int = 0
@@ -215,6 +224,10 @@ class ControlledFoulPlayGameResult:
             "root_puct_opponent_action_scenarios_generated": self.root_puct_opponent_action_scenarios_generated,
             "root_puct_opponent_action_scenarios_skipped": self.root_puct_opponent_action_scenarios_skipped,
             "root_puct_opponent_action_scenarios_unsearched": self.root_puct_opponent_action_scenarios_unsearched,
+            "root_puct_opponent_action_groups_generated": self.root_puct_opponent_action_groups_generated,
+            "root_puct_opponent_action_groups_used": self.root_puct_opponent_action_groups_used,
+            "root_puct_opponent_action_groups_skipped": self.root_puct_opponent_action_groups_skipped,
+            "root_puct_opponent_action_groups_unsearched": self.root_puct_opponent_action_groups_unsearched,
             "root_puct_selected_prior_action_changes": self.root_puct_selected_prior_action_changes,
             "root_puct_pre_gate_prior_action_changes": self.root_puct_pre_gate_prior_action_changes,
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
@@ -262,6 +275,10 @@ class ControlledFoulPlayBenchmarkResult:
         root_scenarios_generated = sum(game.root_puct_opponent_action_scenarios_generated for game in self.games)
         root_scenarios_skipped = sum(game.root_puct_opponent_action_scenarios_skipped for game in self.games)
         root_scenarios_unsearched = sum(game.root_puct_opponent_action_scenarios_unsearched for game in self.games)
+        root_action_groups_generated = sum(game.root_puct_opponent_action_groups_generated for game in self.games)
+        root_action_groups_used = sum(game.root_puct_opponent_action_groups_used for game in self.games)
+        root_action_groups_skipped = sum(game.root_puct_opponent_action_groups_skipped for game in self.games)
+        root_action_groups_unsearched = sum(game.root_puct_opponent_action_groups_unsearched for game in self.games)
         root_selected_prior_action_changes = sum(game.root_puct_selected_prior_action_changes for game in self.games)
         root_pre_gate_prior_action_changes = sum(game.root_puct_pre_gate_prior_action_changes for game in self.games)
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
@@ -307,6 +324,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "leaf_rollout_sampling": self.config.leaf_rollout_sampling,
                 "belief_start_overrides": self.config.belief_start_overrides,
                 "start_override_attempts": self.config.start_override_attempts,
+                "belief_start_override_samples": self.config.belief_start_override_samples,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
                 "foulplay_search_time_ms": self.config.search_time_ms,
                 "allow_search_fallback": self.config.allow_search_fallback,
@@ -316,6 +334,10 @@ class ControlledFoulPlayBenchmarkResult:
                 "opponent_action_scenarios_generated": root_scenarios_generated,
                 "opponent_action_scenarios_skipped": root_scenarios_skipped,
                 "opponent_action_scenarios_unsearched": root_scenarios_unsearched,
+                "opponent_action_groups_generated": root_action_groups_generated,
+                "opponent_action_groups_used": root_action_groups_used,
+                "opponent_action_groups_skipped": root_action_groups_skipped,
+                "opponent_action_groups_unsearched": root_action_groups_unsearched,
                 "selected_prior_action_changes": root_selected_prior_action_changes,
                 "pre_gate_prior_action_changes": root_pre_gate_prior_action_changes,
                 "time_budget_exhaustions": root_time_budget_exhaustions,
@@ -1173,6 +1195,7 @@ def _build_policy(
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         start_override_planner=start_override_planner,
         start_override_attempts=config.start_override_attempts,
+        start_override_samples_per_scenario=config.belief_start_override_samples,
         leaf_rollout_metadata={
             "root_puct_leaf_rollout_opponent_policy": "checkpoint",
             "root_puct_leaf_rollout_sampling": config.leaf_rollout_sampling,
@@ -1387,6 +1410,26 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_action_groups_generated = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_generated") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_used = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_used") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_skipped = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_skipped") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
+    root_action_groups_unsearched = sum(
+        int(decision.metadata.get("root_puct_opponent_action_groups_unsearched") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_selected_prior_action_changes = sum(
         1
         for decision in state.decisions
@@ -1434,6 +1477,10 @@ async def _run_single_game(
         root_puct_opponent_action_scenarios_generated=root_scenarios_generated,
         root_puct_opponent_action_scenarios_skipped=root_scenarios_skipped,
         root_puct_opponent_action_scenarios_unsearched=root_scenarios_unsearched,
+        root_puct_opponent_action_groups_generated=root_action_groups_generated,
+        root_puct_opponent_action_groups_used=root_action_groups_used,
+        root_puct_opponent_action_groups_skipped=root_action_groups_skipped,
+        root_puct_opponent_action_groups_unsearched=root_action_groups_unsearched,
         root_puct_selected_prior_action_changes=root_selected_prior_action_changes,
         root_puct_pre_gate_prior_action_changes=root_pre_gate_prior_action_changes,
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
@@ -2012,6 +2059,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--belief-start-override-samples",
+        type=int,
+        default=1,
+        help=(
+            "Belief start-override samples to average per accepted opponent-action scenario. "
+            "Requires --belief-start-overrides. Values above 1 split each opponent-action "
+            "scenario across multiple sampled hidden worlds without increasing the accepted "
+            "opponent-action cap, increasing search cost."
+        ),
+    )
+    parser.add_argument(
         "--opponent-legal-mask-mode",
         choices=("hidden", "privileged"),
         default="hidden",
@@ -2103,6 +2161,7 @@ def _config_from_args(
         leaf_rollout_sampling=args.leaf_rollout_sampling,
         belief_start_overrides=args.belief_start_overrides,
         start_override_attempts=args.start_override_attempts,
+        belief_start_override_samples=args.belief_start_override_samples,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,

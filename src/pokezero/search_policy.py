@@ -52,6 +52,12 @@ class OpponentActionScenario:
         )
 
 
+@dataclass(frozen=True)
+class _OpponentActionScenarioGroup:
+    root: OpponentActionScenario
+    samples: tuple[OpponentActionScenario, ...]
+
+
 StartOverridePlanner = Callable[
     [PolicyContext, OpponentActionScenario, int, random.Random],
     StartOverrideSource,
@@ -227,6 +233,7 @@ class RootPUCTSearchPolicy:
     leaf_rollout_policy_factory: LeafRolloutPolicyFactory | None = None
     start_override_planner: StartOverridePlanner | None = None
     start_override_attempts: int = 1
+    start_override_samples_per_scenario: int = 1
     leaf_rollout_metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -260,6 +267,10 @@ class RootPUCTSearchPolicy:
             raise ValueError("leaf_rollout_policy_factory is required when leaf rollouts are enabled.")
         if self.start_override_attempts <= 0:
             raise ValueError("start_override_attempts must be positive.")
+        if self.start_override_samples_per_scenario <= 0:
+            raise ValueError("start_override_samples_per_scenario must be positive.")
+        if self.start_override_samples_per_scenario > 1 and self.start_override_planner is None:
+            raise ValueError("start_override_samples_per_scenario requires start_override_planner.")
 
     def reset(self) -> None:
         reset = getattr(self.fallback_policy, "reset", None)
@@ -318,6 +329,15 @@ class RootPUCTSearchPolicy:
             legality_checked = legality_checked or legality_report.checked
             if legality_report.error is not None:
                 return self._fallback(context, rng=rng, reason=legality_report.error)
+        search_scenario_groups = _start_override_sampled_scenario_groups(
+            opponent_scenarios,
+            samples_per_scenario=(
+                self.start_override_samples_per_scenario
+                if self.start_override_planner is not None
+                else 1
+            ),
+        )
+        search_scenarios = _flatten_scenario_groups(search_scenario_groups)
 
         search_trajectory = _trajectory_with_current_observation(context)
         history = player_observation_history(
@@ -343,81 +363,113 @@ class RootPUCTSearchPolicy:
                 start_override_sources_used = 0
                 start_override_attempts_used = 0
                 unsearched_scenario_count = 0
-                for scenario_index, scenario in enumerate(opponent_scenarios):
-                    scenario_search: PUCTBranchSearchResult | None = None
-                    scenario_start_override: StartOverrideSource = None
-                    replay_rejection_reasons: list[str] = []
-                    attempts = self.start_override_attempts if self.start_override_planner is not None else 1
-                    for _attempt_index in range(attempts):
-                        start_override_attempts_used += 1
-                        start_override = (
-                            None
-                            if self.start_override_planner is None
-                            else self.start_override_planner(
-                                context,
-                                scenario,
-                                scenario_index,
-                                rng,
+                unsearched_action_group_count = 0
+                skipped_action_group_count = 0
+                searched_action_group_count = 0
+                flat_scenario_index = 0
+                for group_index, scenario_group in enumerate(search_scenario_groups):
+                    group_search_pairs: list[tuple[OpponentActionScenario, PUCTBranchSearchResult]] = []
+                    for scenario in scenario_group.samples:
+                        scenario_index = flat_scenario_index
+                        flat_scenario_index += 1
+                        scenario_search: PUCTBranchSearchResult | None = None
+                        scenario_start_override: StartOverrideSource = None
+                        replay_rejection_reasons: list[str] = []
+                        attempts = self.start_override_attempts if self.start_override_planner is not None else 1
+                        for _attempt_index in range(attempts):
+                            start_override_attempts_used += 1
+                            start_override = (
+                                None
+                                if self.start_override_planner is None
+                                else self.start_override_planner(
+                                    context,
+                                    scenario,
+                                    scenario_index,
+                                    rng,
+                                )
                             )
-                        )
-                        scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
-                            total_budget_seconds=self.root_time_budget_seconds,
-                            started_at=start,
-                        )
-                        try:
-                            search = puct_branch_search(
-                                env=env,
-                                trajectory=search_trajectory,
-                                player_id=context.player_id,
-                                prefix_decision_round_count=context.decision_round_index,
-                                legal_action_mask=context.observation.legal_action_mask,
-                                opponent_actions=scenario.actions,
-                                value_fn=self.value_fn,
-                                action_priors=priors,
-                                cpuct=self.cpuct,
-                                leaf_rollout_policies=leaf_rollout_policies,
-                                leaf_rollout_config=self.rollout_config,
-                                leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
-                                root_visit_budget=self.root_visit_budget,
-                                root_time_budget_seconds=scenario_root_time_budget_seconds,
-                                start_override=start_override,
-                                expected_current_observation=context.observation,
+                            scenario_root_time_budget_seconds = _remaining_root_time_budget_seconds(
+                                total_budget_seconds=self.root_time_budget_seconds,
+                                started_at=start,
                             )
-                        except ValueError as exc:
-                            reason = _opponent_scenario_replay_legality_error(exc, scenario)
-                            if reason is None:
-                                raise
-                            replay_rejection_reasons.append(reason)
-                            if start_override is None:
+                            try:
+                                search = puct_branch_search(
+                                    env=env,
+                                    trajectory=search_trajectory,
+                                    player_id=context.player_id,
+                                    prefix_decision_round_count=context.decision_round_index,
+                                    legal_action_mask=context.observation.legal_action_mask,
+                                    opponent_actions=scenario.actions,
+                                    value_fn=self.value_fn,
+                                    action_priors=priors,
+                                    cpuct=self.cpuct,
+                                    leaf_rollout_policies=leaf_rollout_policies,
+                                    leaf_rollout_config=self.rollout_config,
+                                    leaf_rollout_decision_rounds=self.leaf_rollout_decision_rounds,
+                                    root_visit_budget=self.root_visit_budget,
+                                    root_time_budget_seconds=scenario_root_time_budget_seconds,
+                                    start_override=start_override,
+                                    expected_current_observation=context.observation,
+                                )
+                            except ValueError as exc:
+                                reason = _opponent_scenario_replay_legality_error(exc, scenario)
+                                if reason is None:
+                                    raise
+                                replay_rejection_reasons.append(reason)
+                                if start_override is None:
+                                    break
+                            else:
+                                scenario_search = search
+                                scenario_start_override = start_override
                                 break
+                        if scenario_search is None:
+                            skipped_scenarios.append(
+                                (
+                                    scenario,
+                                    _format_replay_rejection_reasons(replay_rejection_reasons),
+                                )
+                            )
                         else:
-                            scenario_search = search
-                            scenario_start_override = start_override
-                            break
-                    if scenario_search is None:
-                        skipped_scenarios.append(
+                            group_search_pairs.append((scenario, scenario_search))
+                            if scenario_start_override is not None:
+                                start_override_sources_used += 1
+                    if not group_search_pairs:
+                        skipped_action_group_count += 1
+                        continue
+                    searched_action_group_count += 1
+                    group_sample_weight = scenario_group.root.weight / len(group_search_pairs)
+                    action_group_cap_reached = False
+                    for scenario, scenario_search in group_search_pairs:
+                        scenario_search_pairs.append(
                             (
-                                scenario,
-                                _format_replay_rejection_reasons(replay_rejection_reasons),
+                                replace(scenario, weight=group_sample_weight),
+                                scenario_search,
                             )
                         )
-                    else:
-                        scenario_search_pairs.append((scenario, scenario_search))
-                        if scenario_start_override is not None:
-                            start_override_sources_used += 1
                         if (
                             self.max_opponent_action_scenarios is not None
-                            and len(scenario_search_pairs) >= self.max_opponent_action_scenarios
+                            and searched_action_group_count >= self.max_opponent_action_scenarios
                         ):
-                            unsearched_scenario_count = len(opponent_scenarios) - scenario_index - 1
+                            remaining_groups = search_scenario_groups[group_index + 1 :]
+                            unsearched_scenario_count = sum(
+                                len(group.samples) for group in remaining_groups
+                            )
+                            unsearched_action_group_count = len(remaining_groups)
+                            action_group_cap_reached = True
                             break
+                    if action_group_cap_reached:
+                        break
                 if not scenario_search_pairs:
                     details = "; ".join(reason for _scenario, reason in skipped_scenarios) or "none"
                     metadata = _opponent_scenario_skip_metadata(
-                        opponent_scenarios=opponent_scenarios,
+                        opponent_scenarios=search_scenarios,
                         used_scenarios=(),
                         skipped_scenarios=tuple(skipped_scenarios),
                         unsearched_scenario_count=0,
+                        opponent_action_group_count=len(search_scenario_groups),
+                        used_action_group_count=0,
+                        skipped_action_group_count=skipped_action_group_count,
+                        unsearched_action_group_count=0,
                     )
                     if self.start_override_planner is not None:
                         metadata.update(
@@ -425,6 +477,9 @@ class RootPUCTSearchPolicy:
                                 "root_puct_start_override_sources_used": 0,
                                 "root_puct_start_override_attempts": self.start_override_attempts,
                                 "root_puct_start_override_attempts_used": start_override_attempts_used,
+                                "root_puct_start_override_samples_per_scenario": (
+                                    self.start_override_samples_per_scenario
+                                ),
                             }
                         )
                     raise _AllOpponentScenariosReplayIllegal(
@@ -522,6 +577,7 @@ class RootPUCTSearchPolicy:
                 "root_puct_start_override_sources_used": start_override_sources_used,
                 "root_puct_start_override_attempts": self.start_override_attempts,
                 "root_puct_start_override_attempts_used": start_override_attempts_used,
+                "root_puct_start_override_samples_per_scenario": self.start_override_samples_per_scenario,
             }
             if self.start_override_planner is not None
             else {}
@@ -557,10 +613,14 @@ class RootPUCTSearchPolicy:
                 "root_puct_opponent_actions": dict(used_scenarios[0].actions),
                 "root_puct_opponent_action_scenario_count": len(used_scenarios),
                 **_opponent_scenario_skip_metadata(
-                    opponent_scenarios=opponent_scenarios,
+                    opponent_scenarios=search_scenarios,
                     used_scenarios=used_scenarios,
                     skipped_scenarios=tuple(skipped_scenarios),
                     unsearched_scenario_count=unsearched_scenario_count,
+                    opponent_action_group_count=len(search_scenario_groups),
+                    used_action_group_count=searched_action_group_count,
+                    skipped_action_group_count=skipped_action_group_count,
+                    unsearched_action_group_count=unsearched_action_group_count,
                 ),
                 "root_puct_max_opponent_action_scenarios": self.max_opponent_action_scenarios,
                 "root_puct_opponent_actions_legality_checked": legality_checked,
@@ -688,6 +748,41 @@ def _opponent_action_scenarios(
             ),
         )
     )
+
+
+def _start_override_sampled_scenario_groups(
+    scenarios: Sequence[OpponentActionScenario],
+    *,
+    samples_per_scenario: int,
+) -> tuple[_OpponentActionScenarioGroup, ...]:
+    if samples_per_scenario <= 0:
+        raise ValueError("samples_per_scenario must be positive.")
+    scenario_tuple = tuple(scenarios)
+    if samples_per_scenario == 1:
+        return tuple(
+            _OpponentActionScenarioGroup(root=scenario, samples=(scenario,))
+            for scenario in scenario_tuple
+        )
+    groups: list[_OpponentActionScenarioGroup] = []
+    for scenario in scenario_tuple:
+        sample_weight = scenario.weight / samples_per_scenario
+        samples: list[OpponentActionScenario] = []
+        for sample_index in range(samples_per_scenario):
+            samples.append(
+                OpponentActionScenario(
+                    actions=dict(scenario.actions),
+                    weight=sample_weight,
+                    label=f"{scenario.label}/belief-sample-{sample_index + 1}",
+                )
+            )
+        groups.append(_OpponentActionScenarioGroup(root=scenario, samples=tuple(samples)))
+    return tuple(groups)
+
+
+def _flatten_scenario_groups(
+    scenario_groups: Sequence[_OpponentActionScenarioGroup],
+) -> tuple[OpponentActionScenario, ...]:
+    return tuple(scenario for group in scenario_groups for scenario in group.samples)
 
 
 def _remaining_root_time_budget_seconds(
@@ -821,8 +916,12 @@ def _opponent_scenario_skip_metadata(
     used_scenarios: Sequence[OpponentActionScenario],
     skipped_scenarios: Sequence[tuple[OpponentActionScenario, str]],
     unsearched_scenario_count: int = 0,
+    opponent_action_group_count: int | None = None,
+    used_action_group_count: int | None = None,
+    skipped_action_group_count: int | None = None,
+    unsearched_action_group_count: int | None = None,
 ) -> dict[str, object]:
-    return {
+    metadata: dict[str, object] = {
         "root_puct_opponent_action_scenarios_generated": len(opponent_scenarios),
         "root_puct_opponent_action_scenarios_skipped": len(skipped_scenarios),
         "root_puct_opponent_action_scenarios_unsearched": unsearched_scenario_count,
@@ -838,6 +937,16 @@ def _opponent_scenario_skip_metadata(
             for scenario, reason in skipped_scenarios
         ],
     }
+    if opponent_action_group_count is not None:
+        metadata.update(
+            {
+                "root_puct_opponent_action_groups_generated": opponent_action_group_count,
+                "root_puct_opponent_action_groups_used": used_action_group_count,
+                "root_puct_opponent_action_groups_skipped": skipped_action_group_count,
+                "root_puct_opponent_action_groups_unsearched": unsearched_action_group_count,
+            }
+        )
+    return metadata
 
 
 def _leaf_rollout_metadata(
