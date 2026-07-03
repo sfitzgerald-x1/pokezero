@@ -76,6 +76,7 @@ class ControlledFoulPlayConfig:
     cpuct: float = 1.25
     selection_mode: str = "puct"
     minimum_value_improvement: float | None = None
+    root_visit_budget: int | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
     opponent_legal_mask_mode: str = "hidden"
@@ -96,10 +97,12 @@ class ControlledFoulPlayConfig:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct"}:
             raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
-        if self.selection_mode not in {"puct", "value"}:
-            raise ValueError("selection_mode must be 'puct' or 'value'.")
+        if self.selection_mode not in {"puct", "value", "visits"}:
+            raise ValueError("selection_mode must be 'puct', 'value', or 'visits'.")
         if self.minimum_value_improvement is not None and self.minimum_value_improvement < 0.0:
             raise ValueError("minimum_value_improvement must be non-negative when set.")
+        if self.root_visit_budget is not None and self.root_visit_budget <= 0:
+            raise ValueError("root_visit_budget must be positive when set.")
         if self.root_opponent_action_scenarios <= 0:
             raise ValueError("root_opponent_action_scenarios must be positive.")
         if self.leaf_rollout_rounds < 0:
@@ -124,6 +127,8 @@ class ControlledFoulPlayGameResult:
     pokezero_decisions: int
     root_puct_searches: int
     root_puct_fallbacks: int
+    root_puct_total_visits: int = 0
+    root_puct_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     root_puct_average_elapsed_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,9 +141,12 @@ class ControlledFoulPlayGameResult:
             "pokezero_decisions": self.pokezero_decisions,
             "root_puct_searches": self.root_puct_searches,
             "root_puct_fallbacks": self.root_puct_fallbacks,
+            "root_puct_total_visits": self.root_puct_total_visits,
         }
         if self.root_puct_average_elapsed_seconds is not None:
             payload["root_puct_average_elapsed_seconds"] = self.root_puct_average_elapsed_seconds
+        if self.root_puct_fallback_reasons:
+            payload["root_puct_fallback_reasons"] = dict(sorted(self.root_puct_fallback_reasons.items()))
         return payload
 
 
@@ -163,6 +171,11 @@ class ControlledFoulPlayBenchmarkResult:
     def to_dict(self) -> dict[str, Any]:
         root_searches = sum(game.root_puct_searches for game in self.games)
         root_fallbacks = sum(game.root_puct_fallbacks for game in self.games)
+        root_total_visits = sum(game.root_puct_total_visits for game in self.games)
+        root_fallback_reasons: dict[str, int] = {}
+        for game in self.games:
+            for reason, count in game.root_puct_fallback_reasons.items():
+                root_fallback_reasons[reason] = root_fallback_reasons.get(reason, 0) + count
         elapsed_values = [
             game.root_puct_average_elapsed_seconds
             for game in self.games
@@ -185,6 +198,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
                 "minimum_value_improvement": self.config.minimum_value_improvement,
+                "root_visit_budget": self.config.root_visit_budget,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
                 "opponent_legal_mask_mode": self.config.opponent_legal_mask_mode,
@@ -192,11 +206,14 @@ class ControlledFoulPlayBenchmarkResult:
                 "allow_search_fallback": self.config.allow_search_fallback,
                 "searches": root_searches,
                 "fallbacks": root_fallbacks,
+                "total_visits": root_total_visits,
             },
             "game_results": [game.to_dict() for game in self.games],
         }
         if elapsed_values:
             payload["root_puct"]["average_elapsed_seconds"] = sum(elapsed_values) / len(elapsed_values)
+        if root_fallback_reasons:
+            payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
         return payload
 
 
@@ -607,6 +624,7 @@ def _build_policy(
         cpuct=config.cpuct,
         selection_mode=config.selection_mode,
         minimum_value_improvement=config.minimum_value_improvement,
+        root_visit_budget=config.root_visit_budget,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
         leaf_rollout_metadata={"root_puct_leaf_rollout_opponent_policy": "checkpoint"}
@@ -764,6 +782,18 @@ async def _run_single_game(
         and not decision.metadata.get("root_puct_fallback")
     )
     root_fallbacks = sum(1 for decision in state.decisions if decision.metadata.get("root_puct_fallback"))
+    root_fallback_reasons: dict[str, int] = {}
+    for decision in state.decisions:
+        if not decision.metadata.get("root_puct_fallback"):
+            continue
+        reason = str(decision.metadata.get("root_puct_fallback_reason") or "unknown")
+        root_fallback_reasons[reason] = root_fallback_reasons.get(reason, 0) + 1
+    root_total_visits = sum(
+        int(decision.metadata.get("root_puct_total_visits") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+        and not decision.metadata.get("root_puct_fallback")
+    )
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -773,6 +803,8 @@ async def _run_single_game(
         pokezero_decisions=len(state.decisions),
         root_puct_searches=root_searches,
         root_puct_fallbacks=root_fallbacks,
+        root_puct_total_visits=root_total_visits,
+        root_puct_fallback_reasons=root_fallback_reasons,
         root_puct_average_elapsed_seconds=(sum(elapsed) / len(elapsed) if elapsed else None),
     )
 
@@ -1139,7 +1171,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpuct", type=float, default=1.25, help="Root PUCT exploration constant.")
     parser.add_argument(
         "--selection-mode",
-        choices=("puct", "value"),
+        choices=("puct", "value", "visits"),
         default="puct",
         help="Root search candidate selection rule.",
     )
@@ -1151,6 +1183,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Require the search-selected action to beat the prior-best action by this value margin; "
             "otherwise use the prior-best action."
         ),
+    )
+    parser.add_argument(
+        "--root-visit-budget",
+        type=int,
+        default=None,
+        help="Total root visits per searched decision; defaults to one visit per legal action.",
     )
     parser.add_argument(
         "--root-opponent-action-scenarios",
@@ -1207,6 +1245,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         cpuct=args.cpuct,
         selection_mode=args.selection_mode,
         minimum_value_improvement=args.minimum_value_improvement,
+        root_visit_budget=args.root_visit_budget,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,

@@ -147,6 +147,7 @@ class MetadataPolicy:
         value_gate_used: bool | None = None,
         root_opponent_action_policy: str | None = None,
         root_opponent_action_scenario_count: int | None = None,
+        root_total_visits: int | None = None,
         leaf_rollout_rounds: int | None = None,
         leaf_rollout_opponent_policy: str | None = None,
         leaf_actual_rounds: dict[str, int] | None = None,
@@ -158,6 +159,7 @@ class MetadataPolicy:
         self.value_gate_used = value_gate_used
         self.root_opponent_action_policy = root_opponent_action_policy
         self.root_opponent_action_scenario_count = root_opponent_action_scenario_count
+        self.root_total_visits = root_total_visits
         self.leaf_rollout_rounds = leaf_rollout_rounds
         self.leaf_rollout_opponent_policy = leaf_rollout_opponent_policy
         self.leaf_actual_rounds = leaf_actual_rounds
@@ -190,6 +192,8 @@ class MetadataPolicy:
             metadata["root_puct_opponent_action_policy"] = self.root_opponent_action_policy
         if self.root_opponent_action_scenario_count is not None:
             metadata["root_puct_opponent_action_scenario_count"] = self.root_opponent_action_scenario_count
+        if self.root_total_visits is not None:
+            metadata["root_puct_total_visits"] = self.root_total_visits
         if self.leaf_rollout_rounds is not None:
             metadata["root_puct_leaf_rollout_rounds"] = self.leaf_rollout_rounds
         if self.leaf_rollout_opponent_policy is not None:
@@ -394,6 +398,7 @@ class CollectionTest(unittest.TestCase):
                         value_gate_used=True,
                         root_opponent_action_policy="benchmark",
                         root_opponent_action_scenario_count=2,
+                        root_total_visits=11,
                         leaf_rollout_rounds=2,
                         leaf_rollout_opponent_policy="benchmark",
                         leaf_actual_rounds={"0": 1, "2": 2},
@@ -408,6 +413,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(summary["root-puct-diagnostic"]["decisions"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_searches"], 2)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_fallbacks"], 0)
+        self.assertEqual(summary["root-puct-diagnostic"]["root_puct_total_visits"], 22)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_candidate_count"], 3.0)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_elapsed_seconds"], 0.25)
         self.assertEqual(summary["root-puct-diagnostic"]["root_puct_average_selected_value"], 0.5)

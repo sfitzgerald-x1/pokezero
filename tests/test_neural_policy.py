@@ -2267,6 +2267,8 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "2",
                     "--selection-mode",
                     "value",
+                    "--root-visit-budget",
+                    "17",
                     "--min-value-improvement",
                     "0.2",
                     "--device",
@@ -2294,6 +2296,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(matchups[3].p2_policy.policy_id, "neural-smoke+root-puct")
         self.assertEqual(matchups[2].p1_policy.cpuct, 0.75)
         self.assertEqual(matchups[2].p1_policy.selection_mode, "value")
+        self.assertEqual(matchups[2].p1_policy.root_visit_budget, 17)
         self.assertEqual(matchups[2].p1_policy.minimum_value_improvement, 0.2)
         self.assertEqual(matchups[2].p1_policy.leaf_rollout_decision_rounds, 2)
         self.assertIsNotNone(matchups[2].p1_policy.leaf_rollout_policy_factory)

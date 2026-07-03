@@ -109,6 +109,18 @@ class ValueBranchEnv:
         return self._terminal
 
 
+class StrictLegalValueBranchEnv(ValueBranchEnv):
+    def __init__(self, legal_actions: set[int]) -> None:
+        super().__init__()
+        self.strict_legal_actions = set(legal_actions)
+
+    def step(self, actions: dict[str, int]) -> StepResult:
+        p1_action = int(actions["p1"])
+        if p1_action not in self.strict_legal_actions:
+            raise ValueError(f"action_index {p1_action} is not legal for the current request.")
+        return super().step(actions)
+
+
 class FixedPolicy:
     def __init__(self, action_index: int, *, policy_id: str = "fixed") -> None:
         self.action_index = action_index
@@ -268,6 +280,23 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertEqual(result.best_candidate.value, 1.0)
         self.assertEqual(result.best_candidate.evaluated_history_length, 0)
 
+    def test_value_branch_search_skips_candidate_actions_rejected_by_replay(self) -> None:
+        env = StrictLegalValueBranchEnv({1})
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        result = value_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=lambda history: 0.25,
+        )
+
+        self.assertEqual([candidate.action_index for candidate in result.candidates], [1])
+        self.assertEqual(result.action_index, 1)
+
     def test_value_branch_search_can_score_bounded_leaf_rollout_terminals(self) -> None:
         env = ContinuationOutcomeEnv({0: "p2", 1: "p1"})
         trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
@@ -351,6 +380,46 @@ class FlatBranchSearchTest(unittest.TestCase):
         self.assertAlmostEqual(result.candidates[0].prior, 0.9)
         self.assertGreater(result.candidates[0].score, result.candidates[1].score)
         self.assertEqual(result.to_dict()["selected_action_index"], 0)
+
+    def test_puct_branch_search_accumulates_root_visit_budget(self) -> None:
+        env = ValueBranchEnv()
+        trajectory = BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77)
+
+        def value_fn(history: tuple[PokeZeroObservationV0, ...]) -> float:
+            return {0: 0.1, 1: 0.2}[_only_legal_action(history[-1])]
+
+        result = puct_branch_search(
+            env=env,
+            trajectory=trajectory,
+            player_id="p1",
+            prefix_decision_round_count=0,
+            legal_action_mask=(True, True, False, False, False, False, False, False, False),
+            opponent_actions={"p2": 0},
+            value_fn=value_fn,
+            action_priors=(0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            cpuct=2.0,
+            root_visit_budget=5,
+        )
+
+        self.assertEqual(result.total_visits, 5)
+        self.assertEqual(sum(candidate.visits for candidate in result.candidates), 5)
+        self.assertEqual([candidate.visits for candidate in result.candidates], [4, 1])
+        self.assertEqual(len(env.all_step_calls), 5)
+        self.assertEqual(result.action_index, 0)
+
+    def test_puct_branch_search_rejects_budget_below_legal_action_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "root_visit_budget"):
+            puct_branch_search(
+                env=ValueBranchEnv(),
+                trajectory=BattleTrajectory(battle_id="battle", format_id="gen3randombattle", seed=77),
+                player_id="p1",
+                prefix_decision_round_count=0,
+                legal_action_mask=(True, True, False, False, False, False, False, False, False),
+                opponent_actions={"p2": 0},
+                value_fn=lambda history: 0.0,
+                action_priors=(0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                root_visit_budget=1,
+            )
 
     def test_puct_branch_search_falls_back_to_uniform_when_legal_prior_mass_is_zero(self) -> None:
         env = ValueBranchEnv()

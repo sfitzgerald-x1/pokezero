@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Callable, Mapping
 
@@ -239,12 +239,17 @@ def value_branch_search(
             **dict(opponent_actions),
             player_id: action_index,
         }
-        branch = replay_trajectory_branch(
-            env,
-            trajectory,
-            prefix_decision_round_count=prefix_decision_round_count,
-            branch_actions=branch_actions,
-        )
+        try:
+            branch = replay_trajectory_branch(
+                env,
+                trajectory,
+                prefix_decision_round_count=prefix_decision_round_count,
+                branch_actions=branch_actions,
+            )
+        except ValueError as exc:
+            if _is_candidate_illegal_action_error(exc, action_index=action_index):
+                continue
+            raise
         candidates.append(
             _value_branch_candidate(
                 env=env,
@@ -260,6 +265,9 @@ def value_branch_search(
                 leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
             )
         )
+
+    if not candidates:
+        raise ValueError("value branch search found no replay-legal root actions.")
 
     return ValueBranchSearchResult(
         player_id=player_id,
@@ -283,11 +291,20 @@ def puct_branch_search(
     leaf_rollout_policies: Mapping[PlayerId, Policy] | None = None,
     leaf_rollout_config: RolloutConfig | None = None,
     leaf_rollout_decision_rounds: int = 0,
+    root_visit_budget: int | None = None,
 ) -> PUCTBranchSearchResult:
-    """Score one-ply replay branches with PUCT-style policy-prior exploration."""
+    """Score root replay branches with PUCT-style policy-prior exploration.
+
+    By default this preserves the original one-visit-per-legal-action behavior.
+    When ``root_visit_budget`` is larger than the number of legal root actions,
+    the search repeatedly selects the current highest-PUCT action, re-evaluates
+    that branch, and backs the value up into root visit statistics.
+    """
 
     if cpuct < 0.0 or not math.isfinite(cpuct):
         raise ValueError("cpuct must be a finite non-negative value.")
+    if root_visit_budget is not None and root_visit_budget <= 0:
+        raise ValueError("root_visit_budget must be positive when set.")
     value_search = value_branch_search(
         env=env,
         trajectory=trajectory,
@@ -300,20 +317,74 @@ def puct_branch_search(
         leaf_rollout_config=leaf_rollout_config,
         leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
     )
+    if root_visit_budget is not None and root_visit_budget < len(value_search.candidates):
+        raise ValueError("root_visit_budget must be at least the number of legal root actions.")
     normalized_priors = _normalized_legal_priors(
         action_priors,
         legal_action_indices=tuple(candidate.action_index for candidate in value_search.candidates),
     )
-    total_visits = len(value_search.candidates)
+    visit_budget = root_visit_budget or len(value_search.candidates)
+    accumulators = {
+        candidate.action_index: _PUCTRootAccumulator(
+            value_candidate=candidate,
+            prior=normalized_priors[candidate.action_index],
+            visits=1,
+            total_value=candidate.value,
+        )
+        for candidate in value_search.candidates
+    }
+    prefix_history = player_observation_history(
+        trajectory,
+        player_id=player_id,
+        through_decision_round=prefix_decision_round_count,
+    )
+    for _ in range(len(value_search.candidates), visit_budget):
+        action_index = _select_root_accumulator(
+            tuple(accumulators.values()),
+            cpuct=cpuct,
+        ).action_index
+        branch_actions = {
+            **dict(opponent_actions),
+            player_id: action_index,
+        }
+        branch = replay_trajectory_branch(
+            env,
+            trajectory,
+            prefix_decision_round_count=prefix_decision_round_count,
+            branch_actions=branch_actions,
+        )
+        value_candidate = _value_branch_candidate(
+            env=env,
+            trajectory=trajectory,
+            player_id=player_id,
+            prefix_decision_round_count=prefix_decision_round_count,
+            prefix_history=prefix_history,
+            branch=branch,
+            action_index=action_index,
+            value_fn=value_fn,
+            leaf_rollout_policies=leaf_rollout_policies,
+            leaf_rollout_config=leaf_rollout_config,
+            leaf_rollout_decision_rounds=leaf_rollout_decision_rounds,
+        )
+        accumulator = accumulators[action_index]
+        accumulators[action_index] = replace(
+            accumulator,
+            value_candidate=value_candidate,
+            visits=accumulator.visits + 1,
+            total_value=accumulator.total_value + value_candidate.value,
+        )
+    total_visits = sum(accumulator.visits for accumulator in accumulators.values())
     sqrt_total = math.sqrt(total_visits)
     candidates = tuple(
         _puct_candidate(
-            value_candidate=candidate,
-            prior=normalized_priors[candidate.action_index],
+            value_candidate=accumulator.value_candidate,
+            prior=accumulator.prior,
             cpuct=cpuct,
             sqrt_total_visits=sqrt_total,
+            visits=accumulator.visits,
+            total_value=accumulator.total_value,
         )
-        for candidate in value_search.candidates
+        for accumulator in accumulators.values()
     )
     return PUCTBranchSearchResult(
         player_id=player_id,
@@ -520,6 +591,11 @@ def _finite_value(value: float) -> float:
     return result
 
 
+def _is_candidate_illegal_action_error(exc: ValueError, *, action_index: int) -> bool:
+    message = str(exc)
+    return message == f"action_index {action_index} is not legal for the current request."
+
+
 def player_observation_history(
     trajectory: BattleTrajectory,
     *,
@@ -564,18 +640,59 @@ def _puct_candidate(
     prior: float,
     cpuct: float,
     sqrt_total_visits: float,
+    visits: int = 1,
+    total_value: float | None = None,
 ) -> PUCTBranchSearchCandidate:
-    visits = 1
-    total_value = value_candidate.value
+    if visits <= 0:
+        raise ValueError("PUCT candidate visits must be positive.")
+    if total_value is None:
+        total_value = value_candidate.value
+    mean_value = total_value / visits
     exploration_score = cpuct * prior * sqrt_total_visits / (1 + visits)
-    score = (total_value / visits) + exploration_score
+    score = mean_value + exploration_score
     return PUCTBranchSearchCandidate(
         action_index=value_candidate.action_index,
         prior=prior,
-        value=value_candidate.value,
+        value=mean_value,
         visits=visits,
         total_value=total_value,
         exploration_score=exploration_score,
         score=score,
-        value_candidate=value_candidate,
+        value_candidate=replace(value_candidate, value=mean_value),
+    )
+
+
+@dataclass(frozen=True)
+class _PUCTRootAccumulator:
+    value_candidate: ValueBranchSearchCandidate
+    prior: float
+    visits: int
+    total_value: float
+
+    @property
+    def action_index(self) -> int:
+        return self.value_candidate.action_index
+
+    @property
+    def mean_value(self) -> float:
+        return self.total_value / self.visits
+
+
+def _select_root_accumulator(
+    accumulators: tuple[_PUCTRootAccumulator, ...],
+    *,
+    cpuct: float,
+) -> _PUCTRootAccumulator:
+    if not accumulators:
+        raise ValueError("root PUCT search produced no accumulators.")
+    total_visits = sum(accumulator.visits for accumulator in accumulators)
+    sqrt_total = math.sqrt(total_visits)
+    return max(
+        accumulators,
+        key=lambda accumulator: (
+            accumulator.mean_value
+            + cpuct * accumulator.prior * sqrt_total / (1 + accumulator.visits),
+            accumulator.mean_value,
+            -accumulator.action_index,
+        ),
     )

@@ -523,7 +523,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
     print("")
     print("root-puct diagnostics:")
     header = (
-        f"{'matchup':32} {'policy':32} {'dec':>5} {'search':>6} {'fallback':>8} "
+        f"{'matchup':32} {'policy':32} {'dec':>5} {'search':>6} {'visits':>7} {'fallback':>8} "
         f"{'gate':>8} {'cand':>7} {'ms/dec':>8} {'value':>8} {'score':>8}"
     )
     print(header)
@@ -548,6 +548,7 @@ def _print_policy_decision_diagnostics(report: BenchmarkReport) -> None:
             f"{policy_id[:32]:32} "
             f"{int(metrics.get('decisions', 0)):5d} "
             f"{int(metrics.get('root_puct_searches', 0)):6d} "
+            f"{int(metrics.get('root_puct_total_visits', 0)):7d} "
             f"{int(metrics.get('root_puct_fallbacks', 0)):8d} "
             f"{_optional_report_ratio(value_gate_uses, value_gate_checks):>8} "
             f"{_optional_report_float(average_candidate_count):>7} "

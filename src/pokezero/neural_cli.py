@@ -666,12 +666,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     root_puct_play.add_argument(
         "--selection-mode",
-        choices=("puct", "value"),
+        choices=("puct", "value", "visits"),
         default="puct",
         help=(
             "Root candidate selector for the search policy. 'puct' preserves current PUCT-score "
-            "selection; 'value' selects the highest value-evaluated branch from the same candidates."
+            "selection; 'value' selects the highest value-evaluated branch from the same candidates; "
+            "'visits' selects the most-visited action after the root visit budget is spent."
         ),
+    )
+    root_puct_play.add_argument(
+        "--root-visit-budget",
+        type=int,
+        default=None,
+        help="Total root visits per searched decision; defaults to one visit per legal action.",
     )
     root_puct_play.add_argument(
         "--min-value-improvement",
@@ -2456,6 +2463,7 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
             cpuct=args.cpuct,
             minimum_value_improvement=args.min_value_improvement,
             selection_mode=args.selection_mode,
+            root_visit_budget=args.root_visit_budget,
             leaf_rollout_decision_rounds=leaf_rollout_rounds,
             leaf_rollout_policy_factory=leaf_rollout_policy_factory,
             leaf_rollout_metadata=leaf_rollout_metadata,
