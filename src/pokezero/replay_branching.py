@@ -157,8 +157,14 @@ def replay_action_rounds(
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    check_prefix_observations: bool = True,
 ) -> ReplayPrefixResult:
-    """Reset ``env`` and replay a recorded action prefix from the battle root."""
+    """Reset ``env`` and replay a recorded action prefix from the battle root.
+
+    Prefix observation checks remain enabled by default for strict replay audits. Search callers
+    that supply ``expected_current_observation`` may disable them when only the branch-point state
+    must match the recorded battle.
+    """
 
     _reset_env(env, seed=seed, format_id=format_id, start_override=start_override)
     for expected_index, action_round in enumerate(action_rounds):
@@ -177,7 +183,11 @@ def replay_action_rounds(
             action_round,
             requested_players=env.requested_players(),
         )
-        if start_override is not None and consistency_player_id is not None:
+        if (
+            check_prefix_observations
+            and start_override is not None
+            and consistency_player_id is not None
+        ):
             _require_expected_observation(
                 env,
                 action_round,
@@ -214,6 +224,7 @@ def replay_trajectory_prefix(
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    check_prefix_observations: bool = True,
 ) -> ReplayPrefixResult:
     """Replay the first N decision rounds from a trajectory into ``env``."""
 
@@ -228,6 +239,7 @@ def replay_trajectory_prefix(
         start_override=start_override,
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
+        check_prefix_observations=check_prefix_observations,
     )
 
 
@@ -240,6 +252,7 @@ def replay_trajectory_branch(
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    check_prefix_observations: bool = True,
 ) -> ReplayBranchResult:
     """Replay a trajectory prefix, submit one explicit branch action, and leave ``env`` there."""
 
@@ -250,6 +263,7 @@ def replay_trajectory_branch(
         start_override=start_override,
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
+        check_prefix_observations=check_prefix_observations,
     )
     if prefix.terminal is not None:
         raise ValueError("cannot branch from a terminal replay prefix.")
@@ -282,6 +296,7 @@ def replay_trajectory_branch_rollout(
     start_override: BattleStartOverride | None = None,
     consistency_player_id: PlayerId | None = None,
     expected_current_observation: PokeZeroObservationV0 | None = None,
+    check_prefix_observations: bool = True,
 ) -> ReplayBranchRolloutResult:
     """Replay, branch once, then continue the rollout with policies until terminal or cap."""
 
@@ -293,6 +308,7 @@ def replay_trajectory_branch_rollout(
         start_override=start_override,
         consistency_player_id=consistency_player_id,
         expected_current_observation=expected_current_observation,
+        check_prefix_observations=check_prefix_observations,
     )
     continuation = continue_rollout_from_current_state(
         env=env,
@@ -383,9 +399,15 @@ def _require_observation_match(
         expected,
         ignore_recent_events=ignore_recent_events,
     ):
+        details = _observation_replay_mismatch_details(
+            actual,
+            expected,
+            ignore_recent_events=ignore_recent_events,
+        )
+        detail_suffix = f" ({details})" if details else ""
         raise ValueError(
             "start override does not reproduce recorded replay prefix observations "
-            f"for decision round {turn_index}: {player_id}."
+            f"for decision round {turn_index}: {player_id}.{detail_suffix}"
         )
 
 
@@ -424,3 +446,114 @@ def _observations_match_for_replay(
         and tuple(actual.legal_action_mask) == tuple(expected.legal_action_mask)
         and actual.perspective == expected.perspective
     )
+
+
+def _observation_replay_mismatch_details(
+    actual: PokeZeroObservationV0,
+    expected: PokeZeroObservationV0,
+    *,
+    ignore_recent_events: bool = False,
+) -> str | None:
+    if actual.schema_version != expected.schema_version:
+        return (
+            f"schema_version: actual={_format_mismatch_value(actual.schema_version)} "
+            f"expected={_format_mismatch_value(expected.schema_version)}"
+        )
+
+    categorical_actual = actual.categorical_ids
+    categorical_expected = expected.categorical_ids
+    numeric_actual = actual.numeric_features
+    numeric_expected = expected.numeric_features
+    token_type_actual = actual.token_type_ids
+    token_type_expected = expected.token_type_ids
+    attention_actual = actual.attention_mask
+    attention_expected = expected.attention_mask
+    if ignore_recent_events:
+        categorical_actual = categorical_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        categorical_expected = categorical_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        numeric_actual = numeric_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        numeric_expected = numeric_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        token_type_actual = token_type_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        token_type_expected = token_type_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        attention_actual = attention_actual[:_RECENT_EVENT_TOKEN_OFFSET]
+        attention_expected = attention_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+
+    for name, actual_values, expected_values in (
+        ("categorical_ids", categorical_actual, categorical_expected),
+        ("numeric_features", numeric_actual, numeric_expected),
+        ("token_type_ids", token_type_actual, token_type_expected),
+        ("attention_mask", attention_actual, attention_expected),
+        ("legal_action_mask", actual.legal_action_mask, expected.legal_action_mask),
+    ):
+        mismatch = _first_mismatch(actual_values, expected_values)
+        if mismatch is not None:
+            path, actual_value, expected_value = mismatch
+            return (
+                f"{_format_mismatch_path(name, path, token_segmented=name != 'legal_action_mask')}: "
+                f"actual={_format_mismatch_value(actual_value)} "
+                f"expected={_format_mismatch_value(expected_value)}"
+            )
+
+    if actual.perspective != expected.perspective:
+        return (
+            f"perspective: actual={_format_mismatch_value(actual.perspective)} "
+            f"expected={_format_mismatch_value(expected.perspective)}"
+        )
+    return None
+
+
+def _first_mismatch(actual, expected, path: tuple[int | str, ...] = ()):
+    try:
+        if actual == expected:
+            return None
+    except ValueError:
+        # Some array types return elementwise comparisons. Fall through to indexed comparison.
+        pass
+    if _is_indexable_sequence(actual) and _is_indexable_sequence(expected):
+        actual_len = len(actual)
+        expected_len = len(expected)
+        if actual_len != expected_len:
+            return (path + ("len",), actual_len, expected_len)
+        for index, (actual_item, expected_item) in enumerate(zip(actual, expected, strict=True)):
+            mismatch = _first_mismatch(actual_item, expected_item, path + (index,))
+            if mismatch is not None:
+                return mismatch
+        return None
+    return (path, actual, expected)
+
+
+def _is_indexable_sequence(value) -> bool:
+    return not isinstance(value, (str, bytes)) and hasattr(value, "__len__") and hasattr(value, "__getitem__")
+
+
+def _format_mismatch_path(
+    name: str,
+    path: tuple[int | str, ...],
+    *,
+    token_segmented: bool,
+) -> str:
+    if not path:
+        return name
+    first = path[0]
+    segment = f"/{_token_segment(first)}" if token_segmented and isinstance(first, int) else ""
+    suffix = "".join(f"[{part}]" for part in path)
+    return f"{name}{segment}{suffix}"
+
+
+def _token_segment(index: int) -> str:
+    if index < FIELD_TOKEN_COUNT:
+        return "field"
+    if index < FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT:
+        return "self_pokemon"
+    if index < FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT:
+        return "opponent_pokemon"
+    if index < _RECENT_EVENT_TOKEN_OFFSET:
+        return "action_candidates"
+    return "recent_events"
+
+
+def _format_mismatch_value(value) -> str:
+    text = repr(value)
+    if len(text) > 120:
+        return text[:117] + "..."
+    return text

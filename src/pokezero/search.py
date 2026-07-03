@@ -259,6 +259,10 @@ def value_branch_search(
                 start_override=_materialize_start_override(start_override),
                 consistency_player_id=player_id,
                 expected_current_observation=expected_current_observation,
+                # Root search scores the current decision point. Earlier custom-game replay
+                # observations can drift while sampled hidden worlds are rejected by the
+                # branch-point observation check below.
+                check_prefix_observations=False,
             )
         except ValueError as exc:
             if _is_candidate_illegal_action_error(exc, player_id=player_id, action_index=action_index):
@@ -398,6 +402,9 @@ def puct_branch_search(
             start_override=_materialize_start_override(start_override),
             consistency_player_id=player_id,
             expected_current_observation=expected_current_observation,
+            # See the initial value sweep above: repeated PUCT visits validate the branch point,
+            # not every intermediate prefix observation.
+            check_prefix_observations=False,
         )
         value_candidate = _value_branch_candidate(
             env=env,
@@ -494,6 +501,8 @@ def flat_branch_search(
             start_override=_materialize_start_override(start_override),
             consistency_player_id=player_id,
             expected_current_observation=expected_current_observation,
+            # Flat search has the same branch-point consistency contract as value/PUCT search.
+            check_prefix_observations=False,
         )
         terminal = rollout.continuation.terminal
         candidates.append(

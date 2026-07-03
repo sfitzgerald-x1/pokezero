@@ -11,6 +11,7 @@ from pokezero.search_policy import (
     OpponentActionScenario,
     RootPUCTSearchPolicy,
     _aggregate_scenario_searches,
+    _opponent_scenario_replay_legality_error,
     greedy_opponent_action_planner,
     policy_opponent_action_planner,
     prior_top_k_opponent_action_scenario_planner,
@@ -659,11 +660,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_generated"], 2)
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 1)
         self.assertEqual(metadata["root_puct_start_override_sources_used"], 0)
-        self.assertEqual(
-            metadata["root_puct_opponent_action_skipped_scenarios"][0]["reason"],
+        skip_reason = metadata["root_puct_opponent_action_skipped_scenarios"][0]["reason"]
+        self.assertIn(
             "start override does not reproduce recorded replay prefix observations "
             "for decision round 0: p1.",
+            skip_reason,
         )
+        self.assertIn("legal_action_mask", skip_reason)
 
     def test_root_puct_policy_retries_start_override_replay_rejections(self) -> None:
         branch_envs: list[RejectingStartOverrideOutcomeEnv] = []
@@ -768,6 +771,27 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(decision.metadata["root_puct_start_override_attempts"], 3)
         self.assertEqual(decision.metadata["root_puct_start_override_attempts_used"], 3)
         self.assertEqual(decision.metadata["root_puct_start_override_sources_used"], 0)
+
+    def test_opponent_scenario_replay_legality_classifies_request_drift(self) -> None:
+        scenario = OpponentActionScenario(actions={"p2": 0})
+        message = (
+            "replay actions for decision round 4 do not match environment request "
+            "(unexpected players: p1)."
+        )
+
+        self.assertEqual(
+            _opponent_scenario_replay_legality_error(ValueError(message), scenario),
+            message,
+        )
+
+    def test_opponent_scenario_replay_legality_classifies_illegal_prefix_action(self) -> None:
+        scenario = OpponentActionScenario(actions={"p2": 0})
+        message = "p1: action_index 3 is not legal for the current request."
+
+        self.assertEqual(
+            _opponent_scenario_replay_legality_error(ValueError(message), scenario),
+            message,
+        )
 
     def test_root_puct_policy_value_gate_keeps_prior_action_without_sufficient_value_lift(self) -> None:
         policy = RootPUCTSearchPolicy(

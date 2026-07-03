@@ -28,7 +28,7 @@ lines (~17% foul-play, ~80% max-damage), so it's a strong search prior.
 | Controlled foul-play **strength harness** | **built, smoke-verified** | `foulplay_bridge.py`, `scripts/root_puct_vs_foulplay.py` — runs foul-play as a **separate process** over a fake Showdown websocket while PokeZero owns a seeded BattleStream, so root-PUCT gets the replay seed + trajectory context it needs. Default mode withholds the opponent's private legal-action mask; `--opponent-legal-mask-mode privileged` is diagnostic-only. Full-game hidden-mode smokes now report root searches, total visits, fallbacks, fallback reasons, replay-illegal opponent-scenario skip counts, how often the selected root-PUCT action differs from the checkpoint prior's greedy legal action, and per-decision details for those changes. When `--summary-out` is supplied, the harness writes partial progress after every completed game so slow MCTS reads are inspectable instead of all-or-nothing; partial `win_rate` is a completed-prefix read, not a complete benchmark result. The harness seeds foul-play's Python random/hash startup state (default: `--seed-start`) and records the seed in summaries, but foul-play still uses an unseeded, time-budgeted, multi-process/threaded poke-engine MCTS, so this is **not** a deterministic opponent or a perfect per-game paired counterfactual. Those skips are replay-legality probes against the real branch state, so they improve harness robustness but are still **not oracle-free hidden-info strength evidence**. |
 | Search **behavior benchmark** (action-change rate, candidate count, per-move cost) | **built** | `search_benchmark.py` — **behavior/cost only, no win rate**; and the counterfactual harness replays branches against the **recorded** opponent action (`search_benchmark.py:345`) → oracle leakage (see E0). |
 | Value-**calibration** tooling (ECE, affine/isotonic fit + transform) | **built** | `value_calibration.py`, `neural_policy.py` |
-| **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; replay checks the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
+| **Belief determinizer / start overrides** | **partial, replay-brittle** | `belief.py` emits concrete opponent realizations from the belief view, and replay/search can now accept a `BattleStartOverride` or callable start-override source. Overrides are deliberately restricted to complete `p1`/`p2` packed teams in `gen3customgame`, because arbitrary teams are not honored by `gen3randombattle`; generic replay audits can still check the searched player's pre-action observation features before recorded prefix actions are submitted, excluding instance metadata and opponent-private POV. Root search now validates the sampled world at the branch-point observation instead of every intermediate prefix observation, and reports the first mismatching observation field when sampled worlds drift. The Gen 3 randbat start-override planner can now materialize our request-known team plus sampled public-belief opponent teams, filter only request-known absolute HP-compatible variants, use Gen 3 source metadata, constrain already-public opponent moves into harness-recorded replay slots without reading opponent-private request moves, and retry sampled worlds per opponent-action scenario. Latest corrected hidden-mode smoke still falls back often on deeper histories, so this is not a strength path yet. |
 | poke-engine reversible backend | **probe only** | `engine_cli.py`, `poke_engine_backend.py` — apply/reverse smoke exists, but **Gen-3 outcome equivalence is unproven** (`poke_engine_assessment.md`); not a usable backend yet. |
 | Unit tests for search / search_policy / benchmark | **built** | `tests/test_search*.py` |
 
@@ -62,13 +62,16 @@ In priority order:
    `BattleStartOverride` into `LocalShowdownEnv`, so branches can start from sampled packed teams
    instead of the default random battle root. This seam is intentionally strict: arbitrary packed
    teams are only materialized through `gen3customgame`, both players' teams must be supplied, and
-   replay checks the searched player's pre-action observation features so a sampled world that no
-   longer reproduces that player's recorded prefix fails loudly instead of corrupting search values.
-   The check deliberately excludes instance metadata and the opponent's private POV. The existing
-   planner now materializes our known team from the root request snapshot, samples public-belief
-   opponent variants, fills hidden backline candidates, applies only public/request-known filters,
-   reorders only already-public opponent moves into harness-recorded replay slots, and can retry
-   multiple sampled worlds per opponent-action scenario. The replay slot index comes from the
+   strict replay audits can check the searched player's prefix observation features so a sampled
+   world that no longer reproduces that player's recorded prefix fails loudly. Root search uses the
+   less brittle current-state contract instead: after replaying the recorded prefix, it requires the
+   searched player's branch-point observation to match before scoring any root action. Both paths
+   deliberately exclude instance metadata and the opponent's private POV, and mismatch reports now
+   include the first differing observation field/token. The existing planner now materializes our
+   known team from the root request snapshot, samples public-belief opponent variants, fills hidden
+   backline candidates, applies only public/request-known filters, reorders only already-public
+   opponent moves into harness-recorded replay slots, and can retry multiple sampled worlds per
+   opponent-action scenario. The replay slot index comes from the
    controlled harness' recorded opponent action, while the move identity comes only from public event
    lines; this is a replay-fidelity mechanism, not a true ladder-time hidden-info signal. The
    remaining missing piece is proving this stays stable across many seeds and deeper histories, or
@@ -93,15 +96,20 @@ scenario is illegal for a decision it must still fall back. Privileged legal-mas
 as a diagnostic safety guard but not a headline hidden-info result.
 
 Latest hidden-mode smoke against `foul-play` using the 1.5M belief checkpoint remains a plumbing
-diagnostic, not strength evidence. With `--belief-start-overrides`,
-`--start-override-attempts 8`, two opponent-action scenarios, visit budget 16, 250 ms root budget,
-and one leaf-rollout round over seeds `910001..910005`, latest current-code root-PUCT won `1/5`,
-searched 50 of 199 PokeZero decisions, fell back 149 times, skipped 283 of 375 generated
-opponent-action scenarios, used 35 accepted start overrides, and spent 2401 start-override attempts.
-This fixes the hidden-info-safe public move-slot mechanism, but the smoke is still replay-brittle:
-most later-game sampled worlds fail prefix observation checks. The next gate is not a larger strength
-run; it is reducing replay-prefix brittleness or moving to current-state/reversible branching, then
-running a wider raw-vs-MCTS seed-paired read before any >=300-game MCTS strength claim is meaningful.
+diagnostic, not strength evidence. A same-seed 5-game smoke before the current-state consistency
+change won `1/5`, searched 50 of 199 PokeZero decisions, fell back 149 times, skipped 283 of 375
+generated opponent-action scenarios, used 35 accepted start overrides, and spent 2401 start-override
+attempts. After switching root search to branch-point observation consistency and classifying
+request/illegal-action replay drift as retryable scenario rejection, a 3-game smoke over seeds
+`910001..910003` won `1/3`, searched 30 of 99 PokeZero decisions, fell back 69 times, skipped 129 of
+184 generated opponent-action scenarios, used 12 accepted start overrides, and spent 1088
+start-override attempts. Seed `910001` searched 27 of 27 decisions with zero fallbacks; seeds
+`910002` and `910003` still fell back heavily because all sampled worlds drifted in request shape or
+branch-point observation features by midgame. This fixes some fallback classification and makes the
+remaining failure concrete, but the smoke is still replay-brittle. The next gate is not a larger
+strength run; it is reducing replay-prefix/current-state materialization brittleness or moving to
+reversible current-state branching, then running a wider raw-vs-MCTS seed-paired read before any
+>=300-game MCTS strength claim is meaningful.
 
 ## Design principles / hard constraints
 
