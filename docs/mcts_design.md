@@ -139,6 +139,10 @@ attempts, changed the selected prior action once, and fell back 8 times. This is
 hidden-info-safe behavior: replay brittleness remains visible rather than being hidden behind an
 oracle default-world search.
 
+Hidden-info-safe foul-play validation must pass `--belief-start-overrides`. Non-belief root search
+uses default seeded randbat replay and can reconstruct the opponent's actual hidden team, so those
+runs are useful only as oracle diagnostics and must not be reported as real net+MCTS strength.
+
 ## Design principles / hard constraints
 
 - **Showdown is ground truth**; poke-engine only after a Gen-3 equivalence spike
