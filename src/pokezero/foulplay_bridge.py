@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -78,6 +79,7 @@ class ControlledFoulPlayConfig:
     cpuct: float = 1.25
     selection_mode: str = "puct"
     minimum_value_improvement: float | None = None
+    minimum_override_prior_ratio: float | None = None
     root_visit_budget: int | None = None
     root_opponent_action_scenarios: int = 1
     leaf_rollout_rounds: int = 0
@@ -104,8 +106,14 @@ class ControlledFoulPlayConfig:
             raise ValueError("policy_mode must be 'raw' or 'root-puct'.")
         if self.selection_mode not in {"puct", "value", "visits"}:
             raise ValueError("selection_mode must be 'puct', 'value', or 'visits'.")
-        if self.minimum_value_improvement is not None and self.minimum_value_improvement < 0.0:
-            raise ValueError("minimum_value_improvement must be non-negative when set.")
+        if self.minimum_value_improvement is not None and (
+            self.minimum_value_improvement < 0.0 or not math.isfinite(self.minimum_value_improvement)
+        ):
+            raise ValueError("minimum_value_improvement must be a finite non-negative value when set.")
+        if self.minimum_override_prior_ratio is not None and (
+            self.minimum_override_prior_ratio < 0.0 or not math.isfinite(self.minimum_override_prior_ratio)
+        ):
+            raise ValueError("minimum_override_prior_ratio must be a finite non-negative value when set.")
         if self.root_visit_budget is not None and self.root_visit_budget <= 0:
             raise ValueError("root_visit_budget must be positive when set.")
         if self.root_opponent_action_scenarios <= 0:
@@ -236,6 +244,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
                 "minimum_value_improvement": self.config.minimum_value_improvement,
+                "minimum_override_prior_ratio": self.config.minimum_override_prior_ratio,
                 "root_visit_budget": self.config.root_visit_budget,
                 "root_opponent_action_scenarios": self.config.root_opponent_action_scenarios,
                 "leaf_rollout_rounds": self.config.leaf_rollout_rounds,
@@ -687,6 +696,7 @@ def _build_policy(
         cpuct=config.cpuct,
         selection_mode=config.selection_mode,
         minimum_value_improvement=config.minimum_value_improvement,
+        minimum_override_prior_ratio=config.minimum_override_prior_ratio,
         root_visit_budget=config.root_visit_budget,
         leaf_rollout_decision_rounds=config.leaf_rollout_rounds,
         leaf_rollout_policy_factory=leaf_rollout_policy_factory,
@@ -971,6 +981,13 @@ def _root_puct_prior_action_change_details(
                 "search_visits": _optional_int(metadata.get("root_puct_search_action_visits")),
                 "prior_visits": _optional_int(metadata.get("root_puct_prior_action_visits")),
                 "value_gate_used": bool(metadata.get("root_puct_value_gate_used", False)),
+                "prior_ratio_gate_used": bool(metadata.get("root_puct_prior_ratio_gate_used", False)),
+                "minimum_override_prior_ratio": _optional_float(
+                    metadata.get("root_puct_minimum_override_prior_ratio")
+                ),
+                "prior_ratio_gate_required_prior": _optional_float(
+                    metadata.get("root_puct_prior_ratio_gate_required_prior")
+                ),
             }
         )
     return tuple(details)
@@ -1373,6 +1390,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--minimum-override-prior-ratio",
+        type=float,
+        default=None,
+        help=(
+            "When search would override the checkpoint prior's greedy legal action, require the "
+            "selected action prior to be at least this fraction of the prior-best action prior. "
+            "A value of 1.0 only allows max-prior ties to override."
+        ),
+    )
+    parser.add_argument(
         "--root-visit-budget",
         type=int,
         default=None,
@@ -1439,6 +1466,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         cpuct=args.cpuct,
         selection_mode=args.selection_mode,
         minimum_value_improvement=args.minimum_value_improvement,
+        minimum_override_prior_ratio=args.minimum_override_prior_ratio,
         root_visit_budget=args.root_visit_budget,
         root_opponent_action_scenarios=args.root_opponent_action_scenarios,
         leaf_rollout_rounds=args.leaf_rollout_rounds,
