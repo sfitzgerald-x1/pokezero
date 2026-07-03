@@ -2065,7 +2065,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Belief start-override samples to average per accepted opponent-action scenario. "
             "Requires --belief-start-overrides. Values above 1 split each opponent-action "
-            "scenario across multiple sampled hidden worlds, increasing search cost."
+            "scenario across multiple sampled hidden worlds without increasing the accepted "
+            "opponent-action cap, increasing search cost."
         ),
     )
     parser.add_argument(
