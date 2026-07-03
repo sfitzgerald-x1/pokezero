@@ -642,7 +642,10 @@ def _value_branch_candidate(
 
 def _materialize_start_override(start_override: StartOverrideSource) -> BattleStartOverride | None:
     if callable(start_override):
-        return start_override()
+        sampled_override = start_override()
+        if sampled_override is None:
+            raise ValueError("start override source did not produce a sampled world.")
+        return sampled_override
     return start_override
 
 

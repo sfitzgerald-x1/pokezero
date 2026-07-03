@@ -73,7 +73,10 @@ In priority order:
    less brittle current-state contract instead: after replaying the recorded prefix, it requires the
    searched player's branch-point observation to match before scoring any root action. Both paths
    deliberately exclude instance metadata and the opponent's private POV, and mismatch reports now
-   include the first differing observation field/token. The existing planner now materializes our
+   include the first differing observation field/token. If the belief planner cannot provide a
+   sampled world, or if a provided sampled-world source materializes to nothing, that sample is
+   skipped rather than searched against the seeded default randbat world, because that default replay
+   can reconstruct the opponent's actual hidden team from the live battle seed. The existing planner now materializes our
    known team from the root request snapshot, samples public-belief opponent variants, fills hidden
    backline candidates, applies only public/request-known filters, reorders only already-public
    opponent moves into harness-recorded replay slots, and can retry multiple sampled worlds per
@@ -128,6 +131,13 @@ raw and root-PUCT both won `0/1`; root-PUCT searched 12 decisions, used 15 start
 spent 379 override attempts, changed no selected prior actions, and fell back 11 times because
 sampled worlds or sampled opponent-action scenarios failed replay validation. This proves the
 multi-belief path is wired, not that it is strong enough for a headline read.
+
+After tightening belief mode so a missing sampled world is skipped instead of searched against the
+seeded default randbat world, the same one-game smoke remained diagnostic-only: raw and root-PUCT
+both won `0/1`; root-PUCT searched 20 decisions, used 22 start-override sources, spent 391 override
+attempts, changed the selected prior action once, and fell back 8 times. This is the current
+hidden-info-safe behavior: replay brittleness remains visible rather than being hidden behind an
+oracle default-world search.
 
 ## Design principles / hard constraints
 
