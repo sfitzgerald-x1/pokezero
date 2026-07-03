@@ -45,17 +45,26 @@ def root_puct_fallback_category(reason: object) -> str:
         return "opponent_planner_unexpected_actions"
     if "no branch candidates" in text:
         return "no_branch_candidates"
+    if "sampled start override duplicated" in text:
+        return "duplicate_start_override"
     if "all opponent action scenarios were replay-illegal" in text:
         has_unexpected_players = "unexpected players" in text
         has_missing_players = "missing requested players" in text
         has_observation_mismatch = "start override does not reproduce" in text
         has_missing_world = "did not produce a sampled world" in text
+        has_duplicate_override = "sampled start override duplicated" in text
         if (has_unexpected_players or has_missing_players) and (
             has_observation_mismatch or has_missing_world
         ):
             return "mixed_replay_prefix_divergence"
+        if has_duplicate_override and (
+            has_observation_mismatch or has_missing_world or has_unexpected_players or has_missing_players
+        ):
+            return "mixed_replay_prefix_divergence"
         if has_observation_mismatch and has_missing_world:
             return "mixed_replay_prefix_divergence"
+        if has_duplicate_override:
+            return "duplicate_start_override"
         if has_unexpected_players and has_missing_players:
             return "mixed_replay_request_mismatch"
         if has_unexpected_players:

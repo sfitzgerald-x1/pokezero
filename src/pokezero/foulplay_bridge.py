@@ -230,6 +230,7 @@ class ControlledFoulPlayGameResult:
     root_puct_time_budget_exhaustions: int = 0
     root_puct_start_override_sources_used: int = 0
     root_puct_start_override_attempts_used: int = 0
+    root_puct_start_override_duplicate_attempts: int = 0
     root_puct_start_override_shared_samples: int = 0
     root_puct_start_override_shared_samples_accepted: int = 0
     root_puct_start_override_shared_samples_rejected: int = 0
@@ -261,6 +262,7 @@ class ControlledFoulPlayGameResult:
             "root_puct_time_budget_exhaustions": self.root_puct_time_budget_exhaustions,
             "root_puct_start_override_sources_used": self.root_puct_start_override_sources_used,
             "root_puct_start_override_attempts_used": self.root_puct_start_override_attempts_used,
+            "root_puct_start_override_duplicate_attempts": self.root_puct_start_override_duplicate_attempts,
             "root_puct_start_override_shared_samples": self.root_puct_start_override_shared_samples,
             "root_puct_start_override_shared_samples_accepted": (
                 self.root_puct_start_override_shared_samples_accepted
@@ -398,6 +400,9 @@ class ControlledFoulPlayBenchmarkResult:
         root_time_budget_exhaustions = sum(game.root_puct_time_budget_exhaustions for game in self.games)
         root_start_override_sources_used = sum(game.root_puct_start_override_sources_used for game in self.games)
         root_start_override_attempts_used = sum(game.root_puct_start_override_attempts_used for game in self.games)
+        root_start_override_duplicate_attempts = sum(
+            game.root_puct_start_override_duplicate_attempts for game in self.games
+        )
         root_start_override_shared_samples = sum(game.root_puct_start_override_shared_samples for game in self.games)
         root_start_override_shared_samples_accepted = sum(
             game.root_puct_start_override_shared_samples_accepted for game in self.games
@@ -471,6 +476,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "time_budget_exhaustions": root_time_budget_exhaustions,
                 "start_override_sources_used": root_start_override_sources_used,
                 "start_override_attempts_used": root_start_override_attempts_used,
+                "start_override_duplicate_attempts": root_start_override_duplicate_attempts,
                 "start_override_shared_samples": root_start_override_shared_samples,
                 "start_override_shared_samples_accepted": root_start_override_shared_samples_accepted,
                 "start_override_shared_samples_rejected": root_start_override_shared_samples_rejected,
@@ -1692,6 +1698,11 @@ async def _run_single_game(
         for decision in state.decisions
         if decision.metadata.get("policy_family") == "root-puct-search"
     )
+    root_start_override_duplicate_attempts = sum(
+        int(decision.metadata.get("root_puct_start_override_duplicate_attempts") or 0)
+        for decision in state.decisions
+        if decision.metadata.get("policy_family") == "root-puct-search"
+    )
     root_start_override_shared_samples = sum(
         int(decision.metadata.get("root_puct_start_override_shared_samples") or 0)
         for decision in state.decisions
@@ -1748,6 +1759,7 @@ async def _run_single_game(
         root_puct_time_budget_exhaustions=root_time_budget_exhaustions,
         root_puct_start_override_sources_used=root_start_override_sources_used,
         root_puct_start_override_attempts_used=root_start_override_attempts_used,
+        root_puct_start_override_duplicate_attempts=root_start_override_duplicate_attempts,
         root_puct_start_override_shared_samples=root_start_override_shared_samples,
         root_puct_start_override_shared_samples_accepted=root_start_override_shared_samples_accepted,
         root_puct_start_override_shared_samples_rejected=root_start_override_shared_samples_rejected,

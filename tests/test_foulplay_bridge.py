@@ -500,6 +500,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_time_budget_exhaustions=2,
                     root_puct_start_override_sources_used=3,
                     root_puct_start_override_attempts_used=5,
+                    root_puct_start_override_duplicate_attempts=1,
                     root_puct_start_override_shared_samples=6,
                     root_puct_start_override_shared_samples_accepted=4,
                     root_puct_start_override_shared_samples_rejected=2,
@@ -557,6 +558,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                     root_puct_time_budget_exhaustions=1,
                     root_puct_start_override_sources_used=1,
                     root_puct_start_override_attempts_used=4,
+                    root_puct_start_override_duplicate_attempts=2,
                     root_puct_start_override_shared_samples=3,
                     root_puct_start_override_shared_samples_accepted=1,
                     root_puct_start_override_shared_samples_rejected=2,
@@ -627,6 +629,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["root_puct"]["start_override_sources_used"], 4)
         self.assertEqual(payload["root_puct"]["start_override_attempts"], 7)
         self.assertEqual(payload["root_puct"]["start_override_attempts_used"], 9)
+        self.assertEqual(payload["root_puct"]["start_override_duplicate_attempts"], 3)
         self.assertEqual(payload["root_puct"]["start_override_shared_samples"], 9)
         self.assertEqual(payload["root_puct"]["start_override_shared_samples_accepted"], 5)
         self.assertEqual(payload["root_puct"]["start_override_shared_samples_rejected"], 4)
@@ -666,6 +669,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["game_results"][0]["root_puct_time_budget_exhaustions"], 2)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_sources_used"], 3)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_attempts_used"], 5)
+        self.assertEqual(payload["game_results"][0]["root_puct_start_override_duplicate_attempts"], 1)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_shared_samples"], 6)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_shared_samples_accepted"], 4)
         self.assertEqual(payload["game_results"][0]["root_puct_start_override_shared_samples_rejected"], 2)

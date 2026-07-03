@@ -867,7 +867,14 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
             del context, rng
             planner_calls.append((scenario.label, scenario_index))
             calls_by_sample[scenario_index] = calls_by_sample.get(scenario_index, 0) + 1
-            species = "Badmon" if scenario_index == 0 and calls_by_sample[scenario_index] == 1 else "Xatu"
+            if scenario_index == 0 and calls_by_sample[scenario_index] == 1:
+                species = "Badmon"
+            elif scenario_index == 1 and calls_by_sample[scenario_index] == 1:
+                species = "Xatu"
+            elif scenario_index == 1:
+                species = "Alakazam"
+            else:
+                species = "Xatu"
 
             def sample_override() -> BattleStartOverride:
                 return BattleStartOverride(
@@ -915,11 +922,13 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 ("stay-in/belief-sample-1", 0),
                 ("stay-in/belief-sample-1", 0),
                 ("stay-in/belief-sample-2", 1),
+                ("stay-in/belief-sample-2", 1),
             ],
         )
         self.assertEqual(branch_envs[0].rejected_start_overrides, 1)
         self.assertEqual(metadata["root_puct_start_override_attempts"], 2)
-        self.assertEqual(metadata["root_puct_start_override_attempts_used"], 3)
+        self.assertEqual(metadata["root_puct_start_override_attempts_used"], 4)
+        self.assertEqual(metadata["root_puct_start_override_duplicate_attempts"], 1)
         self.assertEqual(metadata["root_puct_start_override_sources_used"], 2)
         self.assertEqual(metadata["root_puct_start_override_shared_samples"], 2)
         self.assertEqual(metadata["root_puct_start_override_shared_samples_accepted"], 2)
@@ -1001,8 +1010,9 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
                 ("stay-in/belief-sample-2", 1),
             ],
         )
-        self.assertEqual(branch_envs[0].rejected_start_overrides, 2)
+        self.assertEqual(branch_envs[0].rejected_start_overrides, 1)
         self.assertEqual(metadata["root_puct_start_override_attempts_used"], 2)
+        self.assertEqual(metadata["root_puct_start_override_duplicate_attempts"], 1)
         self.assertEqual(metadata["root_puct_start_override_sources_used"], 0)
         self.assertEqual(metadata["root_puct_start_override_shared_samples"], 2)
         self.assertEqual(metadata["root_puct_start_override_shared_samples_accepted"], 0)
@@ -1011,7 +1021,10 @@ class RootPUCTSearchPolicyTest(unittest.TestCase):
         self.assertEqual(metadata["root_puct_opponent_action_scenarios_skipped"], 4)
         self.assertEqual(
             metadata["root_puct_opponent_action_skip_categories"],
-            {"start_override_observation_mismatch": 4},
+            {
+                "duplicate_start_override": 2,
+                "start_override_observation_mismatch": 2,
+            },
         )
         self.assertEqual(metadata["root_puct_opponent_action_groups_skipped"], 2)
 
