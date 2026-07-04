@@ -254,6 +254,36 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(restored.terminal, TerminalState(winner="p1", turn_count=1))
         self.assertEqual(len(restored.trajectory.steps), 2)
 
+    def test_rollout_record_belief_provenance_round_trips_and_tolerates_legacy(self) -> None:
+        from dataclasses import replace as dc_replace
+
+        from pokezero.collection import distinct_belief_set_source_hashes, write_rollout_record
+
+        record = collect_one_record_for_test()
+        self.assertIsNone(record.belief_set_source_hash)
+        # legacy payloads (no key) read back as None
+        legacy_payload = rollout_record_to_dict(record)
+        self.assertNotIn("belief_set_source_hash", legacy_payload)
+        self.assertIsNone(rollout_record_from_dict(legacy_payload).belief_set_source_hash)
+        # provenance round-trips when set
+        stamped = dc_replace(record, belief_set_source_hash="abc123")
+        payload = rollout_record_to_dict(stamped)
+        self.assertEqual(payload["belief_set_source_hash"], "abc123")
+        self.assertEqual(rollout_record_from_dict(payload).belief_set_source_hash, "abc123")
+        # distinct-hash helper peeks first records only
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stamped_path = Path(temp_dir) / "stamped.jsonl"
+            legacy_path = Path(temp_dir) / "legacy.jsonl"
+            with stamped_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, stamped)
+            with legacy_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+            self.assertEqual(distinct_belief_set_source_hashes([stamped_path]), ("abc123",))
+            self.assertEqual(
+                distinct_belief_set_source_hashes([stamped_path, legacy_path]),
+                ("abc123", None),
+            )
+
     def test_collect_rollouts_writes_jsonl_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"

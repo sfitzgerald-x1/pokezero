@@ -461,6 +461,10 @@ class TransformerTrainingResult:
     training_config: TransformerTrainingConfig
     epochs: tuple[TransformerEpochMetrics, ...]
     value_calibration_transform: ValueCalibrationTransform | None = None
+    # Belief-system provenance: the candidate-set source_hash the training rollouts were encoded
+    # with (None = source disabled, mixed provenance, or a pre-provenance checkpoint). Evaluators
+    # should match observation conditions to this or expect degraded value reads.
+    belief_set_source_hash: str | None = None
 
     @property
     def final_metrics(self) -> TransformerEpochMetrics:
@@ -1234,6 +1238,7 @@ def save_transformer_checkpoint(
             "value_calibration_transform": (
                 result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
             ),
+            "belief_set_source_hash": result.belief_set_source_hash,
             "state_dict": model.state_dict(),
         },
         checkpoint_path,
@@ -1288,6 +1293,9 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
             ValueCalibrationTransform.from_dict(value_calibration_payload)
             if isinstance(value_calibration_payload, Mapping)
             else None
+        ),
+        belief_set_source_hash=(
+            str(payload["belief_set_source_hash"]) if payload.get("belief_set_source_hash") else None
         ),
     )
     return model, result

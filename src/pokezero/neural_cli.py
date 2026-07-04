@@ -20,7 +20,14 @@ from .cli_audit import (
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
 )
-from .collection import BenchmarkMatchup, benchmark_rollouts, policy_from_spec, policy_spec_with_showdown_root, reject_eval_only_specs
+from .collection import (
+    BenchmarkMatchup,
+    benchmark_rollouts,
+    distinct_belief_set_source_hashes,
+    policy_from_spec,
+    policy_spec_with_showdown_root,
+    reject_eval_only_specs,
+)
 from .dataset import (
     MAX_ACTIVE_TRAINING_CACHE_GB,
     TrajectoryDatasetConfig,
@@ -1879,6 +1886,15 @@ def _train(args: argparse.Namespace) -> int:
             **train_kwargs,
         )
     train_elapsed_seconds = time.perf_counter() - train_started
+    provenance_hashes = distinct_belief_set_source_hashes(args.data)
+    if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
+        result = replace(result, belief_set_source_hash=provenance_hashes[0])
+    elif len(provenance_hashes) > 1:
+        print(
+            "warning: training data mixes belief set-source provenance "
+            f"({', '.join(str(h)[:12] for h in provenance_hashes)}); checkpoint records none.",
+            file=sys.stderr,
+        )
     save_transformer_checkpoint(args.out, model, result=result)
     for metrics in result.epochs:
         line = (

@@ -128,6 +128,13 @@ class LocalShowdownEnv:
         self._battle_token: str | None = None
 
     @property
+    def belief_set_source_hash(self) -> str | None:
+        """Provenance hash of the candidate-set source encoding observations (None when disabled)."""
+        if self._belief_set_source is None:
+            return None
+        return self._belief_set_source.metadata.source_hash
+
+    @property
     def protocol_lines(self) -> tuple[str, ...]:
         return tuple(self._lines)
 

@@ -1091,6 +1091,7 @@ async def run_controlled_foulplay_benchmark(
 
     _validate_external_paths(config)
     model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
+    _warn_on_belief_provenance_mismatch(config, result)
     policy_id = str(result.model_config.policy_id)
     observation_spec = replace(
         DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -2257,6 +2258,26 @@ def _resolved_belief_set_source(config: ControlledFoulPlayConfig):
     if not config.belief_set_source_enabled():
         return None
     return load_gen3_randbat_source_cached(config.showdown_root)
+
+
+def _warn_on_belief_provenance_mismatch(config: ControlledFoulPlayConfig, result: Any) -> None:
+    """Warn when benchmark observation conditions differ from the checkpoint's training provenance.
+
+    Non-fatal: legacy checkpoints record no provenance, and a deliberate ablation run is
+    legitimate — but a silent mismatch systematically distorts strength/value reads.
+    """
+    recorded = getattr(result, "belief_set_source_hash", None)
+    current = _resolved_belief_set_source(config)
+    current_hash = current.metadata.source_hash if current is not None else None
+    if recorded == current_hash:
+        return
+    if recorded is None:
+        detail = "checkpoint records no belief provenance (legacy or source-off training)"
+    elif current_hash is None:
+        detail = f"checkpoint trained with candidate-set source {recorded[:12]} but the benchmark runs with it disabled"
+    else:
+        detail = f"checkpoint provenance {recorded[:12]} != benchmark source {current_hash[:12]}"
+    print(f"warning: belief set-source mismatch — {detail}.", file=sys.stderr)
 
 
 def _player_state(
