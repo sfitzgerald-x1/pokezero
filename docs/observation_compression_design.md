@@ -152,6 +152,28 @@ accordingly:
   averages public HP) — healing encodes nothing hidden, so it gets no
   inference channel. Leftovers heals route to the item channel as
   already specified.
+- **Absorb-class abilities (Volt Absorb, Water Absorb, Flash Fire).**
+  The outcome enum gains **`absorbed`** — negation class (residual: no
+  evidence) but distinct from `immune`: the defender *gained* from the
+  attack (25% heal, or Flash Fire's boost state), which is the one
+  history lesson the net must never re-learn mid-game. Ability
+  identification rides the existing `[from] ability:` machinery.
+  Flash Fire's boost is **state, not just an event**: tracked as a
+  volatile (protocol `-start`), and the Tier-2 residual must include it
+  among public modifiers when the boosted mon attacks Fire moves
+  (1.5×), else every post-absorb Flamethrower reads as phantom CB
+  evidence. **Elimination direction:** landing normal damage on a mon
+  whose candidate set includes the absorbing ability deterministically
+  rules it out — variant pruning via the same non-trigger pattern the
+  engine already implements for Intimidate ({Volt/Water Absorb, Flash
+  Fire, Levitate} × "move connected normally").
+- **Speed brackets are candidate-ability-conditioned.** Swift
+  Swim/Chlorophyll double speed in weather, so an observed outspeed
+  under rain is evidence about {base speed OR ability}, not base speed
+  alone. Bounds bind only under the candidate-favorable assumption
+  (max-explanation philosophy, as with CB); otherwise one rain game
+  corrupts a bracket permanently. Paralysis and public stage changes
+  condition bounds the same way.
 - **Drain moves and Leech Seed.** The side-effect category carries a
   distinct `drain` value (damage + self-heal in one action); heal
   magnitude stays derivable (50% of observed damage). Interactions:
