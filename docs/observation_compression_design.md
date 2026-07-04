@@ -26,6 +26,46 @@ frequency stats as the standard compression of action history), and the
 capacity freed is worth more than raw history. This is a hypothesis; the
 ablation section makes it falsifiable.
 
+**Evidence update (2026-07-03 evening, active-run curves):** the 256d
+history-8 arm holds a consistent slight edge over 256d-4x at matched
+milestones vs max-damage — temporal structure carries signal that pure
+aggregates would destroy. This kills the strong "history is deadweight"
+reading but not the encoding critique: snapshot replay makes the net
+recover events by diffing 46-token state copies. The revised design
+(below) keeps ordered history in a form ~23× cheaper per turn.
+
+## Transition tokens: ordered history without snapshot replay
+
+Replace history snapshots with **two transition tokens per past turn**
+(one per side), each recording what that side did and what it caused:
+
+- actor (species/slot), action (move id, or switch → incoming species)
+- damage fraction dealt to the defender
+- **damage residual vs the public calc's expected median roll** — one
+  scalar carrying the set-inference content of the damage calc (positive
+  ⇒ Choice Band / offensive investment evidence, negative ⇒ defensive
+  investment; doubles as belief-engine evidence, same accumulator as the
+  exact-state CB bit)
+- flags: effectiveness class, crit, miss, KO
+- side-effect category (status inflicted / hazard set / weather set /
+  boost used)
+
+Cost: 2 tokens/turn vs 46 — **16–24 turns of ordered history for less
+than one snapshot**, so coverage extends to effectively the whole game
+where h4/h8 snapshot windows were the ceiling. The 24 raw
+`recent_public_events` tokens are subsumed and dropped (they are the
+crude 3–4-turn version of this idea, currently paid *in addition to*
+snapshots). Precedent: Metamon's transformer consumes explicit
+(previous-action, reward) sequences rather than repeated state — the
+strongest published agent in this domain uses decision history, not
+snapshot history.
+
+The compression spectrum is then: full snapshots (structure + restated
+state) → transition tokens (structure only) → aggregate stats (no
+structure). The stats block (below) is retained alongside transition
+tokens: cross-turn aggregates spare the trunk from recomputing counts
+over the token sequence, and they remain the z-descriptor vocabulary.
+
 ## Design principle: evidence mass, not rates
 
 Every tendency feature is a **(count, opportunity) pair**, never a bare
@@ -152,12 +192,20 @@ supports it).
 
 ## Ablation plan (500k, same seed bands and yardstick as the width arms)
 
-| arm | window | stats block | width |
+| arm | history | stats block | width |
 |---|---|---|---|
-| A (control) | 4 | no | 256d |
-| B | 1 | yes | 256d |
-| C (payoff) | 1 | yes | 512d |
-| D (optional) | 1, GRU aggregator | no | 256d |
+| A (control) | 4 snapshots | no | 256d |
+| A8 (running) | 8 snapshots | no | 256d |
+| B | none (window=1) | yes | 256d |
+| **E (primary)** | **16-turn transition tokens** | yes | 256d |
+| C (payoff) | 16-turn transition tokens | yes | 512d |
+| D (optional) | GRU aggregator | no | 256d |
+
+B vs E isolates the value of *ordered* history beyond its aggregates —
+the exact question the h8 > h4 edge raises. E vs A/A8 tests whether
+transition tokens preserve what snapshot history provides at a fraction
+of the sequence cost. C spends the savings on width, which the active
+runs say is the productive axis.
 
 Reads: foul-play at matched milestones (primary), max-damage trajectory,
 ΔV/behavior probes, and wall-clock/games-per-hour (the feasibility claim
