@@ -901,6 +901,70 @@ class WhitelistTest(unittest.TestCase):
         self.assertIn("earthquake", whitelist["snorlax"])  # single-carrier: pinned
 
 
+class ObservationWiringTest(unittest.TestCase):
+    """Encode-level wiring: Tier-2 residuals flow into #502's reserved v2 slots."""
+
+    def test_residual_slots_encode_from_tier2_tokens(self) -> None:
+        from dataclasses import replace as dataclass_replace
+
+        from pokezero.category_vocab import build_category_vocabulary
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.showdown import (
+            NUMERIC_TT_RESIDUAL,
+            NUMERIC_TT_RESIDUAL_VALID,
+            TRANSITION_TOKEN_OFFSET,
+            normalize_for_player,
+            observation_from_player_state,
+        )
+
+        damage = max(_bodyslam_rolls())
+        lines = _leads() + _strike_lines(damage, turn=1)
+        request_line = (
+            '|request|{"active":[{"moves":[{"move":"Surf","id":"surf"}]}],'
+            '"side":{"id":"p1","name":"Alice","pokemon":[{"ident":"p1a: Slowbro",'
+            '"details":"Slowbro, L80","condition":"330/330","active":true}]}}'
+        )
+        full = lines[:2] + [request_line] + lines[2:]
+        replay = parse_showdown_replay(full)
+        inference = _infer(full)
+        strike = next(s for s in inference.strikes if s.residual_valid)
+
+        state = normalize_for_player(replay, player_id="agent", player_name="Alice")
+        wired = dataclass_replace(
+            state, transition_tokens=apply_residuals(state.transition_tokens, inference)
+        )
+        vocab = build_category_vocabulary(
+            [
+                "species:Slowbro", "species:Snorlax", "move:bodyslam",
+                "transition:self", "transition:opponent",
+                "tt_kind:move", "tt_kind:switch",
+                "tt_outcome:normal", "tt_effectiveness:neutral", "tt_side_effect:none",
+            ]
+        )
+        row_index = TRANSITION_TOKEN_OFFSET + strike.token_index
+
+        observation = observation_from_player_state(wired, category_vocab=vocab)
+        row = observation.numeric_features[row_index]
+        self.assertAlmostEqual(row[NUMERIC_TT_RESIDUAL], max(-1.0, min(1.0, strike.residual)))
+        self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 1.0)
+
+        # The tier2_residuals mask darkens the channel without touching anything else.
+        masked = observation_from_player_state(
+            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False)
+        )
+        self.assertEqual(masked.numeric_features[row_index][NUMERIC_TT_RESIDUAL], 0.0)
+        self.assertEqual(masked.numeric_features[row_index][NUMERIC_TT_RESIDUAL_VALID], 0.0)
+        self.assertEqual(
+            masked.numeric_features[row_index][: NUMERIC_TT_RESIDUAL],
+            row[: NUMERIC_TT_RESIDUAL],
+        )
+
+        # Plain-extraction tokens carry no residuals: the slots stay zero.
+        plain = observation_from_player_state(state, category_vocab=vocab)
+        self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL], 0.0)
+        self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL_VALID], 0.0)
+
+
 class HelpersTest(unittest.TestCase):
     def test_own_team_from_request(self) -> None:
         request = {

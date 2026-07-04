@@ -231,9 +231,11 @@ NUMERIC_TT_OPP_SPIKES = 114  # /3
 # turns-ago /64 (the token-budget turn scale), both clamped.
 NUMERIC_TT_ABS_TURN = 115
 NUMERIC_TT_TURNS_AGO = 116
-# Reserved zero-masked Tier-2 slots (corrections items 9/10): residual scalar + validity bit.
-# ALWAYS 0.0 in this spec revision; PR D populates them behind its precision gate with no
-# second spec break.
+# Tier-2 slots (corrections items 9/10): residual scalar (signed fraction of defender max
+# HP, clamped) + validity bit. Populated ONLY for tokens whose Tier-2 fields were filled by
+# ``pokezero.tier2`` (``infer_tier2`` / ``apply_residuals``) behind PR D's precision gate,
+# and gated by ``ObservationFeatureMasks.tier2_residuals``; tokens from the plain extraction
+# path carry no residuals, so these stay 0.0 there — same spec version, no second break.
 NUMERIC_TT_RESIDUAL = 117
 NUMERIC_TT_RESIDUAL_VALID = 118
 
@@ -2021,7 +2023,9 @@ def _encode_transition_tokens(
     have absorbed. Unfilled slots stay zeroed and attention-masked. Categorical fields ride the
     shared fixed columns with transition-specific vocab families; the action column branches on
     ``kind`` (move id / incoming species / cant reason — deliberately unmerged vocabularies).
-    ``NUMERIC_TT_RESIDUAL``/``NUMERIC_TT_RESIDUAL_VALID`` stay 0.0: reserved Tier-2 slots.
+    ``NUMERIC_TT_RESIDUAL``/``NUMERIC_TT_RESIDUAL_VALID`` fill only from tokens whose Tier-2
+    fields were populated (``pokezero.tier2``), gated by ``masks.tier2_residuals``; they stay
+    0.0 for the plain extraction path.
     """
     budget = min(masks.transition_token_budget, spec.transition_token_count)
     tokens = state.transition_tokens[-budget:] if budget else ()
@@ -2069,6 +2073,9 @@ def _encode_transition_tokens(
         _set_numeric(num_row, NUMERIC_TT_ABS_TURN, min(1.0, token.turn / 1000.0))
         turns_ago = max(0, state.turn_number - token.turn)
         _set_numeric(num_row, NUMERIC_TT_TURNS_AGO, min(1.0, turns_ago / _STAT_COUNT_DIVISOR))
+        if masks.tier2_residuals and token.residual_valid and token.residual is not None:
+            _set_numeric(num_row, NUMERIC_TT_RESIDUAL, max(-1.0, min(1.0, token.residual)))
+            _set_numeric(num_row, NUMERIC_TT_RESIDUAL_VALID, 1.0)
 
 
 def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:

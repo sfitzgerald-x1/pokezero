@@ -67,11 +67,16 @@ class ObservationFeatureMasks:
       sleep-clause / trapper / pending-Wish bits, computed expected stats).
     - ``transition_token_budget``: how many of the most recent transition tokens are filled
       (32 tokens = the K=16-turn ablation arm); the remaining slots stay zero + masked.
+    - ``tier2_residuals``: whether transition tokens that CARRY Tier-2 residuals (populated
+      by ``pokezero.tier2`` behind PR D's precision gate) write the reserved
+      residual/validity slots. Tokens from the plain extraction path carry none, so the
+      slots stay 0.0 either way for pipelines that never run the Tier-2 inference.
     """
 
     stats_block: bool = True
     exact_state: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
+    tier2_residuals: bool = True
 
     def __post_init__(self) -> None:
         if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
