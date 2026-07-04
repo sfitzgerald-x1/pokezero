@@ -23,8 +23,12 @@ if _SRC.is_dir():
 
     sys.path.insert(0, str(_SRC))
 
-from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noqa: E402
-from pokezero.neural_policy import load_transformer_policy  # noqa: E402
+from pokezero.local_showdown import (  # noqa: E402
+    LocalShowdownConfig,
+    LocalShowdownEnv,
+    env_config_with_checkpoint_masks,
+)
+from pokezero.neural_policy import feature_masks_from_model_config, load_transformer_policy  # noqa: E402
 from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC  # noqa: E402
 
 _DEFAULT_CHECKPOINT = "runs/promoted/strongest-vs-max-damage.pt"
@@ -104,7 +108,14 @@ def play(
         numeric_feature_count=config.numeric_feature_count,
     )
     bot_player = "p1" if human_player == "p2" else "p2"
-    env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root, observation_spec=spec))
+    # The bot reads env.observe() tensors, so the env must encode with the checkpoint's
+    # stamped feature masks (the same latch the shared harnesses apply).
+    env_config = env_config_with_checkpoint_masks(
+        LocalShowdownConfig(showdown_root=showdown_root, observation_spec=spec),
+        feature_masks_from_model_config(config),
+        context="play_against_checkpoint",
+    )
+    env = LocalShowdownEnv(env_config)
     rng = random.Random(seed)
 
     print(f"Gen 3 random battle — you are {human_player} vs {config.policy_id} ({bot_player}).")
