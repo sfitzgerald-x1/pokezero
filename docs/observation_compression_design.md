@@ -47,6 +47,18 @@ Replace history snapshots with **two transition tokens per past turn**
   investment; doubles as belief-engine evidence, same accumulator as the
   exact-state CB bit)
 - flags: effectiveness class, crit, miss, KO
+
+**The flags condition the residual; they are not merely beside it.** On
+a `|-crit|` turn the residual is computed against the *crit-expected*
+median — gen-3 crits are 2× and ignore attack drops, defense boosts, and
+screens, so the crit median must drop those modifiers or a crit through
+Reflect reads as a 3–4× outlier. Unconditioned, ~6% of damage events
+(1/16 base, 1/8 high-crit moves) would inject 2× outliers into the
+set-inference channel as manufactured Choice Band evidence. On a miss
+the residual is masked (no damage ≠ weak-set evidence); multi-hit
+damage is normalized per announced hit. The crit flag exists to explain
+the observation, not to learn from past luck — crit-risk respect comes
+from outcomes shaping the value head (per the luck-ledger decision).
 - side-effect category (status inflicted / hazard set / weather set /
   boost used)
 
