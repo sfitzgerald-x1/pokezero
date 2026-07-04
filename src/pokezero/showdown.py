@@ -1800,7 +1800,7 @@ def _certain_opponent_ability(exact: RevealedPokemonBelief) -> str | None:
     """The opponent mon's ability when CERTAIN: protocol-revealed, or a singleton live
     candidate set (possible minus ruled-out) — the same known-or-singleton standard the
     belief categoricals expose. Gen 3 trap abilities are never protocol-revealed, but all
-    three pool trappers (Wobbuffet/Dugtrio/Magneton) are single-ability species, so under
+    four pool trappers (Wobbuffet/Dugtrio/Magneton/Nosepass) are single-ability species, so under
     belief-on this is exact knowledge the encoder must not ignore (audit bug C1)."""
     if exact.revealed_ability:
         return exact.revealed_ability
