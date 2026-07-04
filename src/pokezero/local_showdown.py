@@ -36,6 +36,7 @@ from .showdown import (
     observation_from_player_state,
     showdown_choice_for_action,
 )
+from .tier2 import Tier2LiveTracker, cb_whitelist_for_source, own_team_from_request
 
 DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
 BRIDGE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "battle_bridge.mjs"
@@ -188,6 +189,14 @@ class LocalShowdownEnv:
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
+        # Tier-2 live residual trackers (#505 follow-up): one per perspective, created
+        # lazily once that player's first request arrives (it carries the exact own-team
+        # stats the residual math needs). Active only when the encode-time masks keep the
+        # channel on AND the candidate-set source is enabled — mask-off arms and
+        # pre-#505 checkpoints (whose provenance latches tier2_residuals=False) pay
+        # nothing and encode byte-identically.
+        self._first_requests: dict[PlayerId, Mapping[str, Any]] = {}
+        self._tier2_trackers: dict[PlayerId, Tier2LiveTracker] = {}
         # Warm pool: the bridge process is reused across battles. Each battle gets a unique routing
         # token; events from a prior battle carry a stale token and are ignored (see _apply_event).
         self._battle_counter = 0
@@ -250,6 +259,8 @@ class LocalShowdownEnv:
         )
         self._parsed_line_count = 0
         self._belief_fed_count = 0
+        self._first_requests = {}
+        self._tier2_trackers = {}
         # Reuse a live bridge process across battles (warm pool); only spawn when there is none or
         # the previous one died. Stale events from the prior battle carry previous_token and are
         # ignored by _apply_event, so a clean queue drain is not required.
@@ -341,6 +352,11 @@ class LocalShowdownEnv:
         self._observation_format_id = snapshot.observation_format_id
         self._lines = list(snapshot.protocol_lines)
         self._latest_requests = _json_clone_requests(snapshot.latest_requests)
+        # Trackers rebuild lazily from the restored line prefix; the earliest request in
+        # the restored snapshot stands in for the battle's first (own-team stats are
+        # immutable within a battle, which is all the trackers read from it).
+        self._first_requests = dict(self._latest_requests)
+        self._tier2_trackers = {}
         self._latest_turn = snapshot.latest_turn
         self._terminal = snapshot.terminal
         self._last_step_had_error = False
@@ -575,6 +591,7 @@ class LocalShowdownEnv:
                     side_id = side.get("id") if isinstance(side, Mapping) else None
                     if side_id == stream:
                         self._latest_requests[stream] = request
+                        self._first_requests.setdefault(stream, request)
                         self._lines.append(line)
         return False
 
@@ -607,13 +624,56 @@ class LocalShowdownEnv:
         if player not in PLAYER_IDS:
             raise ValueError(f"player must be one of {', '.join(PLAYER_IDS)}; got {player!r}.")
         self._sync_incremental_state()
-        return normalize_for_player(
-            self._parser.snapshot(),
+        replay = self._parser.snapshot()
+        state = normalize_for_player(
+            replay,
             player_id=player,
             configured_showdown_slot=player,
             format_id=self._observation_format_id,
             belief_engine=self._belief_engine,
         )
+        tracker = self._tier2_tracker_for(player)
+        if tracker is not None:
+            state = replace(
+                state,
+                transition_tokens=tracker.annotate(
+                    replay, state.transition_tokens, self._belief_engine
+                ),
+            )
+        return state
+
+    def tier2_residuals_active(self) -> bool:
+        """Whether this env populates Tier-2 residuals into transition tokens.
+
+        Requires both the encode-time mask (checkpoint-latched via
+        ``env_config_with_checkpoint_masks``) AND the candidate-set source — without
+        candidate variants every strike is unassessable, so the tracker is skipped
+        outright and encodes stay byte-identical to a pre-#505 pipeline.
+        """
+        return bool(self.config.feature_masks.tier2_residuals) and self._belief_set_source is not None
+
+    def _tier2_tracker_for(self, player: PlayerId) -> Tier2LiveTracker | None:
+        if not self.tier2_residuals_active():
+            return None
+        tracker = self._tier2_trackers.get(player)
+        if tracker is not None:
+            return tracker
+        request = self._first_requests.get(player) or self._latest_requests.get(player)
+        if request is None:
+            return None
+        own_team = own_team_from_request(request)
+        if not own_team:
+            return None
+        root = self.config.resolved_showdown_root()
+        dex = load_showdown_dex_cached(root)
+        tracker = Tier2LiveTracker(
+            perspective_slot=player,
+            own_team=own_team,
+            dex=dex,
+            whitelist=cb_whitelist_for_source(self._belief_set_source, dex),
+        )
+        self._tier2_trackers[player] = tracker
+        return tracker
 
     def _winner_slot(self, winner_name: str) -> PlayerId | None:
         self._sync_incremental_state()

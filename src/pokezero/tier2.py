@@ -42,6 +42,7 @@ here is the conservative, reproducible one the precision gate measures.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, Sequence
 
@@ -268,65 +269,102 @@ def canonical_move_id(move: str) -> str:
     return move_id
 
 
-def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[int, StrikeContext]:
-    """Per-window public-modifier context, replayed from the protocol lines.
+class _IncrementalContextFold:
+    """Incremental public-modifier context fold over the protocol lines.
 
     Tracks only protocol-tautological state: stat stages (with Baton Pass inheritance
     and Haze clears), screens, statuses per (side, species), Flash Fire volatiles,
-    Transform, active occupants, and public HP fractions. Snapshots are taken at each
-    declared-action line, before the action's own effects land.
+    Transform, Forecast/Color Change type changes, Trick/Knock Off item mutation,
+    Trace-class ability overrides, active occupants, and public HP fractions. Each
+    line is processed exactly once; a :class:`StrikeContext` snapshot is stored for
+    every token-emitting action line (``|move|``/``|switch|``/``|cant|`` — drags emit
+    no token), BEFORE the action's own effects land, and ``token_line_indices`` maps
+    transition-token positions to their protocol line indices (the emission rules
+    mirror ``transitions._fold_replay``).
     """
-    occupant: dict[str, str] = {}
-    status: dict[tuple[str, str], Optional[str]] = {}
-    boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
-    pending_bp: dict[str, bool] = {"p1": False, "p2": False}
-    flash_fire: dict[str, bool] = {"p1": False, "p2": False}
-    transformed: dict[str, bool] = {"p1": False, "p2": False}
-    type_changed: dict[str, bool] = {"p1": False, "p2": False}
-    ability_overridden: dict[str, bool] = {"p1": False, "p2": False}
-    # Item mutation follows the MON (persists across switches), keyed (side, species).
-    item_mutated: set[tuple[str, str]] = set()
-    hp: dict[str, float] = {"p1": 1.0, "p2": 1.0}
-    side_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
 
-    window_list = sorted(windows, key=lambda w: w.event_index)
-    next_window = 0
-    contexts: dict[int, StrikeContext] = {}
+    def __init__(self) -> None:
+        self.occupant: dict[str, str] = {}
+        self.status: dict[tuple[str, str], Optional[str]] = {}
+        self.boosts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+        self.pending_bp: dict[str, bool] = {"p1": False, "p2": False}
+        self.flash_fire: dict[str, bool] = {"p1": False, "p2": False}
+        self.transformed: dict[str, bool] = {"p1": False, "p2": False}
+        self.type_changed: dict[str, bool] = {"p1": False, "p2": False}
+        self.ability_overridden: dict[str, bool] = {"p1": False, "p2": False}
+        # Item mutation follows the MON (persists across switches), keyed (side, species).
+        self.item_mutated: set[tuple[str, str]] = set()
+        self.hp: dict[str, float] = {"p1": 1.0, "p2": 1.0}
+        self.side_counts: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+        self.contexts: dict[int, StrikeContext] = {}
+        self.token_line_indices: list[int] = []
+        self._processed = 0
 
-    def snapshot(window: Any) -> StrikeContext:
-        attacker = window.side
-        defender = window.defender_side or _other(attacker)
-        attacker_species = occupant.get(attacker, window.species)
-        defender_species = occupant.get(defender, "")
+    def process(self, raw_lines: Sequence[str]) -> None:
+        """Fold any not-yet-seen suffix of ``raw_lines`` (lines are processed once)."""
+        for index in range(self._processed, len(raw_lines)):
+            self._process_line(index, raw_lines[index])
+        self._processed = len(raw_lines)
+
+    def _snapshot(self, attacker: str, defender: Optional[str], attacker_species: str) -> StrikeContext:
+        defender = defender or _other(attacker)
+        defender_species = self.occupant.get(defender, "")
+        boosts = self.boosts
         return StrikeContext(
             attacker_species=attacker_species,
             defender_species=defender_species,
-            attacker_status=status.get((attacker, _species_key(attacker_species))),
-            defender_status=status.get((defender, _species_key(defender_species))),
+            attacker_status=self.status.get((attacker, _species_key(attacker_species))),
+            defender_status=self.status.get((defender, _species_key(defender_species))),
             attacker_boosts=dict(boosts[attacker]),
             defender_boosts=dict(boosts[defender]),
-            attacker_hp_fraction=hp.get(attacker, 1.0),
-            attacker_flash_fire=flash_fire[attacker],
-            attacker_transformed=transformed[attacker],
-            defender_transformed=transformed[defender],
-            attacker_type_changed=type_changed[attacker],
-            defender_type_changed=type_changed[defender],
-            attacker_item_mutated=(attacker, _species_key(attacker_species)) in item_mutated,
-            defender_item_mutated=(defender, _species_key(defender_species)) in item_mutated,
-            attacker_ability_overridden=ability_overridden[attacker],
-            defender_ability_overridden=ability_overridden[defender],
+            attacker_hp_fraction=self.hp.get(attacker, 1.0),
+            attacker_flash_fire=self.flash_fire[attacker],
+            attacker_transformed=self.transformed[attacker],
+            defender_transformed=self.transformed[defender],
+            attacker_type_changed=self.type_changed[attacker],
+            defender_type_changed=self.type_changed[defender],
+            attacker_item_mutated=(attacker, _species_key(attacker_species)) in self.item_mutated,
+            defender_item_mutated=(defender, _species_key(defender_species)) in self.item_mutated,
+            attacker_ability_overridden=self.ability_overridden[attacker],
+            defender_ability_overridden=self.ability_overridden[defender],
             defender_screens=tuple(
-                name for name in ("reflect", "lightscreen") if side_counts[defender].get(name)
+                name for name in ("reflect", "lightscreen") if self.side_counts[defender].get(name)
             ),
         )
 
-    for index, raw_line in enumerate(raw_lines):
-        while next_window < len(window_list) and window_list[next_window].event_index == index:
-            contexts[index] = snapshot(window_list[next_window])
-            next_window += 1
+    def _record_action(self, index: int, event_type: str, parts: Sequence[str], side: str) -> None:
+        species = self.occupant.get(side) or _species_from_ident(parts[2]) or ""
+        if event_type == "move":
+            defender = _slot_from_ident(parts[4]) if len(parts) > 4 else None
+        elif event_type == "switch":
+            species = _species_from_details(parts[3]) or _species_from_ident(parts[2]) or ""
+            defender = None
+        else:  # cant
+            defender = None
+        self.contexts[index] = self._snapshot(side, defender, species)
+        self.token_line_indices.append(index)
+
+    def _process_line(self, index: int, raw_line: str) -> None:
         parts = raw_line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
         side = _slot_from_ident(parts[2]) if len(parts) > 2 else None
+
+        # Token-emitting action lines (mirrors transitions._fold_replay: drags and
+        # replaces emit no token) snapshot BEFORE the action's own effects land.
+        if event_type in {"move", "switch", "cant"} and side in {"p1", "p2"} and len(parts) >= 4:
+            self._record_action(index, event_type, parts, side)
+
+        occupant = self.occupant
+        status = self.status
+        boosts = self.boosts
+        pending_bp = self.pending_bp
+        flash_fire = self.flash_fire
+        transformed = self.transformed
+        type_changed = self.type_changed
+        ability_overridden = self.ability_overridden
+        item_mutated = self.item_mutated
+        hp = self.hp
+        side_counts = self.side_counts
 
         if event_type in {"switch", "drag", "replace"} and side in {"p1", "p2"} and len(parts) >= 4:
             species = _species_from_details(parts[3]) or _species_from_ident(parts[2])
@@ -415,7 +453,13 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
                 # from the species, so species-derived STAB/effectiveness are wrong.
                 type_changed[side] = True
         _update_side_conditions(parts, side_counts)
-    return contexts
+
+
+def _strike_contexts(raw_lines: Sequence[str]) -> dict[int, StrikeContext]:
+    """Batch wrapper over the incremental fold (contexts keyed by action-line index)."""
+    fold = _IncrementalContextFold()
+    fold.process(raw_lines)
+    return fold.contexts
 
 
 # --- Candidate variants and the data-derived CB whitelist. ---
@@ -799,7 +843,7 @@ def infer_tier2(
 
     fold = _fold_replay(replay, perspective_slot=perspective_slot)
     raw_lines = tuple(event.raw_line for event in replay.public_events)
-    contexts = _strike_contexts(raw_lines, fold.windows)
+    contexts = _strike_contexts(raw_lines)
     own_by_species = {_species_key(mon.species): mon for mon in own_team}
 
     engine = PublicBattleBeliefEngine(format_id=format_id, set_source=set_source)
@@ -886,6 +930,141 @@ def apply_residuals(
         replace(token, residual=inferred.residual, residual_valid=inferred.residual_valid)
         for token, inferred in zip(tokens, inference.tokens)
     )
+
+
+_WHITELIST_CACHE: dict[str, Mapping[str, frozenset[str]]] = {}
+_WHITELIST_CACHE_LOCK = threading.Lock()
+
+
+def cb_whitelist_for_source(set_source: Any, dex: ShowdownDex) -> Mapping[str, frozenset[str]]:
+    """Process-wide cached CB whitelist for a randbats set source.
+
+    Building the whitelist enumerates every species' candidate universe (seconds); the
+    live env would otherwise pay it per battle. Keyed by the source's provenance hash,
+    mirroring ``load_gen3_randbat_source_cached``.
+    """
+    universes = getattr(set_source, "universes", None)
+    if not isinstance(universes, Mapping):
+        return {}
+    metadata = getattr(set_source, "metadata", None)
+    key = getattr(metadata, "source_hash", None) or f"id:{id(set_source)}"
+    with _WHITELIST_CACHE_LOCK:
+        cached = _WHITELIST_CACHE.get(key)
+        if cached is not None:
+            return cached
+    built = build_cb_whitelist(universes, dex)
+    with _WHITELIST_CACHE_LOCK:
+        return _WHITELIST_CACHE.setdefault(key, built)
+
+
+class Tier2LiveTracker:
+    """Incremental live consumer: annotates transition tokens with Tier-2 residuals.
+
+    The batch entry point (:func:`infer_tier2`) refolds the whole replay per call —
+    fine for the offline gate, quadratic if an env did it per observation. This
+    tracker is the per-battle live form used by the collection env:
+
+    - it SHARES the caller's belief engine (the env already feeds it each protocol
+      line exactly once) rather than running a second candidate-filtering pass;
+    - each protocol line is context-folded once (``_IncrementalContextFold``);
+    - each opponent move token is assessed once, at the first ``annotate`` call that
+      sees it — i.e. against the belief state at the first observation boundary after
+      the strike. Observations happen at decision boundaries (end of turn / forced
+      replacement), so this matches ``infer_tier2``'s feed-to-next-action framing at
+      those boundaries (the batch form's evaluation point for a turn's last action is
+      the same upkeep boundary the env observes at).
+
+    Per-``annotate`` work is O(new lines + new strikes); memory is O(actions).
+    """
+
+    def __init__(
+        self,
+        *,
+        perspective_slot: str,
+        own_team: Sequence[OwnMon],
+        dex: ShowdownDex,
+        whitelist: Mapping[str, frozenset[str]],
+        config: Tier2Config | None = None,
+    ) -> None:
+        if perspective_slot not in {"p1", "p2"}:
+            raise ValueError(f"perspective_slot must be 'p1' or 'p2', got {perspective_slot!r}.")
+        self._perspective = perspective_slot
+        self._opponent = _other(perspective_slot)
+        self._own_by_species = {_species_key(mon.species): mon for mon in own_team}
+        self._dex = dex
+        self._whitelist = whitelist
+        self._config = config or Tier2Config()
+        self._fold = _IncrementalContextFold()
+        self._stats_cache: dict[tuple, Mapping[str, int]] = {}
+        self._assessed_until = 0
+        self._residuals: dict[int, float] = {}
+        self._cb_turns: dict[str, list[int]] = {}
+        self._cb_non_ko: set[str] = set()
+
+    @property
+    def cb_bits(self) -> dict[str, bool]:
+        """Per-opponent-mon CB bit under the two-strike + non-KO rules (diagnostics;
+        the observation currently reserves residual/validity slots only)."""
+        return {
+            key: len(turns) >= self._config.required_cb_strikes and key in self._cb_non_ko
+            for key, turns in self._cb_turns.items()
+        }
+
+    def annotate(
+        self,
+        replay: ShowdownReplayState,
+        tokens: Sequence[TransitionToken],
+        belief_engine: PublicBattleBeliefEngine,
+    ) -> tuple[TransitionToken, ...]:
+        """Assess any new opponent strikes and return tokens with residual fields set.
+
+        ``tokens`` must be the transition extraction for the same ``replay`` (the env's
+        ``normalize_for_player`` output); ``belief_engine`` is the caller's persistent
+        engine, already fed through the replay's boundary.
+        """
+        raw_lines = tuple(event.raw_line for event in replay.public_events)
+        self._fold.process(raw_lines)
+        if len(self._fold.token_line_indices) != len(tokens):
+            raise ValueError(
+                "transition tokens do not align with the tracker's protocol fold "
+                f"({len(tokens)} tokens vs {len(self._fold.token_line_indices)} action lines)."
+            )
+        for index in range(self._assessed_until, len(tokens)):
+            token = tokens[index]
+            if token.kind != TOKEN_KIND_MOVE or token.actor_slot != self._opponent:
+                continue
+            context = self._fold.contexts.get(self._fold.token_line_indices[index])
+            if context is None:
+                continue
+            assessment = _assess_strike(
+                token=token,
+                token_index=index,
+                context=context,
+                engine=belief_engine,
+                opponent=self._opponent,
+                own_by_species=self._own_by_species,
+                dex=self._dex,
+                whitelist=self._whitelist,
+                config=self._config,
+                stats_cache=self._stats_cache,
+            )
+            if assessment is None:
+                continue
+            if assessment.residual_valid and assessment.residual is not None:
+                self._residuals[index] = assessment.residual
+            if assessment.cb_eligible and assessment.cb_exceeded:
+                self._cb_turns.setdefault(assessment.attacker_key, []).append(assessment.turn)
+                if not token.ko:
+                    self._cb_non_ko.add(assessment.attacker_key)
+        self._assessed_until = len(tokens)
+        if not self._residuals:
+            return tuple(tokens)
+        return tuple(
+            replace(token, residual=self._residuals[index], residual_valid=True)
+            if index in self._residuals
+            else token
+            for index, token in enumerate(tokens)
+        )
 
 
 def _assess_strike(
