@@ -90,12 +90,27 @@ accordingly:
   from the omniscient logs of controlled foul-play games (we own the
   BattleStream; true sets are recoverable) before any training run
   consumes the bit.
-- **Called moves (Sleep Talk / Metronome — common on gen3 RestTalk
-  sets):** the PP ledger charges the *calling* move (called moves spend
-  no PP of their own in gen 3); the residual computes damage against the
-  *executed* move's power; and no set evidence attaches to the called
-  move (matching the belief engine's existing caller suppression). The
-  `[from] Sleep Talk` protocol tag distinguishes the cases.
+- **Called moves (Sleep Talk — verified the only reachable caller in the
+  gen3 randbats movepool, on 40 species; Metronome/Assist/Mirror
+  Move/Nature Power never appear):** the PP ledger charges the *calling*
+  move (called moves spend no PP of their own in gen 3); the residual
+  computes damage against the *executed* move's power; and no set
+  evidence attaches to the called move (matching the belief engine's
+  existing caller suppression). The `[from] Sleep Talk` protocol tag
+  distinguishes the cases. Implementation may hard-code the Sleep Talk
+  path; generic caller plumbing is unreachable in this format.
+- **Transform (Ditto and Mew only in the pool; Ditto is all-transform):**
+  transition tokens carry a **`transformed` bit** so copied-move usage
+  is self-describing in the history stream — without it the net sees
+  "Ditto used Flamethrower" as ordinary history and can mislearn set
+  associations the belief engine already suppresses. The PP ledger
+  scopes copied moves to the **transform instance**: gen-3 Transform
+  grants 5 PP per copied move and a re-entry + re-transform grants a
+  fresh 5, so copied-move PP is ephemeral (per instance, max 5,
+  discarded on switch-out) and never charges the real set's ledger.
+  Residual attribution keys on `transform_species` (stats are the
+  copied target's, except HP), consistent with existing belief
+  semantics.
 - **Tier-2 extension (note only): defender-side ability inference.** The
   same residual machinery on *our* attacks reveals the defender's
   ability (e.g. Thick Fat halving our Fire damage is observable against
