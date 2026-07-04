@@ -55,10 +55,51 @@ screens, so the crit median must drop those modifiers or a crit through
 Reflect reads as a 3–4× outlier. Unconditioned, ~6% of damage events
 (1/16 base, 1/8 high-crit moves) would inject 2× outliers into the
 set-inference channel as manufactured Choice Band evidence. On a miss
-the residual is masked (no damage ≠ weak-set evidence); multi-hit
-damage is normalized per announced hit. The crit flag exists to explain
-the observation, not to learn from past luck — crit-risk respect comes
-from outcomes shaping the value head (per the luck-ledger decision).
+the residual is masked (no damage ≠ weak-set evidence); multi-hit moves
+carry an explicit `n_hits` field (from `|-hitcount|`) and normalize per
+hit. The crit flag exists to explain the observation, not to learn from
+past luck — crit-risk respect comes from outcomes shaping the value head
+(per the luck-ledger decision).
+
+### Implementation tiers (decided 2026-07-04 — complexity containment)
+
+The modeling risk of this section lives entirely in the expected-damage
+computation; everything else is protocol-announced fact. Tiered
+accordingly:
+
+- **Tier 1 (ships with the compression work; zero modeling risk):**
+  transition tokens with actor, action, raw damage fraction, crit / miss
+  / KO flags, `n_hits`, side-effect category — every field read straight
+  from protocol events. No residual. The E/C ablation arms run on Tier 1
+  alone; raw fractions + species embeddings are already strictly more
+  legible than snapshot diffs.
+- **Tier 2 (separate follow-up; all the modifier complexity, bounded three
+  ways):** the damage residual and the conservative CB/investment bits.
+  (a) Expected damage comes from **poke-engine queries** under the
+  known-stats randbats world (fixed 85/31/neutral spread + public level
+  make both sides' stats deterministic) — no hand-written calculator, so
+  stat stages, screens, burn, weather, Explosion's defense-halving etc.
+  are the engine's problem, not ours. (b) CB inference uses a
+  **fixed-power physical move whitelist** (Hidden Power, Flail/Reversal,
+  Rollout-class, Magnitude, and multi-hit moves never flip the bit).
+  (c) The bit is **conservative by construction**: observed must exceed
+  max-explainable = max over the species' candidate abilities × 1.1
+  type-boost item × max roll × all public modifiers, by a margin, on
+  **two independent events** (one calc edge case cannot flip it).
+  Acceptance gate: precision ≈ 1.0 against ground-truth items extracted
+  from the omniscient logs of controlled foul-play games (we own the
+  BattleStream; true sets are recoverable) before any training run
+  consumes the bit.
+- **Tier 3 (not now):** evidence-weighted belief posteriors —
+  ReBeL-direction work, out of scope for this doc.
+
+**Status chip damage (toxic/burn/sand/Spikes) is attribution hygiene,
+not a feature.** Chip is fully determined by public state the
+observation already tracks (toxic stage, statuses, hazard layers,
+weather) and carries no hidden information; past chip is summarized in
+the HP bar. The pipeline rule: residuals are computed from the move's
+own itemized damage event (protocol `[from]` tags separate chip from
+move damage), never from turn-level HP deltas. No chip history tokens.
 - side-effect category (status inflicted / hazard set / weather set /
   boost used)
 
