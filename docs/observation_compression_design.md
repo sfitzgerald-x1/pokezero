@@ -129,10 +129,21 @@ accordingly:
   - **Negation (`blocked`, `immune`) — no damage event occurred.** The
     attack connected with nothing; magnitude evidence is *undefined*,
     not zero. Residual: no evidence. Move-reveal/set evidence is
-    unaffected (the click is always informative). `immune` doubles as
-    ability-identification evidence where the immunity must be
-    ability-sourced (Levitate vs Earthquake); `blocked` feeds the
-    protect-pattern tendency stat.
+    unaffected (the click is always informative). `blocked` feeds the
+    protect-pattern tendency stat. `immune` splits by explanation, with
+    opposite inference content:
+    - *typing-explained* (Earthquake into a Flying-type): tautological
+      given public state — contributes **no** ability evidence (the
+      attribution order is typing first, ability only as the residual
+      explanation; without this check every EQ into a Skarmory pollutes
+      candidate pruning). Its information lives in the prediction
+      channel instead: attacking into a known immunity almost always
+      means the attack targeted the mon that was leaving — an
+      unambiguous "did not predict the switch" observation for the
+      midground/prediction stat.
+    - *not typing-explained* (EQ immune on a non-Flying): the immunity
+      must be ability-sourced — confirmation-grade ability
+      identification, variant pruning fires.
   - **Truncation (`hit-sub`, `broke-sub`, `endured`) — full computed
     damage WAS dealt**, to a proxy or clipped at survival, so magnitude
     evidence exists in inequality form: `broke-sub` ⇒ damage ≥ sub HP;
