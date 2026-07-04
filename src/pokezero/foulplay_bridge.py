@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import random
 import sys
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .category_vocab import CategoryVocabulary
@@ -103,6 +103,7 @@ class ControlledFoulPlayConfig:
     belief_start_override_samples: int = 1
     start_override_hp_fraction_tolerance: float = 0.02
     opponent_legal_mask_mode: str = "hidden"
+    opponent_crash_retries: int = 1
     allow_search_fallback: bool = True
     node_binary: str = "node"
     pokezero_username: str = "PokeZeroBot"
@@ -169,6 +170,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("start_override_hp_fraction_tolerance must be a finite non-negative value.")
         if self.opponent_legal_mask_mode not in {"hidden", "privileged"}:
             raise ValueError("opponent_legal_mask_mode must be 'hidden' or 'privileged'.")
+        if self.opponent_crash_retries < 0:
+            raise ValueError("opponent_crash_retries must be non-negative.")
 
     @property
     def resolved_foulplay_python(self) -> Path:
@@ -326,6 +329,28 @@ class ControlledFoulPlayGameResult:
         if fallback_categories:
             payload["root_puct_fallback_categories"] = dict(sorted(fallback_categories.items()))
         return payload
+
+
+@dataclass(frozen=True)
+class ControlledFoulPlayOpponentCrash:
+    """A seed abandoned because the external foul-play process exited before completing the game."""
+
+    seed: int
+    policy_mode: str
+    returncode: int | None
+    attempts: int
+    stage: str
+    stderr_tail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "seed": self.seed,
+            "policy_mode": self.policy_mode,
+            "returncode": self.returncode,
+            "attempts": self.attempts,
+            "stage": self.stage,
+            "stderr_tail": self.stderr_tail,
+        }
 
 
 @dataclass(frozen=True)
@@ -532,14 +557,21 @@ class ControlledFoulPlayComparisonResult:
     raw: ControlledFoulPlayBenchmarkResult | None
     root_puct: ControlledFoulPlayBenchmarkResult | None
     comparison_mode: str = "per-seed"
+    opponent_crashes: tuple[ControlledFoulPlayOpponentCrash, ...] = ()
+
+    @property
+    def crashed_seed_count(self) -> int:
+        return len({crash.seed for crash in self.opponent_crashes})
 
     @property
     def complete(self) -> bool:
+        # Seeds abandoned to an opponent crash cannot complete; a run that accounted for every
+        # requested seed (finished or crashed) is complete, with crashes reported as a caveat.
         return (
             self.raw is not None
             and self.root_puct is not None
-            and self.raw.completed_games >= self.raw.config.games
-            and self.root_puct.completed_games >= self.root_puct.config.games
+            and self.raw.completed_games + self.crashed_seed_count >= self.raw.config.games
+            and self.root_puct.completed_games + self.crashed_seed_count >= self.root_puct.config.games
         )
 
     @property
@@ -569,10 +601,12 @@ class ControlledFoulPlayComparisonResult:
                 "raw": self.raw.to_dict() if self.raw is not None else None,
                 "root_puct": self.root_puct.to_dict() if self.root_puct is not None else None,
             },
+            "opponent_crashes": [crash.to_dict() for crash in self.opponent_crashes],
             "comparison": _comparison_readout(
                 self.raw,
                 self.root_puct,
                 comparison_mode=self.comparison_mode,
+                opponent_crashes=self.opponent_crashes,
             ),
         }
 
@@ -582,6 +616,7 @@ def _comparison_readout(
     root_puct: ControlledFoulPlayBenchmarkResult | None,
     *,
     comparison_mode: str,
+    opponent_crashes: tuple[ControlledFoulPlayOpponentCrash, ...] = (),
 ) -> dict[str, Any]:
     raw_by_seed = _games_by_seed(raw)
     search_by_seed = _games_by_seed(root_puct)
@@ -614,11 +649,18 @@ def _comparison_readout(
     raw_wins = raw.wins if raw is not None else 0
     search_wins = root_puct.wins if root_puct is not None else 0
 
+    crashed_seeds = sorted({crash.seed for crash in opponent_crashes})
+
     return {
         "sample_size": {
             "paired_games": paired_games,
             "minimum_strength_games": _MIN_STRENGTH_SAMPLE_GAMES,
             "status": "strength_sized" if paired_games >= _MIN_STRENGTH_SAMPLE_GAMES else "diagnostic_only",
+        },
+        "opponent_crashed_seeds": {
+            "count": len(crashed_seeds),
+            "seeds": crashed_seeds,
+            "handling": "seed_excluded_from_paired_stats_and_aggregates",
         },
         "aggregate": {
             "analysis_method": "completed_prefix_marginal_rates",
@@ -710,13 +752,21 @@ def _per_seed_foulplay_random_seed_schedule(
     *,
     count: int,
 ) -> tuple[int, ...]:
+    return _per_seed_foulplay_random_seed_schedule_for_offsets(config, offsets=range(count))
+
+
+def _per_seed_foulplay_random_seed_schedule_for_offsets(
+    config: ControlledFoulPlayConfig,
+    *,
+    offsets: Iterable[int],
+) -> tuple[int, ...]:
     return tuple(
         (
             config.foulplay_random_seed + offset
             if config.foulplay_random_seed is not None
             else config.seed_start + offset
         )
-        for offset in range(count)
+        for offset in offsets
     )
 
 
@@ -791,6 +841,16 @@ def _wilson_interval(wins: int, games: int, *, z: float) -> tuple[float, float]:
 
 class FoulPlayProtocolError(RuntimeError):
     """Raised when the foul-play websocket client emits an unsupported protocol message."""
+
+
+class FoulPlayProcessExitError(RuntimeError):
+    """Raised when the external foul-play process exits before completing a protocol step."""
+
+    def __init__(self, *, stage: str, returncode: int | None, log_tail: str) -> None:
+        super().__init__(f"foul-play exited with status {returncode} before {stage}.\n{log_tail}")
+        self.stage = stage
+        self.returncode = returncode
+        self.log_tail = log_tail
 
 
 @dataclass
@@ -1188,8 +1248,11 @@ async def _run_controlled_foulplay_comparison_per_seed(
 ) -> ControlledFoulPlayComparisonResult:
     raw_games: list[ControlledFoulPlayGameResult] = []
     root_puct_games: list[ControlledFoulPlayGameResult] = []
+    raw_offsets: list[int] = []
+    root_puct_offsets: list[int] = []
     raw_policy_id: str | None = None
     root_puct_policy_id: str | None = None
+    opponent_crashes: list[ControlledFoulPlayOpponentCrash] = []
 
     def raw_result() -> ControlledFoulPlayBenchmarkResult | None:
         if raw_policy_id is None:
@@ -1198,9 +1261,9 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="raw"),
             policy_id=raw_policy_id,
             games=tuple(raw_games),
-            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule_for_offsets(
                 config,
-                count=len(raw_games),
+                offsets=raw_offsets,
             ),
         )
 
@@ -1211,9 +1274,9 @@ async def _run_controlled_foulplay_comparison_per_seed(
             config=replace(config, policy_mode="root-puct"),
             policy_id=root_puct_policy_id,
             games=tuple(root_puct_games),
-            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule(
+            foulplay_random_seed_schedule=_per_seed_foulplay_random_seed_schedule_for_offsets(
                 config,
-                count=len(root_puct_games),
+                offsets=root_puct_offsets,
             ),
         )
 
@@ -1226,6 +1289,7 @@ async def _run_controlled_foulplay_comparison_per_seed(
                 raw=raw_result(),
                 root_puct=root_puct_result(),
                 comparison_mode="per-seed",
+                opponent_crashes=tuple(opponent_crashes),
             )
         )
 
@@ -1233,16 +1297,37 @@ async def _run_controlled_foulplay_comparison_per_seed(
         seed = config.seed_start + offset
         single_config = _single_seed_comparison_config(config, seed=seed, offset=offset)
 
-        raw_single = await run_controlled_foulplay_benchmark(replace(single_config, policy_mode="raw"))
+        raw_single, raw_crash = await _run_single_seed_comparison_arm(
+            replace(single_config, policy_mode="raw"),
+            seed=seed,
+        )
+        if raw_crash is not None:
+            opponent_crashes.append(raw_crash)
+            emit_progress()
+            continue
+        assert raw_single is not None
         raw_policy_id = raw_single.policy_id
         raw_games.extend(raw_single.games)
+        raw_offsets.extend([offset] * len(raw_single.games))
         emit_progress()
 
-        root_puct_single = await run_controlled_foulplay_benchmark(
-            replace(single_config, policy_mode="root-puct")
+        root_puct_single, root_puct_crash = await _run_single_seed_comparison_arm(
+            replace(single_config, policy_mode="root-puct"),
+            seed=seed,
         )
+        if root_puct_crash is not None:
+            opponent_crashes.append(root_puct_crash)
+            # Drop the raw arm's games for this seed so both arms stay symmetric and the
+            # crashed seed is fully excluded from paired stats and aggregates.
+            if raw_single.games:
+                del raw_games[-len(raw_single.games) :]
+                del raw_offsets[-len(raw_single.games) :]
+            emit_progress()
+            continue
+        assert root_puct_single is not None
         root_puct_policy_id = root_puct_single.policy_id
         root_puct_games.extend(root_puct_single.games)
+        root_puct_offsets.extend([offset] * len(root_puct_single.games))
         emit_progress()
 
     return ControlledFoulPlayComparisonResult(
@@ -1250,7 +1335,33 @@ async def _run_controlled_foulplay_comparison_per_seed(
         raw=raw_result(),
         root_puct=root_puct_result(),
         comparison_mode="per-seed",
+        opponent_crashes=tuple(opponent_crashes),
     )
+
+
+async def _run_single_seed_comparison_arm(
+    single_config: ControlledFoulPlayConfig,
+    *,
+    seed: int,
+) -> tuple[ControlledFoulPlayBenchmarkResult | None, ControlledFoulPlayOpponentCrash | None]:
+    """Run one arm of a paired seed, retrying opponent crashes up to opponent_crash_retries times."""
+
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            return await run_controlled_foulplay_benchmark(single_config), None
+        except FoulPlayProcessExitError as error:
+            if attempts <= single_config.opponent_crash_retries:
+                continue
+            return None, ControlledFoulPlayOpponentCrash(
+                seed=seed,
+                policy_mode=single_config.policy_mode,
+                returncode=error.returncode,
+                attempts=attempts,
+                stage=error.stage,
+                stderr_tail=error.log_tail,
+            )
 
 
 def _single_seed_comparison_config(
@@ -2047,7 +2158,7 @@ async def _wait_for_foulplay_choice_or_exit(
     logs: _ProcessLogBuffer,
 ) -> str:
     if process.returncode is not None:
-        raise RuntimeError(f"foul-play exited with status {process.returncode} before choosing.\n{logs.tail()}")
+        raise FoulPlayProcessExitError(stage="choosing", returncode=process.returncode, log_tail=logs.tail())
     choice_task = asyncio.create_task(server.wait_for_choice(battle_id=battle_id))
     process_task = asyncio.create_task(process.wait())
     try:
@@ -2057,8 +2168,10 @@ async def _wait_for_foulplay_choice_or_exit(
         )
         if choice_task in done:
             return choice_task.result()
-        raise RuntimeError(
-            f"foul-play exited with status {process.returncode} before choosing.\n{logs.tail()}"
+        raise FoulPlayProcessExitError(
+            stage="choosing",
+            returncode=process.returncode,
+            log_tail=logs.tail(),
         )
     finally:
         for task in (choice_task, process_task):
@@ -2074,7 +2187,7 @@ async def _wait_for_foulplay_challenge_or_exit(
     logs: _ProcessLogBuffer,
 ) -> None:
     if process.returncode is not None:
-        raise RuntimeError(f"foul-play exited with status {process.returncode} before challenging.\n{logs.tail()}")
+        raise FoulPlayProcessExitError(stage="challenging", returncode=process.returncode, log_tail=logs.tail())
     challenge_task = asyncio.create_task(server.wait_for_challenge(expected_target=expected_target))
     process_task = asyncio.create_task(process.wait())
     try:
@@ -2085,8 +2198,10 @@ async def _wait_for_foulplay_challenge_or_exit(
         if challenge_task in done:
             challenge_task.result()
             return
-        raise RuntimeError(
-            f"foul-play exited with status {process.returncode} before challenging.\n{logs.tail()}"
+        raise FoulPlayProcessExitError(
+            stage="challenging",
+            returncode=process.returncode,
+            log_tail=logs.tail(),
         )
     finally:
         for task in (challenge_task, process_task):
@@ -2397,6 +2512,16 @@ def build_comparison_arg_parser() -> argparse.ArgumentParser:
             "order and is mainly useful when process startup overhead dominates."
         ),
     )
+    parser.add_argument(
+        "--opponent-crash-retries",
+        type=int,
+        default=1,
+        help=(
+            "Times to retry a seed's arm after foul-play exits before finishing the game "
+            "(per-seed mode). A seed that still crashes is recorded as an opponent crash, "
+            "excluded from paired stats, and the run continues. Use 0 to disable retries."
+        ),
+    )
     parser.description = (
         "Run paired controlled BattleStream benchmarks: raw checkpoint and root-PUCT "
         "against external foul-play over the same seed band."
@@ -2455,6 +2580,7 @@ def _config_from_args(
         belief_start_override_samples=args.belief_start_override_samples,
         start_override_hp_fraction_tolerance=args.start_override_hp_fraction_tolerance,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
+        opponent_crash_retries=getattr(args, "opponent_crash_retries", 1),
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,
         pokezero_username=args.pokezero_username,
@@ -2545,6 +2671,12 @@ async def async_comparison_main(argv: Sequence[str] | None = None) -> int:
             print(
                 "sample-size: diagnostic_only "
                 f"({sample.get('paired_games')}/{sample.get('minimum_strength_games')} paired games)"
+            )
+        crashed = comparison.get("opponent_crashed_seeds") if isinstance(comparison, Mapping) else None
+        if isinstance(crashed, Mapping) and crashed.get("count"):
+            print(
+                f"opponent-crashes: {crashed.get('count')} seed(s) excluded because foul-play "
+                f"exited early: {crashed.get('seeds')}"
             )
     return 0
 
