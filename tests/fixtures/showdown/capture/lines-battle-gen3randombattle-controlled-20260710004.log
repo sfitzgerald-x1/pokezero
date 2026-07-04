@@ -1,0 +1,430 @@
+|t:|1783137895
+|gametype|singles
+|player|p1|PokeZeroBot||
+|player|p2|FoulPlayBot||
+|gen|3
+|tier|[Gen 3] Random Battle
+|rule|HP Percentage Mod: HP is shown in percentages
+|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members
+|rule|Endless Battle Clause: Forcing endless battles is banned
+|rule|Sleep Clause Mod: Limit one foe put to sleep
+|rule|Switch Priority Clause Mod: Faster Pokémon switch first
+|rule|Species Clause: Limit one of each Pokémon
+|rule|OHKO Clause: OHKO moves are banned
+|rule|Evasion Items Clause: Evasion items are banned
+|rule|Evasion Moves Clause: Evasion moves are banned
+|
+|t:|1783137895
+|teamsize|p1|6
+|teamsize|p2|6
+|start
+|switch|p1a: Wailord|Wailord, L87, M|438/438
+|switch|p2a: Whiscash|Whiscash, L83, M|318/318
+|turn|1
+|
+|t:|1783137897
+|move|p1a: Wailord|Ice Beam|p2a: Whiscash
+|-damage|p2a: Whiscash|239/318
+|move|p2a: Whiscash|Toxic|p1a: Wailord|[miss]
+|-miss|p2a: Whiscash|p1a: Wailord
+|
+|-heal|p2a: Whiscash|258/318|[from] item: Leftovers
+|upkeep
+|turn|2
+|
+|t:|1783137899
+|move|p2a: Whiscash|Protect|p2a: Whiscash
+|-singleturn|p2a: Whiscash|Protect
+|move|p1a: Wailord|Surf|p2a: Whiscash
+|-activate|p2a: Whiscash|Protect
+|
+|-heal|p2a: Whiscash|277/318|[from] item: Leftovers
+|upkeep
+|turn|3
+|
+|t:|1783137901
+|switch|p1a: Jumpluff|Jumpluff, L87, M|271/271
+|move|p2a: Whiscash|Toxic|p1a: Jumpluff
+|-status|p1a: Jumpluff|tox
+|
+|-damage|p1a: Jumpluff|255/271 tox|[from] psn
+|-heal|p2a: Whiscash|296/318|[from] item: Leftovers
+|upkeep
+|turn|4
+|
+|t:|1783137904
+|move|p1a: Jumpluff|Leech Seed|p2a: Whiscash
+|-start|p2a: Whiscash|move: Leech Seed
+|move|p2a: Whiscash|Toxic|p1a: Jumpluff
+|-fail|p1a: Jumpluff|tox
+|
+|-heal|p1a: Jumpluff|271/271 tox|[from] item: Leftovers
+|-damage|p1a: Jumpluff|239/271 tox|[from] psn
+|-heal|p2a: Whiscash|315/318|[from] item: Leftovers
+|-damage|p2a: Whiscash|276/318|[from] Leech Seed|[of] p1a: Jumpluff
+|-heal|p1a: Jumpluff|271/271 tox|[silent]
+|upkeep
+|turn|5
+|
+|t:|1783137906
+|switch|p2a: Luvdisc|Luvdisc, F|248/248
+|move|p1a: Jumpluff|Hidden Power|p2a: Luvdisc
+|-damage|p2a: Luvdisc|188/248
+|
+|-heal|p2a: Luvdisc|203/248|[from] item: Leftovers
+|-damage|p1a: Jumpluff|223/271 tox|[from] psn
+|upkeep
+|turn|6
+|
+|t:|1783137908
+|move|p2a: Luvdisc|Toxic|p1a: Jumpluff
+|-fail|p1a: Jumpluff|tox
+|move|p1a: Jumpluff|Leech Seed|p2a: Luvdisc
+|-start|p2a: Luvdisc|move: Leech Seed
+|
+|-heal|p2a: Luvdisc|218/248|[from] item: Leftovers
+|-damage|p2a: Luvdisc|187/248|[from] Leech Seed|[of] p1a: Jumpluff
+|-heal|p1a: Jumpluff|254/271 tox|[silent]
+|-heal|p1a: Jumpluff|270/271 tox|[from] item: Leftovers
+|-damage|p1a: Jumpluff|206/271 tox|[from] psn
+|upkeep
+|turn|7
+|
+|t:|1783137911
+|move|p2a: Luvdisc|Toxic|p1a: Jumpluff
+|-fail|p1a: Jumpluff|tox
+|move|p1a: Jumpluff|Leech Seed||[still]
+|-fail|p1a: Jumpluff
+|
+|-heal|p2a: Luvdisc|202/248|[from] item: Leftovers
+|-damage|p2a: Luvdisc|171/248|[from] Leech Seed|[of] p1a: Jumpluff
+|-heal|p1a: Jumpluff|237/271 tox|[silent]
+|-heal|p1a: Jumpluff|253/271 tox|[from] item: Leftovers
+|-damage|p1a: Jumpluff|173/271 tox|[from] psn
+|upkeep
+|turn|8
+|
+|t:|1783137913
+|switch|p2a: Exploud|Exploud, L86, M|319/319
+|move|p1a: Jumpluff|Hidden Power|p2a: Exploud
+|-damage|p2a: Exploud|253/319
+|
+|-heal|p1a: Jumpluff|189/271 tox|[from] item: Leftovers
+|-damage|p1a: Jumpluff|93/271 tox|[from] psn
+|-heal|p2a: Exploud|272/319|[from] item: Leftovers
+|upkeep
+|turn|9
+|
+|t:|1783137915
+|switch|p2a: Cacturne|Cacturne, L96, F|290/290
+|move|p1a: Jumpluff|Leech Seed|p2a: Cacturne
+|-immune|p2a: Cacturne
+|
+|-heal|p1a: Jumpluff|109/271 tox|[from] item: Leftovers
+|-damage|p1a: Jumpluff|0 fnt|[from] psn
+|faint|p1a: Jumpluff
+|upkeep
+|
+|t:|1783137915
+|switch|p1a: Miltank|Miltank, L77, F|273/273
+|turn|10
+|
+|t:|1783137917
+|move|p1a: Miltank|Toxic|p2a: Cacturne
+|-status|p2a: Cacturne|tox
+|move|p2a: Cacturne|Hidden Power|p1a: Miltank
+|-damage|p1a: Miltank|135/273
+|
+|-heal|p1a: Miltank|152/273|[from] item: Leftovers
+|-damage|p2a: Cacturne|272/290 tox|[from] psn
+|upkeep
+|turn|11
+|
+|t:|1783137920
+|move|p1a: Miltank|Body Slam|p2a: Cacturne
+|-damage|p2a: Cacturne|195/290 tox
+|move|p2a: Cacturne|Leech Seed|p1a: Miltank
+|-start|p1a: Miltank|move: Leech Seed
+|
+|-heal|p1a: Miltank|169/273|[from] item: Leftovers
+|-damage|p1a: Miltank|135/273|[from] Leech Seed|[of] p2a: Cacturne
+|-heal|p2a: Cacturne|229/290 tox|[silent]
+|-heal|p2a: Cacturne|247/290 tox|[from] item: Leftovers
+|-damage|p2a: Cacturne|211/290 tox|[from] psn
+|upkeep
+|turn|12
+|
+|t:|1783137922
+|switch|p2a: Exploud|Exploud, L86, M|272/319
+|move|p1a: Miltank|Body Slam|p2a: Exploud
+|-damage|p2a: Exploud|192/319
+|
+|-heal|p1a: Miltank|152/273|[from] item: Leftovers
+|-damage|p1a: Miltank|118/273|[from] Leech Seed|[of] p2a: Exploud
+|-heal|p2a: Exploud|226/319|[silent]
+|-heal|p2a: Exploud|245/319|[from] item: Leftovers
+|upkeep
+|turn|13
+|
+|t:|1783137924
+|move|p1a: Miltank|Body Slam|p2a: Exploud
+|-damage|p2a: Exploud|157/319
+|move|p2a: Exploud|Return|p1a: Miltank
+|-damage|p1a: Miltank|11/273
+|
+|-heal|p1a: Miltank|28/273|[from] item: Leftovers
+|-damage|p1a: Miltank|0 fnt|[from] Leech Seed|[of] p2a: Exploud
+|-heal|p2a: Exploud|185/319|[silent]
+|faint|p1a: Miltank
+|-heal|p2a: Exploud|204/319|[from] item: Leftovers
+|upkeep
+|
+|t:|1783137924
+|switch|p1a: Donphan|Donphan, L83, M|285/285
+|turn|14
+|
+|t:|1783137926
+|move|p2a: Exploud|Ice Beam|p1a: Donphan
+|-supereffective|p1a: Donphan
+|-damage|p1a: Donphan|115/285
+|move|p1a: Donphan|Earthquake|p2a: Exploud
+|-damage|p2a: Exploud|55/319
+|
+|-heal|p2a: Exploud|74/319|[from] item: Leftovers
+|-heal|p1a: Donphan|132/285|[from] item: Leftovers
+|upkeep
+|turn|15
+|
+|t:|1783137929
+|move|p2a: Exploud|Ice Beam|p1a: Donphan
+|-supereffective|p1a: Donphan
+|-damage|p1a: Donphan|0 fnt
+|faint|p1a: Donphan
+|
+|t:|1783137929
+|switch|p1a: Lickitung|Lickitung, L94, F|322/322
+|
+|-heal|p2a: Exploud|93/319|[from] item: Leftovers
+|upkeep
+|turn|16
+|
+|t:|1783137931
+|switch|p2a: Whiscash|Whiscash, L83, M|276/318
+|move|p1a: Lickitung|Seismic Toss|p2a: Whiscash
+|-damage|p2a: Whiscash|182/318
+|
+|-heal|p2a: Whiscash|201/318|[from] item: Leftovers
+|upkeep
+|turn|17
+|
+|t:|1783137933
+|move|p2a: Whiscash|Toxic|p1a: Lickitung
+|-status|p1a: Lickitung|tox
+|move|p1a: Lickitung|Seismic Toss|p2a: Whiscash
+|-damage|p2a: Whiscash|107/318
+|
+|-heal|p2a: Whiscash|126/318|[from] item: Leftovers
+|-damage|p1a: Lickitung|302/322 tox|[from] psn
+|upkeep
+|turn|18
+|
+|t:|1783137936
+|move|p2a: Whiscash|Earthquake|p1a: Lickitung
+|-damage|p1a: Lickitung|205/322 tox
+|move|p1a: Lickitung|Seismic Toss|p2a: Whiscash
+|-damage|p2a: Whiscash|32/318
+|
+|-heal|p2a: Whiscash|51/318|[from] item: Leftovers
+|-heal|p1a: Lickitung|225/322 tox|[from] item: Leftovers
+|-damage|p1a: Lickitung|185/322 tox|[from] psn
+|upkeep
+|turn|19
+|
+|t:|1783137938
+|move|p2a: Whiscash|Earthquake|p1a: Lickitung
+|-damage|p1a: Lickitung|90/322 tox
+|move|p1a: Lickitung|Seismic Toss|p2a: Whiscash
+|-damage|p2a: Whiscash|0 fnt
+|faint|p2a: Whiscash
+|
+|t:|1783137940
+|switch|p2a: Sandslash|Sandslash, L85, F|266/266
+|
+|-heal|p1a: Lickitung|110/322 tox|[from] item: Leftovers
+|-damage|p1a: Lickitung|50/322 tox|[from] psn
+|upkeep
+|turn|20
+|
+|t:|1783137942
+|move|p2a: Sandslash|Earthquake|p1a: Lickitung
+|-damage|p1a: Lickitung|0 fnt
+|faint|p1a: Lickitung
+|
+|t:|1783137942
+|switch|p1a: Wailord|Wailord, L87, M|438/438
+|
+|upkeep
+|turn|21
+|
+|t:|1783137945
+|switch|p2a: Luvdisc|Luvdisc, F|171/248
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-damage|p2a: Luvdisc|117/248
+|
+|-heal|p2a: Luvdisc|132/248|[from] item: Leftovers
+|upkeep
+|turn|22
+|
+|t:|1783137947
+|move|p2a: Luvdisc|Substitute|p2a: Luvdisc
+|-start|p2a: Luvdisc|Substitute
+|-damage|p2a: Luvdisc|70/248
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-activate|p2a: Luvdisc|Substitute|[damage]
+|
+|-heal|p2a: Luvdisc|85/248|[from] item: Leftovers
+|upkeep
+|turn|23
+|
+|t:|1783137949
+|move|p2a: Luvdisc|Toxic|p1a: Wailord
+|-status|p1a: Wailord|tox
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-end|p2a: Luvdisc|Substitute
+|
+|-heal|p2a: Luvdisc|100/248|[from] item: Leftovers
+|-damage|p1a: Wailord|411/438 tox|[from] psn
+|upkeep
+|turn|24
+|
+|t:|1783137951
+|move|p2a: Luvdisc|Substitute|p2a: Luvdisc
+|-start|p2a: Luvdisc|Substitute
+|-damage|p2a: Luvdisc|38/248
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-activate|p2a: Luvdisc|Substitute|[damage]
+|
+|-heal|p2a: Luvdisc|53/248|[from] item: Leftovers
+|-heal|p1a: Wailord|438/438 tox|[from] item: Leftovers
+|-damage|p1a: Wailord|384/438 tox|[from] psn
+|upkeep
+|turn|25
+|
+|t:|1783137954
+|move|p2a: Luvdisc|Protect|p2a: Luvdisc
+|-singleturn|p2a: Luvdisc|Protect
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-activate|p2a: Luvdisc|Protect
+|
+|-heal|p2a: Luvdisc|68/248|[from] item: Leftovers
+|-heal|p1a: Wailord|411/438 tox|[from] item: Leftovers
+|-damage|p1a: Wailord|330/438 tox|[from] psn
+|upkeep
+|turn|26
+|
+|t:|1783137956
+|move|p2a: Luvdisc|Toxic|p1a: Wailord
+|-fail|p1a: Wailord|tox
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-end|p2a: Luvdisc|Substitute
+|
+|-heal|p2a: Luvdisc|83/248|[from] item: Leftovers
+|-heal|p1a: Wailord|357/438 tox|[from] item: Leftovers
+|-damage|p1a: Wailord|249/438 tox|[from] psn
+|upkeep
+|turn|27
+|
+|t:|1783137958
+|move|p2a: Luvdisc|Substitute|p2a: Luvdisc
+|-start|p2a: Luvdisc|Substitute
+|-damage|p2a: Luvdisc|21/248
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-activate|p2a: Luvdisc|Substitute|[damage]
+|
+|-heal|p2a: Luvdisc|36/248|[from] item: Leftovers
+|-heal|p1a: Wailord|276/438 tox|[from] item: Leftovers
+|-damage|p1a: Wailord|141/438 tox|[from] psn
+|upkeep
+|turn|28
+|
+|t:|1783137960
+|move|p2a: Luvdisc|Surf|p1a: Wailord
+|-resisted|p1a: Wailord
+|-damage|p1a: Wailord|83/438 tox
+|move|p1a: Wailord|Surf|p2a: Luvdisc
+|-resisted|p2a: Luvdisc
+|-crit|p2a: Luvdisc
+|-end|p2a: Luvdisc|Substitute
+|
+|-heal|p2a: Luvdisc|51/248|[from] item: Leftovers
+|-heal|p1a: Wailord|110/438 tox|[from] item: Leftovers
+|-damage|p1a: Wailord|0 fnt|[from] psn
+|faint|p1a: Wailord
+|upkeep
+|
+|t:|1783137960
+|switch|p1a: Grumpig|Grumpig, L83, F|268/268
+|turn|29
+|
+|t:|1783137963
+|move|p2a: Luvdisc|Toxic|p1a: Grumpig
+|-status|p1a: Grumpig|tox
+|move|p1a: Grumpig|Psychic|p2a: Luvdisc
+|-damage|p2a: Luvdisc|0 fnt
+|faint|p2a: Luvdisc
+|
+|t:|1783137965
+|switch|p2a: Cacturne|Cacturne, L96, F|211/290 tox
+|
+|-damage|p1a: Grumpig|252/268 tox|[from] psn
+|-heal|p2a: Cacturne|229/290 tox|[from] item: Leftovers
+|-damage|p2a: Cacturne|211/290 tox|[from] psn
+|upkeep
+|turn|30
+|
+|t:|1783137967
+|move|p1a: Grumpig|Calm Mind|p1a: Grumpig
+|-boost|p1a: Grumpig|spa|1
+|-boost|p1a: Grumpig|spd|1
+|move|p2a: Cacturne|Hidden Power|p1a: Grumpig
+|-supereffective|p1a: Grumpig
+|-damage|p1a: Grumpig|127/268 tox
+|
+|-heal|p1a: Grumpig|143/268 tox|[from] item: Leftovers
+|-damage|p1a: Grumpig|111/268 tox|[from] psn
+|-heal|p2a: Cacturne|229/290 tox|[from] item: Leftovers
+|-damage|p2a: Cacturne|193/290 tox|[from] psn
+|upkeep
+|turn|31
+|
+|t:|1783137969
+|switch|p2a: Sandslash|Sandslash, L85, F|266/266
+|move|p1a: Grumpig|Psychic|p2a: Sandslash
+|-damage|p2a: Sandslash|96/266
+|
+|-heal|p1a: Grumpig|127/268 tox|[from] item: Leftovers
+|-damage|p1a: Grumpig|79/268 tox|[from] psn
+|-heal|p2a: Sandslash|112/266|[from] item: Leftovers
+|upkeep
+|turn|32
+|
+|t:|1783137971
+|move|p1a: Grumpig|Psychic|p2a: Sandslash
+|-damage|p2a: Sandslash|0 fnt
+|faint|p2a: Sandslash
+|
+|t:|1783137973
+|switch|p2a: Vigoroth|Vigoroth, L84, F|272/272
+|
+|-heal|p1a: Grumpig|95/268 tox|[from] item: Leftovers
+|-damage|p1a: Grumpig|31/268 tox|[from] psn
+|upkeep
+|turn|33
+|request|{"active":[{"moves":[{"move":"Fire Punch","id":"firepunch","pp":24,"maxpp":24,"target":"normal","disabled":false},{"move":"Substitute","id":"substitute","pp":16,"maxpp":16,"target":"self","disabled":false},{"move":"Calm Mind","id":"calmmind","pp":31,"maxpp":32,"target":"self","disabled":false},{"move":"Psychic","id":"psychic","pp":13,"maxpp":16,"target":"normal","disabled":false}]}],"side":{"name":"PokeZeroBot","id":"p1","pokemon":[{"ident":"p1: Grumpig","details":"Grumpig, L83, F","condition":"31/268 tox","active":true,"stats":{"atk":79,"def":156,"spa":197,"spd":230,"spe":180},"moves":["firepunch","substitute","calmmind","psychic"],"baseAbility":"thickfat","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Donphan","details":"Donphan, L83, M","condition":"0 fnt","active":false,"stats":{"atk":247,"def":247,"spa":147,"spd":147,"spe":131},"moves":["earthquake","rapidspin","toxic","rockslide"],"baseAbility":"sturdy","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Lickitung","details":"Lickitung, L94, F","condition":"0 fnt","active":false,"stats":{"atk":108,"def":194,"spa":166,"spd":194,"spe":110},"moves":["seismictoss","protect","toxic","wish"],"baseAbility":"owntempo","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Wailord","details":"Wailord, L87, M","condition":"0 fnt","active":false,"stats":{"atk":205,"def":128,"spa":205,"spd":128,"spe":154},"moves":["selfdestruct","hiddenpowergrass","surf","icebeam"],"baseAbility":"waterveil","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Miltank","details":"Miltank, L77, F","condition":"0 fnt","active":false,"stats":{"atk":168,"def":206,"spa":106,"spd":152,"spe":199},"moves":["bodyslam","milkdrink","earthquake","toxic"],"baseAbility":"thickfat","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Jumpluff","details":"Jumpluff, L87, M","condition":"0 fnt","active":false,"stats":{"atk":145,"def":171,"spa":145,"spd":197,"spe":241},"moves":["leechseed","protect","substitute","hiddenpowerflying"],"baseAbility":"chlorophyll","item":"leftovers","pokeball":"pokeball"}]}}
+|request|{"active":[{"moves":[{"move":"Earthquake","id":"earthquake","pp":16,"maxpp":16,"target":"allAdjacent","disabled":false},{"move":"Return 102","id":"return","pp":32,"maxpp":32,"target":"normal","disabled":false},{"move":"Slack Off","id":"slackoff","pp":16,"maxpp":16,"target":"self","disabled":false},{"move":"Bulk Up","id":"bulkup","pp":32,"maxpp":32,"target":"self","disabled":false}]}],"side":{"name":"FoulPlayBot","id":"p2","pokemon":[{"ident":"p2: Vigoroth","details":"Vigoroth, L84, F","condition":"272/272","active":true,"stats":{"atk":183,"def":183,"spa":141,"spd":141,"spe":199},"moves":["earthquake","return102","slackoff","bulkup"],"baseAbility":"vitalspirit","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Exploud","details":"Exploud, L86, M","condition":"93/319","active":false,"stats":{"atk":206,"def":158,"spa":206,"spd":158,"spe":166},"moves":["flamethrower","return102","earthquake","icebeam"],"baseAbility":"soundproof","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Cacturne","details":"Cacturne, L96, F","condition":"193/290 tox","active":false,"stats":{"atk":275,"def":170,"spa":275,"spd":170,"spe":160},"moves":["leechseed","substitute","hiddenpowerdark","focuspunch"],"baseAbility":"sandveil","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Sandslash","details":"Sandslash, L85, F","condition":"0 fnt","active":false,"stats":{"atk":219,"def":236,"spa":125,"spd":142,"spe":159},"moves":["rapidspin","earthquake","toxic","rockslide"],"baseAbility":"sandveil","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Luvdisc","details":"Luvdisc, F","condition":"0 fnt","active":false,"stats":{"atk":65,"def":167,"spa":137,"spd":187,"spe":251},"moves":["substitute","protect","surf","toxic"],"baseAbility":"swiftswim","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Whiscash","details":"Whiscash, L83, M","condition":"0 fnt","active":false,"stats":{"atk":177,"def":169,"spa":174,"spd":166,"spe":147},"moves":["earthquake","icebeam","protect","toxic"],"baseAbility":"oblivious","item":"leftovers","pokeball":"pokeball"}]}}

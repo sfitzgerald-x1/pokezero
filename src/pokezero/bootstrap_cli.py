@@ -17,7 +17,7 @@ from .bootstrap import (
     benchmark_teacher_policy,
     run_teacher_bootstrap,
 )
-from .collection import policy_from_spec, policy_spec_with_showdown_root
+from .collection import env_config_with_policy_spec_masks, policy_from_spec, policy_spec_with_showdown_root
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .policy import SCRIPTED_TEACHER_BRANCHES
@@ -252,6 +252,9 @@ def _teacher(args: argparse.Namespace) -> int:
         if args.opponent_policy is not None
         else None
     )
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (teacher_policy, *(opponent_policies or ())), context="teacher bootstrap"
+    )
     result = run_teacher_bootstrap(
         run_dir=args.run_dir,
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -313,6 +316,9 @@ def _teacher_benchmark(args: argparse.Namespace) -> int:
         if args.baseline_policy is not None
         else None
     )
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (teacher_policy, *(baseline_policies or ())), context="teacher benchmark"
+    )
     result = benchmark_teacher_policy(
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=RolloutConfig(
@@ -364,6 +370,9 @@ def _teacher_selfplay_benchmark(args: argparse.Namespace) -> int:
     )
     policy_showdown_root = env_config.resolved_showdown_root()
     teacher_policy = policy_spec_with_showdown_root(args.teacher_policy, policy_showdown_root)
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (teacher_policy,), context="teacher self-play benchmark"
+    )
     result = benchmark_teacher_selfplay(
         env_factory=lambda: LocalShowdownEnv(env_config),
         rollout_config=RolloutConfig(

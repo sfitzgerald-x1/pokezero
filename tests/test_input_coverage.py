@@ -37,6 +37,28 @@ NUMERIC_LABELS = {
     34: "SELF_HP_COST", 35: "SELF_FUTURE_SIGHT", 36: "OPP_FUTURE_SIGHT", 37: "TOXIC_STAGE",
     38: "ACTUAL_HP", 39: "ACTUAL_ATK", 40: "ACTUAL_DEF", 41: "ACTUAL_SPA", 42: "ACTUAL_SPD",
     43: "ACTUAL_SPE",
+    # ---- spec v2 (exact-state layer + stats token + transition tokens). ----
+    44: "SELF_SLEEP_CLAUSE", 45: "OPP_SLEEP_CLAUSE", 46: "WEATHER_TURNS", 47: "WEATHER_PERMANENT",
+    48: "SELF_REFLECT_TURNS", 49: "SELF_LIGHT_SCREEN_TURNS", 50: "SELF_SAFEGUARD_TURNS",
+    51: "SELF_MIST_TURNS", 52: "OPP_REFLECT_TURNS", 53: "OPP_LIGHT_SCREEN_TURNS",
+    54: "OPP_SAFEGUARD_TURNS", 55: "OPP_MIST_TURNS", 56: "SELF_WISH_PENDING", 57: "OPP_WISH_PENDING",
+    58: "SLEEP_TURNS", 59: "REST_SLEEP", 60: "WAKE_KNOWN", 61: "TURNS_ACTIVE", 62: "TRAPPER_ALIVE",
+    63: "MON_SWITCHED_BEFORE_ATTACK", 64: "MON_STAYED_AND_ATTACKED", 65: "MON_TURNS_ACTIVE_TOTAL",
+    66: "EXPECTED_HP", 67: "EXPECTED_HP_LOW", 68: "EXPECTED_HP_HIGH", 69: "EXPECTED_ATK",
+    70: "EXPECTED_ATK_LOW", 71: "EXPECTED_ATK_HIGH", 72: "EXPECTED_DEF", 73: "EXPECTED_SPA",
+    74: "EXPECTED_SPD", 75: "EXPECTED_SPE",
+    **{76 + i: f"OPP_MOVE_PP[{i}]" for i in range(16)},
+    92: "STAT_OPP_SWITCH_COUNT", 93: "STAT_OPP_DECISION_OPPORTUNITIES",
+    94: "STAT_BLOCKED_ON_OUR_ATTACK", 95: "STAT_PURSUIT_INTERCEPT_PREDICT",
+    96: "STAT_MY_SWITCH_TURNS",
+    97: "STAT_WEATHER_RAIN_SET", 98: "STAT_WEATHER_RAIN_ABILITY",
+    99: "STAT_WEATHER_SUN_SET", 100: "STAT_WEATHER_SUN_ABILITY",
+    101: "STAT_WEATHER_SAND_SET", 102: "STAT_WEATHER_SAND_ABILITY",
+    103: "STAT_WEATHER_HAIL_SET", 104: "STAT_WEATHER_HAIL_ABILITY",
+    105: "TT_DAMAGE_FRACTION", 106: "TT_N_HITS", 107: "TT_CALLED", 108: "TT_TRANSFORMED",
+    109: "TT_CRIT", 110: "TT_MISS", 111: "TT_KO", 112: "TT_PURSUIT_INTERCEPT",
+    113: "TT_OWN_SPIKES", 114: "TT_OPP_SPIKES", 115: "TT_ABS_TURN", 116: "TT_TURNS_AGO",
+    117: "TT_RESIDUAL", 118: "TT_RESIDUAL_VALID",
 }
 
 def categorical_label(col: int) -> str:
@@ -62,6 +84,22 @@ def categorical_label(col: int) -> str:
 ALLOW_NUMERIC: set[int] = {
     24, 25,   # SELF/OPP_SCREENS   — situational (Reflect/Light Screen users absent from SEEDS)
     35, 36,   # SELF/OPP_FUTURE_SIGHT — situational (Future Sight rare in Gen 3 randbats sets)
+    # ---- spec v2 allowances (verified against the 12-seed sweep; everything else covers). ----
+    48, 49, 50, 51, 52, 53, 54, 55,  # timed screen/Safeguard/Mist counters — situational
+                                     # (same mechanic class as 24/25: no setters in SEEDS)
+    87, 88, 89,  # OPP_MOVE_PP[11..13] — situational (needs 12+ occupied belief-move buckets
+                 # with a REVEALED move that deep in the sorted order)
+    90, 91,      # OPP_MOVE_PP[14..15] — structural (mirrors BELIEF_MOVE[14..15]: 16 buckets,
+                 # Gen 3 cap is 14 moves/species)
+    95,          # STAT_PURSUIT_INTERCEPT_PREDICT — situational (doubled Pursuit is rare;
+                 # exercised by transitions fixtures)
+    98,          # STAT_WEATHER_RAIN_ABILITY — situational (Drizzle = Kyogre only in the pool)
+    103,         # STAT_WEATHER_HAIL_SET — situational (Hail users rare in gen 3 randbats)
+    104,         # STAT_WEATHER_HAIL_ABILITY — structural (no hail ability exists in gen 3)
+    108,         # TT_TRANSFORMED — situational (Ditto/Mew only; exercised by unit fixtures)
+    112,         # TT_PURSUIT_INTERCEPT — situational (see 95)
+    117, 118,    # TT_RESIDUAL / TT_RESIDUAL_VALID — structural BY DESIGN: reserved zero-masked
+                 # Tier-2 slots (corrections items 9/10); PR D populates them behind its gate
 }
 ALLOW_CATEGORICAL: set[int] = {
     16,               # BELIEF_ITEM[5]  — structural (6 buckets, Gen 3 cap is 5 items/species)
@@ -158,5 +196,5 @@ if __name__ == "__main__":
     num_values, cat_ids = _aggregate_coverage()
     dead_n = sorted(j for j in num_values if len(num_values[j]) < 2)
     dead_c = sorted(j for j in cat_ids if len(cat_ids[j]) < 2)
-    print("UNCOVERED numeric:", [f"{j}:{NUMERIC_LABELS[j]}" for j in dead_n])
+    print("UNCOVERED numeric:", [f"{j}:{NUMERIC_LABELS.get(j, chr(63))}" for j in dead_n])
     print("UNCOVERED categorical:", [f"{j}:{categorical_label(j)}" for j in dead_c])

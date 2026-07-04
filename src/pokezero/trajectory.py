@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional
 
 from .actions import ACTION_COUNT
 from .env import TerminalState
-from .observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, PokeZeroObservationV0
+from .observation import UNVERSIONED_OBSERVATION_SCHEMA, ObservationPerspective, PokeZeroObservationV0
 
 
 @dataclass(frozen=True)
@@ -162,7 +162,9 @@ def _observation_from_dict(payload: Mapping[str, Any]) -> PokeZeroObservationV0:
         legal_action_mask=tuple(bool(value) for value in _sequence(payload["legal_action_mask"])),
         perspective=_perspective_from_dict(payload.get("perspective")),
         metadata=_mapping(payload.get("metadata", {})),
-        schema_version=str(payload.get("schema_version") or OBSERVATION_SCHEMA_VERSION),
+        # One-way-door posture: a payload with NO schema version is an unknown/legacy artifact
+        # and must be refused downstream — never silently coerced to the current spec.
+        schema_version=str(payload.get("schema_version") or UNVERSIONED_OBSERVATION_SCHEMA),
     )
 
 

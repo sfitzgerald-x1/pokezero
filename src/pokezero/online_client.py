@@ -96,6 +96,10 @@ class OnlineBattleAgent:
     dex: Any
     our_name: str
     spec: Any = DEFAULT_REPLAY_OBSERVATION_SPEC
+    # Encode-time feature masks, derived from the checkpoint's stamped provenance in
+    # build_agent (never left at defaults for a masked ablation checkpoint — the mask-axis
+    # twin of the #492 belief-source train/eval mismatch).
+    feature_masks: Any = None
     rng: random.Random = None  # type: ignore[assignment]
     # Candidate-set source for belief views. None defers to the POKEZERO_BELIEF_SET_SOURCE env
     # gate at build time (build_agent) — the online client is the cluster foul-play probes'
@@ -120,8 +124,9 @@ class OnlineBattleAgent:
             return None
         if not any(state.legal_action_mask):
             return None
+        encode_kwargs = {"feature_masks": self.feature_masks} if self.feature_masks is not None else {}
         observation = observation_from_player_state(
-            state, category_vocab=self.vocab, spec=self.spec, dex=self.dex
+            state, category_vocab=self.vocab, spec=self.spec, dex=self.dex, **encode_kwargs
         )
         decision = self.policy.select_action(observation, rng=self.rng)
         return showdown_choice_for_action(state, decision.action_index)
@@ -140,6 +145,8 @@ def build_agent(
     from .neural_policy import load_transformer_policy
     from .randbat_vocab import gen3_category_vocabulary
 
+    from .neural_policy import feature_masks_from_model_config
+
     policy = load_transformer_policy(checkpoint, deterministic=deterministic)
     config = policy.result.model_config
     # Feed the model the observation shape it was trained on (it may predate later feature slots).
@@ -152,6 +159,7 @@ def build_agent(
         policy=policy,
         vocab=gen3_category_vocabulary(showdown_root),
         dex=load_showdown_dex_cached(showdown_root),
+        feature_masks=feature_masks_from_model_config(config),
         set_source=(
             load_gen3_randbat_source_cached(showdown_root)
             if belief_set_source_env_enabled()

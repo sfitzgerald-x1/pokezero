@@ -1538,6 +1538,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
             policy_id = "checkpoint"
             categorical_feature_count = 1
             numeric_feature_count = 1
+            stats_block_enabled = True
+            exact_state_enabled = True
+            transition_token_budget = 128
 
         class FakeCheckpointResult:
             model_config = FakeModelConfig()
@@ -1642,6 +1645,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
             policy_id = "checkpoint"
             categorical_feature_count = 1
             numeric_feature_count = 1
+            stats_block_enabled = True
+            exact_state_enabled = True
+            transition_token_budget = 128
 
         class FakeCheckpointResult:
             model_config = FakeModelConfig()

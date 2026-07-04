@@ -41,6 +41,14 @@ class MoveInfo:
     # Fraction of the user's max HP the move spends upfront as a deterrent (Belly Drum 0.5,
     # Substitute 0.25, Explosion/Self-Destruct 1.0). Recoil (damage-proportional) is separate.
     self_hp_cost: float = 0.0
+    # Base PP from the dex (0 when unknown). Randbat catalog max PP is 3-PP-Up maxed:
+    # floor(pp * 8/5) — see max_move_pp(); the opponent PP ledger divides by that.
+    pp: int = 0
+
+    @property
+    def max_pp(self) -> int:
+        """Catalog max PP for randbats sets (3 PP Ups): floor(base * 8/5); 0 when unknown."""
+        return (self.pp * 8) // 5 if self.pp > 0 else 0
 
 
 @dataclass(frozen=True)
@@ -150,6 +158,7 @@ for (const id of Object.keys(Moves)) {
     basePower: move.basePower || 0,
     accuracy: move.accuracy === true ? 100 : (move.accuracy || 0),
     priority: move.priority || 0,
+    pp: move.pp || 0,
     recoil: Boolean(move.recoil || move.hasCrashDamage),
     drain: Boolean(move.drain),
     heal: Boolean(move.heal),
@@ -343,6 +352,7 @@ def _move_info_from_payload(move_id: str, payload: Mapping[str, Any]) -> MoveInf
         effect_chance=int(effect_chance),
         effect_label=str(effect_label),
         self_hp_cost=float(self_hp_cost),
+        pp=int(payload.get("pp") or 0),
     )
 
 

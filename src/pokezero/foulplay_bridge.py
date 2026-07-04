@@ -38,12 +38,17 @@ from .local_showdown import (
 from .mcts_diagnostics import root_puct_fallback_category
 from .neural_policy import (
     TransformerSoftmaxPolicy,
+    feature_masks_from_model_config,
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
 )
-from .observation import PokeZeroObservationV0
+from .observation import (
+    DEFAULT_OBSERVATION_FEATURE_MASKS,
+    ObservationFeatureMasks,
+    PokeZeroObservationV0,
+)
 from .policy import Policy, PolicyContext, PolicyDecision
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
@@ -1107,11 +1112,16 @@ async def run_controlled_foulplay_benchmark(
     )
     vocab = gen3_category_vocabulary(config.showdown_root)
     dex = load_showdown_dex_cached(config.showdown_root)
+    # Encode-time feature masks come FROM the checkpoint's stamped provenance (never the
+    # defaults): a K=32 / stats-off / exact-state-off arm must be probed on observations
+    # encoded exactly as trained — the mask-axis twin of the #492 belief-source mismatch.
+    feature_masks = feature_masks_from_model_config(result.model_config)
     env_config = LocalShowdownConfig(
         showdown_root=config.showdown_root,
         node_binary=config.node_binary,
         observation_spec=observation_spec,
         category_vocab=vocab,
+        feature_masks=feature_masks,
     )
     rollout_config = RolloutConfig(
         max_decision_rounds=config.max_decision_rounds,
@@ -1158,6 +1168,7 @@ async def run_controlled_foulplay_benchmark(
                     vocab=vocab,
                     dex=dex,
                     observation_spec=observation_spec,
+                    feature_masks=feature_masks,
                     seed=seed,
                     foulplay_process=foulplay_process,
                     foulplay_logs=foulplay_logs,
@@ -1609,6 +1620,7 @@ async def _run_single_game(
     vocab: CategoryVocabulary,
     dex: ShowdownDex,
     observation_spec: Any,
+    feature_masks: "ObservationFeatureMasks" = DEFAULT_OBSERVATION_FEATURE_MASKS,
     seed: int,
     foulplay_process: asyncio.subprocess.Process,
     foulplay_logs: _ProcessLogBuffer,
@@ -1671,6 +1683,7 @@ async def _run_single_game(
                 vocab=vocab,
                 dex=dex,
                 observation_spec=observation_spec,
+                feature_masks=feature_masks,
                 decision_round=decision_round,
                 requested_players=requested_players,
                 foulplay_process=foulplay_process,
@@ -2076,6 +2089,7 @@ async def _handle_decision_boundary(
     vocab: CategoryVocabulary,
     dex: ShowdownDex,
     observation_spec: Any,
+    feature_masks: "ObservationFeatureMasks" = DEFAULT_OBSERVATION_FEATURE_MASKS,
     decision_round: int,
     requested_players: tuple[PlayerId, ...],
     foulplay_process: asyncio.subprocess.Process,
@@ -2094,6 +2108,7 @@ async def _handle_decision_boundary(
                 category_vocab=vocab,
                 spec=observation_spec,
                 dex=dex,
+                feature_masks=feature_masks,
             ),
             player_states[player],
         )

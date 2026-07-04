@@ -162,7 +162,12 @@ from .neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from .observation import OBSERVATION_SCHEMA_VERSION, ObservationSpec, PokeZeroObservationV0
+from .observation import (
+    OBSERVATION_SCHEMA_VERSION,
+    ObservationFeatureMasks,
+    ObservationSpec,
+    PokeZeroObservationV0,
+)
 from .opponents import (
     DEFAULT_MAX_HISTORICAL_OPPONENTS,
     HISTORICAL_OPPONENT_SELECTION_MODES,
@@ -349,6 +354,7 @@ __all__ = [
     "NeuralSelfPlayIterationResult",
     "NeuralSelfPlayPromotionConfig",
     "NeuralSelfPlayRunResult",
+    "ObservationFeatureMasks",
     "ObservationSpec",
     "ObservationValueFunction",
     "OpponentActionPriorFunction",
