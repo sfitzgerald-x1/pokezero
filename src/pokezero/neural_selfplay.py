@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
+import sys
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
@@ -20,6 +21,7 @@ from .collection import (
     BenchmarkReport,
     CollectionMetrics,
     benchmark_rollouts,
+    distinct_belief_set_source_hashes,
     policy_factory_from_spec,
     _split_policy_spec_options,
 )
@@ -766,6 +768,15 @@ def run_neural_selfplay_iterations(
                     artifact_path=iteration_dir / "value-selection.json",
                 )
             training_elapsed_seconds = perf_counter() - training_started
+            provenance_hashes = distinct_belief_set_source_hashes(training_input_paths)
+            if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
+                training = replace(training, belief_set_source_hash=provenance_hashes[0])
+            elif len(provenance_hashes) > 1:
+                print(
+                    "warning: iteration training data mixes belief set-source provenance "
+                    f"({', '.join(str(h)[:12] for h in provenance_hashes)}); checkpoint records none.",
+                    file=sys.stderr,
+                )
             save_transformer_checkpoint(checkpoint_path, model, result=training)
             checkpoint_bytes = checkpoint_path.stat().st_size if checkpoint_path.exists() else None
             value_calibration = _evaluate_iteration_value_calibration(

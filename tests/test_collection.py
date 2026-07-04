@@ -284,6 +284,41 @@ class CollectionTest(unittest.TestCase):
                 ("abc123", None),
             )
 
+    def test_training_cache_metadata_records_belief_provenance(self) -> None:
+        import json
+        from dataclasses import replace as dc_replace
+
+        from pokezero.collection import distinct_belief_set_source_hashes
+        from pokezero.dataset import TrainingCacheBuilder
+
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("numpy is not installed in this environment.")
+
+        record = dc_replace(collect_one_record_for_test(), belief_set_source_hash="cachehash1")
+        builder = TrainingCacheBuilder()
+        builder.add_record(record)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            builder.write(cache_path, cache_root=Path(temp_dir))
+            metadata = json.loads((cache_path / "metadata.json").read_text())
+            self.assertEqual(metadata["belief_set_source_hash"], "cachehash1")
+            self.assertFalse(metadata["belief_set_source_mixed"])
+            # the provenance helper reads cache directories via their metadata
+            self.assertEqual(distinct_belief_set_source_hashes([cache_path]), ("cachehash1",))
+
+    def test_distinct_hashes_survive_malformed_lines_and_detect_in_file_mixes(self) -> None:
+        from pokezero.collection import distinct_belief_set_source_hashes
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            junk = Path(temp_dir) / "junk.jsonl"
+            junk.write_text("[1, 2, 3]\n")  # valid JSON, not an object — must not raise
+            mixed = Path(temp_dir) / "mixed.jsonl"
+            mixed.write_text('{"belief_set_source_hash": "h1"}\n{"battle_id": "x"}\n')
+            self.assertEqual(distinct_belief_set_source_hashes([junk]), (None,))
+            self.assertEqual(distinct_belief_set_source_hashes([mixed]), ("h1", None))
+
     def test_collect_rollouts_writes_jsonl_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"

@@ -170,6 +170,54 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
         self.assertTrue(forced_on.belief_set_source_enabled())
 
+    def test_provenance_mismatch_warning_three_way_and_dedup(self) -> None:
+        import contextlib
+        import io
+
+        from pokezero.foulplay_bridge import _PROVENANCE_WARNINGS_EMITTED, _warn_on_belief_provenance_mismatch
+
+        class Recorded:
+            def __init__(self, value):
+                self.belief_set_source_hash = value
+
+        class FakeSource:
+            class metadata:
+                source_hash = "currenthash0"
+
+        config_off = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"), belief_set_source=False
+        )
+        config_on = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"), belief_set_source=True
+        )
+
+        def warn_output(config, result) -> str:
+            _PROVENANCE_WARNINGS_EMITTED.clear()
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                _warn_on_belief_provenance_mismatch(config, result)
+            return stderr.getvalue()
+
+        # matched (both off) -> silent; result lacking the attribute behaves as None
+        self.assertEqual(warn_output(config_off, Recorded(None)), "")
+        self.assertEqual(warn_output(config_off, object()), "")
+        # recorded but benchmark disabled
+        self.assertIn("runs with it disabled", warn_output(config_off, Recorded("trainedhash1")))
+        with patch("pokezero.foulplay_bridge._resolved_belief_set_source", return_value=FakeSource()):
+            # legacy checkpoint, benchmark enabled -> message names the enabled side
+            out = warn_output(config_on, Recorded(None))
+            self.assertIn("no belief provenance", out)
+            self.assertIn("enabled", out)
+            # both set, different hashes
+            self.assertIn("!=", warn_output(config_on, Recorded("trainedhash1")))
+            # matched hashes -> silent
+            self.assertEqual(warn_output(config_on, Recorded("currenthash0")), "")
+            # dedup: identical (checkpoint, condition) warns once per process
+            _PROVENANCE_WARNINGS_EMITTED.clear()
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                _warn_on_belief_provenance_mismatch(config_on, Recorded("trainedhash1"))
+                _warn_on_belief_provenance_mismatch(config_on, Recorded("trainedhash1"))
+            self.assertEqual(stderr.getvalue().count("warning:"), 1)
+
     def test_config_rejects_invalid_search_tuning_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "selection_mode"):
             ControlledFoulPlayConfig(

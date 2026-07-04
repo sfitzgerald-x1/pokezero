@@ -592,24 +592,50 @@ def record_from_result(
     )
 
 
-def distinct_belief_set_source_hashes(paths: Iterable[Path | str]) -> tuple[str | None, ...]:
-    """Distinct belief provenance across rollout files, peeking only each file's first record.
+_BELIEF_HASH_KEY = "belief_set_source_hash"
+# Sentinel distinct-hash entry for cache directories whose builder recorded mixed provenance;
+# guarantees the caller's single-hash gate fails and the mixed warning names the cause.
+BELIEF_PROVENANCE_MIXED = "<mixed-provenance-cache>"
 
-    Files are assumed provenance-homogeneous (one collector config per file, which every
-    collection path in this repo guarantees). Returns a sorted tuple; None marks files collected
-    with the source disabled or predating provenance.
+
+def distinct_belief_set_source_hashes(paths: Iterable[Path | str]) -> tuple[str | None, ...]:
+    """Distinct belief provenance across training inputs (rollout jsonl or cache directories).
+
+    Jsonl files are scanned in full (append flows can mix provenance within one file); the scan
+    is a cheap substring test per line, parsing only lines that carry the key, and stops as soon
+    as the outcome is decided (mixed). Cache directories read the hash their builder recorded in
+    ``metadata.json``. Returns a sorted tuple; None marks source-off, pre-provenance, or
+    unreadable inputs. Best-effort by design: provenance must never fail training.
     """
     seen: set[str | None] = set()
     for path in paths:
+        resolved = Path(path)
         try:
-            with Path(path).open("r", encoding="utf-8") as handle:
+            metadata_path = resolved / "metadata.json"
+            if resolved.is_dir():
+                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(payload, Mapping) and payload.get("belief_set_source_mixed"):
+                    seen.update({None, BELIEF_PROVENANCE_MIXED})
+                elif isinstance(payload, Mapping):
+                    seen.add(payload.get(_BELIEF_HASH_KEY) or None)
+                else:
+                    seen.add(None)
+                continue
+            file_hashes: set[str | None] = set()
+            with resolved.open("r", encoding="utf-8") as handle:
                 for line in handle:
-                    if line.strip():
-                        seen.add(json.loads(line).get("belief_set_source_hash"))
+                    if not line.strip():
+                        continue
+                    if _BELIEF_HASH_KEY not in line:
+                        file_hashes.add(None)
+                    else:
+                        payload = json.loads(line)
+                        value = payload.get(_BELIEF_HASH_KEY) if isinstance(payload, Mapping) else None
+                        file_hashes.add(str(value) if value else None)
+                    if len(file_hashes) > 1:
                         break
-        except (OSError, ValueError):
-            # Provenance is best-effort: unreadable/non-jsonl inputs (cache windows, test stubs)
-            # must never fail training — they just contribute unknown provenance.
+            seen.update(file_hashes or {None})
+        except (OSError, ValueError, AttributeError, TypeError):
             seen.add(None)
     return tuple(sorted(seen, key=lambda value: (value is None, value or "")))
 

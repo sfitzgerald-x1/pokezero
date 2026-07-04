@@ -42,6 +42,15 @@ class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
 
 
+def belief_set_source_env_enabled() -> bool:
+    """The single env flip point for candidate-set belief features (training AND eval sides).
+
+    Every consumer must call this rather than re-parsing the variable: two independent parsers
+    drifting apart is exactly the silent train/eval observation mismatch class.
+    """
+    return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class LocalShowdownConfig:
     showdown_root: Path | str | None = None
@@ -70,7 +79,7 @@ class LocalShowdownConfig:
     def belief_set_source_enabled(self) -> bool:
         if self.set_belief_source is not None:
             return self.set_belief_source
-        return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+        return belief_set_source_env_enabled()
 
 
 @dataclass(frozen=True)

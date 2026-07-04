@@ -5127,6 +5127,92 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(result.final_metrics.examples, 2)
         self.assertEqual(observed_row_indexed_batches, [True])
 
+    def test_checkpoint_round_trips_belief_provenance(self) -> None:
+        # Regression guard for the provenance chain's only durable link: if the save payload key
+        # or load passthrough is dropped, every downstream mismatch warning goes permanently
+        # inert while all other tests stay green.
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="belief-provenance-roundtrip",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+            model = EntityTokenTransformerPolicy(model_config)
+            base = TransformerTrainingResult(
+                model_config=model_config,
+                training_config=TransformerTrainingConfig(window_size=2),
+                epochs=(
+                    TransformerEpochMetrics(epoch=1, examples=4, loss=0.5, policy_loss=0.2, policy_accuracy=0.5),
+                ),
+            )
+
+            save_transformer_checkpoint(checkpoint_path, model, result=replace(base, belief_set_source_hash="prov123"))
+            _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+            self.assertEqual(restored.belief_set_source_hash, "prov123")
+
+            save_transformer_checkpoint(checkpoint_path, model, result=base)
+            _, restored_none = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+            self.assertIsNone(restored_none.belief_set_source_hash)
+
+    def test_neural_cli_train_stamps_belief_provenance_from_data(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            stamped_a = temp_path / "a.jsonl"
+            stamped_b = temp_path / "b.jsonl"
+            legacy = temp_path / "legacy.jsonl"
+            stamped_a.write_text('{"belief_set_source_hash": "hashA"}\n')
+            stamped_b.write_text('{"belief_set_source_hash": "hashA"}\n')
+            legacy.write_text('{"battle_id": "x"}\n')
+            captured: list[object] = []
+
+            def fake_train(paths, *, model_config, training_config, initial_model=None, **_kwargs):
+                return object(), TransformerTrainingResult(
+                    model_config=model_config,
+                    training_config=training_config,
+                    epochs=(
+                        TransformerEpochMetrics(epoch=1, examples=4, loss=0.25, policy_loss=0.2, policy_accuracy=0.75),
+                    ),
+                )
+
+            def fake_save(path, model, *, result) -> None:
+                captured.append(result)
+                Path(path).write_bytes(b"checkpoint")
+
+            def run(data_paths: list[str], out_name: str) -> str:
+                with (
+                    patch("pokezero.neural_cli.train_transformer_policy", side_effect=fake_train),
+                    patch("pokezero.neural_cli.save_transformer_checkpoint", side_effect=fake_save),
+                    patch("pokezero.neural_cli.collect_source_metadata", return_value={"available": False}),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    exit_code = neural_cli_main(
+                        ["train", "--data", *data_paths, "--out", str(temp_path / out_name), "--showdown-root", "/tmp/showdown"]
+                    )
+                self.assertEqual(exit_code, 0)
+                return stderr.getvalue()
+
+            run([str(stamped_a), str(stamped_b)], "same.pt")
+            self.assertEqual(captured[-1].belief_set_source_hash, "hashA")
+
+            stderr_text = run([str(stamped_a), str(legacy)], "mixed.pt")
+            self.assertIsNone(captured[-1].belief_set_source_hash)
+            self.assertIn("mixes belief set-source provenance", stderr_text)
+
     def test_checkpoint_round_trips_ppo_diagnostic_metrics(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")

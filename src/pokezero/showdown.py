@@ -1026,8 +1026,14 @@ def _merge_opponent_belief_facts(
 
     The belief engine is the single accumulator of opponent reveals; without this merge the
     opponent rows' ``moves``/``ability``/``item`` fields stay permanently empty and metadata
-    consumers (dataset shaping, probes) silently see nothing the encoder sees. Values are
-    normalized to identifier form to match self-team rows sourced from requests.
+    consumers (dataset shaping, probes) silently see nothing the encoder sees.
+
+    Semantics for consumers (deliberately different from request-sourced self rows):
+    - values are identifier-normalized (``leftovers``), not display form;
+    - fields mean "ever revealed this game", not "currently held" — a consumed or Knocked-Off
+      item stays recorded (that is the belief engine's evidence semantics);
+    - ``moves`` lists revealed set members only (Struggle is excluded: it is forced, not a set
+      slot) and replaces the public row's value wholesale.
     """
     facts_by_species = {
         _normalize_identifier(belief.species): belief for belief in belief_view.opponent_pokemon
@@ -1041,7 +1047,11 @@ def _merge_opponent_belief_facts(
         merged.append(
             replace(
                 pokemon,
-                moves=tuple(_normalize_identifier(move) for move in belief.revealed_moves),
+                moves=tuple(
+                    _normalize_identifier(move)
+                    for move in belief.revealed_moves
+                    if _normalize_identifier(move) != "struggle"
+                ),
                 ability=(
                     _normalize_identifier(belief.revealed_ability)
                     if belief.revealed_ability

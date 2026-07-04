@@ -28,7 +28,13 @@ from .category_vocab import CategoryVocabulary
 from .determinization import gen3_randbat_belief_start_override_planner
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
-from .local_showdown import BRIDGE_PATH, LocalShowdownConfig, LocalShowdownEnv, showdown_seed_from_int
+from .local_showdown import (
+    BRIDGE_PATH,
+    LocalShowdownConfig,
+    LocalShowdownEnv,
+    belief_set_source_env_enabled,
+    showdown_seed_from_int,
+)
 from .mcts_diagnostics import root_puct_fallback_category
 from .neural_policy import (
     TransformerSoftmaxPolicy,
@@ -192,7 +198,7 @@ class ControlledFoulPlayConfig:
     def belief_set_source_enabled(self) -> bool:
         if self.belief_set_source is not None:
             return self.belief_set_source
-        return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+        return belief_set_source_env_enabled()
 
     @property
     def effective_root_prior_temperature(self) -> float:
@@ -605,6 +611,7 @@ class ControlledFoulPlayComparisonResult:
                 count=self.config.games,
             ),
             "comparison_mode": self.comparison_mode,
+            "belief_set_source": self.config.belief_set_source_enabled(),
             "status": self.status,
             "complete": self.complete,
             "runs": {
@@ -1397,6 +1404,14 @@ def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
         raise FileNotFoundError(
             f"built Pokemon Showdown simulator not found under {config.showdown_root}; "
             "set --showdown-root to a built checkout."
+        )
+    if config.belief_set_source_enabled() and not (
+        config.showdown_root / "dist" / "data" / "random-battles" / "gen3" / "teams.js"
+    ).exists():
+        raise FileNotFoundError(
+            "belief set source is enabled but the built Gen 3 randbat generator is missing at "
+            f"{config.showdown_root}/dist/data/random-battles/gen3/teams.js; run `node build` in "
+            "the Showdown checkout or disable via --belief-set-source off."
         )
     if not (config.foulplay_root / "run.py").exists():
         raise FileNotFoundError(
@@ -2260,19 +2275,32 @@ def _resolved_belief_set_source(config: ControlledFoulPlayConfig):
     return load_gen3_randbat_source_cached(config.showdown_root)
 
 
+_PROVENANCE_WARNINGS_EMITTED: set[tuple[str, str | None, str | None]] = set()
+
+
 def _warn_on_belief_provenance_mismatch(config: ControlledFoulPlayConfig, result: Any) -> None:
     """Warn when benchmark observation conditions differ from the checkpoint's training provenance.
 
     Non-fatal: legacy checkpoints record no provenance, and a deliberate ablation run is
-    legitimate — but a silent mismatch systematically distorts strength/value reads.
+    legitimate — but a silent mismatch systematically distorts strength/value reads. Emitted once
+    per (checkpoint, condition) per process: per-seed comparison mode re-enters the benchmark for
+    every arm of every pair, and hundreds of identical lines would bury real diagnostics.
     """
     recorded = getattr(result, "belief_set_source_hash", None)
     current = _resolved_belief_set_source(config)
     current_hash = current.metadata.source_hash if current is not None else None
     if recorded == current_hash:
         return
+    key = (str(config.checkpoint), recorded, current_hash)
+    if key in _PROVENANCE_WARNINGS_EMITTED:
+        return
+    _PROVENANCE_WARNINGS_EMITTED.add(key)
+    benchmark_side = f"enabled ({current_hash[:12]})" if current_hash else "disabled"
     if recorded is None:
-        detail = "checkpoint records no belief provenance (legacy or source-off training)"
+        detail = (
+            "checkpoint records no belief provenance (legacy or source-off training) "
+            f"while the benchmark side is {benchmark_side}"
+        )
     elif current_hash is None:
         detail = f"checkpoint trained with candidate-set source {recorded[:12]} but the benchmark runs with it disabled"
     else:
