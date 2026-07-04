@@ -1,0 +1,196 @@
+{
+  "generated": "2026-07-04",
+  "harness": "scripts/tier2_gate.py",
+  "policy": "move-biased random-legal (move_bias=0.75), both seats",
+  "games_requested": 120,
+  "games_completed": 120,
+  "seed": 11,
+  "mean_turns": 48.91,
+  "randbat_source_hash": "e648ed6a6fbf7c78",
+  "whitelist_species": 149,
+  "whitelist_pairs": 387,
+  "strikes_assessed": 5435,
+  "strikes_cb_eligible": 240,
+  "strikes_residual_valid": 3238,
+  "strike_disqualifier_histogram": {
+    "cb-not-a-candidate": 3448,
+    "not-whitelisted": 2494,
+    "ko-clipped": 856,
+    "no-damage-event": 778,
+    "stat-stages": 510,
+    "cb-pinned-by-elimination": 374,
+    "crit": 260,
+    "no-base-power": 199,
+    "baseline-disagreement": 152,
+    "ability-overridden": 110,
+    "called": 34,
+    "type-changed": 32,
+    "transformed-defender": 30,
+    "item-mutated": 30,
+    "transformed-attacker": 26,
+    "conditioning-ambiguity": 4,
+    "multi-hit": 3,
+    "truncated-outcome": 2,
+    "no-computable-variant": 2,
+    "struggle": 2
+  },
+  "cb": {
+    "predictions": 27,
+    "true_positives": 27,
+    "false_positives": 0,
+    "precision": 1.0,
+    "true_cb_mons_total": 183,
+    "true_cb_mons_seen": 179,
+    "recall_seen": 0.15083798882681565,
+    "recall_all": 0.14754098360655737,
+    "false_positive_detail": [],
+    "true_positive_sample": [
+      {
+        "game": 7,
+        "perspective": "p1",
+        "mon": "pidgeot",
+        "true_item": "choiceband",
+        "strike_turns": [
+          21,
+          22,
+          23,
+          24,
+          25
+        ]
+      },
+      {
+        "game": 8,
+        "perspective": "p1",
+        "mon": "pinsir",
+        "true_item": "choiceband",
+        "strike_turns": [
+          22,
+          23,
+          24
+        ]
+      },
+      {
+        "game": 18,
+        "perspective": "p2",
+        "mon": "yanma",
+        "true_item": "choiceband",
+        "strike_turns": [
+          16,
+          17
+        ]
+      },
+      {
+        "game": 20,
+        "perspective": "p1",
+        "mon": "aipom",
+        "true_item": "choiceband",
+        "strike_turns": [
+          50,
+          51
+        ]
+      },
+      {
+        "game": 22,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_item": "choiceband",
+        "strike_turns": [
+          29,
+          44,
+          47,
+          48
+        ]
+      },
+      {
+        "game": 23,
+        "perspective": "p1",
+        "mon": "aerodactyl",
+        "true_item": "choiceband",
+        "strike_turns": [
+          25,
+          26
+        ]
+      },
+      {
+        "game": 23,
+        "perspective": "p2",
+        "mon": "pinsir",
+        "true_item": "choiceband",
+        "strike_turns": [
+          26,
+          27
+        ]
+      },
+      {
+        "game": 27,
+        "perspective": "p1",
+        "mon": "raticate",
+        "true_item": "choiceband",
+        "strike_turns": [
+          20,
+          21,
+          22
+        ]
+      },
+      {
+        "game": 31,
+        "perspective": "p1",
+        "mon": "dodrio",
+        "true_item": "choiceband",
+        "strike_turns": [
+          1,
+          2
+        ]
+      },
+      {
+        "game": 38,
+        "perspective": "p2",
+        "mon": "banette",
+        "true_item": "choiceband",
+        "strike_turns": [
+          1,
+          2,
+          3
+        ]
+      }
+    ]
+  },
+  "calibration_known_set": {
+    "clean_strikes": 3365,
+    "crit_strikes_included": 157,
+    "roll_match_rate": 1.0,
+    "mean_log_ratio": -0.0005039060593416248,
+    "std_log_ratio": 0.05133401208749894,
+    "roll_histogram": [
+      315,
+      206,
+      216,
+      192,
+      200,
+      254,
+      192,
+      196,
+      220,
+      224,
+      219,
+      201,
+      203,
+      179,
+      161,
+      187
+    ],
+    "mismatch_examples": [],
+    "spread_mons_checked": 1440,
+    "spread_stat_mismatches": 0,
+    "spread_mismatch_examples": []
+  },
+  "gate": {
+    "precision_pass": true,
+    "calibration_pass": true,
+    "verdict": "PASS",
+    "criteria": {
+      "precision": "zero false positives and >= 3 true positives",
+      "calibration": ">= 200 clean strikes, roll-match >= 0.98, |mean log-ratio| <= 0.01, zero spread mismatches"
+    }
+  }
+}
