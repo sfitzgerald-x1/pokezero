@@ -121,6 +121,22 @@ accordingly:
   teammate's PP ledger and pollute its tendency stats. The
   `transformed` bit + `transform_species` are what let every consumer
   explain a foreign species acting for a known slot.
+- **Damage-outcome enum (Protect / Substitute / Endure / immunity):**
+  attack tokens carry `damage_outcome ∈ {normal, blocked, hit-sub,
+  broke-sub, endured, immune}` — one enum for the whole class of events
+  that truncate or absorb the observed damage number, so history is
+  self-describing without cross-token joins (the defender's own
+  Protect/Sub click is a separate token the same turn). Residual
+  semantics per value: `blocked` and `hit-sub` mask it (the protocol
+  reports no number against a sub); `broke-sub` converts it to a lower
+  bound (gen-3 subs have 25% of max HP) and `hit-sub` implies the
+  complementary upper bound — coarse inequality evidence Tier 2 may
+  consume where no exact number exists; `endured` is lower-bound-only
+  (naive computation systematically understates the hit → false
+  "not CB" evidence); `immune` masks it and, where the immunity must be
+  ability-sourced (Levitate vs Earthquake), doubles as
+  ability-identification evidence for candidate pruning. `blocked`
+  events additionally feed the protect-pattern tendency stat.
 - **Tier-2 extension (note only): defender-side ability inference.** The
   same residual machinery on *our* attacks reveals the defender's
   ability (e.g. Thick Fat halving our Fire damage is observable against
