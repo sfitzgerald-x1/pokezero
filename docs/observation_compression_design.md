@@ -144,6 +144,24 @@ accordingly:
     - *not typing-explained* (EQ immune on a non-Flying): the immunity
       must be ability-sourced — confirmation-grade ability
       identification, variant pruning fires.
+- **Healing: a side-effect category value, never a magnitude field.**
+  Unlike damage, every gen-3 heal magnitude is deterministic given the
+  action plus public state (Recover-class 50%, Rest 100%,
+  Synthesis-class weather-scaled with weather public, drains =
+  f(observed damage), Leech Seed = 1/8 seeded max HP, Pain Split
+  averages public HP) — healing encodes nothing hidden, so it gets no
+  inference channel. Leftovers heals route to the item channel as
+  already specified.
+- **Pending-effect rule: store latent state, never derivable
+  expectations.** Next-turn Leftovers/Leech Seed/Ingrain expectations
+  are rule applications over tracked state — storing them repeats the
+  snapshot-replay mistake in miniature. But **pending Wish** (50% heal
+  landing end of next turn on whatever occupies the slot; 16 species in
+  the pool) is latent state no rule can reconstruct, and it is
+  currently untracked — `showdown.py` tracks Future Sight's pending
+  counter and has no Wish equivalent. Wish joins the exact-state
+  pending/duration-counter family (same pattern as
+  `future_sight_turns`), both sides.
   - **Truncation (`hit-sub`, `broke-sub`, `endured`) — full computed
     damage WAS dealt**, to a proxy or clipped at survival, so magnitude
     evidence exists in inequality form: `broke-sub` ⇒ damage ≥ sub HP;
