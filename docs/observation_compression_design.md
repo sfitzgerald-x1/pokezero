@@ -309,6 +309,38 @@ structure). The stats block (below) is retained alongside transition
 tokens: cross-turn aggregates spare the trunk from recomputing counts
 over the token sequence, and they remain the z-descriptor vocabulary.
 
+### Whole-game memory: two channels, two retention policies (decided 2026-07-04)
+
+The observation stores the whole game **twice, in channels with
+different retention properties**, and truncation is safe precisely
+because durable information is routed out of the ordered channel:
+
+1. **Unbounded aggregates (whole game, order-free, never truncated):**
+   the exact-state layer and stats block — PP ledger, belief facts,
+   non-proc prunings, counters, (count, opportunity) pairs — accumulate
+   at constant size. Everything durable about a 40-turn-old turn
+   (reveals, spend, tendencies) already lives here.
+2. **Ordered transition window (recency/momentum):** fixed slot budget,
+   zero-padded, masked, filled as turns arrive. Two positional signals
+   per token: **absolute turn number** (game phase) and **turns-ago**
+   (recency). Ordering carries short-range structure (the h8 > h4
+   evidence); nothing suggests order at range 100 adds anything the
+   aggregates miss.
+
+**Budget: 64 turns (128 transition tokens), truncate oldest-first** —
+the prefix is exactly what the aggregates have absorbed. Rationale:
+healthy games run ~25–30 turns (50–60 tokens — whole-game coverage is
+nearly free), while the long tail is RestTalk stall loops whose ordered
+detail is worthless and whose real content (PP attrition) lives in the
+ledger; attention is quadratic and every training example pays the full
+slot budget, so size to ~p95 of healthy length, not the 250-turn cap;
+and a 2-layer trunk attends poorly over 500 tokens — freed compute is
+worth more as width. **K is a masked config, not a spec change**: the
+ablation gets K ∈ {16, 64} for free, testing whether ordered range
+beyond 16 pays at all once aggregates exist. If K=16 matches K=64, the
+compression program has fully delivered: whole-game memory at a
+twentieth of the original sequence cost.
+
 ## Design principle: evidence mass, not rates
 
 Every tendency feature is a **(count, opportunity) pair**, never a bare
