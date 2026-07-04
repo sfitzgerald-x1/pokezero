@@ -19,6 +19,8 @@ from pathlib import Path
 
 from pokezero.observation import ObservationFeatureMasks
 from pokezero.showdown import (
+    NUMERIC_TT_CB_BIT,
+    NUMERIC_TT_INVESTMENT_BIT,
     NUMERIC_TT_RESIDUAL,
     NUMERIC_TT_RESIDUAL_VALID,
     TRANSITION_TOKEN_OFFSET,
@@ -125,6 +127,9 @@ class LiveResidualPopulationTest(unittest.TestCase):
                     else:
                         self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
                         self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
+                    self.assertEqual(row[NUMERIC_TT_CB_BIT], 1.0 if token.cb_bit else 0.0)
+                    # The investment slot is a true reserve: zero in every path.
+                    self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
             self.assertGreater(populated_total, 5)
         finally:
             env.close()
@@ -152,15 +157,22 @@ class LiveResidualPopulationTest(unittest.TestCase):
                     if (
                         stripped_a[NUMERIC_TT_RESIDUAL] != stripped_b[NUMERIC_TT_RESIDUAL]
                         or stripped_a[NUMERIC_TT_RESIDUAL_VALID] != stripped_b[NUMERIC_TT_RESIDUAL_VALID]
+                        or stripped_a[NUMERIC_TT_CB_BIT] != stripped_b[NUMERIC_TT_CB_BIT]
                     ):
                         saw_residual_difference = True
                     stripped_a[NUMERIC_TT_RESIDUAL] = stripped_b[NUMERIC_TT_RESIDUAL] = 0.0
                     stripped_a[NUMERIC_TT_RESIDUAL_VALID] = stripped_b[NUMERIC_TT_RESIDUAL_VALID] = 0.0
+                    stripped_a[NUMERIC_TT_CB_BIT] = stripped_b[NUMERIC_TT_CB_BIT] = 0.0
                     self.assertEqual(stripped_a, stripped_b)
-                # The mask-off run's residual columns are all zero.
+                # The mask-off run's tier2 columns are all zero; the investment
+                # reserve is zero under BOTH masks.
                 for row in b.numeric_features:
                     self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
                     self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
+                    self.assertEqual(row[NUMERIC_TT_CB_BIT], 0.0)
+                    self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+                for row in a.numeric_features:
+                    self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
             self.assertTrue(saw_residual_difference, "seed produced no populated residuals")
         finally:
             env_on.close()
@@ -226,6 +238,11 @@ class MonotoneConsistencySweepTest(unittest.TestCase):
                                 f"seed {seed} {player}: live claims a residual the batch "
                                 f"cutoff masks ({live_token.action}) — not evidence-monotone"
                             )
+                        if live_token.cb_bit and not batch_token.cb_bit:
+                            self.fail(
+                                f"seed {seed} {player}: live sets the as-of-strike CB bit "
+                                f"where the batch cutoff does not — not evidence-monotone"
+                            )
                     live_true = {k for k, v in env._tier2_trackers[player].cb_bits.items() if v}
                     batch_true = {k for k, v in batch.cb_bits.items() if v}
                     self.assertLessEqual(
@@ -237,6 +254,61 @@ class MonotoneConsistencySweepTest(unittest.TestCase):
                 env.close()
         # The sweep must actually exercise the value-equality assertion.
         self.assertGreater(jointly_valid, 100)
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class CbBitFixtureGameTest(unittest.TestCase):
+    """The CB bit fires on a REAL gate-corpus game with a Choice Band reveal-by-damage.
+
+    Fixture: seed-11 game 7 of the #505 gate corpus — p2's Pidgeot holds Choice Band
+    (ground truth from its own opening request, recorded in the fixture header) and the
+    p1-perspective inference concluded it from damage exceedance on turns 21-25.
+    """
+
+    def test_cb_bit_fires_and_is_monotone_on_the_fixture_game(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.tier2 import cb_whitelist_for_source, infer_tier2, own_team_from_request
+
+        root = _integration_root()
+        fixture = Path(__file__).parent / "fixtures" / "showdown" / "tier2-cb-pidgeot-game.log"
+        lines = [
+            line
+            for line in fixture.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")
+        ]
+        replay = parse_showdown_replay(lines)
+        first_request = next(
+            json.loads(line[len("|request|"):])
+            for line in lines
+            if line.startswith("|request|") and '"id":"p1"' in line.replace(" ", "")
+        )
+        dex = load_showdown_dex_cached(root)
+        source = load_gen3_randbat_source_cached(root)
+        inference = infer_tier2(
+            replay,
+            perspective_slot="p1",
+            own_team=own_team_from_request(first_request),
+            dex=dex,
+            set_source=source,
+            whitelist=cb_whitelist_for_source(source, dex),
+        )
+        self.assertTrue(inference.cb_bits.get("p2:pidgeot"), "CB conclusion did not fire")
+        self.assertGreaterEqual(len(inference.cb_strike_turns["p2:pidgeot"]), 2)
+        # As-of-strike monotonicity on the token stream: no bit before the concluding
+        # strike, bit on every assessed Pidgeot strike from it onward.
+        flags = [
+            (token.turn, token.cb_bit)
+            for token in inference.tokens
+            if token.kind == "move" and token.actor_slot == "p2" and token.actor_species == "Pidgeot"
+        ]
+        bits = [bit for _, bit in flags]
+        self.assertIn(True, bits)
+        first_true = bits.index(True)
+        self.assertGreater(first_true, 0)  # two strikes are needed before it can fire
+        self.assertTrue(all(bits[first_true:]))
+        concluding_turn = flags[first_true][0]
+        self.assertEqual(concluding_turn, inference.cb_strike_turns["p2:pidgeot"][1])
 
 
 @unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")

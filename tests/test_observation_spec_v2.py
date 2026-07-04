@@ -366,6 +366,75 @@ class ExactStateEncodingTest(unittest.TestCase):
         self.assertEqual(rows["Dugtrio"][NUMERIC_TRAPPER_ALIVE], 1.0)
         self.assertEqual(rows["Xatu"][NUMERIC_TRAPPER_ALIVE], 0.0)  # active, not benched
 
+    def test_unrevealed_singleton_candidate_trapper_sets_bit(self) -> None:
+        # Audit bug C1: gen3 trap abilities are NEVER protocol-revealed, but all three
+        # pool trappers are single-ability species — a singleton live candidate set is
+        # certain knowledge and must set the opponent-side bit for a benched trapper.
+        from pokezero.belief import CandidateSetSummary
+
+        class SingletonTrapSource:
+            def summarize(self, *, format_id, species, revealed_moves, **kwargs):
+                if species.lower().startswith("dugtrio"):
+                    return CandidateSetSummary(
+                        species=species, candidate_count=1, uncertainty=0.5,
+                        possible_abilities=("Arena Trap",),
+                    )
+                return None
+
+        state = _state(
+            [
+                "|switch|p2a: Dugtrio|Dugtrio, L76|100/100",
+                "|switch|p2a: Xatu|Xatu, L78|100/100",
+            ],
+            set_source=SingletonTrapSource(),
+        )
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        rows = {
+            state.opponent_team[index].species: observation.numeric_features[
+                OPPONENT_POKEMON_TOKEN_OFFSET + index
+            ]
+            for index in range(len(state.opponent_team))
+        }
+        self.assertEqual(rows["Dugtrio"][NUMERIC_TRAPPER_ALIVE], 1.0)
+
+    def test_two_candidate_trap_ability_does_not_set_bit(self) -> None:
+        # A hypothetical species where the trap ability is only ONE of two live
+        # candidates is NOT certain — the bit must stay dark (hard-rule asymmetry).
+        from pokezero.belief import CandidateSetSummary
+
+        class AmbiguousTrapSource:
+            def summarize(self, *, format_id, species, revealed_moves, **kwargs):
+                if species.lower().startswith("dugtrio"):
+                    return CandidateSetSummary(
+                        species=species, candidate_count=2, uncertainty=1.0,
+                        possible_abilities=("Arena Trap", "Sand Veil"),
+                    )
+                return None
+
+        state = _state(
+            [
+                "|switch|p2a: Dugtrio|Dugtrio, L76|100/100",
+                "|switch|p2a: Xatu|Xatu, L78|100/100",
+            ],
+            set_source=AmbiguousTrapSource(),
+        )
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        dugtrio_index = next(
+            index for index, mon in enumerate(state.opponent_team) if mon.species == "Dugtrio"
+        )
+        row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + dugtrio_index]
+        self.assertEqual(row[NUMERIC_TRAPPER_ALIVE], 0.0)
+
+    def test_self_mon_uncertainty_is_zero(self) -> None:
+        # Own mons are fully known: UNCERTAINTY must be 0.0 on self tokens (the audit
+        # flagged the previous constant 1.0 as semantically inverted).
+        from pokezero.showdown import NUMERIC_UNCERTAINTY, SELF_POKEMON_TOKEN_OFFSET
+
+        state = _state([])
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        row = observation.numeric_features[SELF_POKEMON_TOKEN_OFFSET]
+        self.assertEqual(row[NUMERIC_UNCERTAINTY], 0.0)
+
     def test_opponent_pp_fraction_uses_catalog_max_pp(self) -> None:
         state = _state([
             "|move|p2a: Xatu|Psychic|p1a: Charizard",

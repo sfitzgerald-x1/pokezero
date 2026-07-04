@@ -189,9 +189,13 @@ class TransitionToken:
     own_spikes_layers: int = 0
     opp_spikes_layers: int = 0
     weather: Optional[str] = None
-    # Tier-2 reserved fields (zero-masked until PR D's gate passes).
+    # Tier-2 fields (populated only by pokezero.tier2 behind the #505 precision gate;
+    # always None/False/False from this module's Tier-1 extraction). ``cb_bit`` is the
+    # two-strike Choice Band conclusion for the ACTING mon as of this strike — monotone
+    # within a battle, set on assessed opponent move tokens only.
     residual: Optional[float] = None
     residual_valid: bool = False
+    cb_bit: bool = False
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,10 @@
 >    {own layers, opp layers, weather}, positional pair {absolute turn,
 >    turns-ago}. Tier-2 reserved zero-masked slots: residual scalar +
 >    validity bit, CB bit, investment bit — same spec version, no second
->    break.
+>    break. *(Implementation note, 2026-07-04: all four slots are now
+>    materialized — residual 117 / validity 118 / CB bit 119 populated
+>    behind the tier2 gate + mask; investment 120 held at constant zero
+>    as the H3 reserve.)*
 > 10. Residual encoding: signed fraction of defender max HP (observed
 >    minus expected-median under the candidate-conservative baseline),
 >    with a separate validity bit (masked ⇒ invalid, value 0); populated

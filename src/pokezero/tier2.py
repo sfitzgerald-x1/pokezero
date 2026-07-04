@@ -26,8 +26,10 @@ defender is the perspective player's own mon, whose exact stats/ability/item are
 from its own request — no defender-side ambiguity. Trick carriers are handled upstream:
 the generator assigns Trick users Choice Band unconditionally, so the randbats candidate
 variants already pin their item at the Tier-1/exact layer (``randbat._possible_items``);
-this module adds no duplicate rule. The reserved "investment bit" stays zero-masked —
-it is not part of PR D's gate scope.
+this module adds no duplicate rule. All four corrections-item-9 slots are materialized
+in the observation: residual (117) + validity (118) + the as-of-strike CB bit (119,
+populated here under the same tier2 gate + mask), while the investment bit (120) is a
+true always-zero reserve held for the H3 defender-side/investment inference.
 
 Expected damage comes from :mod:`pokezero.gen3_damage` (see that module's docstring for
 the engine-choice rationale: the vendored Showdown sim is the calibration target;
@@ -854,6 +856,10 @@ def infer_tier2(
     residuals: dict[int, tuple[Optional[float], bool]] = {}
     cb_turns: dict[str, list[int]] = {}
     cb_non_ko: set[str] = set()
+    # As-of-strike CB conclusion per assessed token index (corrections item 9's CB
+    # slot): monotone within a battle — once a mon concludes, every later assessed
+    # strike token of that mon carries the bit.
+    cb_bit_indices: set[int] = set()
 
     windows = list(fold.windows)
     for index, (token, window) in enumerate(zip(fold.tokens, windows)):
@@ -887,6 +893,11 @@ def infer_tier2(
             cb_turns.setdefault(assessment.attacker_key, []).append(assessment.turn)
             if not token.ko:
                 cb_non_ko.add(assessment.attacker_key)
+        if (
+            len(cb_turns.get(assessment.attacker_key, ())) >= config.required_cb_strikes
+            and assessment.attacker_key in cb_non_ko
+        ):
+            cb_bit_indices.add(index)
 
     # Feed any trailing events so the engine ends at the true boundary (parity with a
     # from_events construction; no evaluation depends on it).
@@ -895,7 +906,14 @@ def infer_tier2(
         fed += 1
 
     tokens = tuple(
-        replace(token, residual=residuals[index][0], residual_valid=True) if index in residuals else token
+        replace(
+            token,
+            residual=residuals[index][0] if index in residuals else token.residual,
+            residual_valid=True if index in residuals else token.residual_valid,
+            cb_bit=index in cb_bit_indices,
+        )
+        if index in residuals or index in cb_bit_indices
+        else token
         for index, token in enumerate(fold.tokens)
     )
     # The bit needs the two-strike count AND at least one NON-KO exceedance: a KO-
@@ -927,7 +945,12 @@ def apply_residuals(
     if len(tokens) != len(inference.tokens):
         raise ValueError("token sequence does not match the inference's extraction.")
     return tuple(
-        replace(token, residual=inferred.residual, residual_valid=inferred.residual_valid)
+        replace(
+            token,
+            residual=inferred.residual,
+            residual_valid=inferred.residual_valid,
+            cb_bit=inferred.cb_bit,
+        )
         for token, inferred in zip(tokens, inference.tokens)
     )
 
@@ -1007,6 +1030,7 @@ class Tier2LiveTracker:
         self._residuals: dict[int, float] = {}
         self._cb_turns: dict[str, list[int]] = {}
         self._cb_non_ko: set[str] = set()
+        self._cb_bit_indices: set[int] = set()
 
     @property
     def cb_bits(self) -> dict[str, bool]:
@@ -1063,12 +1087,22 @@ class Tier2LiveTracker:
                 self._cb_turns.setdefault(assessment.attacker_key, []).append(assessment.turn)
                 if not token.ko:
                     self._cb_non_ko.add(assessment.attacker_key)
+            if (
+                len(self._cb_turns.get(assessment.attacker_key, ())) >= self._config.required_cb_strikes
+                and assessment.attacker_key in self._cb_non_ko
+            ):
+                self._cb_bit_indices.add(index)
         self._assessed_until = len(tokens)
-        if not self._residuals:
+        if not self._residuals and not self._cb_bit_indices:
             return tuple(tokens)
         return tuple(
-            replace(token, residual=self._residuals[index], residual_valid=True)
-            if index in self._residuals
+            replace(
+                token,
+                residual=self._residuals.get(index, token.residual),
+                residual_valid=True if index in self._residuals else token.residual_valid,
+                cb_bit=index in self._cb_bit_indices,
+            )
+            if index in self._residuals or index in self._cb_bit_indices
             else token
             for index, token in enumerate(tokens)
         )

@@ -256,6 +256,10 @@ class ChoiceBandTwoStrikeTest(unittest.TestCase):
         inference = _infer(lines)
         self.assertEqual(inference.cb_bits.get("p2:snorlax"), True)
         self.assertEqual(len(inference.cb_strike_turns["p2:snorlax"]), 2)
+        # The as-of-strike CB bit (slot 119's source field): False on the first
+        # exceedance token (conclusion needs two), True from the second onward.
+        strike_tokens = [t for t in inference.tokens if t.kind == "move" and t.actor_slot == "p2"]
+        self.assertEqual([t.cb_bit for t in strike_tokens], [False, True])
 
     def test_single_exceedance_is_not_enough(self) -> None:
         damage = _exceeding_damage()
@@ -1007,8 +1011,8 @@ class HelpersTest(unittest.TestCase):
         tokens = extract_transition_tokens(replay, perspective_slot="p1")
         updated = apply_residuals(tokens, inference)
         self.assertEqual(
-            [(t.residual, t.residual_valid) for t in updated],
-            [(t.residual, t.residual_valid) for t in inference.tokens],
+            [(t.residual, t.residual_valid, t.cb_bit) for t in updated],
+            [(t.residual, t.residual_valid, t.cb_bit) for t in inference.tokens],
         )
         with self.assertRaises(ValueError):
             apply_residuals(tokens[:-1], inference)
@@ -1101,11 +1105,16 @@ class LiveTrackerTest(unittest.TestCase):
             whitelist=_WHITELIST,
         )
         self.assertEqual(len(annotated), len(batch.tokens))
-        live_fields = [(t.residual, t.residual_valid) for t in annotated]
-        batch_fields = [(t.residual, t.residual_valid) for t in batch.tokens]
+        live_fields = [(t.residual, t.residual_valid, t.cb_bit) for t in annotated]
+        batch_fields = [(t.residual, t.residual_valid, t.cb_bit) for t in batch.tokens]
         self.assertEqual(live_fields, batch_fields)
+        # The as-of-strike bit is monotone: no True before the concluding strike.
+        cb_flags = [t.cb_bit for t in annotated if t.kind == "move" and t.actor_slot == "p2"]
+        self.assertIn(True, cb_flags)
+        first_true = cb_flags.index(True)
+        self.assertTrue(all(cb_flags[first_true:]))
         # The corpus exercises all three strike classes.
-        self.assertGreaterEqual(sum(1 for _, valid in live_fields if valid), 3)
+        self.assertGreaterEqual(sum(1 for _, valid, _bit in live_fields if valid), 3)
         self.assertEqual(tracker.cb_bits, dict(batch.cb_bits))
         self.assertTrue(tracker.cb_bits.get("p2:snorlax"))
 

@@ -911,6 +911,78 @@ class Phase2DynamicStateTest(unittest.TestCase):
         )
         self.assertEqual(state.self_active_volatiles, ("flashfire",))
 
+    def test_partial_trap_volatile_via_activate_and_end(self) -> None:
+        # Audit bug C2: the sim announces partial traps via |-activate|...|move: Wrap|
+        # (conditions.ts partiallytrapped.onStart) and ends them with the MOVE name +
+        # [partiallytrapped] — real lines lifted from the zero-activation audit logs.
+        wrapped = self._replay_with(
+            ["|-activate|p2a: Charizard|move: Wrap|[of] p1a: Shuckle"]
+        )
+        self.assertEqual(wrapped.self_active_volatiles, ("partiallytrapped",))
+        ended = self._replay_with(
+            [
+                "|-activate|p2a: Charizard|move: Wrap|[of] p1a: Shuckle",
+                "|-end|p2a: Charizard|Wrap|[partiallytrapped]",
+            ]
+        )
+        self.assertEqual(ended.self_active_volatiles, ())
+        silent = self._replay_with(
+            [
+                "|-activate|p2a: Charizard|move: Wrap|[of] p1a: Shuckle",
+                "|-end|p2a: Charizard|Wrap|[partiallytrapped]|[silent]",
+            ]
+        )
+        self.assertEqual(silent.self_active_volatiles, ())
+        # Pursuit's interception marker is also an |-activate|move:| line — never a trap.
+        pursuit = self._replay_with(
+            ["|-activate|p2a: Charizard|move: Pursuit"]
+        )
+        self.assertEqual(pursuit.self_active_volatiles, ())
+
+    def _destiny_bond_replay(self, extra_lines: list[str]):
+        # Standalone replay (not _replay_with: its fixture tail appends further
+        # Charizard moves, which CORRECTLY expire an armed bond — these tests need to
+        # control exactly which action follows the arming line).
+        lines = [
+            "|player|p1|Other|",
+            "|player|p2|PokeZeroBot|",
+            "|switch|p1a: Snorlax|Snorlax, L78|100/100",
+            "|switch|p2a: Charizard|Charizard, L78|100/100",
+            "|turn|1",
+            "|move|p2a: Charizard|Destiny Bond|p2a: Charizard",
+            "|-singlemove|p2a: Charizard|Destiny Bond",
+            *extra_lines,
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+        return normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+    def test_destiny_bond_volatile_via_singlemove_expires_on_next_action(self) -> None:
+        # Audit bug C3: Destiny Bond arms via |-singlemove| (which the parser ignored)
+        # and the sim removes it SILENTLY before the mon's next move (onBeforeMove) or
+        # aborted move (onMoveAborted) — no protocol removal line exists.
+        armed = self._destiny_bond_replay([])
+        self.assertEqual(armed.self_active_volatiles, ("destinybond",))
+        moved = self._destiny_bond_replay(
+            ["|turn|2", "|move|p2a: Charizard|Flamethrower|p1a: Snorlax"]
+        )
+        self.assertEqual(moved.self_active_volatiles, ())
+        aborted = self._destiny_bond_replay(["|turn|2", "|cant|p2a: Charizard|par"])
+        self.assertEqual(aborted.self_active_volatiles, ())
+        # A successful re-click re-arms: the |move| clears, the |-singlemove| re-adds.
+        rearmed = self._destiny_bond_replay(
+            [
+                "|turn|2",
+                "|move|p2a: Charizard|Destiny Bond|p2a: Charizard",
+                "|-singlemove|p2a: Charizard|Destiny Bond",
+            ]
+        )
+        self.assertEqual(rearmed.self_active_volatiles, ("destinybond",))
+        # The opponent's move never expires OUR bond.
+        theirs = self._destiny_bond_replay(
+            ["|turn|2", "|move|p1a: Snorlax|Body Slam|p2a: Charizard"]
+        )
+        self.assertEqual(theirs.self_active_volatiles, ("destinybond",))
+
     def test_volatiles_cleared_on_end_and_switch(self) -> None:
         ended = self._replay_with(
             [
