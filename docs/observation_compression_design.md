@@ -37,35 +37,87 @@ estimates) — no oracle leakage.
 
 ## v1 feature set
 
-1. **Exact opponent PP ledger (belief engine).** For every revealed
-   opponent move: remaining-PP fraction, maintained exactly — max PP from
-   the randbats catalog, decrement per observed use, ×2 when our active
-   mon has Pressure (our own ability is perfectly known, so the ledger is
-   exact, not approximate). Exposed as a numeric feature on the opponent
-   move slots, mirroring our own `NUMERIC_MOVE_PP_FRACTION`. Motivation:
-   pp-stall is a real strategy in both directions; managing opponent PP
-   (Pressure stalling, counting boosted-move uses) is decision-relevant
-   signal the net currently cannot see at all.
+### Exact-state features (belief-engine/state layer — computations, not tendencies)
+
+These are deterministic bookkeeping the engine can do perfectly; they live
+beside the PP ledger, not in the stats block. All approved 2026-07-03.
+
+- **Speed brackets from turn order.** Every observed turn order is an exact
+  inequality against a known stat of ours. Two scalars per opponent mon:
+  best lower / upper bound on speed observed so far. Pins randbats sets
+  fast; the belief engine does not consume turn order today.
+- **Sleep clause consumed** (one bit per side): once a side has put an
+  opposing mon to sleep, its remaining sleep moves are dead weight.
+- **Sleep turn counters** per sleeping mon, both sides, with a
+  **rest-sleep flag**: Rest is exactly 2 turns (wake turn *known*), natural
+  sleep is 1–4 (wake is a hazard rate). The flag distinguishes "they know
+  when they wake" from "they're gambling," which changes both sides' play
+  around the sleeping mon.
+- **Choice Band detection — damage-calc only.** One bit per opponent mon:
+  observed damage exceeded the maximum non-CB roll for that move/matchup.
+  This is deterministic proof (set-level variation cannot produce +50%
+  damage). Repeat-move streaks are deliberately *not* used: repetition is
+  consistent with CB but proves nothing.
+- **Timed field-condition counters**: weather turns remaining (normalized
+  /5) + permanent bit (see Weather section below), and the same for
+  Reflect / Light Screen / Safeguard / Mist (deterministic 5-turn-class
+  counters in gen 3).
+- **Turns-in-battle counter** for the opponent's active mon. Cheap proxy
+  with two readings: a fresh counter after a faint implies the KO context;
+  a long counter signals commitment to the current position.
+
+### PP-ledger subsumption principle
+
+The exact PP ledger (feature 1 below) doubles as a **per-move usage
+counter**, and revealed-move tokens already persist set knowledge. Together
+they subsume, at zero extra cost, the whole family of reveal/usage-count
+features considered and rejected as separate items: phazing usage, Pursuit
+counts, Counter/Mirror Coat usage, recovery-move counts, Encore/Taunt
+reveals, boost-history, Endure/reversal-kit alerts, Substitute counts, and
+Protect patterns. Do not add dedicated features for these; if a later probe
+shows the net failing to use one, the fix is representation/capacity, not
+another counter. (Boom threat likewise: candidate-set collapse already
+carries "Explosion is still possible," which is the decision-relevant
+part.)
+
+### Tendency features (stats block)
+
+1. **Exact opponent PP ledger (belief engine — exact-state class).** For
+   every revealed opponent move: remaining-PP fraction, maintained
+   exactly — max PP from the randbats catalog, decrement per observed
+   use, ×2 when our active mon has Pressure (our own ability is perfectly
+   known, so the ledger is exact, not approximate). Exposed as a numeric
+   feature on the opponent move slots, mirroring our own
+   `NUMERIC_MOVE_PP_FRACTION`. Motivation: pp-stall is a real strategy in
+   both directions, and per the subsumption principle above this single
+   ledger carries the entire usage-count feature family.
 2. **Global switch tendency:** (opponent switch count, opponent decision
    opportunities).
 3. **Per-opponent-mon tendency triple** on the existing 6 opponent-mon
    tokens: (switched-out-before-attacking count, stayed-and-attacked
    count, turns-active). Deliberately *not* the full 6×6
    matchup-conditional matrix — sparse deadweight at battle length.
-4. **Opponent weather/field reveals:** per weather type, one flag —
-   "opponent has set this weather this game" (synergy reveal about their
-   remaining team). Own-side weather usage is *not* tracked: the field
-   token already carries active field state, and our own past usage
-   changes no decision.
+4. **Opponent weather reveals, with source.** Per weather type:
+   {opponent set it this game, source was an ability}. The ability case
+   (Drizzle/Drought/Sand Stream — all present in the gen3 randbats pool)
+   is a double reveal: the mon's ability is confirmed (narrowing its set
+   catalog) and the weather is **permanent** in gen 3, versus exactly 5
+   turns for move weather (no extension items exist in gen 3). Source is
+   parsed directly from the `|-weather|...|[from] ability:` protocol tag.
+   Current gap being fixed: `_update_weather` keeps only a bare
+   identifier — no duration, no source — so Tyranitar sand (plan the
+   whole game around it) is indistinguishable from turn-4 Sandstorm
+   (about to expire). Own-side weather usage is *not* tracked: the field
+   token carries active state + the turns-remaining counter above, and
+   our own past usage changes no decision.
 5. **Midground/prediction signal**, over turns where *we* switched:
    (my-switch-turn count, opponent-move-better-vs-incoming count
    [margin-thresholded damage-calc comparison, to exclude
    good-vs-both moves], pivot-move count). High ratio = opponent predicts
    switches / midgrounds; low = they tunnel the active mon. Noisy by
    nature; the (count, rate) form lets the net weigh confidence.
-6. **Opponent setup usage** (optional, cheap): per-mon "has used a setup
-   move" bit. Partially redundant with revealed-move features ("has used"
-   vs "has"); include only if the token budget is comfortable.
+6. ~~Opponent setup usage bits~~ — removed 2026-07-03: subsumed by
+   revealed-move tokens + the PP ledger (see subsumption principle).
 
 **Descoped — per-candidate-move declined-opportunity counters.** The
 "they didn't click the KO move they might have" evidence is real, but
