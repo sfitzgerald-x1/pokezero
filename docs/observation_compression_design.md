@@ -185,6 +185,21 @@ accordingly:
   model), and weather + candidate abilities are already features. If
   probes later show rain-sweeper identification failing, a narrow
   trigger rule can be added behind Tier-2-style validation.
+- **Pursuit (variable power + out-of-order execution).** If the target
+  is switching, Pursuit executes before the switch at doubled power
+  (40→80) against the outgoing mon. Detection is protocol-tautological
+  — event order alone (Pursuit's damage against a mon whose switch or
+  faint-then-declared-replacement follows in the same turn) yields a
+  `pursuit-intercept` flag, no mechanics model. Rules: the residual
+  uses scenario-correct power (80 when intercepting) but **Pursuit is
+  excluded from the CB whitelist entirely** (scenario-dependent power +
+  an unverified gen-3 accuracy-bypass quirk on switching targets — on
+  the Tier-2 engine-verification list — make it a poor CB probe at 40
+  BP regardless). A doubled Pursuit is an *affirmative* switch-predict
+  observation for the midground/prediction stat (sharper than the
+  immunity-based no-predict signal). Faint-during-intercept still
+  completes the declared switch — slot-first attribution covers the
+  unusual transition; entry counters must not double-count.
 - **Drain moves and Leech Seed.** The side-effect category carries a
   distinct `drain` value (damage + self-heal in one action); heal
   magnitude stays derivable (50% of observed damage). Interactions:
