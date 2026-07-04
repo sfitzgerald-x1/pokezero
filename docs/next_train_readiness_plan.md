@@ -119,6 +119,56 @@ delta on higher base); full per-head E1 on the wave's best head at
 5. D's gate run attempted once (ships masked either way).
 6. Launch; first milestone read at 50k confirms probes fire end-to-end.
 
+## Horizon — the program beyond this train (triggers, not dates)
+
+Everything tiered/gated past the next wave, consolidated from the
+design docs so it stops living in "deferred" footnotes. Six tracks:
+
+**H1 — Search revival** *(paused per E0's thin +4.0)*: rerun E0-oracle
+with the wave's best head (trigger: a head passes the ΔV ≥10%-of-spread
+bar) and with belief-2-3m-class heads as the free upgrade; then
+**matrix-game root search** (Simultaneous-AlphaZero-style per-node
+solves replacing opponent-action scenarios — the soundness fix);
+then depth-limited re-solving; endgame **PBS/ReBeL** over the belief
+engine (the closed-universe bet). **Expert-iteration stages** stay
+gated on a decisive E0 margin — search amplifies, never teaches.
+
+**H2 — Population/diversity** *(beyond the wave's cross-arm pools)*:
+**self-derived z conditioning** (descriptor pseudo-rewards over the
+stats vocabulary the new spec already computes — hazard/status/switch
+rates; the AlphaStar mechanism minus the human source); then
+exploiter-lite arms / PSRO-proper with `f_hard` matchmaking (trigger:
+cross-arm pools move ΔV/argmax but plateau before the strategy tier).
+
+**H3 — Value-head machinery**: **multi-γ heads** (trigger, per #487:
+shaping moves ΔV but degrades terminal calibration); **defender-side
+ability inference** (the symmetric Tier-2 extension, cheap once D
+exists); **Tier-3 evidence-weighted posteriors** (requires a behavior
+likelihood model — i.e., the quarantined opponent world-model below).
+
+**H4 — Opponent world-model** *(the one sanctioned human-data use)*:
+train a "what would they click" model from the PokéChamp 500k+
+high-Elo corpus, for search-time opponent priors (opens the spin-block
+branch that self-play blindness keeps shut) and exploiter training —
+never as policy teacher. Companion: **pool-human-v1** via
+`pokezero-replay-import` as the third eval pool.
+
+**H5 — Architecture falsification & depth retry**: the
+**attention-knockout probe** on existing checkpoints (an afternoon;
+decides whether attention is load-bearing at 2 layers); the
+**set-encoder control arm** (thesis-style, attention-free, games/hour-
+matched) if the knockout is ambiguous; **3L depth retry** only with the
+full stabilizer bundle (QK-LN, depth-scaled init, warmup, logit cap)
+AND an equilibrium guard (R-NaD-lite or pool share) — the 4L
+postmortem's two-front lesson.
+
+**H6 — Scale & debts**: the 512d **volume continuation to ~3M**
+(decision 2 below — T6's unfinished axis); muP if width scaling
+continues past 512d; small debts: `online_client` set-source threading
+(same fix shape as the bridge), finetune base-hash cross-check,
+FP-ladder rung calibration, metamon OOD-rung calibration / gen3-OU
+side yardstick from the eval registry's future-use list.
+
 ## Open decisions (Scott)
 
 1. WS-4 slot 4: metamon-S continuation vs R-NaD arm vs K=16 mask.
