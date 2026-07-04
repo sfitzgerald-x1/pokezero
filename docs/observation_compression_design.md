@@ -93,6 +93,36 @@ accordingly:
 - **Tier 3 (not now):** evidence-weighted belief posteriors —
   ReBeL-direction work, out of scope for this doc.
 
+### The item universe is 13 items, mostly species-locked (verified 2026-07-04)
+
+From the generator (`teams.ts`): seven species-locked assignments
+(Farfetch'd→Stick, Latias/Latios→Soul Dew, Marowak→Thick Club,
+Pikachu→Light Ball, Deoxys→White Herb, Linoone-sweeper→Silk Scarf,
+Unown→CB/Twisted Spoon by set), plus a general pool of just
+{Leftovers (default), Choice Band, Lum Berry, Salac/Petaya/Liechi
+Berry}. No RNG trick items exist in the pool. Consequences:
+
+- The randbat source's candidate variants **already carry items** (the
+  spread-reproduction work replicated the generator's item logic), and
+  variant pruning is joint — revealing Substitute prunes to variants
+  whose items come along (Sub→pinch-berry, RestTalk→Leftovers
+  correlations are structural, not inferred). Species locks collapse
+  `possible_items` on upsert with no special-casing.
+- The CB max-explanation tightens: the only 1.1× items in the format
+  are themselves species-locked, so for the general population the
+  non-CB item universe contains **zero damage modifiers** — exceedance
+  needs to clear only candidate-ability variance and roll variance.
+- **New exact-state rule — no-Leftovers pruning:** Leftovers healing is
+  automatic and protocol-itemized below full HP, so *ended a turn
+  active and damaged with no Leftovers heal event* ⇒ prune all
+  Leftovers variants. Deterministic negative evidence (PP-ledger
+  epistemic class, not the descoped behavioral kind); with Leftovers as
+  the default item, one damaged end-of-turn typically collapses the
+  item question to {CB, Lum, pinch berry} and the moveset correlation
+  finishes it. Full-HP turns yield no evidence; Knock Off/Trick and
+  berry activations emit explicit item events the engine already
+  consumes.
+
 **Status chip damage (toxic/burn/sand/Spikes) is attribution hygiene,
 not a feature.** Chip is fully determined by public state the
 observation already tracks (toxic stage, statuses, hazard layers,
