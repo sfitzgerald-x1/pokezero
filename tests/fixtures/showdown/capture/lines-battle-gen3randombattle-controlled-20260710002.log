@@ -1,0 +1,273 @@
+|t:|1783137765
+|gametype|singles
+|player|p1|PokeZeroBot||
+|player|p2|FoulPlayBot||
+|gen|3
+|tier|[Gen 3] Random Battle
+|rule|HP Percentage Mod: HP is shown in percentages
+|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members
+|rule|Endless Battle Clause: Forcing endless battles is banned
+|rule|Sleep Clause Mod: Limit one foe put to sleep
+|rule|Switch Priority Clause Mod: Faster Pokémon switch first
+|rule|Species Clause: Limit one of each Pokémon
+|rule|OHKO Clause: OHKO moves are banned
+|rule|Evasion Items Clause: Evasion items are banned
+|rule|Evasion Moves Clause: Evasion moves are banned
+|
+|t:|1783137765
+|teamsize|p1|6
+|teamsize|p2|6
+|start
+|switch|p1a: Kingdra|Kingdra, L81, M|254/254
+|switch|p2a: Hitmonlee|Hitmonlee, L84, M|221/221
+|turn|1
+|
+|t:|1783137768
+|move|p2a: Hitmonlee|Earthquake|p1a: Kingdra
+|-damage|p1a: Kingdra|168/254
+|move|p1a: Kingdra|Rain Dance|p1a: Kingdra
+|-weather|RainDance
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|183/254|[from] item: Leftovers
+|upkeep
+|turn|2
+|
+|t:|1783137770
+|move|p1a: Kingdra|Hydro Pump|p2a: Hitmonlee
+|-damage|p2a: Hitmonlee|79/221
+|move|p2a: Hitmonlee|Substitute|p2a: Hitmonlee
+|-start|p2a: Hitmonlee|Substitute
+|-damage|p2a: Hitmonlee|24/221
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|198/254|[from] item: Leftovers
+|-enditem|p2a: Hitmonlee|Salac Berry|[eat]
+|-boost|p2a: Hitmonlee|spe|1|[from] item: Salac Berry
+|upkeep
+|turn|3
+|
+|t:|1783137772
+|move|p1a: Kingdra|Hydro Pump|p2a: Hitmonlee
+|-end|p2a: Hitmonlee|Substitute
+|move|p2a: Hitmonlee|Reversal|p1a: Kingdra
+|-damage|p1a: Kingdra|81/254
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|96/254|[from] item: Leftovers
+|upkeep
+|turn|4
+|
+|t:|1783137774
+|move|p1a: Kingdra|Hydro Pump|p2a: Hitmonlee
+|-damage|p2a: Hitmonlee|0 fnt
+|faint|p2a: Hitmonlee
+|
+|t:|1783137777
+|switch|p2a: Banette|Banette, L88, F|256/256
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|111/254|[from] item: Leftovers
+|upkeep
+|turn|5
+|
+|t:|1783137779
+|move|p1a: Kingdra|Rain Dance||[still]
+|-fail|p1a: Kingdra
+|move|p2a: Banette|Shadow Ball|p1a: Kingdra
+|-damage|p1a: Kingdra|11/254
+|
+|-weather|none
+|-heal|p1a: Kingdra|26/254|[from] item: Leftovers
+|upkeep
+|turn|6
+|
+|t:|1783137781
+|switch|p2a: Girafarig|Girafarig, L85, F|258/258
+|move|p1a: Kingdra|Rain Dance|p1a: Kingdra
+|-weather|RainDance
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|41/254|[from] item: Leftovers
+|upkeep
+|turn|7
+|
+|t:|1783137784
+|move|p1a: Kingdra|Ice Beam|p2a: Girafarig
+|-damage|p2a: Girafarig|179/258
+|-status|p2a: Girafarig|frz
+|cant|p2a: Girafarig|frz
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|56/254|[from] item: Leftovers
+|-heal|p2a: Girafarig|195/258 frz|[from] item: Leftovers
+|upkeep
+|turn|8
+|
+|t:|1783137786
+|move|p1a: Kingdra|Ice Beam|p2a: Girafarig
+|-damage|p2a: Girafarig|123/258 frz
+|cant|p2a: Girafarig|frz
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|71/254|[from] item: Leftovers
+|-heal|p2a: Girafarig|139/258 frz|[from] item: Leftovers
+|upkeep
+|turn|9
+|
+|t:|1783137788
+|move|p1a: Kingdra|Hydro Pump|p2a: Girafarig|[miss]
+|-miss|p1a: Kingdra|p2a: Girafarig
+|cant|p2a: Girafarig|frz
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|86/254|[from] item: Leftovers
+|-heal|p2a: Girafarig|155/258 frz|[from] item: Leftovers
+|upkeep
+|turn|10
+|
+|t:|1783137790
+|move|p1a: Kingdra|Hydro Pump|p2a: Girafarig|[miss]
+|-miss|p1a: Kingdra|p2a: Girafarig
+|cant|p2a: Girafarig|frz
+|
+|-weather|none
+|-heal|p1a: Kingdra|101/254|[from] item: Leftovers
+|-heal|p2a: Girafarig|171/258 frz|[from] item: Leftovers
+|upkeep
+|turn|11
+|
+|t:|1783137793
+|cant|p2a: Girafarig|frz
+|move|p1a: Kingdra|Hydro Pump|p2a: Girafarig
+|-damage|p2a: Girafarig|18/258 frz
+|
+|-heal|p2a: Girafarig|34/258 frz|[from] item: Leftovers
+|-heal|p1a: Kingdra|116/254|[from] item: Leftovers
+|upkeep
+|turn|12
+|
+|t:|1783137795
+|cant|p2a: Girafarig|frz
+|move|p1a: Kingdra|Hydro Pump|p2a: Girafarig
+|-damage|p2a: Girafarig|0 fnt
+|faint|p2a: Girafarig
+|
+|t:|1783137797
+|switch|p2a: Pinsir|Pinsir, L81, M|238/238
+|
+|-heal|p1a: Kingdra|131/254|[from] item: Leftovers
+|upkeep
+|turn|13
+|
+|t:|1783137799
+|move|p1a: Kingdra|Rain Dance|p1a: Kingdra
+|-weather|RainDance
+|move|p2a: Pinsir|Swords Dance|p2a: Pinsir
+|-boost|p2a: Pinsir|atk|2
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Kingdra|146/254|[from] item: Leftovers
+|upkeep
+|turn|14
+|
+|t:|1783137802
+|move|p1a: Kingdra|Ice Beam|p2a: Pinsir
+|-damage|p2a: Pinsir|165/238
+|move|p2a: Pinsir|Hidden Power|p1a: Kingdra
+|-damage|p1a: Kingdra|0 fnt
+|faint|p1a: Kingdra
+|
+|t:|1783137802
+|switch|p1a: Swalot|Swalot, L87, M|316/316
+|
+|-weather|RainDance|[upkeep]
+|upkeep
+|turn|15
+|
+|t:|1783137804
+|move|p2a: Pinsir|Earthquake|p1a: Swalot
+|-supereffective|p1a: Swalot
+|-damage|p1a: Swalot|0 fnt
+|faint|p1a: Swalot
+|
+|t:|1783137804
+|switch|p1a: Delcatty|Delcatty, L96, M|290/290
+|
+|-weather|RainDance|[upkeep]
+|upkeep
+|turn|16
+|
+|t:|1783137806
+|move|p1a: Delcatty|Ice Beam|p2a: Pinsir
+|-damage|p2a: Pinsir|90/238
+|move|p2a: Pinsir|Earthquake|p1a: Delcatty
+|-damage|p1a: Delcatty|127/290
+|
+|-weather|RainDance|[upkeep]
+|-heal|p1a: Delcatty|145/290|[from] item: Leftovers
+|upkeep
+|turn|17
+|
+|t:|1783137809
+|move|p1a: Delcatty|Ice Beam|p2a: Pinsir
+|-damage|p2a: Pinsir|12/238
+|move|p2a: Pinsir|Hidden Power|p1a: Delcatty
+|-damage|p1a: Delcatty|0 fnt
+|faint|p1a: Delcatty
+|
+|t:|1783137809
+|switch|p1a: Smeargle|Smeargle, L89, F|243/243
+|
+|-weather|none
+|-enditem|p2a: Pinsir|Salac Berry|[eat]
+|-boost|p2a: Pinsir|spe|1|[from] item: Salac Berry
+|upkeep
+|turn|18
+|
+|t:|1783137811
+|move|p2a: Pinsir|Hidden Power|p1a: Smeargle
+|-damage|p1a: Smeargle|0 fnt
+|faint|p1a: Smeargle
+|
+|t:|1783137811
+|switch|p1a: Wobbuffet|Wobbuffet, L82, F|446/446
+|
+|upkeep
+|turn|19
+|
+|t:|1783137813
+|move|p2a: Pinsir|Hidden Power|p1a: Wobbuffet
+|-supereffective|p1a: Wobbuffet
+|-damage|p1a: Wobbuffet|8/446
+|move|p1a: Wobbuffet|Counter|p2a: Pinsir
+|-damage|p2a: Pinsir|0 fnt
+|faint|p2a: Pinsir
+|
+|t:|1783137815
+|switch|p2a: Gligar|Gligar, L83, F|240/240
+|
+|-heal|p1a: Wobbuffet|35/446|[from] item: Leftovers
+|upkeep
+|turn|20
+|
+|t:|1783137817
+|move|p2a: Gligar|Earthquake|p1a: Wobbuffet
+|-damage|p1a: Wobbuffet|0 fnt
+|faint|p1a: Wobbuffet
+|
+|t:|1783137817
+|switch|p1a: Starmie|Starmie, L74|211/211
+|
+|upkeep
+|turn|21
+|
+|t:|1783137820
+|switch|p2a: Banette|Banette, L88, F|256/256
+|move|p1a: Starmie|Psychic|p2a: Banette
+|-damage|p2a: Banette|170/256
+|
+|upkeep
+|turn|22
+|request|{"active":[{"moves":[{"move":"Recover","id":"recover","pp":32,"maxpp":32,"target":"self","disabled":false},{"move":"Psychic","id":"psychic","pp":15,"maxpp":16,"target":"normal","disabled":false},{"move":"Hydro Pump","id":"hydropump","pp":8,"maxpp":8,"target":"normal","disabled":false},{"move":"Thunderbolt","id":"thunderbolt","pp":24,"maxpp":24,"target":"normal","disabled":false}]}],"side":{"name":"PokeZeroBot","id":"p1","pokemon":[{"ident":"p1: Starmie","details":"Starmie, L74","condition":"211/211","active":true,"stats":{"atk":116,"def":169,"spa":191,"spd":169,"spe":213},"moves":["recover","psychic","hydropump","thunderbolt"],"baseAbility":"naturalcure","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Wobbuffet","details":"Wobbuffet, L82, F","condition":"0 fnt","active":false,"stats":{"atk":59,"def":142,"spa":101,"spd":142,"spe":101},"moves":["mirrorcoat","counter","encore","destinybond"],"baseAbility":"shadowtag","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Smeargle","details":"Smeargle, L89, F","condition":"0 fnt","active":false,"stats":{"atk":86,"def":113,"spa":86,"spd":131,"spe":184},"moves":["encore","spikes","spore","explosion"],"baseAbility":"owntempo","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Delcatty","details":"Delcatty, L96, M","condition":"0 fnt","active":false,"stats":{"atk":129,"def":179,"spa":160,"spd":160,"spe":189},"moves":["icebeam","calmmind","thunderbolt","batonpass"],"baseAbility":"cutecharm","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Kingdra","details":"Kingdra, L81, M","condition":"0 fnt","active":false,"stats":{"atk":158,"def":201,"spa":201,"spd":201,"spe":184},"moves":["raindance","substitute","hydropump","icebeam"],"baseAbility":"swiftswim","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Swalot","details":"Swalot, L87, M","condition":"0 fnt","active":false,"stats":{"atk":177,"def":194,"spa":176,"spd":193,"spe":145},"moves":["sludgebomb","encore","icebeam","hiddenpowerground"],"baseAbility":"liquidooze","item":"leftovers","pokeball":"pokeball"}]}}
+|request|{"active":[{"moves":[{"move":"Shadow Ball","id":"shadowball","pp":23,"maxpp":24,"target":"normal","disabled":false},{"move":"Endure","id":"endure","pp":16,"maxpp":16,"target":"self","disabled":false},{"move":"Hidden Power Fighting 70","id":"hiddenpower","pp":24,"maxpp":24,"target":"normal","disabled":false},{"move":"Destiny Bond","id":"destinybond","pp":8,"maxpp":8,"target":"self","disabled":false}]}],"side":{"name":"FoulPlayBot","id":"p2","pokemon":[{"ident":"p2: Banette","details":"Banette, L88, F","condition":"170/256","active":true,"stats":{"atk":253,"def":164,"spa":195,"spd":160,"spe":164},"moves":["shadowball","endure","hiddenpowerfighting","destinybond"],"baseAbility":"insomnia","item":"salacberry","pokeball":"pokeball"},{"ident":"p2: Gligar","details":"Gligar, L83, F","condition":"240/240","active":false,"stats":{"atk":171,"def":221,"spa":105,"spd":155,"spe":189},"moves":["hiddenpowerflying","earthquake","substitute","swordsdance"],"baseAbility":"hypercutter","item":"salacberry","pokeball":"pokeball"},{"ident":"p2: Pinsir","details":"Pinsir, L81, M","condition":"0 fnt","active":false,"stats":{"atk":248,"def":208,"spa":136,"spd":159,"spe":184},"moves":["swordsdance","earthquake","rockslide","hiddenpowerbug"],"baseAbility":"hypercutter","item":"","pokeball":"pokeball"},{"ident":"p2: Lunatone","details":"Lunatone, L84","condition":"255/255","active":false,"stats":{"atk":99,"def":157,"spa":207,"spd":191,"spe":165},"moves":["hiddenpowerfire","psychic","toxic","hypnosis"],"baseAbility":"levitate","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Girafarig","details":"Girafarig, L85, F","condition":"0 fnt","active":false,"stats":{"atk":142,"def":159,"spa":201,"spd":159,"spe":192},"moves":["hiddenpowerfire","calmmind","psychic","substitute"],"baseAbility":"earlybird","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Hitmonlee","details":"Hitmonlee, L84, M","condition":"0 fnt","active":false,"stats":{"atk":250,"def":136,"spa":107,"spd":232,"spe":194},"moves":["reversal","hiddenpowerghost","earthquake","substitute"],"baseAbility":"limber","item":"","pokeball":"pokeball"}]}}

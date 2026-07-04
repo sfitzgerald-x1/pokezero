@@ -1,0 +1,252 @@
+|t:|1783137722
+|gametype|singles
+|player|p1|PokeZeroBot||
+|player|p2|FoulPlayBot||
+|gen|3
+|tier|[Gen 3] Random Battle
+|rule|HP Percentage Mod: HP is shown in percentages
+|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members
+|rule|Endless Battle Clause: Forcing endless battles is banned
+|rule|Sleep Clause Mod: Limit one foe put to sleep
+|rule|Switch Priority Clause Mod: Faster Pokémon switch first
+|rule|Species Clause: Limit one of each Pokémon
+|rule|OHKO Clause: OHKO moves are banned
+|rule|Evasion Items Clause: Evasion items are banned
+|rule|Evasion Moves Clause: Evasion moves are banned
+|
+|t:|1783137722
+|teamsize|p1|6
+|teamsize|p2|6
+|start
+|switch|p1a: Rapidash|Rapidash, L83, F|244/244
+|switch|p2a: Volbeat|Volbeat, L94, M|275/275
+|turn|1
+|
+|t:|1783137725
+|switch|p2a: Nidoqueen|Nidoqueen, L82, F|282/282
+|move|p1a: Rapidash|Fire Blast|p2a: Nidoqueen
+|-damage|p2a: Nidoqueen|166/282
+|
+|upkeep
+|turn|2
+|
+|t:|1783137727
+|move|p1a: Rapidash|Fire Blast|p2a: Nidoqueen
+|-damage|p2a: Nidoqueen|61/282
+|move|p2a: Nidoqueen|Earthquake|p1a: Rapidash
+|-supereffective|p1a: Rapidash
+|-damage|p1a: Rapidash|0 fnt
+|faint|p1a: Rapidash
+|
+|t:|1783137727
+|switch|p1a: Octillery|Octillery, L87, F|272/272
+|
+|upkeep
+|turn|3
+|
+|t:|1783137729
+|move|p2a: Nidoqueen|Earthquake|p1a: Octillery
+|-crit|p1a: Octillery
+|-damage|p1a: Octillery|0 fnt
+|faint|p1a: Octillery
+|
+|t:|1783137729
+|switch|p1a: Altaria|Altaria, L85, F|266/266
+|
+|upkeep
+|turn|4
+|
+|t:|1783137732
+|switch|p2a: Articuno|Articuno, L80|275/275
+|-ability|p2a: Articuno|Pressure|[silent]
+|move|p1a: Altaria|Flamethrower|p2a: Articuno
+|-supereffective|p2a: Articuno
+|-damage|p2a: Articuno|183/275
+|
+|-heal|p2a: Articuno|200/275|[from] item: Leftovers
+|upkeep
+|turn|5
+|
+|t:|1783137734
+|move|p1a: Altaria|Toxic|p2a: Articuno
+|-status|p2a: Articuno|tox
+|move|p2a: Articuno|Ice Beam|p1a: Altaria
+|-supereffective|p1a: Altaria
+|-damage|p1a: Altaria|0 fnt
+|faint|p1a: Altaria
+|
+|t:|1783137734
+|switch|p1a: Ledian|Ledian, M|272/272
+|
+|-heal|p2a: Articuno|217/275 tox|[from] item: Leftovers
+|-damage|p2a: Articuno|200/275 tox|[from] psn
+|upkeep
+|turn|6
+|
+|t:|1783137736
+|move|p1a: Ledian|Swords Dance|p1a: Ledian
+|-boost|p1a: Ledian|atk|2
+|move|p2a: Articuno|Ice Beam|p1a: Ledian
+|-supereffective|p1a: Ledian
+|-damage|p1a: Ledian|139/272
+|
+|-heal|p1a: Ledian|156/272|[from] item: Leftovers
+|-heal|p2a: Articuno|217/275 tox|[from] item: Leftovers
+|-damage|p2a: Articuno|183/275 tox|[from] psn
+|upkeep
+|turn|7
+|
+|t:|1783137739
+|move|p1a: Ledian|Silver Wind|p2a: Articuno
+|-resisted|p2a: Articuno
+|-damage|p2a: Articuno|141/275 tox
+|move|p2a: Articuno|Rest|p2a: Articuno
+|-status|p2a: Articuno|slp|[from] move: Rest
+|-heal|p2a: Articuno|275/275 slp|[silent]
+|
+|-heal|p1a: Ledian|173/272|[from] item: Leftovers
+|upkeep
+|turn|8
+|
+|t:|1783137741
+|move|p1a: Ledian|Silver Wind|p2a: Articuno
+|-resisted|p2a: Articuno
+|-crit|p2a: Articuno
+|-damage|p2a: Articuno|181/275 slp
+|cant|p2a: Articuno|slp
+|move|p2a: Articuno|Sleep Talk|p2a: Articuno
+|move|p2a: Articuno|Hidden Power|p1a: Ledian|[from] Sleep Talk
+|-supereffective|p1a: Ledian
+|-damage|p1a: Ledian|111/272
+|
+|-heal|p1a: Ledian|128/272|[from] item: Leftovers
+|-heal|p2a: Articuno|198/275 slp|[from] item: Leftovers
+|upkeep
+|turn|9
+|
+|t:|1783137743
+|move|p1a: Ledian|Swords Dance|p1a: Ledian
+|-boost|p1a: Ledian|atk|2
+|cant|p2a: Articuno|slp
+|move|p2a: Articuno|Sleep Talk|p2a: Articuno
+|move|p2a: Articuno|Ice Beam|p1a: Ledian|[from] Sleep Talk
+|-supereffective|p1a: Ledian
+|-damage|p1a: Ledian|9/272
+|
+|-heal|p1a: Ledian|26/272|[from] item: Leftovers
+|-heal|p2a: Articuno|215/275 slp|[from] item: Leftovers
+|upkeep
+|turn|10
+|
+|t:|1783137745
+|move|p1a: Ledian|Silver Wind|p2a: Articuno
+|-resisted|p2a: Articuno
+|-damage|p2a: Articuno|118/275 slp
+|-curestatus|p2a: Articuno|slp|[msg]
+|move|p2a: Articuno|Ice Beam|p1a: Ledian
+|-supereffective|p1a: Ledian
+|-damage|p1a: Ledian|0 fnt
+|faint|p1a: Ledian
+|
+|t:|1783137745
+|switch|p1a: Milotic|Milotic, L77, F|273/273
+|
+|-heal|p2a: Articuno|135/275|[from] item: Leftovers
+|upkeep
+|turn|11
+|
+|t:|1783137748
+|move|p2a: Articuno|Ice Beam|p1a: Milotic
+|-resisted|p1a: Milotic
+|-damage|p1a: Milotic|232/273
+|move|p1a: Milotic|Toxic|p2a: Articuno
+|-status|p2a: Articuno|tox
+|
+|-heal|p2a: Articuno|152/275 tox|[from] item: Leftovers
+|-damage|p2a: Articuno|135/275 tox|[from] psn
+|-heal|p1a: Milotic|249/273|[from] item: Leftovers
+|upkeep
+|turn|12
+|
+|t:|1783137750
+|move|p2a: Articuno|Rest|p2a: Articuno
+|-status|p2a: Articuno|slp|[from] move: Rest
+|-heal|p2a: Articuno|275/275 slp|[silent]
+|move|p1a: Milotic|Surf|p2a: Articuno
+|-damage|p2a: Articuno|200/275 slp
+|
+|-heal|p2a: Articuno|217/275 slp|[from] item: Leftovers
+|-heal|p1a: Milotic|266/273|[from] item: Leftovers
+|upkeep
+|turn|13
+|
+|t:|1783137752
+|switch|p2a: Metagross|Metagross, L73|237/237
+|move|p1a: Milotic|Surf|p2a: Metagross
+|-damage|p2a: Metagross|144/237
+|
+|-heal|p1a: Milotic|273/273|[from] item: Leftovers
+|-heal|p2a: Metagross|158/237|[from] item: Leftovers
+|upkeep
+|turn|14
+|
+|t:|1783137755
+|move|p1a: Milotic|Surf|p2a: Metagross
+|-damage|p2a: Metagross|62/237
+|move|p2a: Metagross|Explosion|p1a: Milotic
+|-crit|p1a: Milotic
+|-damage|p1a: Milotic|0 fnt
+|faint|p2a: Metagross
+|faint|p1a: Milotic
+|
+|t:|1783137757
+|switch|p1a: Alakazam|Alakazam, L76, F|209/209
+|switch|p2a: Lugia|Lugia, L70|264/264
+|-ability|p2a: Lugia|Pressure|[silent]
+|
+|upkeep
+|turn|15
+|
+|t:|1783137759
+|move|p1a: Alakazam|Calm Mind|p1a: Alakazam
+|-boost|p1a: Alakazam|spa|1
+|-boost|p1a: Alakazam|spd|1
+|move|p2a: Lugia|Toxic|p1a: Alakazam
+|-status|p1a: Alakazam|tox
+|-status|p2a: Lugia|psn|[from] ability: Synchronize|[of] p1a: Alakazam
+|
+|-damage|p1a: Alakazam|196/209 tox|[from] psn
+|-damage|p2a: Lugia|231/264 psn|[from] psn
+|upkeep
+|turn|16
+|
+|t:|1783137761
+|move|p1a: Alakazam|Psychic|p2a: Lugia
+|-resisted|p2a: Lugia
+|-damage|p2a: Lugia|169/264 psn
+|move|p2a: Lugia|Earthquake|p1a: Alakazam
+|-damage|p1a: Alakazam|110/209 tox
+|
+|-heal|p1a: Alakazam|123/209 tox|[from] item: Leftovers
+|-damage|p1a: Alakazam|97/209 tox|[from] psn
+|-heal|p2a: Lugia|185/264 psn|[from] item: Leftovers
+|-damage|p2a: Lugia|152/264 psn|[from] psn
+|upkeep
+|turn|17
+|
+|t:|1783137763
+|move|p1a: Alakazam|Psychic|p2a: Lugia
+|-resisted|p2a: Lugia
+|-damage|p2a: Lugia|95/264 psn
+|move|p2a: Lugia|Psychic|p1a: Alakazam
+|-resisted|p1a: Alakazam
+|-damage|p1a: Alakazam|74/209 tox
+|
+|-heal|p1a: Alakazam|87/209 tox|[from] item: Leftovers
+|-damage|p1a: Alakazam|48/209 tox|[from] psn
+|-heal|p2a: Lugia|111/264 psn|[from] item: Leftovers
+|-damage|p2a: Lugia|78/264 psn|[from] psn
+|upkeep
+|turn|18
+|request|{"active":[{"moves":[{"move":"Calm Mind","id":"calmmind","pp":31,"maxpp":32,"target":"self","disabled":false},{"move":"Fire Punch","id":"firepunch","pp":24,"maxpp":24,"target":"normal","disabled":false},{"move":"Psychic","id":"psychic","pp":12,"maxpp":16,"target":"normal","disabled":false},{"move":"Thunder Punch","id":"thunderpunch","pp":24,"maxpp":24,"target":"normal","disabled":false}]}],"side":{"name":"PokeZeroBot","id":"p1","pokemon":[{"ident":"p1: Alakazam","details":"Alakazam, L76, F","condition":"48/209 tox","active":true,"stats":{"atk":81,"def":112,"spa":249,"spd":173,"spe":226},"moves":["calmmind","firepunch","psychic","thunderpunch"],"baseAbility":"synchronize","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Altaria","details":"Altaria, L85, F","condition":"0 fnt","active":false,"stats":{"atk":168,"def":202,"spa":168,"spd":227,"spe":185},"moves":["toxic","flamethrower","earthquake","dragonclaw"],"baseAbility":"naturalcure","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Octillery","details":"Octillery, L87, F","condition":"0 fnt","active":false,"stats":{"atk":189,"def":180,"spa":232,"spd":180,"spe":128},"moves":["hiddenpowergrass","surf","icebeam","thunderwave"],"baseAbility":"suctioncups","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Rapidash","details":"Rapidash, L83, F","condition":"0 fnt","active":false,"stats":{"atk":172,"def":164,"spa":180,"spd":180,"spe":222},"moves":["fireblast","toxic","substitute","hiddenpowergrass"],"baseAbility":"flashfire","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Ledian","details":"Ledian, M","condition":"0 fnt","active":false,"stats":{"atk":127,"def":157,"spa":167,"spd":277,"spe":227},"moves":["batonpass","swordsdance","substitute","silverwind"],"baseAbility":"swarm","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Milotic","details":"Milotic, L77, F","condition":"0 fnt","active":false,"stats":{"atk":97,"def":166,"spa":199,"spd":237,"spe":169},"moves":["refresh","toxic","surf","recover"],"baseAbility":"marvelscale","item":"leftovers","pokeball":"pokeball"}]}}
+|request|{"active":[{"moves":[{"move":"Recover","id":"recover","pp":32,"maxpp":32,"target":"self","disabled":false},{"move":"Toxic","id":"toxic","pp":15,"maxpp":16,"target":"normal","disabled":false},{"move":"Earthquake","id":"earthquake","pp":15,"maxpp":16,"target":"allAdjacent","disabled":false},{"move":"Psychic","id":"psychic","pp":15,"maxpp":16,"target":"normal","disabled":false}]}],"side":{"name":"FoulPlayBot","id":"p2","pokemon":[{"ident":"p2: Lugia","details":"Lugia, L70","condition":"78/264 psn","active":true,"stats":{"atk":167,"def":223,"spa":167,"spd":257,"spe":195},"moves":["recover","toxic","earthquake","psychic"],"baseAbility":"pressure","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Metagross","details":"Metagross, L73","condition":"0 fnt","active":false,"stats":{"atk":240,"def":232,"spa":181,"spd":174,"spe":145},"moves":["agility","earthquake","explosion","meteormash"],"baseAbility":"clearbody","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Articuno","details":"Articuno, L80","condition":"217/275 slp","active":false,"stats":{"atk":142,"def":206,"spa":197,"spd":246,"spe":181},"moves":["sleeptalk","icebeam","rest","hiddenpowerfire"],"baseAbility":"pressure","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Miltank","details":"Miltank, L77, F","condition":"273/273","active":false,"stats":{"atk":168,"def":206,"spa":106,"spd":152,"spe":199},"moves":["milkdrink","bodyslam","healbell","earthquake"],"baseAbility":"thickfat","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Nidoqueen","details":"Nidoqueen, L82, F","condition":"61/282","active":false,"stats":{"atk":182,"def":190,"spa":170,"spd":187,"spe":172},"moves":["shadowball","icebeam","earthquake","sludgebomb"],"baseAbility":"poisonpoint","item":"choiceband","pokeball":"pokeball"},{"ident":"p2: Volbeat","details":"Volbeat, L94, M","condition":"275/275","active":false,"stats":{"atk":142,"def":157,"spa":142,"spd":194,"spe":213},"moves":["batonpass","thunderbolt","tailglow","icepunch"],"baseAbility":"swarm","item":"leftovers","pokeball":"pokeball"}]}}

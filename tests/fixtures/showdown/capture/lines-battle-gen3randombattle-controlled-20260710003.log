@@ -1,0 +1,368 @@
+|t:|1783137822
+|gametype|singles
+|player|p1|PokeZeroBot||
+|player|p2|FoulPlayBot||
+|gen|3
+|tier|[Gen 3] Random Battle
+|rule|HP Percentage Mod: HP is shown in percentages
+|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members
+|rule|Endless Battle Clause: Forcing endless battles is banned
+|rule|Sleep Clause Mod: Limit one foe put to sleep
+|rule|Switch Priority Clause Mod: Faster Pokémon switch first
+|rule|Species Clause: Limit one of each Pokémon
+|rule|OHKO Clause: OHKO moves are banned
+|rule|Evasion Items Clause: Evasion items are banned
+|rule|Evasion Moves Clause: Evasion moves are banned
+|
+|t:|1783137822
+|teamsize|p1|6
+|teamsize|p2|6
+|start
+|switch|p1a: Mightyena|Mightyena, L92, F|278/278
+|switch|p2a: Murkrow|Murkrow, L90, M|254/254
+|-ability|p1a: Mightyena|Intimidate|boost
+|-unboost|p2a: Murkrow|atk|1
+|turn|1
+|
+|t:|1783137824
+|switch|p2a: Sudowoodo|Sudowoodo, L92, F|278/278
+|move|p1a: Mightyena|Crunch|p2a: Sudowoodo
+|-damage|p2a: Sudowoodo|203/278
+|
+|upkeep
+|turn|2
+|
+|t:|1783137826
+|move|p1a: Mightyena|Crunch|p2a: Sudowoodo
+|-damage|p2a: Sudowoodo|129/278
+|move|p2a: Sudowoodo|Rock Slide|p1a: Mightyena|[miss]
+|-miss|p2a: Sudowoodo|p1a: Mightyena
+|
+|upkeep
+|turn|3
+|
+|t:|1783137829
+|move|p1a: Mightyena|Crunch|p2a: Sudowoodo
+|-damage|p2a: Sudowoodo|50/278
+|move|p2a: Sudowoodo|Rock Slide|p1a: Mightyena
+|-damage|p1a: Mightyena|107/278
+|
+|-heal|p1a: Mightyena|124/278|[from] item: Leftovers
+|upkeep
+|turn|4
+|
+|t:|1783137831
+|switch|p2a: Vileplume|Vileplume, L85, M|266/266
+|move|p1a: Mightyena|Crunch|p2a: Vileplume
+|-damage|p2a: Vileplume|202/266
+|
+|-heal|p1a: Mightyena|141/278|[from] item: Leftovers
+|-heal|p2a: Vileplume|218/266|[from] item: Leftovers
+|upkeep
+|turn|5
+|
+|t:|1783137833
+|move|p1a: Mightyena|Double-Edge|p2a: Vileplume
+|-damage|p2a: Vileplume|127/266
+|-damage|p1a: Mightyena|111/278|[from] Recoil|[of] p2a: Vileplume
+|move|p2a: Vileplume|Sludge Bomb|p1a: Mightyena
+|-damage|p1a: Mightyena|9/278
+|
+|-heal|p1a: Mightyena|26/278|[from] item: Leftovers
+|-heal|p2a: Vileplume|143/266|[from] item: Leftovers
+|upkeep
+|turn|6
+|
+|t:|1783137836
+|switch|p2a: Relicanth|Relicanth, L88, M|319/319
+|move|p1a: Mightyena|Crunch|p2a: Relicanth
+|-damage|p2a: Relicanth|237/319
+|
+|-heal|p1a: Mightyena|43/278|[from] item: Leftovers
+|-heal|p2a: Relicanth|256/319|[from] item: Leftovers
+|upkeep
+|turn|7
+|
+|t:|1783137838
+|move|p1a: Mightyena|Crunch|p2a: Relicanth
+|-damage|p2a: Relicanth|179/319
+|move|p2a: Relicanth|Earthquake|p1a: Mightyena
+|-damage|p1a: Mightyena|0 fnt
+|faint|p1a: Mightyena
+|
+|t:|1783137838
+|switch|p1a: Bellossom|Bellossom, L94, M|293/293
+|
+|-heal|p2a: Relicanth|198/319|[from] item: Leftovers
+|upkeep
+|turn|8
+|
+|t:|1783137840
+|switch|p2a: Dragonite|Dragonite, L75, M|259/259
+|move|p1a: Bellossom|Magical Leaf|p2a: Dragonite
+|-resisted|p2a: Dragonite
+|-damage|p2a: Dragonite|239/259
+|
+|upkeep
+|turn|9
+|
+|t:|1783137842
+|move|p2a: Dragonite|Hidden Power|p1a: Bellossom
+|-supereffective|p1a: Bellossom
+|-damage|p1a: Bellossom|95/293
+|move|p1a: Bellossom|Magical Leaf|p2a: Dragonite
+|-resisted|p2a: Dragonite
+|-damage|p2a: Dragonite|222/259
+|
+|-heal|p1a: Bellossom|113/293|[from] item: Leftovers
+|upkeep
+|turn|10
+|
+|t:|1783137845
+|move|p2a: Dragonite|Hidden Power|p1a: Bellossom
+|-supereffective|p1a: Bellossom
+|-damage|p1a: Bellossom|0 fnt
+|faint|p1a: Bellossom
+|
+|t:|1783137845
+|switch|p1a: Vigoroth|Vigoroth, L84, F|272/272
+|
+|upkeep
+|turn|11
+|
+|t:|1783137847
+|switch|p2a: Ampharos|Ampharos, L82, M|282/282
+|move|p1a: Vigoroth|Return|p2a: Ampharos
+|-damage|p2a: Ampharos|168/282
+|
+|-heal|p2a: Ampharos|185/282|[from] item: Leftovers
+|upkeep
+|turn|12
+|
+|t:|1783137849
+|move|p1a: Vigoroth|Shadow Ball|p2a: Ampharos
+|-damage|p2a: Ampharos|129/282
+|move|p2a: Ampharos|Toxic|p1a: Vigoroth|[miss]
+|-miss|p2a: Ampharos|p1a: Vigoroth
+|
+|-heal|p2a: Ampharos|146/282|[from] item: Leftovers
+|upkeep
+|turn|13
+|
+|t:|1783137852
+|move|p1a: Vigoroth|Shadow Ball|p2a: Ampharos
+|-damage|p2a: Ampharos|86/282
+|move|p2a: Ampharos|Thunderbolt|p1a: Vigoroth
+|-damage|p1a: Vigoroth|114/272
+|
+|-heal|p1a: Vigoroth|131/272|[from] item: Leftovers
+|-heal|p2a: Ampharos|103/282|[from] item: Leftovers
+|upkeep
+|turn|14
+|
+|t:|1783137854
+|move|p1a: Vigoroth|Shadow Ball|p2a: Ampharos
+|-damage|p2a: Ampharos|43/282
+|move|p2a: Ampharos|Thunderbolt|p1a: Vigoroth
+|-damage|p1a: Vigoroth|0 fnt
+|faint|p1a: Vigoroth
+|
+|t:|1783137854
+|switch|p1a: Rayquaza|Rayquaza, L70|262/262
+|
+|-heal|p2a: Ampharos|60/282|[from] item: Leftovers
+|upkeep
+|turn|15
+|
+|t:|1783137856
+|move|p1a: Rayquaza|Earthquake|p2a: Ampharos
+|-supereffective|p2a: Ampharos
+|-damage|p2a: Ampharos|0 fnt
+|faint|p2a: Ampharos
+|
+|t:|1783137858
+|switch|p2a: Relicanth|Relicanth, L88, M|198/319
+|
+|-heal|p2a: Relicanth|217/319|[from] item: Leftovers
+|upkeep
+|turn|16
+|
+|t:|1783137861
+|move|p1a: Rayquaza|Earthquake|p2a: Relicanth
+|-supereffective|p2a: Relicanth
+|-damage|p2a: Relicanth|113/319
+|move|p2a: Relicanth|Rock Slide|p1a: Rayquaza
+|-supereffective|p1a: Rayquaza
+|-damage|p1a: Rayquaza|70/262
+|
+|-heal|p2a: Relicanth|132/319|[from] item: Leftovers
+|upkeep
+|turn|17
+|
+|t:|1783137863
+|move|p1a: Rayquaza|Earthquake|p2a: Relicanth
+|-supereffective|p2a: Relicanth
+|-damage|p2a: Relicanth|28/319
+|move|p2a: Relicanth|Rest|p2a: Relicanth
+|-status|p2a: Relicanth|slp|[from] move: Rest
+|-heal|p2a: Relicanth|319/319 slp|[silent]
+|
+|upkeep
+|turn|18
+|
+|t:|1783137865
+|move|p1a: Rayquaza|Earthquake|p2a: Relicanth
+|-supereffective|p2a: Relicanth
+|-damage|p2a: Relicanth|211/319 slp
+|cant|p2a: Relicanth|slp
+|move|p2a: Relicanth|Sleep Talk|p2a: Relicanth
+|move|p2a: Relicanth|Rest|p2a: Relicanth|[from] Sleep Talk
+|
+|-heal|p2a: Relicanth|230/319 slp|[from] item: Leftovers
+|upkeep
+|turn|19
+|
+|t:|1783137868
+|move|p1a: Rayquaza|Earthquake|p2a: Relicanth
+|-supereffective|p2a: Relicanth
+|-damage|p2a: Relicanth|127/319 slp
+|cant|p2a: Relicanth|slp
+|move|p2a: Relicanth|Sleep Talk|p2a: Relicanth
+|move|p2a: Relicanth|Rest|p2a: Relicanth|[from] Sleep Talk
+|
+|-heal|p2a: Relicanth|146/319 slp|[from] item: Leftovers
+|upkeep
+|turn|20
+|
+|t:|1783137870
+|move|p1a: Rayquaza|Earthquake|p2a: Relicanth
+|-supereffective|p2a: Relicanth
+|-damage|p2a: Relicanth|40/319 slp
+|-curestatus|p2a: Relicanth|slp|[msg]
+|move|p2a: Relicanth|Rock Slide|p1a: Rayquaza
+|-supereffective|p1a: Rayquaza
+|-damage|p1a: Rayquaza|0 fnt
+|faint|p1a: Rayquaza
+|
+|t:|1783137870
+|switch|p1a: Wailord|Wailord, L87, F|438/438
+|
+|-heal|p2a: Relicanth|59/319|[from] item: Leftovers
+|upkeep
+|turn|21
+|
+|t:|1783137872
+|move|p1a: Wailord|Ice Beam|p2a: Relicanth
+|-resisted|p2a: Relicanth
+|-damage|p2a: Relicanth|18/319
+|move|p2a: Relicanth|Rest|p2a: Relicanth
+|-status|p2a: Relicanth|slp|[from] move: Rest
+|-heal|p2a: Relicanth|319/319 slp|[silent]
+|
+|upkeep
+|turn|22
+|
+|t:|1783137874
+|switch|p2a: Sudowoodo|Sudowoodo, L92, F|50/278
+|move|p1a: Wailord|Surf|p2a: Sudowoodo
+|-supereffective|p2a: Sudowoodo
+|-damage|p2a: Sudowoodo|0 fnt
+|faint|p2a: Sudowoodo
+|
+|t:|1783137877
+|switch|p2a: Vileplume|Vileplume, L85, M|143/266
+|
+|-heal|p2a: Vileplume|159/266|[from] item: Leftovers
+|upkeep
+|turn|23
+|
+|t:|1783137879
+|move|p1a: Wailord|Ice Beam|p2a: Vileplume
+|-supereffective|p2a: Vileplume
+|-damage|p2a: Vileplume|19/266
+|move|p2a: Vileplume|Sleep Powder|p1a: Wailord
+|-status|p1a: Wailord|slp|[from] move: Sleep Powder
+|
+|-heal|p2a: Vileplume|35/266|[from] item: Leftovers
+|upkeep
+|turn|24
+|
+|t:|1783137881
+|cant|p1a: Wailord|slp
+|move|p2a: Vileplume|Synthesis|p2a: Vileplume
+|-heal|p2a: Vileplume|168/266
+|
+|-heal|p2a: Vileplume|184/266|[from] item: Leftovers
+|upkeep
+|turn|25
+|
+|t:|1783137884
+|cant|p1a: Wailord|slp
+|move|p2a: Vileplume|Hidden Power|p1a: Wailord
+|-supereffective|p1a: Wailord
+|-damage|p1a: Wailord|217/438 slp
+|
+|-heal|p1a: Wailord|244/438 slp|[from] item: Leftovers
+|-heal|p2a: Vileplume|200/266|[from] item: Leftovers
+|upkeep
+|turn|26
+|
+|t:|1783137886
+|-curestatus|p1a: Wailord|slp|[msg]
+|move|p1a: Wailord|Ice Beam|p2a: Vileplume
+|-supereffective|p2a: Vileplume
+|-damage|p2a: Vileplume|67/266
+|move|p2a: Vileplume|Sludge Bomb|p1a: Wailord
+|-damage|p1a: Wailord|114/438
+|-status|p1a: Wailord|psn
+|
+|-heal|p1a: Wailord|141/438 psn|[from] item: Leftovers
+|-damage|p1a: Wailord|87/438 psn|[from] psn
+|-heal|p2a: Vileplume|83/266|[from] item: Leftovers
+|upkeep
+|turn|27
+|
+|t:|1783137888
+|switch|p2a: Relicanth|Relicanth, L88, M|319/319 slp
+|move|p1a: Wailord|Ice Beam|p2a: Relicanth
+|-resisted|p2a: Relicanth
+|-damage|p2a: Relicanth|277/319 slp
+|
+|-heal|p1a: Wailord|114/438 psn|[from] item: Leftovers
+|-damage|p1a: Wailord|60/438 psn|[from] psn
+|-heal|p2a: Relicanth|296/319 slp|[from] item: Leftovers
+|upkeep
+|turn|28
+|
+|t:|1783137890
+|move|p1a: Wailord|Surf|p2a: Relicanth
+|-damage|p2a: Relicanth|174/319 slp
+|cant|p2a: Relicanth|slp
+|move|p2a: Relicanth|Sleep Talk|p2a: Relicanth
+|move|p2a: Relicanth|Earthquake|p1a: Wailord|[from] Sleep Talk
+|-damage|p1a: Wailord|0 fnt
+|faint|p1a: Wailord
+|
+|t:|1783137890
+|switch|p1a: Ninjask|Ninjask, L79, M|225/225
+|
+|-heal|p2a: Relicanth|193/319 slp|[from] item: Leftovers
+|upkeep
+|turn|29
+|
+|t:|1783137892
+|move|p1a: Ninjask|Hidden Power|p2a: Relicanth
+|-resisted|p2a: Relicanth
+|-damage|p2a: Relicanth|170/319 slp
+|cant|p2a: Relicanth|slp
+|move|p2a: Relicanth|Sleep Talk|p2a: Relicanth
+|move|p2a: Relicanth|Earthquake|p1a: Ninjask|[from] Sleep Talk
+|-immune|p1a: Ninjask
+|
+|-ability|p1a: Ninjask|Speed Boost|boost
+|-boost|p1a: Ninjask|spe|1
+|-heal|p2a: Relicanth|189/319 slp|[from] item: Leftovers
+|upkeep
+|turn|30
+|request|{"active":[{"moves":[{"move":"Swords Dance","id":"swordsdance","pp":48,"maxpp":48,"target":"self","disabled":false},{"move":"Hidden Power Flying 70","id":"hiddenpower","pp":23,"maxpp":24,"target":"normal","disabled":false},{"move":"Protect","id":"protect","pp":16,"maxpp":16,"target":"self","disabled":false},{"move":"Baton Pass","id":"batonpass","pp":64,"maxpp":64,"target":"self","disabled":false}]}],"side":{"name":"PokeZeroBot","id":"p1","pokemon":[{"ident":"p1: Ninjask","details":"Ninjask, L79, M","condition":"225/225","active":true,"stats":{"atk":187,"def":116,"spa":124,"spd":124,"spe":298},"moves":["swordsdance","hiddenpowerflying","protect","batonpass"],"baseAbility":"speedboost","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Wailord","details":"Wailord, L87, F","condition":"0 fnt","active":false,"stats":{"atk":205,"def":128,"spa":205,"spd":128,"spe":154},"moves":["hiddenpowergrass","icebeam","surf","selfdestruct"],"baseAbility":"waterveil","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Bellossom","details":"Bellossom, L94, M","condition":"0 fnt","active":false,"stats":{"atk":157,"def":213,"spa":222,"spd":241,"spe":146},"moves":["stunspore","magicalleaf","moonlight","hiddenpowerfire"],"baseAbility":"chlorophyll","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Vigoroth","details":"Vigoroth, L84, F","condition":"0 fnt","active":false,"stats":{"atk":183,"def":183,"spa":141,"spd":141,"spe":199},"moves":["shadowball","return102","bulkup","slackoff"],"baseAbility":"vitalspirit","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Mightyena","details":"Mightyena, L92, F","condition":"0 fnt","active":false,"stats":{"atk":218,"def":180,"spa":162,"spd":162,"spe":180},"moves":["crunch","doubleedge","healbell","hiddenpowerfighting"],"baseAbility":"intimidate","item":"leftovers","pokeball":"pokeball"},{"ident":"p1: Rayquaza","details":"Rayquaza, L70","condition":"0 fnt","active":false,"stats":{"atk":250,"def":166,"spa":250,"spd":166,"spe":174},"moves":["hiddenpowerflying","overheat","dragondance","earthquake"],"baseAbility":"airlock","item":"lumberry","pokeball":"pokeball"}]}}
+|request|{"active":[{"moves":[{"move":"Earthquake","id":"earthquake","pp":15,"maxpp":16,"target":"allAdjacent","disabled":false},{"move":"Sleep Talk","id":"sleeptalk","pp":12,"maxpp":16,"target":"self","disabled":false},{"move":"Rest","id":"rest","pp":14,"maxpp":16,"target":"self","disabled":false},{"move":"Rock Slide","id":"rockslide","pp":14,"maxpp":16,"target":"allAdjacentFoes","disabled":false}]}],"side":{"name":"FoulPlayBot","id":"p2","pokemon":[{"ident":"p2: Relicanth","details":"Relicanth, L88, M","condition":"189/319 slp","active":true,"stats":{"atk":209,"def":279,"spa":129,"spd":165,"spe":147},"moves":["earthquake","sleeptalk","rest","rockslide"],"baseAbility":"swiftswim","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Dragonite","details":"Dragonite, L75, M","condition":"222/259","active":false,"stats":{"atk":244,"def":185,"spa":193,"spd":193,"spe":164},"moves":["brickbreak","fireblast","earthquake","hiddenpowerflying"],"baseAbility":"innerfocus","item":"choiceband","pokeball":"pokeball"},{"ident":"p2: Vileplume","details":"Vileplume, L85, M","condition":"83/266","active":false,"stats":{"atk":184,"def":193,"spa":218,"spd":202,"spe":134},"moves":["hiddenpowergrass","sludgebomb","sleeppowder","synthesis"],"baseAbility":"chlorophyll","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Ampharos","details":"Ampharos, L82, M","condition":"0 fnt","active":false,"stats":{"atk":129,"def":169,"spa":236,"spd":195,"spe":137},"moves":["firepunch","thunderbolt","hiddenpowerice","toxic"],"baseAbility":"static","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Murkrow","details":"Murkrow, L90, M","condition":"254/254","active":false,"stats":{"atk":204,"def":127,"spa":203,"spd":126,"spe":215},"moves":["drillpeck","hiddenpowerground","pursuit","thunderwave"],"baseAbility":"insomnia","item":"leftovers","pokeball":"pokeball"},{"ident":"p2: Sudowoodo","details":"Sudowoodo, L92, F","condition":"0 fnt","active":false,"stats":{"atk":236,"def":264,"spa":108,"spd":172,"spe":108},"moves":["rockslide","explosion","doubleedge","earthquake"],"baseAbility":"rockhead","item":"choiceband","pokeball":"pokeball"}]}}
