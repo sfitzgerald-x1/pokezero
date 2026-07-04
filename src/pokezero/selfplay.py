@@ -869,6 +869,7 @@ def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
         elapsed_seconds=record.elapsed_seconds,
         terminal=record.terminal,
         trajectory=trajectory,
+        belief_set_source_hash=record.belief_set_source_hash,
     )
 
 

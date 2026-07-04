@@ -314,6 +314,27 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(metadata["item"], "Petaya Berry")
         self.assertEqual(metadata["stats"]["hp"], 250)
 
+    def test_opponent_rows_carry_belief_revealed_facts(self) -> None:
+        # Regression: opponent rows' moves/ability/item stayed permanently empty because reveals
+        # accumulate only in the belief engine — metadata consumers (dataset shaping, probes)
+        # silently saw none of what the encoder's belief facts saw. normalize_for_player now
+        # merges revealed facts onto the public rows, normalized to identifier form to match
+        # request-sourced self rows.
+        lines = fixture_lines("p2_seat_replay.txt") + [
+            "|-heal|p1a: Xatu|80/100|[from] item: Leftovers",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-gen3randombattle-1")
+
+        state = normalize_for_player(replay, player_id="agent", player_name="PokeZeroBot")
+
+        xatu = state.opponent_team[1]
+        self.assertEqual(xatu.species, "Xatu")
+        self.assertEqual(xatu.moves, ("psychic",))
+        self.assertEqual(xatu.item, "leftovers")
+        metadata = _pokemon_metadata(xatu)
+        self.assertEqual(metadata["moves"], ["psychic"])
+        self.assertEqual(metadata["item"], "leftovers")
+
     def test_revealed_opponent_moves_populate_move_buckets_without_set_source(self) -> None:
         # Regression: revealed opponent moves are protocol ground truth and must be encoded even
         # when the belief set source is off (possible_moves empty). Previously the move buckets were

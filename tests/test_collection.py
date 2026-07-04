@@ -254,6 +254,71 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(restored.terminal, TerminalState(winner="p1", turn_count=1))
         self.assertEqual(len(restored.trajectory.steps), 2)
 
+    def test_rollout_record_belief_provenance_round_trips_and_tolerates_legacy(self) -> None:
+        from dataclasses import replace as dc_replace
+
+        from pokezero.collection import distinct_belief_set_source_hashes, write_rollout_record
+
+        record = collect_one_record_for_test()
+        self.assertIsNone(record.belief_set_source_hash)
+        # legacy payloads (no key) read back as None
+        legacy_payload = rollout_record_to_dict(record)
+        self.assertNotIn("belief_set_source_hash", legacy_payload)
+        self.assertIsNone(rollout_record_from_dict(legacy_payload).belief_set_source_hash)
+        # provenance round-trips when set
+        stamped = dc_replace(record, belief_set_source_hash="abc123")
+        payload = rollout_record_to_dict(stamped)
+        self.assertEqual(payload["belief_set_source_hash"], "abc123")
+        self.assertEqual(rollout_record_from_dict(payload).belief_set_source_hash, "abc123")
+        # distinct-hash helper peeks first records only
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stamped_path = Path(temp_dir) / "stamped.jsonl"
+            legacy_path = Path(temp_dir) / "legacy.jsonl"
+            with stamped_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, stamped)
+            with legacy_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+            self.assertEqual(distinct_belief_set_source_hashes([stamped_path]), ("abc123",))
+            self.assertEqual(
+                distinct_belief_set_source_hashes([stamped_path, legacy_path]),
+                ("abc123", None),
+            )
+
+    def test_training_cache_metadata_records_belief_provenance(self) -> None:
+        import json
+        from dataclasses import replace as dc_replace
+
+        from pokezero.collection import distinct_belief_set_source_hashes
+        from pokezero.dataset import TrainingCacheBuilder
+
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("numpy is not installed in this environment.")
+
+        record = dc_replace(collect_one_record_for_test(), belief_set_source_hash="cachehash1")
+        builder = TrainingCacheBuilder()
+        builder.add_record(record)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            builder.write(cache_path, cache_root=Path(temp_dir))
+            metadata = json.loads((cache_path / "metadata.json").read_text())
+            self.assertEqual(metadata["belief_set_source_hash"], "cachehash1")
+            self.assertFalse(metadata["belief_set_source_mixed"])
+            # the provenance helper reads cache directories via their metadata
+            self.assertEqual(distinct_belief_set_source_hashes([cache_path]), ("cachehash1",))
+
+    def test_distinct_hashes_survive_malformed_lines_and_detect_in_file_mixes(self) -> None:
+        from pokezero.collection import distinct_belief_set_source_hashes
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            junk = Path(temp_dir) / "junk.jsonl"
+            junk.write_text("[1, 2, 3]\n")  # valid JSON, not an object — must not raise
+            mixed = Path(temp_dir) / "mixed.jsonl"
+            mixed.write_text('{"belief_set_source_hash": "h1"}\n{"battle_id": "x"}\n')
+            self.assertEqual(distinct_belief_set_source_hashes([junk]), (None,))
+            self.assertEqual(distinct_belief_set_source_hashes([mixed]), ("h1", None))
+
     def test_collect_rollouts_writes_jsonl_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"

@@ -269,6 +269,9 @@ class TrainingCacheBuilder:
         self._seeds: list[int] = []
         self._turn_indices: list[int] = []
         self._terminal_capped: list[bool] = []
+        # Belief provenance of ingested records; written to cache metadata as a single hash when
+        # unanimous, else null (mixed/legacy) with a mixed flag for diagnostics.
+        self._belief_set_source_hashes: set[str | None] = set()
 
     @property
     def record_count(self) -> int:
@@ -309,6 +312,7 @@ class TrainingCacheBuilder:
             self._seeds.append(example.seed)
             self._turn_indices.append(example.turn_index)
             self._terminal_capped.append(example.terminal_capped)
+        self._belief_set_source_hashes.add(record.belief_set_source_hash)
         self._record_count += 1
 
     def write(
@@ -356,6 +360,12 @@ class TrainingCacheBuilder:
                     "window_size": self.config.window_size,
                 },
                 "array_dtypes": {name: str(value.dtype) for name, value in arrays.items()},
+                "belief_set_source_hash": (
+                    next(iter(self._belief_set_source_hashes))
+                    if len(self._belief_set_source_hashes) == 1
+                    else None
+                ),
+                "belief_set_source_mixed": len(self._belief_set_source_hashes) > 1,
                 "format": "directory-of-npy-arrays",
                 "padding_row": 0,
                 "categorical_storage": {

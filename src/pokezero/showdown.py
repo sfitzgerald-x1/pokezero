@@ -463,6 +463,7 @@ def normalize_for_player(
         # Persistent engine fed incrementally: resolve+snapshot on a copy so its pending-switch
         # state survives for the next ingested event.
         belief_view = belief_engine.resolved_player_view(showdown_slot)
+    opponent_team = _merge_opponent_belief_facts(opponent_team, belief_view)
     recent_events = tuple(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
@@ -1015,6 +1016,55 @@ def _opponent_team_from_public_state(
     opponent_slot: str,
 ) -> tuple[ShowdownPokemon, ...]:
     return tuple(replay.public_revealed.get(opponent_slot, ()))
+
+
+def _merge_opponent_belief_facts(
+    opponent_team: tuple[ShowdownPokemon, ...],
+    belief_view: "PlayerBeliefView",
+) -> tuple[ShowdownPokemon, ...]:
+    """Copy protocol-revealed facts (moves/ability/item) from the belief view onto public rows.
+
+    The belief engine is the single accumulator of opponent reveals; without this merge the
+    opponent rows' ``moves``/``ability``/``item`` fields stay permanently empty and metadata
+    consumers (dataset shaping, probes) silently see nothing the encoder sees.
+
+    Semantics for consumers (deliberately different from request-sourced self rows):
+    - values are identifier-normalized (``leftovers``), not display form;
+    - fields mean "ever revealed this game", not "currently held" — a consumed or Knocked-Off
+      item stays recorded (that is the belief engine's evidence semantics);
+    - ``moves`` lists revealed set members only (Struggle is excluded: it is forced, not a set
+      slot) and replaces the public row's value wholesale.
+    """
+    facts_by_species = {
+        _normalize_identifier(belief.species): belief for belief in belief_view.opponent_pokemon
+    }
+    merged: list[ShowdownPokemon] = []
+    for pokemon in opponent_team:
+        belief = facts_by_species.get(_normalize_identifier(pokemon.species))
+        if belief is None:
+            merged.append(pokemon)
+            continue
+        merged.append(
+            replace(
+                pokemon,
+                moves=tuple(
+                    _normalize_identifier(move)
+                    for move in belief.revealed_moves
+                    if _normalize_identifier(move) != "struggle"
+                ),
+                ability=(
+                    _normalize_identifier(belief.revealed_ability)
+                    if belief.revealed_ability
+                    else pokemon.ability
+                ),
+                item=(
+                    _normalize_identifier(belief.revealed_item)
+                    if belief.revealed_item
+                    else pokemon.item
+                ),
+            )
+        )
+    return tuple(merged)
 
 
 def _blank_categorical_rows(spec: ObservationSpec) -> list[list[str]]:

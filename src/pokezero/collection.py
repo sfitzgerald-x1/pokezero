@@ -159,6 +159,10 @@ class RolloutRecord:
     elapsed_seconds: float
     terminal: TerminalState
     trajectory: BattleTrajectory
+    # Belief-system provenance: the candidate-set source_hash the collecting env encoded
+    # observations with (None = source disabled or pre-provenance record). Flows into checkpoint
+    # metadata at train time so eval can match observation conditions to training.
+    belief_set_source_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -488,7 +492,12 @@ def run_rollout_record_on_env(
     start = perf_counter()
     result = RolloutDriver(env=env, policies=policies, config=rollout_config).run(seed=seed, battle_id=battle_id)
     elapsed = perf_counter() - start
-    return record_from_result(result, policies=policies, elapsed_seconds=elapsed)
+    return record_from_result(
+        result,
+        policies=policies,
+        elapsed_seconds=elapsed,
+        belief_set_source_hash=getattr(env, "belief_set_source_hash", None),
+    )
 
 
 def run_rollout_record(
@@ -568,6 +577,7 @@ def record_from_result(
     *,
     policies: Mapping[str, Policy],
     elapsed_seconds: float,
+    belief_set_source_hash: str | None = None,
 ) -> RolloutRecord:
     return RolloutRecord(
         battle_id=result.trajectory.battle_id,
@@ -578,7 +588,56 @@ def record_from_result(
         elapsed_seconds=elapsed_seconds,
         terminal=result.terminal,
         trajectory=result.trajectory,
+        belief_set_source_hash=belief_set_source_hash,
     )
+
+
+_BELIEF_HASH_KEY = "belief_set_source_hash"
+# Sentinel distinct-hash entry for cache directories whose builder recorded mixed provenance;
+# guarantees the caller's single-hash gate fails and the mixed warning names the cause.
+BELIEF_PROVENANCE_MIXED = "<mixed-provenance-cache>"
+
+
+def distinct_belief_set_source_hashes(paths: Iterable[Path | str]) -> tuple[str | None, ...]:
+    """Distinct belief provenance across training inputs (rollout jsonl or cache directories).
+
+    Jsonl files are scanned in full (append flows can mix provenance within one file); the scan
+    is a cheap substring test per line, parsing only lines that carry the key, and stops as soon
+    as the outcome is decided (mixed). Cache directories read the hash their builder recorded in
+    ``metadata.json``. Returns a sorted tuple; None marks source-off, pre-provenance, or
+    unreadable inputs. Best-effort by design: provenance must never fail training.
+    """
+    seen: set[str | None] = set()
+    for path in paths:
+        resolved = Path(path)
+        try:
+            metadata_path = resolved / "metadata.json"
+            if resolved.is_dir():
+                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(payload, Mapping) and payload.get("belief_set_source_mixed"):
+                    seen.update({None, BELIEF_PROVENANCE_MIXED})
+                elif isinstance(payload, Mapping):
+                    seen.add(payload.get(_BELIEF_HASH_KEY) or None)
+                else:
+                    seen.add(None)
+                continue
+            file_hashes: set[str | None] = set()
+            with resolved.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    if _BELIEF_HASH_KEY not in line:
+                        file_hashes.add(None)
+                    else:
+                        payload = json.loads(line)
+                        value = payload.get(_BELIEF_HASH_KEY) if isinstance(payload, Mapping) else None
+                        file_hashes.add(str(value) if value else None)
+                    if len(file_hashes) > 1:
+                        break
+            seen.update(file_hashes or {None})
+        except (OSError, ValueError, AttributeError, TypeError):
+            seen.add(None)
+    return tuple(sorted(seen, key=lambda value: (value is None, value or "")))
 
 
 def write_rollout_record(handle: TextIO, record: RolloutRecord) -> None:
@@ -610,6 +669,11 @@ def rollout_record_to_dict(record: RolloutRecord) -> dict[str, Any]:
         "elapsed_seconds": record.elapsed_seconds,
         "terminal": _terminal_to_dict(record.terminal),
         "trajectory": trajectory_to_dict(record.trajectory),
+        **(
+            {"belief_set_source_hash": record.belief_set_source_hash}
+            if record.belief_set_source_hash is not None
+            else {}
+        ),
     }
 
 
@@ -625,6 +689,9 @@ def rollout_record_from_dict(payload: Mapping[str, Any]) -> RolloutRecord:
         elapsed_seconds=float(payload["elapsed_seconds"]),
         terminal=_terminal_from_dict(_mapping(payload["terminal"])),
         trajectory=trajectory_from_dict(_mapping(payload["trajectory"])),
+        belief_set_source_hash=(
+            str(payload["belief_set_source_hash"]) if payload.get("belief_set_source_hash") else None
+        ),
     )
 
 
