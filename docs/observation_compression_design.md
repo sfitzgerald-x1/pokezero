@@ -1,5 +1,75 @@
 # Observation compression: opponent-signal stats replace the 4-turn window
 
+> **CORRECTIONS LAYER (2026-07-04, dual-review — AUTHORITATIVE, supersedes
+> conflicting body text below; full editorial restructure lands with the
+> implementation PRs):**
+>
+> **Mechanics (engine-verified):**
+> 1. The randbats spread is NOT fully deterministic: the generator zeroes
+>    Atk EV/IV on no-physical-attack sets and trims HP EVs on
+>    Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum sets. Def/SpA/
+>    SpD/Spe stay exact 85/31/neutral; **HP and Atk are
+>    variant-conditioned**. Computed-stats features carry exact values
+>    for the four fixed stats and per-variant values (or bounds) for
+>    HP/Atk; residual margins absorb the ±few-% HP-denominator ambiguity.
+> 2. Pinch berries activate **end-of-turn only** in gen3 → non-proc rule
+>    3 prunes only after an end of turn at ≤25%, never mid-turn.
+> 3. Drain-vs-sub reconstruction is **±1 HP** (heal = ceil(damage/2)),
+>    not exact.
+> 4. **Pursuit accuracy SETTLED**: the engine bypasses accuracy against a
+>    switching target — removed from the Tier-2 open list.
+> 5. Solar Beam is halved in rain, **sand, and hail** (sand reachable).
+> 6. Wish heals 50% of the **recipient's** max HP.
+>
+> **Spec decisions closing review P0/P1s:**
+> 7. The Tier-2 CB specification (whitelist, max-explanation margin,
+>    two-strike, precision gate) is canonical; the exact-state section's
+>    single-exceedance version is STRUCK.
+> 8. The Rest flag is **candidate-conditioned on Early Bird** (5 reachable
+>    carriers): wake known-2 iff Early Bird absent from candidates;
+>    ambiguous {1,2} otherwise; a 1-turn Rest-wake confirms Early Bird
+>    and restores determinism thereafter. The sleep-clause bit has LIVE
+>    semantics (clears on wake/faint; tracks the currently-slept mon).
+> 9. Canonical Tier-1 token field list (closes the schema): actor, action,
+>    **`called` bit** (Sleep Talk executions — new, same mislearning class
+>    as `transformed`), `transformed` bit, damage fraction,
+>    `damage_outcome` enum {normal, blocked, immune, absorbed, hit-sub,
+>    broke-sub, endured}, flags {crit, miss, KO, `pursuit-intercept`},
+>    `n_hits`, effectiveness class, side-effect category, context trio
+>    {own layers, opp layers, weather}, positional pair {absolute turn,
+>    turns-ago}. Tier-2 reserved zero-masked slots: residual scalar +
+>    validity bit, CB bit, investment bit — same spec version, no second
+>    break.
+> 10. Residual encoding: signed fraction of defender max HP (observed
+>    minus expected-median under the candidate-conservative baseline),
+>    with a separate validity bit (masked ⇒ invalid, value 0); populated
+>    on opponent attacks only in base Tier 2; margins ≥ protocol
+>    quantization (1% HP) — "tight" bounds are tight only for our own
+>    mons' exact HP.
+> 11. Token emission rules: one token per *declared action* (move or
+>    switch), so faint-replacements, Baton Pass completions, Pursuit
+>    interceptions, and turn-1 lead send-outs each emit their own switch
+>    token; **K is specified in tokens (128), not turns**; `turns-ago`
+>    ties break by within-turn resolution order.
+> 12. The ablation matrix re-anchors control arms at **512d** (the width
+>    result makes 256d controls uninformative); all arms carry the
+>    exact-state layer (isolating history encoding); the midground stat
+>    ships **Tier-2-gated**, not in Tier-1 arms; E/C train at K=64 with
+>    K=16 as the masked ablation.
+> 13. The protect-pattern / prediction-channel observations route into
+>    the midground stat's existing counters (no new dedicated stats —
+>    subsumption principle holds): `blocked`-on-our-attack and
+>    typing-explained-immune increment "no-predict"; doubled Pursuit
+>    increments "predict".
+> 14. Status-move clicks and no-action turns (`|cant|`: sleep, para,
+>    flinch, recharge) emit tokens with action id + outcome; the
+>    immune typing-split's type-chart computation is **Tier-2-gated**
+>    with a fixture test (per the hard-rule asymmetry).
+> 15. Trick × pruning: post-swap the recipient's item is **known**
+>    (identity of the given item), variant pruning on the *original* item
+>    freezes at its pre-swap state; non-proc rules apply to the current
+>    known item only.
+
 Status: design, 2026-07-03. Motivated by the width result (512d arm leading
 its cohort on trajectory: 74.4% max-damage at 208k games) and the cost
 structure that blocks scaling width further. Companion to
