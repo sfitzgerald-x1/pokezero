@@ -202,6 +202,7 @@ def main() -> int:
 
     roll_hits = 0
     roll_total = 0
+    crit_strikes_calibrated = 0
     roll_histogram = [0] * len(ROLL_NUMERATORS)
     log_ratios: list[float] = []
     mismatch_examples: list[dict[str, Any]] = []
@@ -316,14 +317,17 @@ def main() -> int:
                     whitelist=whitelist,
                     config=calibration_config,
                 )
+                # Calibration covers EXACTLY the population production ships as
+                # residual_valid: plain and crit strikes (crit-conditioned rolls);
+                # multi-hit is residual_valid=False in production and so never
+                # reaches here (population parity, per review MED-2).
                 for strike in control.strikes:
                     if not strike.residual_valid or not strike.baseline_rolls:
                         continue
                     if strike.observed_hp is None or strike.expected_median_hp is None:
                         continue
-                    token = control.tokens[strike.token_index]
-                    if token.crit or token.n_hits != 1:
-                        continue  # calibration is over clean single-hit, non-crit strikes
+                    if control.tokens[strike.token_index].crit:
+                        crit_strikes_calibrated += 1
                     roll_total += 1
                     rolls = strike.baseline_rolls
                     if strike.observed_hp in rolls:
@@ -397,6 +401,7 @@ def main() -> int:
         },
         "calibration_known_set": {
             "clean_strikes": roll_total,
+            "crit_strikes_included": crit_strikes_calibrated,
             "roll_match_rate": roll_match_rate,
             "mean_log_ratio": mean_log,
             "std_log_ratio": std_log,

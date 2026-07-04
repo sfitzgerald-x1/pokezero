@@ -156,9 +156,23 @@ class DamageRollsTest(unittest.TestCase):
             gen3_damage_rolls(self._ctx(crit=False, attack_boost=1))[-1],
         )
 
-    def test_screen_halves_after_type_but_not_on_crit(self) -> None:
-        self.assertEqual(gen3_damage_rolls(self._ctx(screen=True))[-1], 64)
+    def test_screen_halves_at_phase1_before_plus_two_but_not_on_crit(self) -> None:
+        # Phase1 (gen4-mod hook, inherited by gen3): 126 -> 63 (x0.5) -> 65 (+2).
+        self.assertEqual(gen3_damage_rolls(self._ctx(screen=True))[-1], 65)
         self.assertEqual(gen3_damage_rolls(self._ctx(screen=True, crit=True))[-1], 256)
+        # Order-sensitivity at the unit level: with STAB the Phase1 position gives
+        # modify(65, 1.5) = 97, while the (wrong) post-type position would give
+        # floor(modify(128, 1.5) / ... ) = modify(192, 0.5) = 96 — disjoint tops.
+        self.assertEqual(gen3_damage_rolls(self._ctx(screen=True, stab=True))[-1], 97)
+
+    def test_phase1_mods_flash_fire_position(self) -> None:
+        # Flash Fire volatile is a Phase1 DAMAGE mod: 126 -> 189 (x1.5) -> 191 (+2).
+        self.assertEqual(gen3_damage_rolls(self._ctx(phase1_mods=((1.5, 1),)))[-1], 191)
+        # It chains WITH the screen inside the one Phase1 event: 0.5 * 1.5 = 0.75 at
+        # 4096 scale -> modify(126, 0.75) = 94 -> 96 (+2).
+        self.assertEqual(
+            gen3_damage_rolls(self._ctx(phase1_mods=((1.5, 1),), screen=True))[-1], 96
+        )
 
     def test_weather_mod_applies_before_plus_two(self) -> None:
         # 126 -> 189 (x1.5) -> 191 (+2).
@@ -167,6 +181,28 @@ class DamageRollsTest(unittest.TestCase):
     def test_attack_chain_choice_band(self) -> None:
         # CB: attack 300 -> 450; base 189 -> 191 with +2.
         self.assertEqual(gen3_damage_rolls(self._ctx(attack_mods=((1.5, 1),)))[-1], 191)
+
+    def test_hustle_is_a_direct_stat_modify_not_a_chain_entry(self) -> None:
+        # Hustle returns modify(atk, 1.5) directly (the sim's own comment: applied to
+        # the stat, not chained), so Hustle + Choice Band truncates TWICE:
+        # modify(modify(163, 1.5)=244, 1.5) = 366, while a merged chain would give
+        # modify(163, 2.25) = 367 — a real off-lattice divergence (Delibird case).
+        from pokezero.gen3_damage import apply_chain, modify
+
+        self.assertEqual(modify(163, 1.5), 244)
+        self.assertEqual(apply_chain(modify(163, 1.5), [(1.5, 1)]), 366)
+        self.assertEqual(apply_chain(163, [(1.5, 1), (1.5, 1)]), 367)
+        direct = gen3_damage_rolls(
+            self._ctx(attack=163, base_power=60, defense=190, stab=True,
+                      attack_direct_mods=((1.5, 1),), attack_mods=((1.5, 1),), level=98)
+        )
+        merged = gen3_damage_rolls(
+            self._ctx(attack=163, base_power=60, defense=190, stab=True,
+                      attack_mods=((1.5, 1), (1.5, 1)), level=98)
+        )
+        self.assertNotEqual(direct, merged)
+        self.assertIn(125, direct)  # the live-sim observed value (seed-11 game 93)
+        self.assertNotIn(125, merged)
 
     def test_base_power_mods_solar_beam_facade(self) -> None:
         halved = gen3_damage_rolls(self._ctx(base_power=120, base_power_mods=((0.5, 1),)))
@@ -545,7 +581,7 @@ class SimCrossCheckTest(unittest.TestCase):
             context_builder=lambda s, crit: Gen3DamageContext(
                 level=100, base_power=95, category="Special",
                 attack=s["p1"]["spa"], defense=s["p2"]["spd"], stab=True,
-                attack_mods=((0.5, 1),), crit=crit,
+                base_power_mods=((0.5, 1),), crit=crit,
             ),
         )
 
@@ -579,7 +615,7 @@ class SimCrossCheckTest(unittest.TestCase):
             context_builder=lambda s, crit: Gen3DamageContext(
                 level=100, base_power=95, category="Special",
                 attack=s["p2"]["spa"], defense=s["p1"]["spd"], stab=True, effectiveness=0.5,
-                attack_mods=((1.5, 1),), crit=crit,
+                phase1_mods=((1.5, 1),), crit=crit,
             ),
         )
 
@@ -597,6 +633,199 @@ class SimCrossCheckTest(unittest.TestCase):
                 attack=s["p1"]["atk"], defense=s["p2"]["def"], stab=True,
                 explosion_def_halving=True, crit=crit,
             ),
+        )
+
+
+def _final_position_screen_rolls(unscreened_context: Gen3DamageContext) -> tuple[int, ...]:
+    """The pre-fix (wrong) chain: screen halving after STAB/type, before the roll.
+
+    ``rolls[-1]`` of an unscreened context is the fully-modified pre-roll base (the
+    roll-100 value), so halving it and re-rolling reproduces the old chain exactly.
+    """
+    from pokezero.gen3_damage import modify
+
+    rolls = gen3_damage_rolls(unscreened_context)
+    base = modify(rolls[-1], 0.5)
+    return tuple(max(1, int(int(base * n) / 100)) for n in ROLL_NUMERATORS)
+
+
+@unittest.skipUnless(_integration_config() is not None, "requires built Showdown checkout and node")
+class ChainOrderSensitiveTest(unittest.TestCase):
+    """Live-sim tests that DISTINGUISH damage-chain positions, not just membership.
+
+    Roll-membership at one seed passes with ~15/16 probability under a wrongly-ordered
+    chain (review MED-3/HIGH-1), so for each repositioned modifier — screens and Flash
+    Fire at ModifyDamagePhase1, the pinch abilities and Thick Fat at BasePower — these
+    tests pin fixed seeds whose observed damage lands in (correct lattice \\ wrong
+    lattice): values the alternative chain position can never produce. Each scenario
+    also asserts every non-crit observation fits the correct lattice and that none
+    fits only the wrong one. Seeds were selected by an exhaustive probe over seeds
+    1-40; the fixtures are deterministic, so these observations are stable.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = _integration_config()
+
+    def _run_order_scenario(
+        self, *, p1_team, p2_team, turn_choices, seeds, attacker, move, turn,
+        right_builder, wrong_builder, precondition=None,
+    ):
+        distinguishing = 0
+        observed_any = 0
+        for seed in seeds:
+            lines, p1_request, p2_request = _run_turns(
+                self.config, p1_team, p2_team, turn_choices, seed
+            )
+            stats = {"p1": _request_stats(p1_request), "p2": _request_stats(p2_request)}
+            events = _damage_events(lines, {"p1": stats["p1"]["hp"], "p2": stats["p2"]["hp"]})
+            event = next(
+                (e for e in events if e["attacker"] == attacker and e["move"] == move and e["turn"] == turn),
+                None,
+            )
+            if event is None or event["crit"]:
+                continue
+            if precondition is not None and not precondition(lines, stats):
+                continue
+            observed_any += 1
+            right = right_builder(stats)
+            wrong = wrong_builder(stats)
+            self.assertNotEqual(right, wrong, "fixture is not order-discriminative")
+            observed = event["damage"]
+            self.assertIn(observed, right, f"seed {seed}: {observed} outside the correct lattice {right}")
+            if observed not in wrong:
+                distinguishing += 1
+        self.assertGreater(observed_any, 0, "no usable observations")
+        self.assertGreater(
+            distinguishing, 0,
+            "no observation distinguished the chain positions — reselect seeds",
+        )
+
+    def test_reflect_is_phase1_not_final(self) -> None:
+        self._run_order_scenario(
+            p1_team=[_mon("Slowbro", ["Reflect", "Splash"], "Oblivious")],
+            p2_team=[_mon("Snorlax", ["Splash", "Return"], "Immunity")],
+            turn_choices=[("move 1", "move 1"), ("move 2", "move 2")],
+            seeds=(11, 29, 5),
+            attacker="p2", move="return", turn=2,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=102, category="Physical",
+                attack=s["p2"]["atk"], defense=s["p1"]["def"], stab=True, screen=True,
+            )),
+            # Wrong order: screen after STAB/type — halve the full unscreened base at
+            # the final position, then roll (the exact pre-fix chain).
+            wrong_builder=lambda s: _final_position_screen_rolls(Gen3DamageContext(
+                level=100, base_power=102, category="Physical",
+                attack=s["p2"]["atk"], defense=s["p1"]["def"], stab=True,
+            )),
+        )
+
+    def test_reflect_wrong_order_lattice_is_the_shifted_one(self) -> None:
+        # The alternative chains differ by exactly the +2's position relative to the
+        # halving: pin both lattices at the module level for the fixture's stats so a
+        # future chain refactor that silently reverts the order fails loudly.
+        from pokezero.gen3_damage import modify
+
+        base = 126  # any representative pre-Phase1 base
+        phase1 = modify(base, 0.5) + 2  # 63 + 2 = 65
+        final = modify(base + 2, 0.5)  # modify(128) = 64
+        self.assertEqual(phase1, 65)
+        self.assertEqual(final, 64)
+        self.assertNotEqual(phase1, final)
+
+    def test_light_screen_is_phase1_not_final(self) -> None:
+        self._run_order_scenario(
+            p1_team=[_mon("Snorlax", ["Light Screen", "Splash"], "Immunity")],
+            p2_team=[_mon("Alakazam", ["Splash", "Psychic"], "Synchronize")],
+            turn_choices=[("move 1", "move 1"), ("move 2", "move 2")],
+            seeds=(15, 9, 18),
+            attacker="p2", move="psychic", turn=2,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=90, category="Special",
+                attack=s["p2"]["spa"], defense=s["p1"]["spd"], stab=True, screen=True,
+            )),
+            wrong_builder=lambda s: _final_position_screen_rolls(Gen3DamageContext(
+                level=100, base_power=90, category="Special",
+                attack=s["p2"]["spa"], defense=s["p1"]["spd"], stab=True,
+            )),
+        )
+
+    def test_flash_fire_is_phase1_damage_mod_not_stat_mod(self) -> None:
+        self._run_order_scenario(
+            p1_team=[_mon("Charizard", ["Flamethrower", "Splash"], "Blaze")],
+            p2_team=[_mon("Flareon", ["Splash", "Flamethrower"], "Flash Fire")],
+            turn_choices=[("move 1", "move 1"), ("move 2", "move 2")],
+            seeds=(13, 25, 32),
+            attacker="p2", move="flamethrower", turn=2,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=95, category="Special",
+                attack=s["p2"]["spa"], defense=s["p1"]["spd"], stab=True, effectiveness=0.5,
+                phase1_mods=((1.5, 1),),
+            )),
+            wrong_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=95, category="Special",
+                attack=s["p2"]["spa"], defense=s["p1"]["spd"], stab=True, effectiveness=0.5,
+                attack_mods=((1.5, 1),),
+            )),
+        )
+
+    def test_thick_fat_is_base_power_mod_not_stat_mod(self) -> None:
+        # Level 82 chosen because the BasePower and stat-mod lattices diverge there.
+        self._run_order_scenario(
+            p1_team=[_mon("Charizard", ["Flamethrower"], "Blaze", level=82)],
+            p2_team=[_mon("Snorlax", ["Splash"], "Thick Fat", level=82)],
+            turn_choices=[("move 1", "move 1")],
+            seeds=(7, 21, 26),
+            attacker="p1", move="flamethrower", turn=1,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=82, base_power=95, category="Special",
+                attack=s["p1"]["spa"], defense=s["p2"]["spd"], stab=True,
+                base_power_mods=((0.5, 1),),
+            )),
+            wrong_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=82, base_power=95, category="Special",
+                attack=s["p1"]["spa"], defense=s["p2"]["spd"], stab=True,
+                attack_mods=((0.5, 1),),
+            )),
+        )
+
+    def test_blaze_pinch_is_base_power_mod_not_stat_mod(self) -> None:
+        def zard_below_third(lines, stats):
+            max_hp = stats["p1"]["hp"]
+            current = max_hp
+            turn = 0
+            for line in lines:
+                parts = line.split("|")
+                event_type = parts[1] if len(parts) > 1 else ""
+                if event_type == "turn":
+                    turn = int(parts[2])
+                elif (
+                    event_type in {"-damage", "-heal"}
+                    and parts[2].startswith("p1")
+                    and "/" in parts[3].split()[0]
+                ):
+                    current = int(parts[3].split()[0].split("/")[0])
+                elif event_type == "move" and parts[2].startswith("p1") and "Flamethrower" in parts[3] and turn == 3:
+                    return current * 3 <= max_hp
+            return False
+
+        self._run_order_scenario(
+            p1_team=[_mon("Charizard", ["Splash", "Flamethrower"], "Blaze", level=82)],
+            p2_team=[_mon("Snorlax", ["Return", "Splash"], "Immunity", level=82)],
+            turn_choices=[("move 1", "move 1"), ("move 1", "move 1"), ("move 2", "move 2")],
+            seeds=(8, 16, 29),
+            attacker="p1", move="flamethrower", turn=3,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=82, base_power=95, category="Special",
+                attack=s["p1"]["spa"], defense=s["p2"]["spd"], stab=True,
+                base_power_mods=((1.5, 1),),
+            )),
+            wrong_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=82, base_power=95, category="Special",
+                attack=s["p1"]["spa"], defense=s["p2"]["spd"], stab=True,
+                attack_mods=((1.5, 1),),
+            )),
+            precondition=zard_below_third,
         )
 
 

@@ -401,6 +401,40 @@ class ChoiceBandTwoStrikeTest(unittest.TestCase):
         self.assertFalse(strike.residual_valid)  # clipped observation, no residual
         self.assertIn("ko-clipped", strike.disqualifiers)
 
+    def test_ko_only_exceedances_never_flip_the_bit(self) -> None:
+        # Two KO-clipped exceedances: both count as strikes, but the bit requires at
+        # least one NON-KO exceedance (the off-model upper guard is weakened on
+        # clipped observations).
+        damage = _exceeding_damage()
+        ko_block = [
+            "|move|p2a: Snorlax|Body Slam|p1a: Slowbro",
+            "|-damage|p1a: Slowbro|0 fnt",
+            "|faint|p1a: Slowbro",
+            "|",
+        ]
+        lines = _leads(p1_hp=f"{damage}/330")
+        lines += ko_block
+        lines += [
+            f"|switch|p1a: Slowbro|Slowbro, L80|{damage}/330",
+            "|upkeep",
+            "|turn|2",
+        ]
+        lines += ko_block + ["|upkeep", "|turn|3"]
+        inference = _infer(lines)
+        self.assertEqual(len(inference.cb_strike_turns.get("p2:snorlax", ())), 2)
+        self.assertFalse(inference.cb_bits.get("p2:snorlax", False))
+        # One KO strike + one clean exceedance flips it.
+        lines = _leads(p1_hp=f"{damage}/330")
+        lines += ko_block
+        lines += [
+            "|switch|p1a: Slowbro|Slowbro, L80|330/330",
+            "|upkeep",
+            "|turn|2",
+        ]
+        lines += _strike_lines(damage, turn=2)
+        inference = _infer(lines)
+        self.assertTrue(inference.cb_bits.get("p2:snorlax", False))
+
 
 class ResidualChannelTest(unittest.TestCase):
     def test_residual_sign_and_token_population(self) -> None:
@@ -475,10 +509,47 @@ class ResidualChannelTest(unittest.TestCase):
         ]
         inference = _infer(lines, source=source)
         strike = next(s for s in inference.strikes if s.move_id == "bonemerang")
-        self.assertTrue(strike.residual_valid)
+        # The per-hit expectation is still computed and exposed, but multi-hit
+        # residuals ship INVALID: the summed-roll population is outside the gate's
+        # calibrated population (production validity == calibration coverage).
         self.assertAlmostEqual(strike.expected_median_hp, 2 * median_damage(per_hit))
+        self.assertFalse(strike.residual_valid)
         self.assertIn("multi-hit", strike.disqualifiers)
         self.assertFalse(strike.cb_eligible)
+
+    def test_plus_minus_cross_field_activation(self) -> None:
+        # Gen3 Plus/Minus check ALL actives (mods/gen3/abilities.ts): in singles the
+        # partner is OUR active, whose ability is exactly known. Minus attacker into
+        # our Plus defender gets 1.5x SpA; into anyone else it stays inert.
+        source = FakeSource(
+            {"snorlax": [{"variant_id": "m", "moves": ["flamethrower", "rest", "sleeptalk", "bodyslam"], "ability": "Minus", "item": "Leftovers", "level": _LEVEL}]}
+        )
+        stats = randbats_spread_stats(
+            _DEX.species_info("snorlax").base_stats, level=_LEVEL,
+            moves=["flamethrower", "rest", "sleeptalk", "bodyslam"], item="Leftovers",
+            has_physical_attack=True,
+        )
+
+        def rolls(attack_mods=()):
+            return gen3_damage_rolls(
+                Gen3DamageContext(
+                    level=_LEVEL, base_power=95, category="Special",
+                    attack=stats["spa"], defense=_OWN_SLOWBRO.stats["spd"],
+                    attack_mods=tuple(attack_mods),
+                    effectiveness=_DEX.effectiveness("Fire", ("Water", "Psychic")),
+                )
+            )
+
+        lines = _leads() + _strike_lines(20, turn=1, move="Flamethrower")
+        plain = _infer(lines, source=source)
+        strike = next(s for s in plain.strikes if s.move_id == "flamethrower")
+        self.assertAlmostEqual(strike.expected_median_hp, median_damage(rolls()))
+        plus_defender = (
+            OwnMon(species="Slowbro", level=80, stats=_OWN_SLOWBRO.stats, ability="Plus", item=None),
+        )
+        boosted = _infer(lines, source=source, own_team=plus_defender)
+        strike = next(s for s in boosted.strikes if s.move_id == "flamethrower")
+        self.assertAlmostEqual(strike.expected_median_hp, median_damage(rolls([(1.5, 1)])))
 
     def test_transformed_attacker_is_excluded(self) -> None:
         lines = _leads()
@@ -513,6 +584,46 @@ class ResidualChannelTest(unittest.TestCase):
         strike = next(s for s in inference.strikes if s.move_id == "bodyslam")
         self.assertFalse(strike.residual_valid)
         self.assertIn("type-changed", strike.disqualifiers)
+
+    def test_traced_ability_disqualifies_until_switch(self) -> None:
+        # Trace acquisition (either side) replaces a live ability: no damage
+        # inference while the tracer is on the field (review HIGH-2). The rule is
+        # structural — it keys on the acquisition-tagged |-ability| line, not on
+        # which species traced.
+        damage = int(median_damage(_bodyslam_rolls()))
+        lines = _leads()
+        lines += ["|-ability|p1a: Slowbro|Immunity|[from] ability: Trace|[of] p2a: Snorlax"]
+        lines += _strike_lines(damage, turn=1)
+        inference = _infer(lines)
+        strike = next(s for s in inference.strikes if s.move_id == "bodyslam")
+        self.assertIn("ability-overridden", strike.disqualifiers)
+        self.assertFalse(strike.residual_valid)
+        self.assertFalse(strike.cb_eligible)
+        # Attacker-side trace disqualifies too.
+        lines = _leads()
+        lines += ["|-ability|p2a: Snorlax|Oblivious|[from] ability: Trace|[of] p1a: Slowbro"]
+        lines += _strike_lines(damage, turn=1)
+        inference = _infer(lines)
+        strike = next(s for s in inference.strikes if s.move_id == "bodyslam")
+        self.assertIn("ability-overridden", strike.disqualifiers)
+        # The override ends when the traced mon leaves the field.
+        lines = _leads()
+        lines += ["|-ability|p2a: Snorlax|Oblivious|[from] ability: Trace|[of] p1a: Slowbro"]
+        lines += [
+            "|switch|p2a: Flareon|Flareon, L80|100/100",
+            "|",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+            "|",
+            "|upkeep",
+            "|turn|3",
+        ]
+        lines += _strike_lines(damage, turn=3)
+        inference = _infer(lines)
+        strike = next(s for s in inference.strikes if s.move_id == "bodyslam")
+        self.assertNotIn("ability-overridden", strike.disqualifiers)
+        self.assertTrue(strike.residual_valid)
 
     def test_trick_item_mutation_excludes_and_persists_across_switches(self) -> None:
         damage = _exceeding_damage()
@@ -642,12 +753,14 @@ class WeatherAndVolatileTest(unittest.TestCase):
             has_physical_attack=True,
         )
 
-        def flareon_rolls(attack_mods=()):
+        def flareon_rolls(phase1_mods=()):
+            # Flash Fire's boost is a ModifyDamagePhase1 damage mod (gen4-mod hook,
+            # inherited by gen3) — NOT an attack-stat mod.
             return gen3_damage_rolls(
                 Gen3DamageContext(
                     level=_LEVEL, base_power=95, category="Special",
                     attack=stats["spa"], defense=_OWN_SLOWBRO.stats["spd"],
-                    attack_mods=tuple(attack_mods), stab=True,
+                    phase1_mods=tuple(phase1_mods), stab=True,
                     effectiveness=_DEX.effectiveness("Fire", ("Water", "Psychic")),
                 )
             )

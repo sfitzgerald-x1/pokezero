@@ -10,9 +10,10 @@ defines (items 7, 9, 10 of ``docs/observation_compression_design.md``):
   every deterministic public modifier conditioned — stat stages, screens, burn (Guts
   exempt), sun/rain Fire/Water, Solar Beam halving in rain/sand/hail, Facade's status
   doubling, Flash Fire's tracked volatile, Explosion's defense halving, crit-expected
-  medians on ``|-crit|`` strikes, Pursuit's intercept power, and ``n_hits``
-  normalization. Anything the candidate set leaves ambiguous invalidates the residual
-  instead of guessing.
+  medians on ``|-crit|`` strikes, and Pursuit's intercept power. Multi-hit
+  (Bonemerang) strikes are masked: production validity ships only populations the
+  gate's calibration arm covers. Anything the candidate set leaves ambiguous
+  invalidates the residual instead of guessing.
 - the per-opponent-mon **Choice Band bit**: on a whitelisted fixed-power physical move,
   observed damage must exceed the maximum explainable non-CB roll (max over surviving
   candidate variants' abilities and items, max roll, all public modifiers) by a margin,
@@ -114,6 +115,9 @@ TYPE_BOOST_ITEMS: Mapping[str, str] = {
     "dragonfang": "Dragon",
     "blackglasses": "Dark",
 }
+# Gen3 Sea Incense is 1.05, not 1.1 (mods/gen3/items.ts). Dormant — the generator never
+# assigns it — kept exact against set drift.
+_TYPE_BOOST_FACTORS: Mapping[str, float] = {"seaincense": 1.05}
 
 _PINCH_ABILITY_TYPES: Mapping[str, str] = {
     "overgrow": "Grass",
@@ -233,6 +237,11 @@ class StrikeContext:
     # no longer describe the current holder (corrections item 15's mutation rule).
     attacker_item_mutated: bool = False
     defender_item_mutated: bool = False
+    # Trace (or any acquisition-tagged |-ability|): the side's LIVE ability is no
+    # longer its set/request ability — every ability-conditioned modifier is suspect,
+    # on both sides of the matchup. Structural, not species-keyed.
+    attacker_ability_overridden: bool = False
+    defender_ability_overridden: bool = False
     defender_screens: tuple[str, ...] = ()
 
 
@@ -274,6 +283,7 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
     flash_fire: dict[str, bool] = {"p1": False, "p2": False}
     transformed: dict[str, bool] = {"p1": False, "p2": False}
     type_changed: dict[str, bool] = {"p1": False, "p2": False}
+    ability_overridden: dict[str, bool] = {"p1": False, "p2": False}
     # Item mutation follows the MON (persists across switches), keyed (side, species).
     item_mutated: set[tuple[str, str]] = set()
     hp: dict[str, float] = {"p1": 1.0, "p2": 1.0}
@@ -303,6 +313,8 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
             defender_type_changed=type_changed[defender],
             attacker_item_mutated=(attacker, _species_key(attacker_species)) in item_mutated,
             defender_item_mutated=(defender, _species_key(defender_species)) in item_mutated,
+            attacker_ability_overridden=ability_overridden[attacker],
+            defender_ability_overridden=ability_overridden[defender],
             defender_screens=tuple(
                 name for name in ("reflect", "lightscreen") if side_counts[defender].get(name)
             ),
@@ -325,6 +337,7 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
             flash_fire[side] = False
             transformed[side] = False
             type_changed[side] = False
+            ability_overridden[side] = False
             occupant[side] = species
             condition = _condition_features(parts[4] if len(parts) > 4 else None)
             hp[side] = condition.hp_fraction if condition.hp_fraction is not None else 1.0
@@ -335,6 +348,7 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
             flash_fire[side] = False
             transformed[side] = False
             type_changed[side] = False
+            ability_overridden[side] = False
             hp[side] = 0.0
         elif event_type == "-transform" and side in {"p1", "p2"}:
             transformed[side] = True
@@ -345,6 +359,14 @@ def _strike_contexts(raw_lines: Sequence[str], windows: Sequence[Any]) -> dict[i
             if "move: Trick" in raw_line or "move: Knock Off" in raw_line:
                 mutated_species = occupant.get(side) or _species_from_ident(parts[2])
                 item_mutated.add((side, _species_key(mutated_species)))
+        elif event_type == "-ability" and side in {"p1", "p2"}:
+            # A plain |-ability| line is a reveal; an ACQUISITION-tagged one replaces
+            # the side's live ability until it leaves the field (Trace here; Role
+            # Play / Skill Swap defensively — both unreachable in this pool). The
+            # rule is structural: a traced ability breaks every ability-conditioned
+            # modifier regardless of which species did the tracing.
+            if "Trace" in raw_line or "move: Role Play" in raw_line or "move: Skill Swap" in raw_line:
+                ability_overridden[side] = True
         elif event_type == "-status" and side in {"p1", "p2"} and len(parts) >= 4:
             species = occupant.get(side) or _species_from_ident(parts[2])
             status[(side, _species_key(species))] = parts[3].strip() or None
@@ -584,6 +606,8 @@ def _variant_damage(
     if base_power <= 0:
         return None
 
+    # BasePower-event mods (mods/gen4 inherited by gen3): Solar Beam weather, Facade,
+    # the pinch abilities (onBasePower), and Thick Fat (onSourceBasePower).
     base_power_mods: list[tuple[float, float]] = []
     weather = normalize_id(token.weather or "")
     suppressed = _weather_suppressed(variant.ability, own.ability)
@@ -591,6 +615,24 @@ def _variant_damage(
         base_power_mods.append((0.5, 1))
     if move_id == "facade" and (context.attacker_status or "") in _FACADE_STATUSES:
         base_power_mods.append((2, 1))
+    ability = variant.ability
+    pinch_type = _PINCH_ABILITY_TYPES.get(ability)
+    if pinch_type is not None and move_type == pinch_type:
+        fraction = context.attacker_hp_fraction
+        if abs(3.0 * fraction - 1.0) <= config.pinch_ambiguity_band:
+            ambiguous = True
+            base_power_mods.append((1.5, 1))  # conservative-max interpretation
+        elif fraction <= 1.0 / 3.0:
+            base_power_mods.append((1.5, 1))
+    own_ability = normalize_id(own.ability or "")
+    if own_ability == "thickfat" and move_type in {"Fire", "Ice"}:
+        base_power_mods.append((0.5, 1))
+
+    # ModifyDamagePhase1 mods beyond the screen (which gen3_damage applies itself):
+    # the Flash Fire volatile (mods/gen4/abilities.ts, inherited).
+    phase1_mods: list[tuple[float, float]] = []
+    if context.attacker_flash_fire and move_type == "Fire":
+        phase1_mods.append((1.5, 1))
 
     stats = _variant_stats(variant, attacker_species_key, dex, stats_cache)
     if stats is None:
@@ -603,29 +645,24 @@ def _variant_damage(
     if defense is None or max_hp is None:
         return None
 
-    # Attack-stat modifier chain (defender-side source mods first, then abilities, then
-    # items — event-order rounding differences are inside the margins).
+    # Attack-stat modifier chain (ModifyAtk/SpA events: abilities then items). Hustle
+    # is the one DIRECT-modify handler (it truncates the stat itself; chained handlers
+    # accumulate into one finalModify — Hustle+CB truncates twice in the engine).
     attack_mods: list[tuple[float, float]] = []
-    own_ability = normalize_id(own.ability or "")
-    if own_ability == "thickfat" and move_type in {"Fire", "Ice"}:
-        attack_mods.append((0.5, 1))
-    ability = variant.ability
+    attack_direct_mods: list[tuple[float, float]] = []
     guts_active = ability == "guts" and (context.attacker_status or "") in _GUTS_STATUSES
     if guts_active:
         attack_mods.append((1.5, 1))
     if ability == "hustle" and category == "Physical":
-        attack_mods.append((1.5, 1))
+        attack_direct_mods.append((1.5, 1))
     if ability in {"hugepower", "purepower"} and category == "Physical":
         attack_mods.append((2, 1))
-    pinch_type = _PINCH_ABILITY_TYPES.get(ability)
-    if pinch_type is not None and move_type == pinch_type:
-        fraction = context.attacker_hp_fraction
-        if abs(3.0 * fraction - 1.0) <= config.pinch_ambiguity_band:
-            ambiguous = True
-            attack_mods.append((1.5, 1))  # conservative-max interpretation
-        elif fraction <= 1.0 / 3.0:
-            attack_mods.append((1.5, 1))
-    if context.attacker_flash_fire and move_type == "Fire":
+    # Gen3 Plus/Minus check ALL actives, not allies (mods/gen3/abilities.ts) — in
+    # singles the partner is the OPPOSING active, i.e. our own mon, whose ability is
+    # exactly known. The inventory's "inert in singles" note is dex-level, not
+    # engine-level; reachable via Plusle/Minun.
+    partner = {"minus": "plus", "plus": "minus"}.get(ability)
+    if partner is not None and category == "Special" and own_ability == partner:
         attack_mods.append((1.5, 1))
 
     item_mods: list[tuple[float, float]] = []
@@ -642,7 +679,7 @@ def _variant_damage(
     else:
         boost_type = TYPE_BOOST_ITEMS.get(item)
         if boost_type is not None and boost_type == move_type:
-            item_mods.append((1.1, 1))
+            item_mods.append((_TYPE_BOOST_FACTORS.get(item, 1.1), 1))
 
     defense_mods: list[tuple[float, float]] = []
     if own_ability == "marvelscale" and context.defender_status and category == "Physical":
@@ -686,8 +723,10 @@ def _variant_damage(
                 attack_boost=int(context.attacker_boosts.get(attack_stat_key, 0)),
                 defense_boost=int(context.defender_boosts.get(defense_stat_key, 0)),
                 attack_mods=tuple(mods_with_item),
+                attack_direct_mods=tuple(attack_direct_mods),
                 defense_mods=tuple(defense_mods),
                 base_power_mods=tuple(base_power_mods),
+                phase1_mods=tuple(phase1_mods),
                 stab=stab,
                 effectiveness=effectiveness,
                 burned=burned,
@@ -770,6 +809,7 @@ def infer_tier2(
     strikes: list[StrikeAssessment] = []
     residuals: dict[int, tuple[Optional[float], bool]] = {}
     cb_turns: dict[str, list[int]] = {}
+    cb_non_ko: set[str] = set()
 
     windows = list(fold.windows)
     for index, (token, window) in enumerate(zip(fold.tokens, windows)):
@@ -801,6 +841,8 @@ def infer_tier2(
             residuals[index] = (assessment.residual, True)
         if assessment.cb_eligible and assessment.cb_exceeded:
             cb_turns.setdefault(assessment.attacker_key, []).append(assessment.turn)
+            if not token.ko:
+                cb_non_ko.add(assessment.attacker_key)
 
     # Feed any trailing events so the engine ends at the true boundary (parity with a
     # from_events construction; no evaluation depends on it).
@@ -812,7 +854,13 @@ def infer_tier2(
         replace(token, residual=residuals[index][0], residual_valid=True) if index in residuals else token
         for index, token in enumerate(fold.tokens)
     )
-    cb_bits = {key: len(turns) >= config.required_cb_strikes for key, turns in cb_turns.items()}
+    # The bit needs the two-strike count AND at least one NON-KO exceedance: a KO-
+    # clipped observation is understated, which weakens the off-model upper guard on
+    # that strike, so KO strikes alone may never flip the bit.
+    cb_bits = {
+        key: len(turns) >= config.required_cb_strikes and key in cb_non_ko
+        for key, turns in cb_turns.items()
+    }
     return Tier2Inference(
         perspective_slot=perspective_slot,
         opponent_slot=opponent,
@@ -894,6 +942,11 @@ def _assess_strike(
         # modifiers describe the ORIGINAL assignment, not the current holder
         # (corrections item 15). Conservative: no damage inference on such mons.
         return replace(base, disqualifiers=("item-mutated",))
+    if context.attacker_ability_overridden or context.defender_ability_overridden:
+        # Trace-class acquisition replaced a live ability (announced |-ability| with
+        # an acquisition tag): every ability-conditioned modifier — on either side —
+        # may now be wrong. Symmetric to item-mutated; structural, not species-keyed.
+        return replace(base, disqualifiers=("ability-overridden",))
 
     own = own_by_species.get(_species_key(context.defender_species))
     if own is None or "hp" not in own.stats:
@@ -956,7 +1009,13 @@ def _assess_strike(
     baseline_agrees = (median_high - median_low) <= agreement
     expected_median = (median_low + median_high) / 2.0
 
-    residual_valid = baseline_agrees and not ambiguous and not truncated and not token.ko
+    # Multi-hit (Bonemerang) residuals are masked: the summed-roll population is
+    # excluded from the gate's calibration arm, and production validity must exactly
+    # match the calibrated population. Crit strikes STAY valid — they are calibrated
+    # (crit-conditioned) alongside plain strikes.
+    residual_valid = (
+        baseline_agrees and not ambiguous and not truncated and not token.ko and n_hits == 1
+    )
     residual = (observed_hp - expected_median) / max_hp if residual_valid else None
     if not baseline_agrees:
         disqualifiers.append("baseline-disagreement")
@@ -1004,7 +1063,12 @@ def _assess_strike(
     cb_exceeded = False
     if cb_eligible and max_non_cb is not None and max_cb is not None:
         exceeds_non_cb = observed_hp > max_non_cb + margin
-        within_cb = observed_hp <= max_cb + margin  # off-model guard
+        # Off-model guard: damage beyond even the best CB explanation means something
+        # unmodeled happened — never count it. Caveat: on a KO the observed value is
+        # clipped at the defender's remaining HP, which understates true damage and
+        # can slip an off-model hit under this ceiling; the bit therefore requires at
+        # least one NON-KO exceedance among its strikes (see infer_tier2).
+        within_cb = observed_hp <= max_cb + margin
         cb_exceeded = exceeds_non_cb and within_cb
         if exceeds_non_cb and not within_cb:
             disqualifiers.append("exceeds-cb-explanation")

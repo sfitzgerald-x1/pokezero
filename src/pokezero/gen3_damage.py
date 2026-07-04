@@ -12,9 +12,17 @@ chain in pure Python instead:
 
 - base formula: ``sim/battle-actions.ts getDamage`` —
   ``tr(tr(tr(tr(2*L/5+2) * P * A) / D) / 50)`` with boosted stats and stat-modify events;
-- modifier chain: ``data/mods/gen3/scripts.ts modifyDamage`` — burn, weather, +2, crit x2,
-  STAB, type effectiveness, screens (base-data Reflect/Light Screen hook the final
-  ModifyDamage event and skip crits), then the 85-100 randomizer;
+- modifier chain: ``data/mods/gen3/scripts.ts modifyDamage`` — burn, ModifyDamagePhase1,
+  weather, physical-min-1, +2, crit x2, Phase2 floor, STAB, type effectiveness, then the
+  85-100 randomizer;
+- gen3 inherits the gen4 mod (``mods/gen3/scripts.ts`` ``inherit: 'gen4'``), which
+  re-hooks Reflect / Light Screen (0.5, crit-skipped) and the Flash Fire volatile (1.5)
+  onto **ModifyDamagePhase1** (``mods/gen4/moves.ts``, ``mods/gen4/abilities.ts``) — NOT
+  the final ModifyDamage event the current base data uses — and moves the pinch
+  abilities (Blaze/Overgrow/Torrent/Swarm, 1.5 at <=1/3 HP) and Thick Fat (0.5 on
+  Fire/Ice) onto the **BasePower** event. Stat-modify events keep Guts / Hustle /
+  Huge+Pure Power / Choice Band / Thick Club / Light Ball / Soul Dew / Marvel Scale and
+  the gen3 1.1x type-boost items (``mods/gen3/items.ts``; Sea Incense is 1.05);
 - fixed-point rounding: ``Battle.modify`` / ``Battle.chainModify`` 4096-based math and
   ``Pokemon.calculateStat``'s boost table.
 
@@ -228,13 +236,18 @@ class Gen3DamageContext:
     (1.5, 1), Soul Dew SpA/SpD (1.5, 1), Thick Club / Light Ball (2, 1).
 
     ``base_power_mods`` cover BasePower-event conditioning: Solar Beam in
-    rain/sand/hail (0.5, 1) and Facade with a status (2, 1). ``weather_mod`` is the
+    rain/sand/hail (0.5, 1), Facade with a status (2, 1), the pinch abilities
+    (1.5, 1 — gen4-mod ``onBasePower``, inherited by gen3), and Thick Fat's Fire/Ice
+    halving (0.5, 1 — ``onSourceBasePower``). ``phase1_mods`` are ModifyDamagePhase1
+    damage mods beyond the screen (the Flash Fire volatile's (1.5, 1)); they chain
+    WITH the screen halving in a single Phase1 event. ``weather_mod`` is the
     WeatherModifyDamage entry (Fire/Water in sun/rain: (1.5, 1) or (0.5, 1)).
 
     ``burned`` must already encode the Guts exemption (burn halving is skipped when
     the attacker's ability is Guts); ``screen`` is the category-matching screen on
-    the defender's side (crit bypass is handled here, per the vendored base-data
-    Reflect/Light Screen handlers).
+    the defender's side, applied at Phase1 — BEFORE the +2 / crit / STAB / type steps
+    — per the gen4-mod handlers gen3 inherits, and skipped on crits (the handler's
+    own check).
     """
 
     level: int
@@ -245,8 +258,14 @@ class Gen3DamageContext:
     attack_boost: int = 0
     defense_boost: int = 0
     attack_mods: tuple[tuple[float, float], ...] = ()
+    # Direct-modify stat handlers (Hustle — the sim's own comment: "applied directly to
+    # the stat as opposed to chaining with the others"): each applies its own modify()
+    # to the running stat BEFORE the chained handlers' single finalModify. Hustle+Choice
+    # Band therefore truncates twice, not once — a real ±1 divergence otherwise.
+    attack_direct_mods: tuple[tuple[float, float], ...] = ()
     defense_mods: tuple[tuple[float, float], ...] = ()
     base_power_mods: tuple[tuple[float, float], ...] = ()
+    phase1_mods: tuple[tuple[float, float], ...] = ()
     stab: bool = False
     effectiveness: float = 1.0  # product of 2x / 0.5x steps; 0 means immune
     burned: bool = False
@@ -277,6 +296,8 @@ def gen3_damage_rolls(context: Gen3DamageContext) -> tuple[int, ...]:
         if defense_boost > 0:
             defense_boost = 0
     attack = boosted_stat(context.attack, attack_boost)
+    for direct in context.attack_direct_mods:
+        attack = modify(attack, *direct)
     attack = apply_chain(attack, context.attack_mods)
     defense = boosted_stat(context.defense, defense_boost)
     defense = apply_chain(defense, context.defense_mods)
@@ -288,7 +309,14 @@ def gen3_damage_rolls(context: Gen3DamageContext) -> tuple[int, ...]:
     # data/mods/gen3/scripts.ts modifyDamage, in order.
     if context.burned:
         base = modify(base, 0.5)
-    # (ModifyDamagePhase1: no handler in the gen3 randbats universe.)
+    # ModifyDamagePhase1: the gen4-mod handlers gen3 inherits — Reflect / Light Screen
+    # (0.5, skipped on crits, the handler's own check) and the Flash Fire volatile
+    # (1.5) — chain together in one event and apply in one modify.
+    phase1: list[tuple[float, float]] = []
+    if context.screen and not context.crit:
+        phase1.append((0.5, 1))
+    phase1.extend(context.phase1_mods)
+    base = apply_chain(base, phase1)
     if context.weather_mod is not None:
         base = modify(base, *context.weather_mod)
     if context.category == "Physical" and base == 0:
@@ -296,8 +324,8 @@ def gen3_damage_rolls(context: Gen3DamageContext) -> tuple[int, ...]:
     base += 2
     if context.crit:
         base = modify(base, 2)
-    # (ModifyDamagePhase2: no handler in the gen3 randbats universe; floor is a no-op
-    # on ints.)
+    # (ModifyDamagePhase2: no handler in the effective-gen3 randbats universe; the
+    # floor is a no-op on ints.)
     if context.stab:
         base = modify(base, 1.5)
     effectiveness = context.effectiveness
@@ -307,9 +335,8 @@ def gen3_damage_rolls(context: Gen3DamageContext) -> tuple[int, ...]:
     while effectiveness <= 0.5:
         base = _tr(base / 2)
         effectiveness *= 2
-    if context.screen and not context.crit:
-        # Base-data Reflect / Light Screen hook the final ModifyDamage event.
-        base = modify(base, 0.5)
+    # (Final ModifyDamage event: empty in effective gen3 — the gen4 mod re-hooks the
+    # base-data Reflect / Light Screen handlers onto Phase1 above.)
 
     rolls = []
     for numerator in ROLL_NUMERATORS:
