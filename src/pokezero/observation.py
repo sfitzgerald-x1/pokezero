@@ -7,13 +7,24 @@ from typing import Any, Mapping
 
 from .actions import ACTION_COUNT
 
-OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v1"
+# v2 (the WS-1 C one-way break, docs/observation_compression_design.md + corrections layer):
+# window_size=1 snapshots, the 24 recent-event tokens are dropped, and the token sequence gains
+# a stats token plus a 128-slot transition-token block (K in tokens, corrections item 11).
+# Checkpoints trained under v1 must load-and-refuse; replay them from their pinned tag
+# (docs/model_versioning.md).
+OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v2"
+LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 SHOWDOWN_PLAYER_SLOTS = ("p1", "p2")
 FIELD_TOKEN_COUNT = 1
 SELF_POKEMON_TOKEN_COUNT = 6
 OPPONENT_POKEMON_TOKEN_COUNT = 6
 ACTION_CANDIDATE_TOKEN_COUNT = ACTION_COUNT
-RECENT_EVENT_TOKEN_COUNT = 24
+# One stats token carries the global tendency (count, opportunity) pairs (design doc "Encoding").
+STATS_TOKEN_COUNT = 1
+# Transition-token slot budget: 128 tokens ≈ 64 turns of ordered history, truncated oldest-first
+# (the truncated prefix is what the unbounded aggregates have already absorbed). The K ∈ {16-turn}
+# ablation arm masks the budget down via config (ObservationFeatureMasks) — not a spec change.
+TRANSITION_TOKEN_COUNT = 128
 
 
 @dataclass(frozen=True)
@@ -26,7 +37,8 @@ class ObservationSpec:
 
     categorical_feature_count: int
     numeric_feature_count: int
-    recent_event_token_count: int = RECENT_EVENT_TOKEN_COUNT
+    stats_token_count: int = STATS_TOKEN_COUNT
+    transition_token_count: int = TRANSITION_TOKEN_COUNT
 
     @property
     def token_count(self) -> int:
@@ -35,8 +47,38 @@ class ObservationSpec:
             + SELF_POKEMON_TOKEN_COUNT
             + OPPONENT_POKEMON_TOKEN_COUNT
             + ACTION_CANDIDATE_TOKEN_COUNT
-            + self.recent_event_token_count
+            + self.stats_token_count
+            + self.transition_token_count
         )
+
+
+@dataclass(frozen=True)
+class ObservationFeatureMasks:
+    """Ablation-arm feature masks (config, NOT spec — shapes and version are unchanged).
+
+    Masked-off content is zeroed and attention-masked at encode time, so an arm trains and
+    evaluates on the same spec version with the block simply dark:
+
+    - ``stats_block``: the stats token + the per-opponent-mon tendency triple.
+    - ``exact_state``: the exact-state layer (PP-ledger fractions, sleep/duration counters,
+      sleep-clause / trapper / pending-Wish bits, computed expected stats).
+    - ``transition_token_budget``: how many of the most recent transition tokens are filled
+      (32 tokens = the K=16-turn ablation arm); the remaining slots stay zero + masked.
+    """
+
+    stats_block: bool = True
+    exact_state: bool = True
+    transition_token_budget: int = TRANSITION_TOKEN_COUNT
+
+    def __post_init__(self) -> None:
+        if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
+            raise ValueError(
+                f"transition_token_budget must be in 1..{TRANSITION_TOKEN_COUNT}, "
+                f"got {self.transition_token_budget}."
+            )
+
+
+DEFAULT_OBSERVATION_FEATURE_MASKS = ObservationFeatureMasks()
 
 
 @dataclass(frozen=True)
@@ -80,6 +122,13 @@ class PokeZeroObservationV0:
 
     def validate(self, spec: ObservationSpec) -> None:
         if self.schema_version != OBSERVATION_SCHEMA_VERSION:
+            if self.schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS:
+                raise ValueError(
+                    f"Observation schema {self.schema_version!r} predates the current spec "
+                    f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens). Legacy data "
+                    "and checkpoints must be replayed from their pinned tag "
+                    "(docs/model_versioning.md)."
+                )
             raise ValueError(f"Unsupported observation schema version: {self.schema_version!r}.")
         _require_outer_length("categorical_ids", self.categorical_ids, spec.token_count)
         _require_outer_length("numeric_features", self.numeric_features, spec.token_count)

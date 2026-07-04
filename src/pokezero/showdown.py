@@ -6,7 +6,7 @@ Showdown protocol seats (`p1`/`p2`) and PokeZero's player-relative model input.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import re
@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
     from .dex import ShowdownDex
+    from .transitions import OpponentMonTendency, TendencyStats, TransitionToken
 
 from .actions import (
     ACTION_COUNT,
@@ -27,8 +28,12 @@ from .belief import PlayerBeliefView, PokemonSetSource, PublicBattleBeliefEngine
 from .dex import resolve_move_base_power, resolve_move_effect
 from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
+    DEFAULT_OBSERVATION_FEATURE_MASKS,
     FIELD_TOKEN_COUNT,
     OPPONENT_POKEMON_TOKEN_COUNT,
+    STATS_TOKEN_COUNT,
+    TRANSITION_TOKEN_COUNT,
+    ObservationFeatureMasks,
     ObservationPerspective,
     ObservationSpec,
     PokeZeroObservationV0,
@@ -50,7 +55,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=44,
+    numeric_feature_count=119,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -145,12 +150,119 @@ NUMERIC_ACTUAL_DEF = 40
 NUMERIC_ACTUAL_SPA = 41
 NUMERIC_ACTUAL_SPD = 42
 NUMERIC_ACTUAL_SPE = 43
+# ---- observation spec v2 additions (exact-state layer + stats token + transition tokens). ----
+# Field token — side-level exact state. Sleep-clause bits carry LIVE semantics (corrections
+# item 8): 1 while the side currently has an opposing mon asleep from its own sleep move.
+NUMERIC_SELF_SLEEP_CLAUSE = 44
+NUMERIC_OPP_SLEEP_CLAUSE = 45
+# Weather duration: turns remaining / 5 for move weather; ability weather is permanent in gen 3
+# (permanent bit set, counter pinned at 1.0 so it never reads as decaying).
+NUMERIC_WEATHER_TURNS = 46
+NUMERIC_WEATHER_PERMANENT = 47
+# Deterministic 5-turn side-condition counters (turns remaining / 5), per side.
+NUMERIC_SELF_REFLECT_TURNS = 48
+NUMERIC_SELF_LIGHT_SCREEN_TURNS = 49
+NUMERIC_SELF_SAFEGUARD_TURNS = 50
+NUMERIC_SELF_MIST_TURNS = 51
+NUMERIC_OPP_REFLECT_TURNS = 52
+NUMERIC_OPP_LIGHT_SCREEN_TURNS = 53
+NUMERIC_OPP_SAFEGUARD_TURNS = 54
+NUMERIC_OPP_MIST_TURNS = 55
+# Pending Wish per side (latent state no rule can reconstruct — design doc pending-effect rule).
+NUMERIC_SELF_WISH_PENDING = 56
+NUMERIC_OPP_WISH_PENDING = 57
+# Pokemon tokens — per-mon exact state (both sides where known). Sleep counter /5; wake-known
+# distinguishes "they know when they wake" (Rest, Early Bird resolved per corrections item 8)
+# from natural sleep's hazard rate. Turns-active is the current stint (reset on entry), /64.
+NUMERIC_SLEEP_TURNS = 58
+NUMERIC_REST_SLEEP = 59
+NUMERIC_WAKE_KNOWN = 60
+NUMERIC_TURNS_ACTIVE = 61
+# Trapper-alive: this mon has a revealed trap ability (Shadow Tag / Arena Trap / Magnet Pull),
+# is not fainted, and is benched — the persistent switch-threat flag from the WS-1 A corrective.
+NUMERIC_TRAPPER_ALIVE = 62
+# Opponent tokens — per-mon tendency triple (design doc stats item 3), evidence-mass counts /64.
+NUMERIC_MON_SWITCHED_BEFORE_ATTACK = 63
+NUMERIC_MON_STAYED_AND_ATTACKED = 64
+NUMERIC_MON_TURNS_ACTIVE_TOTAL = 65
+# Opponent tokens — computed expected stats (design doc exact-state; corrections item 1): the
+# fixed four (def/spa/spd/spe) are exact from species+level+85 EV/31 IV/neutral; HP and Atk are
+# variant-conditioned — the 85/31 baseline plus a [low, high] bound pair over candidate variants
+# (Atk-zeroing on no-physical sets, HP-EV trim on Sub+Flail/Reversal / Sub+pinch-berry /
+# Belly Drum sets) when a set source is attached, else baseline. All / 714 like actual stats.
+NUMERIC_EXPECTED_HP = 66
+NUMERIC_EXPECTED_HP_LOW = 67
+NUMERIC_EXPECTED_HP_HIGH = 68
+NUMERIC_EXPECTED_ATK = 69
+NUMERIC_EXPECTED_ATK_LOW = 70
+NUMERIC_EXPECTED_ATK_HIGH = 71
+NUMERIC_EXPECTED_DEF = 72
+NUMERIC_EXPECTED_SPA = 73
+NUMERIC_EXPECTED_SPD = 74
+NUMERIC_EXPECTED_SPE = 75
+# Opponent tokens — exact PP ledger (design doc stats item 1): remaining-PP fraction per
+# REVEALED move, positionally aligned with the belief-move bucket columns (same sorted order as
+# CATEGORY_BELIEF_MOVE_OFFSET..+16). Max PP is the randbat catalog rule (3 PP Ups: floor(pp*8/5))
+# from the dex; Pressure ×2 / Sleep-Talk-charges-caller / Transform scoping are already applied
+# engine-side in move_uses. Unrevealed columns stay 0.0 (no knowledge claimed).
+NUMERIC_OPP_MOVE_PP_OFFSET = 76  # ..91 (BELIEF_MOVE_BUCKET_COUNT columns)
+# Stats token — global tendency (count, opportunity) pairs, evidence mass /64, never bare rates.
+NUMERIC_STAT_OPP_SWITCH_COUNT = 92
+NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES = 93
+NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK = 94
+NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT = 95
+NUMERIC_STAT_MY_SWITCH_TURNS = 96
+# Opponent weather reveals: per weather in _WEATHER_REVEAL_ORDER, a (set-this-game bit,
+# source-was-ability bit) pair — ability weather is a double reveal + permanent (item 4).
+NUMERIC_STAT_WEATHER_REVEAL_OFFSET = 97  # ..104 (4 weathers x 2)
+# Transition tokens (corrections item 9 canonical schema; categoricals share the fixed columns).
+NUMERIC_TT_DAMAGE_FRACTION = 105
+NUMERIC_TT_N_HITS = 106  # /5 (gen 3 multi-hit max)
+NUMERIC_TT_CALLED = 107  # Sleep Talk execution bit
+NUMERIC_TT_TRANSFORMED = 108
+NUMERIC_TT_CRIT = 109
+NUMERIC_TT_MISS = 110
+NUMERIC_TT_KO = 111
+NUMERIC_TT_PURSUIT_INTERCEPT = 112
+# Context trio numerics (weather is categorical on CATEGORY_MOVE_EFFECT).
+NUMERIC_TT_OWN_SPIKES = 113  # /3
+NUMERIC_TT_OPP_SPIKES = 114  # /3
+# Positional pair (corrections item 11): absolute turn /1000 (matches NUMERIC_TURN_COUNT) +
+# turns-ago /64 (the token-budget turn scale), both clamped.
+NUMERIC_TT_ABS_TURN = 115
+NUMERIC_TT_TURNS_AGO = 116
+# Reserved zero-masked Tier-2 slots (corrections items 9/10): residual scalar + validity bit.
+# ALWAYS 0.0 in this spec revision; PR D populates them behind its precision gate with no
+# second spec break.
+NUMERIC_TT_RESIDUAL = 117
+NUMERIC_TT_RESIDUAL_VALID = 118
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
 OPPONENT_POKEMON_TOKEN_OFFSET = SELF_POKEMON_TOKEN_OFFSET + SELF_POKEMON_TOKEN_COUNT
 ACTION_CANDIDATE_TOKEN_OFFSET = OPPONENT_POKEMON_TOKEN_OFFSET + OPPONENT_POKEMON_TOKEN_COUNT
-RECENT_EVENT_TOKEN_OFFSET = ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_CANDIDATE_TOKEN_COUNT
+STATS_TOKEN_OFFSET = ACTION_CANDIDATE_TOKEN_OFFSET + ACTION_CANDIDATE_TOKEN_COUNT
+TRANSITION_TOKEN_OFFSET = STATS_TOKEN_OFFSET + STATS_TOKEN_COUNT
+
+# Transition-token kind ids. Literal copies of transitions.TOKEN_KIND_* — showdown cannot import
+# transitions at module level (transitions imports showdown's parse helpers); a unit test asserts
+# the two sets stay identical.
+_TT_KIND_MOVE = "move"
+_TT_KIND_SWITCH = "switch"
+_TT_KIND_CANT = "cant"
+
+# Evidence-mass normalization scale for tendency counts (turn-scale, matches the 64-turn
+# transition budget); counts saturate at 64 rather than being encoded as rates.
+_STAT_COUNT_DIVISOR = 64.0
+# Fixed field order for the stats token's opponent weather-reveal pairs.
+_WEATHER_REVEAL_ORDER = ("raindance", "sunnyday", "sandstorm", "hail")
+# Deterministic gen 3 timed effects: 5 turns for move weather and for these side conditions.
+_TIMED_CONDITION_DURATION = 5
+_TIMED_SIDE_CONDITIONS = ("reflect", "lightscreen", "safeguard", "mist")
+# Revealed trap abilities whose holder threatens switches while alive on the bench.
+_TRAP_ABILITIES = frozenset({"shadowtag", "arenatrap", "magnetpull"})
+# Pinch berries for the HP-EV-trim variant condition (corrections item 1).
+_PINCH_BERRIES = frozenset({"salacberry", "petayaberry", "liechiberry"})
 
 
 @dataclass(frozen=True)
@@ -187,6 +299,15 @@ class ShowdownReplayState:
     weather: Optional[str] = None
     turn_number: int = 0
     winner: Optional[str] = None
+    # Weather duration/source tracking (exact-state layer): the turn the current weather was set
+    # and whether it came from an ability (|-weather|...|[from] ability: — permanent in gen 3).
+    weather_set_turn: Optional[int] = None
+    weather_from_ability: bool = False
+    # Set-turn per side for the deterministic 5-turn side conditions (Reflect / Light Screen /
+    # Safeguard / Mist), keyed by normalized condition id.
+    side_condition_set_turns: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
+    # Pending Wish per side: the turn each side declared Wish (heals its slot end of next turn).
+    wish_set_turns: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -246,6 +367,21 @@ class PlayerRelativeBattleState:
     self_future_sight_turns: int = 0  # turns until a delayed attack lands on the player's side
     opponent_future_sight_turns: int = 0  # turns until the player's own delayed attack lands
     winner: Optional[str] = None
+    # ---- spec v2: ordered history + tendency aggregates + side-level exact state. ----
+    # One TransitionToken per declared action, whole game, within-turn resolution order
+    # (oldest-truncation to the encode budget happens at encode time, not here).
+    transition_tokens: tuple["TransitionToken", ...] = ()
+    tendency_stats: "TendencyStats | None" = None
+    weather_turns_remaining: int = 0
+    weather_permanent: bool = False
+    # Turns remaining per active timed side condition (reflect/lightscreen/safeguard/mist).
+    self_timed_condition_turns: Mapping[str, int] = field(default_factory=dict)
+    opponent_timed_condition_turns: Mapping[str, int] = field(default_factory=dict)
+    self_wish_pending: bool = False
+    opponent_wish_pending: bool = False
+    # Live sleep-clause consumption per side (from the belief engine's holders).
+    self_sleep_clause_used: bool = False
+    opponent_sleep_clause_used: bool = False
 
     @property
     def self_active(self) -> ShowdownPokemon | None:
@@ -283,6 +419,10 @@ class _ReplayParser:
         self.weather: Optional[str] = None
         self.turn_number: int = 0
         self.winner: Optional[str] = None
+        self.weather_set_turn: Optional[int] = None
+        self.weather_from_ability: bool = False
+        self.side_condition_set_turns: dict[str, dict[str, int]] = {"p1": {}, "p2": {}}
+        self.wish_set_turns: dict[str, int] = {}
 
     def feed(self, lines: Sequence[str]) -> None:
         for raw_line in lines:
@@ -356,6 +496,9 @@ class _ReplayParser:
                     self.toxic_stage[slot] = min(15, stage + 1)
         _update_side_conditions(parts, self.side_condition_counts)
         self.weather = _update_weather(parts, self.weather)
+        self._update_weather_meta(parts, line)
+        self._update_timed_side_conditions(parts)
+        self._update_wish(parts, line)
         _update_boosts(parts, self.boosts)
         _update_volatiles(parts, self.volatiles)
         _update_future_sight(parts, self.future_sight, self.turn_number)
@@ -363,6 +506,61 @@ class _ReplayParser:
         _flag_baton_pass(parts, self.pending_baton_pass)
         self.public_events.append(_public_event_from_line(line))
         self.public_lines.append(line)
+
+    def _update_weather_meta(self, parts: Sequence[str], line: str) -> None:
+        """Track the current weather's set turn + ability source from |-weather| lines.
+
+        A ``[upkeep]``-tagged line continues the existing weather (set turn/source unchanged);
+        a fresh ``|-weather|<id>|`` line (re)sets them; ``none`` clears them. Ability-sourced
+        weather (``[from] ability:`` — Drizzle/Drought/Sand Stream) is permanent in gen 3;
+        move weather runs exactly 5 turns (no extension items exist in gen 3).
+        """
+        if (parts[1] if len(parts) > 1 else "") != "-weather":
+            return
+        identifier = _normalize_identifier(parts[2].strip() if len(parts) > 2 else "")
+        if not identifier or identifier == "none":
+            self.weather_set_turn = None
+            self.weather_from_ability = False
+            return
+        if "[upkeep]" in line:
+            return
+        self.weather_set_turn = self.turn_number
+        self.weather_from_ability = "[from] ability:" in line
+
+    def _update_timed_side_conditions(self, parts: Sequence[str]) -> None:
+        """Record the set turn of the deterministic 5-turn side conditions per side."""
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type not in {"-sidestart", "-sideend"} or len(parts) < 4:
+            return
+        slot = _slot_from_ident(parts[2])
+        if slot not in self.side_condition_set_turns:
+            return
+        condition = _side_condition_identifier(parts[3])
+        if condition not in _TIMED_SIDE_CONDITIONS:
+            return
+        if event_type == "-sidestart":
+            self.side_condition_set_turns[slot][condition] = self.turn_number
+        else:
+            self.side_condition_set_turns[slot].pop(condition, None)
+
+    def _update_wish(self, parts: Sequence[str], line: str) -> None:
+        """Track pending Wish per side: set on the |move| declaration, cleared when it lands.
+
+        The landing heal arrives ``[from] move: Wish`` on the slot occupant end of the NEXT
+        turn (a full-HP landing emits no heal and simply expires via the turn arithmetic in
+        ``_wish_pending``). The heal-line clear covers mid-turn observations between the
+        landing and the next |turn| boundary.
+        """
+        event_type = parts[1] if len(parts) > 1 else ""
+        if event_type == "move" and len(parts) >= 4:
+            slot = _slot_from_ident(parts[2])
+            if slot in {"p1", "p2"} and _normalize_identifier(parts[3]) == "wish":
+                self.wish_set_turns[slot] = self.turn_number
+            return
+        if event_type in {"-heal", "-sethp"} and len(parts) > 2 and "[from] move: Wish" in line:
+            slot = _slot_from_ident(parts[2])
+            if slot is not None:
+                self.wish_set_turns.pop(slot, None)
 
     def snapshot(self) -> ShowdownReplayState:
         return ShowdownReplayState(
@@ -385,6 +583,12 @@ class _ReplayParser:
             weather=self.weather,
             turn_number=self.turn_number,
             winner=self.winner,
+            weather_set_turn=self.weather_set_turn,
+            weather_from_ability=self.weather_from_ability,
+            side_condition_set_turns={
+                slot: dict(turns) for slot, turns in self.side_condition_set_turns.items()
+            },
+            wish_set_turns=dict(self.wish_set_turns),
         )
 
 
@@ -468,6 +672,14 @@ def normalize_for_player(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
     )
+    # Ordered transition history + tendency aggregates (PR B extraction functions). Local import:
+    # transitions.py imports this module's parse helpers, so a module-level import would cycle.
+    from .transitions import extract_tendency_stats, extract_transition_tokens
+
+    transition_tokens = extract_transition_tokens(replay, perspective_slot=showdown_slot)
+    tendency_stats = extract_tendency_stats(replay, perspective_slot=showdown_slot)
+    weather_turns_remaining, weather_permanent = _weather_duration_features(replay)
+    sleep_clause_holders = belief_engine.sleep_clause_holders
     return PlayerRelativeBattleState(
         battle_id=replay.battle_id,
         player_id=player_id,
@@ -495,7 +707,51 @@ def normalize_for_player(
         self_future_sight_turns=_future_sight_turns_remaining(replay, showdown_slot),
         opponent_future_sight_turns=_future_sight_turns_remaining(replay, opponent_slot),
         winner=replay.winner,
+        transition_tokens=transition_tokens,
+        tendency_stats=tendency_stats,
+        weather_turns_remaining=weather_turns_remaining,
+        weather_permanent=weather_permanent,
+        self_timed_condition_turns=_timed_condition_turns(replay, showdown_slot),
+        opponent_timed_condition_turns=_timed_condition_turns(replay, opponent_slot),
+        self_wish_pending=_wish_pending(replay, showdown_slot),
+        opponent_wish_pending=_wish_pending(replay, opponent_slot),
+        self_sleep_clause_used=sleep_clause_holders.get(showdown_slot) is not None,
+        opponent_sleep_clause_used=sleep_clause_holders.get(opponent_slot) is not None,
     )
+
+
+def _weather_duration_features(replay: ShowdownReplayState) -> tuple[int, bool]:
+    """(turns remaining, permanent) for the active weather; (0, False) when clear.
+
+    Ability weather is permanent in gen 3: the counter is pinned at the full 5 so it never reads
+    as decaying. Move weather counts down deterministically from its set turn.
+    """
+    if not replay.weather:
+        return 0, False
+    if replay.weather_from_ability:
+        return _TIMED_CONDITION_DURATION, True
+    if replay.weather_set_turn is None:
+        return 0, False
+    elapsed = replay.turn_number - replay.weather_set_turn
+    return max(0, _TIMED_CONDITION_DURATION - elapsed), False
+
+
+def _timed_condition_turns(replay: ShowdownReplayState, slot: str) -> dict[str, int]:
+    """Turns remaining per ACTIVE timed side condition for one side (5-turn class, gen 3)."""
+    set_turns = replay.side_condition_set_turns.get(slot, {})
+    active_counts = replay.side_condition_counts.get(slot, {})
+    remaining: dict[str, int] = {}
+    for condition, set_turn in set_turns.items():
+        if not active_counts.get(condition):
+            continue
+        remaining[condition] = max(0, _TIMED_CONDITION_DURATION - (replay.turn_number - set_turn))
+    return remaining
+
+
+def _wish_pending(replay: ShowdownReplayState, slot: str) -> bool:
+    """True while a declared Wish has not yet landed on ``slot``'s side (lands end of next turn)."""
+    set_turn = replay.wish_set_turns.get(slot)
+    return set_turn is not None and (replay.turn_number - set_turn) <= 1
 
 
 def observation_from_player_state(
@@ -504,6 +760,7 @@ def observation_from_player_state(
     category_vocab: "CategoryVocabulary",
     spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC,
     dex: "ShowdownDex | None" = None,
+    feature_masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
 ) -> PokeZeroObservationV0:
     """Encode normalized replay state into fixed-shape observation rows.
 
@@ -511,10 +768,17 @@ def observation_from_player_state(
     via ``category_vocab`` (required) in a single pass. When ``dex`` is supplied, raw mechanical
     facts (Pokemon types; move type / damage class / base power / priority / accuracy) are
     populated into the type/mechanic feature slots; without it those slots stay padding.
+    ``feature_masks`` darkens ablation-arm blocks (zeroed + attention-masked) without changing
+    shapes or the spec version.
     """
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
-    _encode_field_token(categorical_ids, numeric_features, state)
+    _encode_field_token(categorical_ids, numeric_features, state, masks=feature_masks)
+    # Exact-state per-mon fields come from the belief engine's ledgers for BOTH sides (it tracks
+    # self and opponent); the opponent's belief-fact buckets keep their existing single source.
+    self_exact_beliefs = {
+        _normalize_identifier(belief.species): belief for belief in state.belief_view.self_pokemon
+    }
     _encode_pokemon_tokens(
         categorical_ids,
         numeric_features,
@@ -526,8 +790,18 @@ def observation_from_player_state(
         active_volatiles=state.self_active_volatiles,
         active_toxic_stage=state.self_toxic_stage,
         dex=dex,
+        exact_beliefs_by_species=self_exact_beliefs,
+        masks=feature_masks,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
+    tendency_by_species = (
+        {
+            _normalize_identifier(tendency.species): tendency
+            for tendency in state.tendency_stats.opponent_mon_tendencies
+        }
+        if state.tendency_stats is not None
+        else {}
+    )
     _encode_pokemon_tokens(
         categorical_ids,
         numeric_features,
@@ -540,13 +814,17 @@ def observation_from_player_state(
         active_volatiles=state.opponent_active_volatiles,
         active_toxic_stage=state.opponent_toxic_stage,
         dex=dex,
+        exact_beliefs_by_species=opponent_beliefs,
+        tendency_by_species=tendency_by_species,
+        masks=feature_masks,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
-    _encode_recent_event_tokens(categorical_ids, numeric_features, state, spec)
+    _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
+    _encode_transition_tokens(categorical_ids, numeric_features, state, spec, masks=feature_masks)
     # Convert the raw category strings to compact embedding rows in one pass.
     categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
     token_type_ids = _token_type_ids(spec)
-    attention_mask = _attention_mask(state, spec)
+    attention_mask = _attention_mask(state, spec, masks=feature_masks)
     return PokeZeroObservationV0(
         categorical_ids=tuple(tuple(row) for row in categorical_rows),
         numeric_features=tuple(tuple(row) for row in numeric_features),
@@ -1081,6 +1359,8 @@ def _encode_field_token(
     categorical_ids: list[list[int]],
     numeric_features: list[list[float]],
     state: PlayerRelativeBattleState,
+    *,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
 ) -> None:
     _set_category(categorical_ids[FIELD_TOKEN_OFFSET], CATEGORY_PRIMARY, f"request_kind:{state.request_kind}")
     # Winner identity is deliberately NOT encoded: it is constant ("none") at every decision
@@ -1102,6 +1382,44 @@ def _encode_field_token(
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_SELF_FUTURE_SIGHT, min(1.0, state.self_future_sight_turns / 2.0))
     if state.opponent_future_sight_turns:
         _set_numeric(numeric_features[FIELD_TOKEN_OFFSET], NUMERIC_OPP_FUTURE_SIGHT, min(1.0, state.opponent_future_sight_turns / 2.0))
+    if masks.exact_state:
+        _encode_field_exact_state(numeric_features[FIELD_TOKEN_OFFSET], state)
+
+
+# (condition id, self numeric slot, opponent numeric slot) for the timed side conditions.
+_TIMED_CONDITION_SLOTS = (
+    ("reflect", NUMERIC_SELF_REFLECT_TURNS, NUMERIC_OPP_REFLECT_TURNS),
+    ("lightscreen", NUMERIC_SELF_LIGHT_SCREEN_TURNS, NUMERIC_OPP_LIGHT_SCREEN_TURNS),
+    ("safeguard", NUMERIC_SELF_SAFEGUARD_TURNS, NUMERIC_OPP_SAFEGUARD_TURNS),
+    ("mist", NUMERIC_SELF_MIST_TURNS, NUMERIC_OPP_MIST_TURNS),
+)
+
+
+def _encode_field_exact_state(num_row: list[float], state: PlayerRelativeBattleState) -> None:
+    """Side-level exact-state features: sleep clause, timed durations, pending Wish."""
+    if state.self_sleep_clause_used:
+        _set_numeric(num_row, NUMERIC_SELF_SLEEP_CLAUSE, 1.0)
+    if state.opponent_sleep_clause_used:
+        _set_numeric(num_row, NUMERIC_OPP_SLEEP_CLAUSE, 1.0)
+    if state.weather:
+        _set_numeric(
+            num_row,
+            NUMERIC_WEATHER_TURNS,
+            min(1.0, state.weather_turns_remaining / float(_TIMED_CONDITION_DURATION)),
+        )
+        if state.weather_permanent:
+            _set_numeric(num_row, NUMERIC_WEATHER_PERMANENT, 1.0)
+    for condition, self_slot, opp_slot in _TIMED_CONDITION_SLOTS:
+        self_turns = state.self_timed_condition_turns.get(condition, 0)
+        if self_turns:
+            _set_numeric(num_row, self_slot, min(1.0, self_turns / float(_TIMED_CONDITION_DURATION)))
+        opp_turns = state.opponent_timed_condition_turns.get(condition, 0)
+        if opp_turns:
+            _set_numeric(num_row, opp_slot, min(1.0, opp_turns / float(_TIMED_CONDITION_DURATION)))
+    if state.self_wish_pending:
+        _set_numeric(num_row, NUMERIC_SELF_WISH_PENDING, 1.0)
+    if state.opponent_wish_pending:
+        _set_numeric(num_row, NUMERIC_OPP_WISH_PENDING, 1.0)
 
 
 # Gen 3 has a single entry hazard (Spikes, max 3 layers); Toxic Spikes / Stealth Rock are
@@ -1265,6 +1583,9 @@ def _encode_pokemon_tokens(
     active_volatiles: Sequence[str] = (),
     active_toxic_stage: int = 0,
     dex: "ShowdownDex | None" = None,
+    exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
+    tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
@@ -1312,11 +1633,13 @@ def _encode_pokemon_tokens(
         # Moves mirror ability/item: revealed moves are ground truth (protocol-observed, no belief
         # set source required) and must always be encoded; possible_moves from the set source
         # augment them. Revealed take priority and are never evicted by the sort/truncate.
-        _encode_belief_fact_categories(
-            categorical_ids[token_index],
-            "possible_move",
+        # The final sorted bucket list is materialized here so the PP-ledger numeric columns can
+        # align positionally with the belief-move categorical columns.
+        bucket_moves = _compact_belief_values(
             _prioritized_belief_moves(revealed_moves, possible_moves, BELIEF_MOVE_BUCKET_COUNT),
+            limit=BELIEF_MOVE_BUCKET_COUNT,
         )
+        _encode_belief_fact_categories(categorical_ids[token_index], "possible_move", bucket_moves)
         _set_numeric(numeric_features[token_index], NUMERIC_HP_FRACTION, condition.hp_fraction or 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_ACTIVE, 1.0 if candidate.active else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_LEGAL, 0.0 if condition.fainted else 1.0)
@@ -1329,6 +1652,336 @@ def _encode_pokemon_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_POSSIBLE_MOVE_COUNT, float(len(possible_moves)))
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ABILITY, 1.0 if revealed_ability else 0.0)
         _set_numeric(numeric_features[token_index], NUMERIC_REVEALED_ITEM, 1.0 if revealed_item else 0.0)
+        # ---- spec v2 per-mon blocks. ----
+        exact = _belief_for_species(exact_beliefs_by_species, candidate.species)
+        if masks.exact_state:
+            _encode_mon_exact_state(
+                numeric_features[token_index],
+                candidate,
+                exact,
+                role=role,
+                status=status,
+                fainted=condition.fainted,
+            )
+            if role == "opponent":
+                _encode_opponent_move_pp_fractions(
+                    numeric_features[token_index], exact, bucket_moves, dex=dex
+                )
+                _encode_expected_stats(
+                    numeric_features[token_index],
+                    dex,
+                    base_species=candidate.species,
+                    battle_species=enc_species,
+                    details=candidate.details,
+                    belief=exact,
+                )
+        if masks.stats_block and role == "opponent" and tendency_by_species:
+            tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
+            if tendency is not None:
+                _encode_mon_tendency(numeric_features[token_index], tendency)
+
+
+def _encode_mon_exact_state(
+    num_row: list[float],
+    candidate: ShowdownPokemon,
+    exact: RevealedPokemonBelief | None,
+    *,
+    role: str,
+    status: str,
+    fainted: bool,
+) -> None:
+    """Per-mon exact-state features from the belief engine's ledgers (both sides).
+
+    Sleep fields populate only while asleep. ``wake-known`` semantics (corrections item 8):
+    for our own mons the wake turn is always known (our ability is known); for opponent mons a
+    Rest wake is known-2 iff Early Bird is absent from the live candidate abilities (ambiguous
+    {1, 2} otherwise; a revealed ability restores determinism either way). Natural sleep is a
+    hazard rate — never wake-known.
+    """
+    if exact is not None:
+        if status == "slp":
+            _set_numeric(num_row, NUMERIC_SLEEP_TURNS, min(1.0, exact.sleep_turns / 5.0))
+            if exact.rest_sleep:
+                _set_numeric(num_row, NUMERIC_REST_SLEEP, 1.0)
+                if role == "self" or _opponent_rest_wake_known(exact):
+                    _set_numeric(num_row, NUMERIC_WAKE_KNOWN, 1.0)
+        if candidate.active and exact.turns_active:
+            _set_numeric(num_row, NUMERIC_TURNS_ACTIVE, min(1.0, exact.turns_active / _STAT_COUNT_DIVISOR))
+    ability = (
+        candidate.ability
+        if role == "self"
+        else (exact.revealed_ability if exact is not None else None)
+    )
+    if (
+        ability
+        and _normalize_identifier(ability) in _TRAP_ABILITIES
+        and not fainted
+        and not candidate.active
+    ):
+        _set_numeric(num_row, NUMERIC_TRAPPER_ALIVE, 1.0)
+
+
+def _opponent_rest_wake_known(exact: RevealedPokemonBelief) -> bool:
+    """Whether an opponent Rest sleeper's wake turn is deterministic to us (Early Bird resolved)."""
+    if exact.revealed_ability:
+        return True
+    candidates = {
+        _normalize_identifier(ability) for ability in exact.possible_abilities
+    } - {_normalize_identifier(ability) for ability in exact.ruled_out_abilities}
+    if not candidates:
+        # No candidate information (set source off, nothing revealed): cannot assert Early Bird
+        # absent, so the wake stays ambiguous.
+        return False
+    return "earlybird" not in candidates
+
+
+def _encode_opponent_move_pp_fractions(
+    num_row: list[float],
+    exact: RevealedPokemonBelief | None,
+    bucket_moves: Sequence[str],
+    *,
+    dex: "ShowdownDex | None",
+) -> None:
+    """Remaining-PP fraction per REVEALED opponent move, aligned with the belief-move buckets.
+
+    Max PP is the randbat catalog rule (3 PP Ups) from the dex; ``move_uses`` already carries the
+    engine-side charging rules (Pressure x2, Sleep-Talk-charges-caller, Transform scoping).
+    Unrevealed bucket columns stay 0.0 — no PP knowledge is claimed for merely-possible moves.
+    """
+    if exact is None or dex is None:
+        return
+    revealed_keys = {
+        _normalize_identifier(move) for move in exact.revealed_moves if _normalize_identifier(move)
+    }
+    if not revealed_keys:
+        return
+    uses_by_move = {key: uses for key, uses in exact.move_uses}
+    for index, move in enumerate(bucket_moves[:BELIEF_MOVE_BUCKET_COUNT]):
+        key = _normalize_identifier(move)
+        if key not in revealed_keys:
+            continue
+        info = dex.move_info(key)
+        max_pp = info.max_pp if info is not None else 0
+        if max_pp <= 0:
+            continue
+        remaining = max(0, max_pp - int(uses_by_move.get(key, 0)))
+        _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_OFFSET + index, remaining / float(max_pp))
+
+
+def _gen3_stat(base: int, level: int, *, ev: int, iv: int, hp: bool) -> int:
+    """Gen 3 stat formula at a neutral nature (the randbats generator's spread family)."""
+    core = ((2 * base + iv + ev // 4) * level) // 100
+    return core + level + 10 if hp else core + 5
+
+
+def _encode_expected_stats(
+    num_row: list[float],
+    dex: "ShowdownDex | None",
+    *,
+    base_species: str,
+    battle_species: str,
+    details: str | None,
+    belief: RevealedPokemonBelief | None,
+) -> None:
+    """Deterministic opponent stat block from species + level + the fixed 85/31/neutral spread.
+
+    Def/SpA/SpD/Spe are exact (the generator never varies them). HP and Atk are
+    variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high] bound pair over
+    the candidate variants — Atk-zeroing (0 EV / 0 IV) on no-physical-attack variants, HP-EV trim
+    (0 EV lower bound) on Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum variants. Without
+    an attached set source the bounds collapse to the baseline. Transform note: non-HP stats key
+    on the effective battler (``battle_species``, matching the base-stat encoding), HP on the
+    original species (Transform never copies HP).
+    """
+    if dex is None:
+        return
+    level = _level_from_details(details)
+    if level is None:
+        return
+    battle_info = dex.species_info(battle_species)
+    hp_info = dex.species_info(base_species)
+    if battle_info is None or hp_info is None:
+        return
+    base = battle_info.base_stats
+    hp_base = hp_info.base_stats.get("hp")
+    for stat_key, slot in (
+        ("def", NUMERIC_EXPECTED_DEF),
+        ("spa", NUMERIC_EXPECTED_SPA),
+        ("spd", NUMERIC_EXPECTED_SPD),
+        ("spe", NUMERIC_EXPECTED_SPE),
+    ):
+        value = base.get(stat_key)
+        if value:
+            _set_numeric(
+                num_row, slot, min(1.0, _gen3_stat(value, level, ev=85, iv=31, hp=False) / _ACTUAL_STAT_DIVISOR)
+            )
+    atk_base = base.get("atk")
+    if not atk_base or not hp_base:
+        return
+    atk_baseline = _gen3_stat(atk_base, level, ev=85, iv=31, hp=False)
+    hp_baseline = _gen3_stat(hp_base, level, ev=85, iv=31, hp=True)
+    atk_low = atk_high = atk_baseline
+    hp_low = hp_high = hp_baseline
+    variants = belief.candidate_variants if belief is not None else ()
+    if variants:
+        atk_values: list[int] = []
+        hp_values: list[int] = []
+        for variant in variants:
+            moves = {
+                _normalize_identifier(str(move)) for move in _as_sequence(variant.get("moves"))
+            }
+            item = _normalize_identifier(str(variant.get("item") or ""))
+            has_physical = any(_is_physical_attack(dex, move) for move in moves)
+            atk_values.append(
+                atk_baseline if has_physical else _gen3_stat(atk_base, level, ev=0, iv=0, hp=False)
+            )
+            hp_trimmed = "bellydrum" in moves or (
+                "substitute" in moves and (bool(moves & {"flail", "reversal"}) or item in _PINCH_BERRIES)
+            )
+            hp_values.append(
+                _gen3_stat(hp_base, level, ev=0, iv=31, hp=True) if hp_trimmed else hp_baseline
+            )
+        atk_low, atk_high = min(atk_values), max(atk_values)
+        hp_low, hp_high = min(hp_values), max(hp_values)
+    for slot, value in (
+        (NUMERIC_EXPECTED_HP, hp_baseline),
+        (NUMERIC_EXPECTED_HP_LOW, hp_low),
+        (NUMERIC_EXPECTED_HP_HIGH, hp_high),
+        (NUMERIC_EXPECTED_ATK, atk_baseline),
+        (NUMERIC_EXPECTED_ATK_LOW, atk_low),
+        (NUMERIC_EXPECTED_ATK_HIGH, atk_high),
+    ):
+        _set_numeric(num_row, slot, min(1.0, value / _ACTUAL_STAT_DIVISOR))
+
+
+def _is_physical_attack(dex: "ShowdownDex", move_id: str) -> bool:
+    info = dex.move_info(move_id)
+    return info is not None and info.gen3_category == "Physical" and info.base_power > 0
+
+
+def _as_sequence(value: Any) -> Sequence[Any]:
+    if isinstance(value, (list, tuple)):
+        return value
+    return ()
+
+
+def _encode_mon_tendency(num_row: list[float], tendency: "OpponentMonTendency") -> None:
+    """Per-opponent-mon tendency triple (counts /64 — evidence mass, never rates)."""
+    if tendency.switched_out_before_attacking:
+        _set_numeric(
+            num_row,
+            NUMERIC_MON_SWITCHED_BEFORE_ATTACK,
+            min(1.0, tendency.switched_out_before_attacking / _STAT_COUNT_DIVISOR),
+        )
+    if tendency.stayed_and_attacked:
+        _set_numeric(
+            num_row,
+            NUMERIC_MON_STAYED_AND_ATTACKED,
+            min(1.0, tendency.stayed_and_attacked / _STAT_COUNT_DIVISOR),
+        )
+    if tendency.turns_active:
+        _set_numeric(
+            num_row,
+            NUMERIC_MON_TURNS_ACTIVE_TOTAL,
+            min(1.0, tendency.turns_active / _STAT_COUNT_DIVISOR),
+        )
+
+
+def _encode_stats_token(
+    categorical_ids: list[list[int]],
+    numeric_features: list[list[float]],
+    state: PlayerRelativeBattleState,
+    *,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+) -> None:
+    """The global tendency-stats token: (count, opportunity) pairs + opponent weather reveals."""
+    stats = state.tendency_stats
+    if stats is None or not masks.stats_block:
+        return
+    cat_row = categorical_ids[STATS_TOKEN_OFFSET]
+    num_row = numeric_features[STATS_TOKEN_OFFSET]
+    _set_category(cat_row, CATEGORY_ROLE, "stats")
+    _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
+    for slot, count in (
+        (NUMERIC_STAT_OPP_SWITCH_COUNT, stats.opponent_switch_count),
+        (NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES, stats.opponent_decision_opportunities),
+        (NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK, stats.blocked_on_our_attack_count),
+        (NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT, stats.pursuit_intercept_predict_count),
+        (NUMERIC_STAT_MY_SWITCH_TURNS, stats.my_switch_turn_count),
+    ):
+        if count:
+            _set_numeric(num_row, slot, min(1.0, count / _STAT_COUNT_DIVISOR))
+    reveals_by_weather = {reveal.weather: reveal for reveal in stats.opponent_weather_reveals}
+    for index, weather in enumerate(_WEATHER_REVEAL_ORDER):
+        reveal = reveals_by_weather.get(weather)
+        if reveal is None:
+            continue
+        _set_numeric(num_row, NUMERIC_STAT_WEATHER_REVEAL_OFFSET + (2 * index), 1.0)
+        if reveal.from_ability:
+            _set_numeric(num_row, NUMERIC_STAT_WEATHER_REVEAL_OFFSET + (2 * index) + 1, 1.0)
+
+
+def _encode_transition_tokens(
+    categorical_ids: list[list[int]],
+    numeric_features: list[list[float]],
+    state: PlayerRelativeBattleState,
+    spec: ObservationSpec,
+    *,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+) -> None:
+    """Encode the ordered transition-token block (corrections item 9 schema).
+
+    Slots fill chronologically (oldest first) with the most recent ``budget`` tokens —
+    oldest-first truncation, since the truncated prefix is exactly what the unbounded aggregates
+    have absorbed. Unfilled slots stay zeroed and attention-masked. Categorical fields ride the
+    shared fixed columns with transition-specific vocab families; the action column branches on
+    ``kind`` (move id / incoming species / cant reason — deliberately unmerged vocabularies).
+    ``NUMERIC_TT_RESIDUAL``/``NUMERIC_TT_RESIDUAL_VALID`` stay 0.0: reserved Tier-2 slots.
+    """
+    budget = min(masks.transition_token_budget, spec.transition_token_count)
+    tokens = state.transition_tokens[-budget:] if budget else ()
+    self_slot = state.perspective.showdown_slot
+    for index, token in enumerate(tokens):
+        cat_row = categorical_ids[TRANSITION_TOKEN_OFFSET + index]
+        num_row = numeric_features[TRANSITION_TOKEN_OFFSET + index]
+        actor_role = "self" if token.actor_slot == self_slot else "opponent"
+        _set_category(cat_row, CATEGORY_PRIMARY, f"species:{token.actor_species}")
+        if token.kind == _TT_KIND_MOVE:
+            action_label = f"move:{token.action}"
+        elif token.kind == _TT_KIND_SWITCH:
+            action_label = f"species:{token.action}"
+        else:
+            action_label = f"cant:{token.action}"
+        _set_category(cat_row, CATEGORY_SECONDARY, action_label)
+        _set_category(cat_row, CATEGORY_ROLE, f"transition:{actor_role}")
+        _set_category(cat_row, CATEGORY_SLOT, f"tt_kind:{token.kind}")
+        if token.kind == _TT_KIND_MOVE:
+            _set_category(cat_row, CATEGORY_TYPE_1, f"tt_outcome:{token.damage_outcome}")
+            _set_category(cat_row, CATEGORY_TYPE_2, f"tt_effectiveness:{token.effectiveness}")
+            _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"tt_side_effect:{token.side_effect}")
+        if token.weather:
+            _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
+        _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
+        if token.damage_fraction:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, token.damage_fraction))
+        _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
+        for slot, flag in (
+            (NUMERIC_TT_CALLED, token.called),
+            (NUMERIC_TT_TRANSFORMED, token.transformed),
+            (NUMERIC_TT_CRIT, token.crit),
+            (NUMERIC_TT_MISS, token.miss),
+            (NUMERIC_TT_KO, token.ko),
+            (NUMERIC_TT_PURSUIT_INTERCEPT, token.pursuit_intercept),
+        ):
+            if flag:
+                _set_numeric(num_row, slot, 1.0)
+        if token.own_spikes_layers:
+            _set_numeric(num_row, NUMERIC_TT_OWN_SPIKES, min(1.0, token.own_spikes_layers / 3.0))
+        if token.opp_spikes_layers:
+            _set_numeric(num_row, NUMERIC_TT_OPP_SPIKES, min(1.0, token.opp_spikes_layers / 3.0))
+        _set_numeric(num_row, NUMERIC_TT_ABS_TURN, min(1.0, token.turn / 1000.0))
+        turns_ago = max(0, state.turn_number - token.turn)
+        _set_numeric(num_row, NUMERIC_TT_TURNS_AGO, min(1.0, turns_ago / _STAT_COUNT_DIVISOR))
 
 
 def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
@@ -1405,23 +2058,6 @@ def _encode_action_tokens(
         _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0 if pokemon is not None else 0.0)
 
 
-def _encode_recent_event_tokens(
-    categorical_ids: list[list[int]],
-    numeric_features: list[list[float]],
-    state: PlayerRelativeBattleState,
-    spec: ObservationSpec,
-) -> None:
-    for event_index, event in enumerate(state.recent_events[: spec.recent_event_token_count]):
-        token_index = RECENT_EVENT_TOKEN_OFFSET + event_index
-        _set_category(categorical_ids[token_index], CATEGORY_PRIMARY, f"event:{event.event_type}")
-        event_detail = _event_detail_category(event)
-        if event_detail is not None:
-            _set_category(categorical_ids[token_index], CATEGORY_SECONDARY, event_detail)
-        _set_category(categorical_ids[token_index], CATEGORY_ROLE, f"event_actor:{event.actor_role}")
-        _set_category(categorical_ids[token_index], CATEGORY_SLOT, f"event_target:{event.target_role}")
-        _set_numeric(numeric_features[token_index], NUMERIC_PRESENT, 1.0)
-
-
 def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
     return {
         "battle_id": state.battle_id,
@@ -1449,6 +2085,13 @@ def _observation_metadata(state: PlayerRelativeBattleState) -> dict[str, Any]:
         "opponent_team": [_pokemon_metadata(pokemon) for pokemon in state.opponent_team],
         "action_candidates": _action_candidate_metadata(state),
         "recent_public_events": list(state.recent_public_events),
+        "transition_token_count": len(state.transition_tokens),
+        "self_sleep_clause_used": state.self_sleep_clause_used,
+        "opponent_sleep_clause_used": state.opponent_sleep_clause_used,
+        "weather_turns_remaining": state.weather_turns_remaining,
+        "weather_permanent": state.weather_permanent,
+        "self_wish_pending": state.self_wish_pending,
+        "opponent_wish_pending": state.opponent_wish_pending,
     }
 
 
@@ -1742,28 +2385,6 @@ def _request_move_name(move: Mapping[str, Any]) -> str:
     return "unknown"
 
 
-def _event_detail_category(event: PlayerRelativePublicEvent) -> str | None:
-    """Enumerable detail token for a recent event, or None to leave the slot as padding.
-
-    Only emits closed-vocabulary tokens (move / species / status, which reuse the same ids as
-    the action and pokemon tokens). The previously-emitted dynamic strings are dropped, since
-    they are unactionable in randbats and were the only things landing in the OOV block:
-      - -damage/-heal carried the raw HP string ("234/267 tox") -> HP is already numeric
-        (NUMERIC_HP_FRACTION) and any status is conveyed by -status events;
-      - player/win carried usernames, which are meaningless in random battles;
-      - the fallback carried free-form payloads (noise).
-    The event *type* is still encoded in CATEGORY_PRIMARY, so no actionable signal is lost.
-    """
-    primary = event.primary or "none"
-    if event.event_type == "move":
-        return f"move:{primary}"
-    if event.event_type in {"switch", "drag", "replace"}:
-        return f"species:{primary}"
-    if event.event_type in {"-status", "-curestatus"}:
-        return f"status:{primary}"
-    return None
-
-
 def _request_side_id(request: Mapping[str, Any]) -> str | None:
     side = request.get("side") if isinstance(request.get("side"), Mapping) else {}
     side_id = side.get("id") if isinstance(side, Mapping) else None
@@ -1849,20 +2470,32 @@ def _same_public_pokemon(left: ShowdownPokemon, right: ShowdownPokemon) -> bool:
 
 
 def _token_type_ids(spec: ObservationSpec) -> tuple[int, ...]:
+    # Type id 4 (the v1 recent-event section) is retired, not reused: 5 = stats, 6 = transition.
     token_types: list[int] = []
     token_types.extend([0])
     token_types.extend([1] * 6)
     token_types.extend([2] * 6)
     token_types.extend([3] * ACTION_COUNT)
-    token_types.extend([4] * spec.recent_event_token_count)
+    token_types.extend([5] * spec.stats_token_count)
+    token_types.extend([6] * spec.transition_token_count)
     return tuple(token_types)
 
 
-def _attention_mask(state: PlayerRelativeBattleState, spec: ObservationSpec) -> tuple[bool, ...]:
+def _attention_mask(
+    state: PlayerRelativeBattleState,
+    spec: ObservationSpec,
+    *,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+) -> tuple[bool, ...]:
     mask: list[bool] = []
     mask.extend([True])
     mask.extend(index < len(state.self_team) for index in range(6))
     mask.extend(index < len(state.opponent_team) for index in range(6))
     mask.extend([True] * ACTION_COUNT)
-    mask.extend(index < len(state.recent_public_events) for index in range(spec.recent_event_token_count))
+    stats_visible = masks.stats_block and state.tendency_stats is not None
+    mask.extend([stats_visible] * spec.stats_token_count)
+    filled = min(
+        len(state.transition_tokens), masks.transition_token_budget, spec.transition_token_count
+    )
+    mask.extend(index < filled for index in range(spec.transition_token_count))
     return tuple(mask)

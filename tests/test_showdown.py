@@ -9,11 +9,14 @@ from pokezero.observation import (
     FIELD_TOKEN_COUNT,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
+    STATS_TOKEN_COUNT,
+    ObservationFeatureMasks,
 )
 from pokezero.category_vocab import build_category_vocabulary
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo
 from pokezero.showdown import (
     CATEGORY_MOVE_EFFECT,
+    NUMERIC_TT_DAMAGE_FRACTION,
     CATEGORY_SECONDARY,
     CATEGORY_VOLATILE_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -44,7 +47,6 @@ from pokezero.showdown import (
     NUMERIC_SELF_HAZARDS,
     NUMERIC_SELF_SCREENS,
     PlayerRelativePublicEvent,
-    _event_detail_category,
     _pokemon_metadata,
     _self_team_from_request,
     detect_showdown_slot,
@@ -65,8 +67,9 @@ _TEST_VOCAB = build_category_vocabulary(
         "request_kind:move",
         "species:Charizard", "species:Arcanine", "species:Xatu", "species:Snorlax", "species:Blissey",
         "move:flamethrower", "move:dragonclaw", "move:Flamethrower",
-        "event:player", "event:move", "event:-damage",
-        "event_actor:self", "event_target:opponent",
+        "stats", "transition:self", "transition:opponent",
+        "tt_kind:move", "tt_kind:switch", "tt_kind:cant",
+        "tt_outcome:normal", "tt_effectiveness:neutral", "tt_side_effect:none",
         "belief:possible_ability:earlybird", "belief:possible_ability:synchronize",
         "belief:possible_item:leftovers",
         "belief:possible_move:psychic", "belief:possible_move:thunderwave", "belief:possible_move:wish",
@@ -98,24 +101,6 @@ def _phase2_fake_dex() -> ShowdownDex:
 def stable_category_id(value: str) -> int:
     """Test shim: resolve a token string to its row in the shared test vocabulary."""
     return _TEST_VOCAB.encode(value)
-
-
-class EventDetailCategoryTest(unittest.TestCase):
-    def _event(self, event_type: str, primary: str) -> PlayerRelativePublicEvent:
-        return PlayerRelativePublicEvent(event_type=event_type, raw_line="", primary=primary)
-
-    def test_enumerable_details_emit_in_vocab_tokens(self) -> None:
-        self.assertEqual(_event_detail_category(self._event("move", "Flamethrower")), "move:Flamethrower")
-        self.assertEqual(_event_detail_category(self._event("switch", "Snorlax")), "species:Snorlax")
-        self.assertEqual(_event_detail_category(self._event("-status", "par")), "status:par")
-
-    def test_unactionable_details_are_dropped(self) -> None:
-        # HP strings, usernames, winner identity, and free-form payloads -> None (padding slot).
-        self.assertIsNone(_event_detail_category(self._event("-damage", "70/100")))
-        self.assertIsNone(_event_detail_category(self._event("-heal", "200/267 tox")))
-        self.assertIsNone(_event_detail_category(self._event("player", "SomeUsername")))
-        self.assertIsNone(_event_detail_category(self._event("win", "SomeUsername")))
-        self.assertIsNone(_event_detail_category(self._event("-weather", "Sandstorm")))
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "showdown"
@@ -533,40 +518,32 @@ class ShowdownReplayNormalizationTest(unittest.TestCase):
         self.assertEqual(observation.categorical_ids[action_offset + 5][0], stable_category_id("species:Blissey"))
         self.assertEqual(observation.numeric_features[action_offset + 5][0], 0.0)
         self.assertEqual(observation.numeric_features[action_offset + 5][2], 0.0)
-        self.assertEqual(observation.categorical_ids[event_offset][0], stable_category_id("event:player"))
-        move_event_index = next(
-            index for index, event in enumerate(state.recent_events) if event.event_type == "move"
-        )
-        damage_event_index = next(
-            index for index, event in enumerate(state.recent_events) if event.event_type == "-damage"
-        )
+        # Spec v2 tail: one stats token, then the transition-token block (chronological,
+        # zero-padded, attention-masked beyond the filled slots).
+        stats_offset = event_offset
+        transition_offset = stats_offset + STATS_TOKEN_COUNT
+        self.assertEqual(observation.categorical_ids[stats_offset][2], stable_category_id("stats"))
+        self.assertTrue(observation.attention_mask[stats_offset])
+        # Fixture history: p1 lead switch, p1 voluntary switch, p2 lead switch, then two moves.
+        self.assertEqual(len(state.transition_tokens), 5)
         self.assertEqual(
-            observation.categorical_ids[event_offset + move_event_index][0],
-            stable_category_id("event:move"),
+            observation.categorical_ids[transition_offset][3], stable_category_id("tt_kind:switch")
         )
+        move_token = transition_offset + 3
+        self.assertEqual(observation.categorical_ids[move_token][0], stable_category_id("species:Charizard"))
+        self.assertEqual(observation.categorical_ids[move_token][1], stable_category_id("move:flamethrower"))
+        self.assertEqual(observation.categorical_ids[move_token][2], stable_category_id("transition:self"))
+        self.assertEqual(observation.categorical_ids[move_token][3], stable_category_id("tt_kind:move"))
+        self.assertEqual(observation.categorical_ids[move_token][4], stable_category_id("tt_outcome:normal"))
+        self.assertAlmostEqual(
+            observation.numeric_features[move_token][NUMERIC_TT_DAMAGE_FRACTION], 0.3, places=6
+        )
+        opp_move_token = transition_offset + 4
         self.assertEqual(
-            observation.categorical_ids[event_offset + move_event_index][1],
-            stable_category_id("move:Flamethrower"),
+            observation.categorical_ids[opp_move_token][2], stable_category_id("transition:opponent")
         )
-        self.assertEqual(
-            observation.categorical_ids[event_offset + move_event_index][2],
-            stable_category_id("event_actor:self"),
-        )
-        self.assertEqual(
-            observation.categorical_ids[event_offset + move_event_index][3],
-            stable_category_id("event_target:opponent"),
-        )
-        self.assertEqual(
-            observation.categorical_ids[event_offset + damage_event_index][0],
-            stable_category_id("event:-damage"),
-        )
-        # Lean encoding: the -damage detail (raw HP string "70/100") is unactionable — HP is
-        # captured numerically and status via -status events — so the SECONDARY slot is padding.
-        self.assertEqual(observation.categorical_ids[event_offset + damage_event_index][1], 0)
-        self.assertEqual(
-            observation.categorical_ids[event_offset + damage_event_index][3],
-            stable_category_id("event_target:opponent"),
-        )
+        self.assertTrue(all(observation.attention_mask[transition_offset : transition_offset + 5]))
+        self.assertFalse(any(observation.attention_mask[transition_offset + 5 :]))
 
     def test_observation_encodes_public_belief_summary_features(self) -> None:
         replay = parse_showdown_replay(fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1")
