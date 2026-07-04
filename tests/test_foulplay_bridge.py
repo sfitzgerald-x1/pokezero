@@ -145,6 +145,31 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(_is_terminal_protocol_line("|tie|"))
         self.assertFalse(_is_terminal_protocol_line("|turn|2"))
 
+    def test_belief_set_source_gate_honors_env_and_explicit_override(self) -> None:
+        # Regression: benchmarks silently evaluated nets with candidate-set features ablated while
+        # training ran with them enabled (train/eval observation mismatch). The gate must default
+        # to the shared POKEZERO_BELIEF_SET_SOURCE env flip point and allow explicit override.
+        import os
+
+        config = ControlledFoulPlayConfig(checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"))
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("POKEZERO_BELIEF_SET_SOURCE", None)
+            self.assertFalse(config.belief_set_source_enabled())
+        with patch.dict(os.environ, {"POKEZERO_BELIEF_SET_SOURCE": "1"}):
+            self.assertTrue(config.belief_set_source_enabled())
+            forced_off = ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                belief_set_source=False,
+            )
+            self.assertFalse(forced_off.belief_set_source_enabled())
+        forced_on = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            belief_set_source=True,
+        )
+        self.assertTrue(forced_on.belief_set_source_enabled())
+
     def test_config_rejects_invalid_search_tuning_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "selection_mode"):
             ControlledFoulPlayConfig(

@@ -104,6 +104,10 @@ class ControlledFoulPlayConfig:
     start_override_hp_fraction_tolerance: float = 0.02
     opponent_legal_mask_mode: str = "hidden"
     opponent_crash_retries: int = 1
+    # Candidate-set source for player-relative belief views. None defers to the
+    # POKEZERO_BELIEF_SET_SOURCE env gate (the single flip point shared with local_showdown), so
+    # benchmark observations match training observations without per-harness wiring.
+    belief_set_source: bool | None = None
     allow_search_fallback: bool = True
     node_binary: str = "node"
     pokezero_username: str = "PokeZeroBot"
@@ -184,6 +188,11 @@ class ControlledFoulPlayConfig:
         if self.foulplay_random_seed is not None:
             return self.foulplay_random_seed
         return self.seed_start
+
+    def belief_set_source_enabled(self) -> bool:
+        if self.belief_set_source is not None:
+            return self.belief_set_source
+        return os.environ.get("POKEZERO_BELIEF_SET_SOURCE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     @property
     def effective_root_prior_temperature(self) -> float:
@@ -466,6 +475,7 @@ class ControlledFoulPlayBenchmarkResult:
             "seed_start": self.config.seed_start,
             "foulplay_random_seed": self.config.resolved_foulplay_random_seed,
             "max_decision_rounds": self.config.max_decision_rounds,
+            "belief_set_source": self.config.belief_set_source_enabled(),
             "root_puct": {
                 "cpuct": self.config.cpuct,
                 "selection_mode": self.config.selection_mode,
@@ -2056,8 +2066,9 @@ async def _handle_decision_boundary(
     foulplay_logs: _ProcessLogBuffer,
 ) -> TerminalState | None:
     assert state.trajectory is not None
+    belief_set_source = _resolved_belief_set_source(config)
     player_states = {
-        player: _player_state(state, player)
+        player: _player_state(state, player, set_source=belief_set_source)
         for player in requested_players
     }
     observations = {
@@ -2237,13 +2248,30 @@ def _requested_legal_action_masks_for_context(
     return masks
 
 
-def _player_state(state: _ControlledBattleState, player: PlayerId) -> PlayerRelativeBattleState:
+def _resolved_belief_set_source(config: ControlledFoulPlayConfig):
+    """Candidate-set source for belief views, matching the training-side gate.
+
+    The loader is process-cached, so resolving per decision is cheap. Returning None keeps the
+    revealed-facts-only behavior.
+    """
+    if not config.belief_set_source_enabled():
+        return None
+    return load_gen3_randbat_source_cached(config.showdown_root)
+
+
+def _player_state(
+    state: _ControlledBattleState,
+    player: PlayerId,
+    *,
+    set_source=None,
+) -> PlayerRelativeBattleState:
     replay = parse_showdown_replay(state.all_lines(), battle_id=state.battle_id)
     return normalize_for_player(
         replay,
         player_id=player,
         configured_showdown_slot=player,
         format_id=state.format_id,
+        set_source=set_source,
     )
 
 
@@ -2485,6 +2513,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--belief-set-source",
+        choices=("env", "on", "off"),
+        default="env",
+        help=(
+            "Candidate-set source for player-relative belief views: 'on'/'off' override the "
+            "POKEZERO_BELIEF_SET_SOURCE env gate (default 'env'). Training runs with the gate "
+            "enabled must benchmark with it enabled or the net sees ablated observations."
+        ),
+    )
+    parser.add_argument(
         "--no-search-fallback",
         action="store_true",
         help="Raise on search failure instead of falling back to the raw checkpoint action.",
@@ -2581,6 +2619,7 @@ def _config_from_args(
         start_override_hp_fraction_tolerance=args.start_override_hp_fraction_tolerance,
         opponent_legal_mask_mode=args.opponent_legal_mask_mode,
         opponent_crash_retries=getattr(args, "opponent_crash_retries", 1),
+        belief_set_source={"env": None, "on": True, "off": False}[getattr(args, "belief_set_source", "env")],
         allow_search_fallback=not args.no_search_fallback,
         node_binary=args.node_binary,
         pokezero_username=args.pokezero_username,
