@@ -155,7 +155,8 @@ def main() -> int:
         agent = build_agent(path, args.showdown_root, our_name="sample", deterministic=True)
         for record, (state, _) in zip(records, states):
             obs = observation_from_player_state(
-                state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+                state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+                **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
             )
             probs = evaluate_transformer_action_priors(
                 model=agent.policy.model, result=agent.policy.result, observations=[obs]

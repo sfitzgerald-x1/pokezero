@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from .dataset import TrajectoryDatasetConfig, TrainingCacheSummary
     from .linear_policy import LinearPolicyModel
 
-ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v1"
+# v2: records carry observation-spec-v2 tensors (window-1 + transition tokens). Bumped with the
+# observation break so pre-break JSONL refuses at the record guard instead of failing shape-wise.
+ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v2"
 LINEAR_POLICY_SPEC_PREFIX = "linear:"
 NEURAL_POLICY_SPEC_PREFIX = "neural:"
 
@@ -767,6 +769,44 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
 
 def policy_from_name(name: str) -> Policy:
     return policy_from_spec(name)
+
+
+def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *, context: str):
+    """Adopt encode-time feature masks from any ``neural:`` checkpoint specs in ``specs``.
+
+    The HIGH-1 train/eval latch for spec-driven CLI harnesses: every checkpoint that will
+    observe through the env contributes its stamped masks; conflicts (between checkpoints, or
+    with an explicit env override) hard-fail in ``env_config_with_checkpoint_masks``.
+    Torch-free when no neural specs are present.
+    """
+    paths = neural_checkpoint_paths_from_policy_specs(specs)
+    if not paths:
+        return env_config
+    from .local_showdown import env_config_with_checkpoint_masks
+    from .neural_policy import feature_masks_from_model_config, load_transformer_model_config
+
+    required = [
+        feature_masks_from_model_config(load_transformer_model_config(path)) for path in paths
+    ]
+    return env_config_with_checkpoint_masks(env_config, required, context=context)
+
+
+def neural_checkpoint_paths_from_policy_specs(specs: Iterable[str | None]) -> tuple[Path, ...]:
+    """Checkpoint paths of every ``neural:`` policy spec (string parsing only, torch-free).
+
+    Used by CLI harnesses to derive env encode-time feature masks from the checkpoints that
+    will observe through the env (see ``local_showdown.env_config_with_checkpoint_masks``).
+    """
+    paths: list[Path] = []
+    for spec in specs:
+        if spec is None:
+            continue
+        body, _ = _split_policy_spec_options(str(spec).strip())
+        if body.lower().startswith(NEURAL_POLICY_SPEC_PREFIX):
+            checkpoint = body[len(NEURAL_POLICY_SPEC_PREFIX) :].strip()
+            if checkpoint:
+                paths.append(Path(checkpoint))
+    return tuple(paths)
 
 
 # Baselines that exist only to evaluate candidates and must never seed training data.

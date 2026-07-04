@@ -19,7 +19,15 @@ from .rollout import RolloutConfig, RolloutResult, continue_rollout_from_current
 from .trajectory import BattleTrajectory
 
 
-_RECENT_EVENT_TOKEN_OFFSET = (
+# First token index of the history-tail sections (stats + transition tokens in spec v2).
+# Board-state comparisons slice up to here: replay-from-root reconstructs the same board but a
+# different protocol history (fresh turn numbers / transition prefix / tendency counts).
+# SEARCH-HORIZON NOTE (for the H1 revival, so this isn't rediscovered): under spec v2 this
+# excludes 129/151 tokens from parity — branch-time observations see empty history/stats
+# blocks where training saw filled ones, a much larger off-distribution gap than v1's
+# 24-token event tail. Acceptable while search is paused; an H1 design must either replay
+# the transition prefix into branches or quantify the value-head sensitivity to a dark tail.
+_HISTORY_TAIL_TOKEN_OFFSET = (
     FIELD_TOKEN_COUNT
     + SELF_POKEMON_TOKEN_COUNT
     + OPPONENT_POKEMON_TOKEN_COUNT
@@ -456,14 +464,14 @@ def _observations_match_for_replay(
         # Start overrides for randbats use gen3customgame because Showdown only honors arbitrary
         # packed teams there. Its startup rule/tier protocol lines differ from gen3randombattle
         # even when the current battle state, request, teams, and legal actions are faithful.
-        categorical_actual = categorical_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        categorical_expected = categorical_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        numeric_actual = numeric_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        numeric_expected = numeric_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        token_type_actual = token_type_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        token_type_expected = token_type_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        attention_actual = attention_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        attention_expected = attention_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        categorical_actual = categorical_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        categorical_expected = categorical_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        numeric_actual = numeric_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        numeric_expected = numeric_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        token_type_actual = token_type_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        token_type_expected = token_type_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        attention_actual = attention_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        attention_expected = attention_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
     return (
         actual.schema_version == expected.schema_version
         and categorical_actual == categorical_expected
@@ -501,14 +509,14 @@ def _observation_replay_mismatch_details(
     attention_actual = actual.attention_mask
     attention_expected = expected.attention_mask
     if ignore_recent_events:
-        categorical_actual = categorical_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        categorical_expected = categorical_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        numeric_actual = numeric_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        numeric_expected = numeric_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        token_type_actual = token_type_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        token_type_expected = token_type_expected[:_RECENT_EVENT_TOKEN_OFFSET]
-        attention_actual = attention_actual[:_RECENT_EVENT_TOKEN_OFFSET]
-        attention_expected = attention_expected[:_RECENT_EVENT_TOKEN_OFFSET]
+        categorical_actual = categorical_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        categorical_expected = categorical_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        numeric_actual = numeric_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        numeric_expected = numeric_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        token_type_actual = token_type_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        token_type_expected = token_type_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
+        attention_actual = attention_actual[:_HISTORY_TAIL_TOKEN_OFFSET]
+        attention_expected = attention_expected[:_HISTORY_TAIL_TOKEN_OFFSET]
 
     for name, actual_values, expected_values in (
         ("categorical_ids", categorical_actual, categorical_expected),
@@ -641,9 +649,9 @@ def _token_segment(index: int) -> str:
         return "self_pokemon"
     if index < FIELD_TOKEN_COUNT + SELF_POKEMON_TOKEN_COUNT + OPPONENT_POKEMON_TOKEN_COUNT:
         return "opponent_pokemon"
-    if index < _RECENT_EVENT_TOKEN_OFFSET:
+    if index < _HISTORY_TAIL_TOKEN_OFFSET:
         return "action_candidates"
-    return "recent_events"
+    return "history_tail"
 
 
 def _format_mismatch_value(value) -> str:

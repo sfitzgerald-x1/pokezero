@@ -82,30 +82,34 @@ UNOWN_FORMES = tuple(f"Unown-{letter}" for letter in "BCDEFGHIJKLMNOPQRSTUVWXYZ"
 # Bounded structural request kinds the env can surface (see showdown.py _request_kind).
 REQUEST_KINDS = ("move", "force_switch", "team_preview", "wait", "none", "unknown")
 
-# Token actor/target roles used by the encoder.
-EVENT_ROLES = ("self", "opponent", "none")
+# Transition-token actor roles (player-relative; the v1 recent-event actor/target roles are gone
+# with the recent-event tokens themselves).
+TRANSITION_ROLES = ("self", "opponent")
 
-# Showdown protocol message types that can appear as recent-event tokens. This is a
-# comprehensive superset of the bounded protocol vocabulary; unobserved types are harmless
-# extra rows. Kept broad on purpose so bounded events never fall into OOV.
-EVENT_TYPES = (
-    # Major actions / framing.
-    "move", "switch", "drag", "replace", "detailschange", "swap", "cant", "faint",
-    "turn", "upkeep", "win", "tie", "request", "unknown",
-    "player", "teamsize", "gametype", "gen", "tier", "rule", "clearpoke", "poke",
-    "teampreview", "start", "inactive", "inactiveoff", "raw", "html", "uhtml",
-    "error", "bigerror", "debug", "t:", "j", "l", "n", "c", "c:", "b",
-    # Minor (-) effects.
-    "-formechange", "-fail", "-block", "-notarget", "-miss", "-damage", "-heal",
-    "-sethp", "-status", "-curestatus", "-cureteam", "-boost", "-unboost", "-setboost",
-    "-swapboost", "-invertboost", "-clearboost", "-clearallboost", "-clearpositiveboost",
-    "-clearnegativeboost", "-copyboost", "-weather", "-fieldstart", "-fieldend",
-    "-sidestart", "-sideend", "-swapsideconditions", "-start", "-end", "-crit",
-    "-supereffective", "-resisted", "-immune", "-item", "-enditem", "-ability",
-    "-endability", "-transform", "-mega", "-primal", "-burst", "-zpower", "-zbroken",
-    "-activate", "-hint", "-center", "-message", "-combine", "-waiting", "-prepare",
-    "-mustrecharge", "-nothing", "-hitcount", "-singlemove", "-singleturn", "-anim",
-    "-ohko", "-fieldactivate", "-candynamax", "-terastallize",
+# Transition-token structural families (observation spec v2, corrections item 9). Kinds/outcome/
+# effectiveness/side-effect values mirror transitions.py's closed constants; a unit test keeps the
+# two in lockstep so encoder emissions can never fall into OOV.
+TRANSITION_KINDS = ("move", "switch", "cant")
+TRANSITION_OUTCOMES = (
+    "normal", "blocked", "immune", "absorbed", "hit-sub", "broke-sub", "endured",
+)
+TRANSITION_EFFECTIVENESS = ("neutral", "super", "resisted", "immune")
+TRANSITION_SIDE_EFFECTS = (
+    "none", "status-inflicted", "hazard-set", "hazard-clear", "weather-set",
+    "boost", "drain", "heal", "charging",
+)
+
+# |cant| reasons the transition tokens can surface as action ids, audited against the pool's
+# reachable emitters (normalized by _side_condition_identifier, so "ability: Truant" ->
+# "truant" and the move-sourced "Focus Punch" -> "focuspunch"). Gen 3 |cant| sources:
+# status (slp/frz/par), flinch, attract, recharge, Disable/Imprison/Taunt suppression,
+# broken focus (|cant|POKEMON|Focus Punch| — vendored data/moves.ts onMoveAborted, no gen3
+# override; Focus Punch IS in the gen3 randbats movepools), ability: Truant (Slaking),
+# ability: Damp (Explosion/Self-Destruct block), and nopp. A comprehensive superset is fine —
+# unobserved reasons are harmless extra rows; a MISSING reason OOVs on a live game.
+GEN3_CANT_REASONS = (
+    "slp", "frz", "par", "flinch", "attract", "recharge", "disable", "imprison",
+    "taunt", "nopp", "partiallytrapped", "truant", "damp", "focuspunch",
 )
 
 
@@ -193,14 +197,21 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     ]
     groups["status"] = [f"status:{status}" for status in entities["statuses"]]
 
-    structural: list[str] = ["field", "action", "pokemon:self", "pokemon:opponent", "action:move", "action:switch", "winner:none"]
+    structural: list[str] = ["field", "action", "stats", "pokemon:self", "pokemon:opponent", "action:move", "action:switch", "winner:none"]
     structural += [f"request_kind:{kind}" for kind in REQUEST_KINDS]
     # NOTE: party-slot tokens (self_slot/opponent_slot) are intentionally NOT enumerated — the
     # encoder no longer emits them (team order is arbitrary in randbats). The action SLOT column
     # still uses move_slot/switch_slot below.
     structural += [f"move_slot:{i}" for i in range(1, 5)] + [f"switch_slot:{i}" for i in range(1, 6)]
-    structural += [f"event:{event_type}" for event_type in EVENT_TYPES]
-    structural += [f"event_actor:{role}" for role in EVENT_ROLES] + [f"event_target:{role}" for role in EVENT_ROLES]
+    # Transition-token families (spec v2): role, kind, outcome enum, effectiveness class,
+    # side-effect category, and cant-reason action ids. The action column otherwise reuses the
+    # move:/species: families enumerated above.
+    structural += [f"transition:{role}" for role in TRANSITION_ROLES]
+    structural += [f"tt_kind:{kind}" for kind in TRANSITION_KINDS]
+    structural += [f"tt_outcome:{outcome}" for outcome in TRANSITION_OUTCOMES]
+    structural += [f"tt_effectiveness:{eff}" for eff in TRANSITION_EFFECTIVENESS]
+    structural += [f"tt_side_effect:{effect}" for effect in TRANSITION_SIDE_EFFECTS]
+    structural += [f"cant:{reason}" for reason in GEN3_CANT_REASONS]
     # Encoder fallbacks for empty action slots.
     structural += [f"move:slot:{i}" for i in range(1, 5)] + [f"species:slot:{i}" for i in range(1, 6)]
     groups["structural"] = structural

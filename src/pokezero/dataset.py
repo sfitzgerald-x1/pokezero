@@ -12,11 +12,14 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .collection import RolloutRecord, iter_rollout_records
+from .observation import require_current_observation_schema
 from .padding import zeros_like as _zeros_like
 from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
-TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v1"
+# v2: cache arrays carry observation-spec-v2 tensors. Bumped with the observation break so a
+# pre-break cache refuses at the metadata guard instead of failing shape-wise mid-training.
+TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v2"
 MAX_ACTIVE_TRAINING_CACHE_GB = 50.0
 MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024 * 1024)
 
@@ -457,6 +460,15 @@ def examples_from_record(
         config=dataset_config,
     )
     history_by_player: dict[str, list[TrajectoryStep]] = {}
+
+    # Data-side one-way door: refuse legacy/unversioned observations HERE, with the clean
+    # pinned-tag message, instead of letting 44-wide v1 rows die as a bare matmul shape error
+    # inside the model. One check per record (all steps share a battle's encoding).
+    if record.trajectory.steps:
+        require_current_observation_schema(
+            record.trajectory.steps[0].observation.schema_version,
+            context=f"rollout record {record.trajectory.battle_id!r}",
+        )
 
     for step_index, step in enumerate(record.trajectory.steps):
         player_history = history_by_player.setdefault(step.player_id, [])

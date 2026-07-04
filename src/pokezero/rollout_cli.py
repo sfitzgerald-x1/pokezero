@@ -12,6 +12,7 @@ from .collection import (
     benchmark_rollouts,
     collect_training_cache,
     collect_rollouts,
+    env_config_with_policy_spec_masks,
     policy_benchmark_matchups,
     policy_from_spec,
     policy_spec_with_showdown_root,
@@ -217,6 +218,9 @@ def _collect(args: argparse.Namespace) -> int:
         node_binary=args.node_binary,
     )
     policy_showdown_root = env_config.resolved_showdown_root()
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (args.p1_policy, args.p2_policy), context="rollout harness"
+    )
     policies = {
         "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
         "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
@@ -244,6 +248,9 @@ def _collect_training_cache(args: argparse.Namespace) -> int:
         node_binary=args.node_binary,
     )
     policy_showdown_root = env_config.resolved_showdown_root()
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (args.p1_policy, args.p2_policy), context="rollout harness"
+    )
     policies = {
         "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
         "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),
@@ -281,6 +288,9 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     opponent_policies = tuple(
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.opponent_policy or (args.current_policy,))
+    )
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (current_policy, *opponent_policies), context="self-play training cache"
     )
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
@@ -324,6 +334,11 @@ def _benchmark(args: argparse.Namespace) -> int:
         format_id=args.format_id,
     )
     matchups = None
+    env_config = env_config_with_policy_spec_masks(
+        env_config,
+        (*(args.policy or ()), *(args.opponent_policy or ())),
+        context="rollout benchmark",
+    )
     if args.policy:
         matchups = policy_benchmark_matchups(
             policy_specs=args.policy,
@@ -356,6 +371,9 @@ def _replay_benchmark(args: argparse.Namespace) -> int:
         node_binary=args.node_binary,
     )
     policy_showdown_root = env_config.resolved_showdown_root()
+    env_config = env_config_with_policy_spec_masks(
+        env_config, (args.p1_policy, args.p2_policy), context="rollout harness"
+    )
     policies = {
         "p1": policy_from_spec(policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)),
         "p2": policy_from_spec(policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)),

@@ -77,7 +77,8 @@ def _self_play_behavior(agent, showdown_root: str, num_games: int, seed_start: i
                 if not any(state.legal_action_mask):
                     continue
                 obs = observation_from_player_state(
-                    state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+                    state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+                    **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
                 )
                 idx = agent.policy.select_action(obs, rng=agent.rng).action_index
                 actions[player] = idx

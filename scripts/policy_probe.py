@@ -37,7 +37,11 @@ import sys
 from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT, MOVE_ACTION_COUNT
-from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from pokezero.local_showdown import (
+    LocalShowdownConfig,
+    LocalShowdownEnv,
+    env_config_with_checkpoint_masks,
+)
 from pokezero.online_client import build_agent
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.showdown import (
@@ -107,8 +111,16 @@ def capture_base_state(
     policy, dex = agent.policy, agent.dex
     target_set = {_norm(t) for t in targets}
 
+    # The driver checkpoint reads env.observe() tensors, so the env must encode with the
+    # masks it trained under (the same latch the shared harnesses apply).
+    env_config = LocalShowdownConfig(showdown_root=showdown_root)
+    if agent.feature_masks is not None:
+        env_config = env_config_with_checkpoint_masks(
+            env_config, agent.feature_masks, context="policy_probe capture driver"
+        )
+
     for game_seed in range(seed, seed + max_seeds):
-        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root))
+        env = LocalShowdownEnv(env_config)
         env.reset(seed=game_seed)
         rng = random.Random(game_seed)
         best = None  # last qualifying capture this game, used if we never reach min_turn
@@ -203,7 +215,8 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, base_state
     def evaluate(stage):
         state = engineer_toxic(base_state, stage)
         obs = observation_from_player_state(
-            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+            **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
         )
         token = _active_token_index(state)
         seen_status = obs.categorical_ids[token][CATEGORY_SECONDARY]
@@ -245,7 +258,8 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, base_state
             state = engineer_toxic(base_state, stage)
             obs_window.append(
                 observation_from_player_state(
-                    state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+                    state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+                    **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
                 )
             )
         probs = evaluate_transformer_action_priors(

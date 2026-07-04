@@ -319,8 +319,16 @@ def evaluate_checkpoint(label: str, checkpoint: str, showdown_root: str, corpus:
     agent = build_agent(checkpoint, showdown_root, our_name="factors", deterministic=True)
 
     def priors(state):
+        # Encode with the CHECKPOINT's stamped feature masks (build_agent derives them):
+        # the graded model must see states encoded exactly as it trained. The corpus-driver
+        # envs above stay at default masks deliberately — the drivers are scripted policies
+        # that never read observation tensors; states are re-encoded here per checkpoint.
         obs = observation_from_player_state(
-            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+            state,
+            category_vocab=agent.vocab,
+            spec=agent.spec,
+            dex=agent.dex,
+            **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
         )
         return evaluate_transformer_action_priors(
             model=agent.policy.model, result=agent.policy.result, observations=[obs]
