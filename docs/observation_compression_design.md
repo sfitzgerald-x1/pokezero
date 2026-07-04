@@ -90,6 +90,17 @@ accordingly:
   from the omniscient logs of controlled foul-play games (we own the
   BattleStream; true sets are recoverable) before any training run
   consumes the bit.
+- **Called moves (Sleep Talk / Metronome — common on gen3 RestTalk
+  sets):** the PP ledger charges the *calling* move (called moves spend
+  no PP of their own in gen 3); the residual computes damage against the
+  *executed* move's power; and no set evidence attaches to the called
+  move (matching the belief engine's existing caller suppression). The
+  `[from] Sleep Talk` protocol tag distinguishes the cases.
+- **Tier-2 extension (note only): defender-side ability inference.** The
+  same residual machinery on *our* attacks reveals the defender's
+  ability (e.g. Thick Fat halving our Fire damage is observable against
+  their deterministic stats). Symmetric, cheap once Tier 2 exists;
+  recorded here so it isn't rediscovered.
 - **Tier 3 (not now):** evidence-weighted belief posteriors —
   ReBeL-direction work, out of scope for this doc.
 
