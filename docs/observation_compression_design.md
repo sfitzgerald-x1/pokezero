@@ -112,16 +112,27 @@ Berry}. No RNG trick items exist in the pool. Consequences:
   are themselves species-locked, so for the general population the
   non-CB item universe contains **zero damage modifiers** — exceedance
   needs to clear only candidate-ability variance and roll variance.
-- **New exact-state rule — no-Leftovers pruning:** Leftovers healing is
-  automatic and protocol-itemized below full HP, so *ended a turn
-  active and damaged with no Leftovers heal event* ⇒ prune all
-  Leftovers variants. Deterministic negative evidence (PP-ledger
-  epistemic class, not the descoped behavioral kind); with Leftovers as
-  the default item, one damaged end-of-turn typically collapses the
-  item question to {CB, Lum, pinch berry} and the moveset correlation
-  finishes it. Full-HP turns yield no evidence; Knock Off/Trick and
-  berry activations emit explicit item events the engine already
-  consumes.
+- **New exact-state rule family — non-proc pruning.** Three items in
+  the general pool announce themselves *automatically* when their
+  trigger occurs, so a trigger without the proc is deterministic
+  negative evidence (PP-ledger epistemic class, not the descoped
+  behavioral kind):
+  1. *No-Leftovers:* ended a turn active and damaged with no itemized
+     Leftovers heal ⇒ prune Leftovers variants. Full-HP turns yield no
+     evidence.
+  2. *No-Lum:* a successful status application not **instantly** cured
+     ⇒ prune Lum variants (gen-3 Lum procs immediately, incl. on Rest's
+     self-sleep; Shed Skin's end-of-turn ability-tagged cure is
+     timing-distinguishable; Safeguard/Substitute blocks apply no
+     status and yield no evidence).
+  3. *No-pinch-berry:* HP at or below 25% after an action with no berry
+     activation ⇒ prune Salac/Petaya/Liechi variants.
+  Because Leftovers is the default item, the family compounds fast: one
+  damaged turn removes the modal candidate, and a stuck status or a big
+  hit reduces the general pool to **Choice Band by elimination** —
+  making the Tier-2 damage residual confirmation rather than primary
+  evidence for most mons. Knock Off/Trick and all positive activations
+  emit explicit item events the engine already consumes.
 
 **Status chip damage (toxic/burn/sand/Spikes) is attribution hygiene,
 not a feature.** Chip is fully determined by public state the
