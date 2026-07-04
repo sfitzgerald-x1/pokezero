@@ -23,6 +23,14 @@ Their answer was **not** search and **not** entropy. It was (a) human data as
 a standing exploration prior, (b) a league of diverse opponents. Both have
 cheap partial transfers to us.
 
+> **Project direction (2026-07-03, Scott):** human data is *not* to be used
+> as a teaching source — the goal is AlphaGo-Zero-style from-scratch
+> superhuman play. Human models are admissible only for evaluation,
+> search-time opponent modeling, and exploiter-opponent duty. The
+> human-data rows in the transfer table below should be read through that
+> lens; the no-human-data replacements for each mechanism are in
+> [`no_human_data_selfplay_context.md`](no_human_data_selfplay_context.md).
+
 ## Mechanism inventory (exact)
 
 ### 1. Human data as exploration scaffolding
