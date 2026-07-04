@@ -967,19 +967,57 @@ TRACKED_VOLATILES = frozenset({
 })
 
 
-def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> None:
-    """Track active-mon volatile statuses from |-start| / |-end| lines (per Showdown slot).
+# Gen 3 partial-trap moves. The sim announces the volatile via
+# ``|-activate|<target>|move: Wrap|[of] <source>`` (conditions.ts partiallytrapped.onStart)
+# and ends it with ``|-end|<target>|Wrap|[partiallytrapped]`` — the move NAME, not the
+# volatile id, so both arms need this normalization set (audit bug C2). Wrap is the pool's
+# only member; the rest are defensive against set drift.
+_PARTIAL_TRAP_MOVES = frozenset({"wrap", "bind", "clamp", "firespin", "whirlpool", "sandtomb"})
+# ``|-singlemove|`` volatiles with until-the-mon's-next-move semantics: the sim removes
+# them SILENTLY (onBeforeMove / onMoveAborted, no protocol line), so the parser clears
+# them on the mon's next |move| or |cant| line (audit bug C3). Destiny Bond is the pool's
+# only reachable member (Grudge/Rage are -singlemove emitters but their moves are not in
+# the gen3 randbats pool); Focus Punch's focus is ``-singleturn`` and is NOT tracked here.
+_SINGLEMOVE_VOLATILES = frozenset({"destinybond", "grudge"})
 
-    Only names in TRACKED_VOLATILES are recorded; other `-start` payloads (ability procs, type
-    changes, internal markers) are ignored, so every emitted token has an enumerated vocab row.
+
+def _update_volatiles(parts: Sequence[str], volatiles: dict[str, set[str]]) -> None:
+    """Track active-mon volatile statuses per Showdown slot.
+
+    Arms: ``-start``/``-end`` (the common family), ``-activate move: <partial-trap>`` /
+    ``-end <partial-trap move> [partiallytrapped]`` (bug C2 — the sim never emits a
+    ``-start`` for partial traps), ``-singlemove`` (bug C3 — Destiny Bond class), and
+    ``move``/``cant`` lines, which silently expire single-move volatiles. Only names in
+    TRACKED_VOLATILES are recorded, so every emitted token has an enumerated vocab row.
     """
     event_type = parts[1] if len(parts) > 1 else ""
-    if event_type not in {"-start", "-end"} or len(parts) < 4:
+    if len(parts) < 3:
         return
     slot = _slot_from_ident(parts[2])
     if slot not in volatiles:
         return
+    if event_type in {"move", "cant"}:
+        # The sim removes single-move volatiles silently before the mon's next action
+        # (onBeforeMove / onMoveAborted); a successful re-click re-arms via the
+        # following |-singlemove| line.
+        volatiles[slot] -= _SINGLEMOVE_VOLATILES
+        return
+    if len(parts) < 4:
+        return
     name = _side_condition_identifier(parts[3])  # strips move:/ability:/item: prefix + normalizes
+    if event_type == "-singlemove":
+        if name in TRACKED_VOLATILES:
+            volatiles[slot].add(name)
+        return
+    if event_type == "-activate":
+        if name in _PARTIAL_TRAP_MOVES:
+            volatiles[slot].add("partiallytrapped")
+        return
+    if event_type not in {"-start", "-end"}:
+        return
+    if event_type == "-end" and name in _PARTIAL_TRAP_MOVES:
+        volatiles[slot].discard("partiallytrapped")
+        return
     if name not in TRACKED_VOLATILES:
         return
     if event_type == "-start":
@@ -1625,7 +1663,13 @@ def _encode_pokemon_tokens(
         ability_feature_values = _known_or_possible_values(revealed_ability, possible_abilities)
         item_feature_values = _known_or_possible_values(revealed_item, possible_items)
         candidate_set_count = belief.candidate_set_count if belief is not None else None
-        uncertainty = belief.uncertainty if belief is not None else 1.0
+        # Own mons are fully known (their belief entry is None by design): uncertainty
+        # is 0.0, not the max-entropy default — the previous constant 1.0 was
+        # semantically inverted (audit section 6 wart; cosmetic, constant either way).
+        if role == "self":
+            uncertainty = 0.0
+        else:
+            uncertainty = belief.uncertainty if belief is not None else 1.0
         # A transformed mon (Ditto) fights as its target: encode species, types and base stats from
         # the copied identity so the model sees the effective battler, not Ditto's base 48-across.
         # Transform copies everything EXCEPT HP and level, so base HP stays the original's (a
@@ -1741,7 +1785,7 @@ def _encode_mon_exact_state(
     ability = (
         candidate.ability
         if role == "self"
-        else (exact.revealed_ability if exact is not None else None)
+        else (_certain_opponent_ability(exact) if exact is not None else None)
     )
     if (
         ability
@@ -1750,6 +1794,25 @@ def _encode_mon_exact_state(
         and not candidate.active
     ):
         _set_numeric(num_row, NUMERIC_TRAPPER_ALIVE, 1.0)
+
+
+def _certain_opponent_ability(exact: RevealedPokemonBelief) -> str | None:
+    """The opponent mon's ability when CERTAIN: protocol-revealed, or a singleton live
+    candidate set (possible minus ruled-out) — the same known-or-singleton standard the
+    belief categoricals expose. Gen 3 trap abilities are never protocol-revealed, but all
+    three pool trappers (Wobbuffet/Dugtrio/Magneton) are single-ability species, so under
+    belief-on this is exact knowledge the encoder must not ignore (audit bug C1)."""
+    if exact.revealed_ability:
+        return exact.revealed_ability
+    ruled_out = {_normalize_identifier(ability) for ability in exact.ruled_out_abilities}
+    live = [
+        ability
+        for ability in exact.possible_abilities
+        if _normalize_identifier(ability) not in ruled_out
+    ]
+    if len(live) == 1:
+        return live[0]
+    return None
 
 
 def _opponent_rest_wake_known(exact: RevealedPokemonBelief) -> bool:
