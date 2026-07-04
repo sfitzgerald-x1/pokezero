@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 from pathlib import Path
 import sys
@@ -113,6 +114,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Opponent policy spec. May be repeated. When omitted, mirrors --current-policy "
             "for teacher-cut/current-policy self-play."
         ),
+    )
+    # Ablation-arm feature masks for the checkpoint-less iteration-0 case (the cluster
+    # controller collects with current-policy=random-legal before any checkpoint exists).
+    # When a neural: policy IS given, masks adopt from the checkpoint and explicit flags
+    # must agree or hard-fail (env_config_with_checkpoint_masks conflict semantics). The
+    # resolved masks are recorded in the cache metadata either way, so the subsequent
+    # train cross-checks them against the model config.
+    collect_selfplay_cache.add_argument(
+        "--transition-token-budget",
+        type=int,
+        default=None,
+        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+    )
+    collect_selfplay_cache.add_argument(
+        "--no-stats-block",
+        action="store_true",
+        help="Ablation arm: zero + attention-mask the stats token and per-mon tendency triple.",
+    )
+    collect_selfplay_cache.add_argument(
+        "--no-exact-state",
+        action="store_true",
+        help="Ablation arm: zero the exact-state layer (PP fractions, counters, expected stats).",
+    )
+    collect_selfplay_cache.add_argument(
+        "--tier2-residuals",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Populate + encode the Tier-2 residual channel (#505). Default: on for checkpoint-less collection; adopted from the checkpoint otherwise.",
     )
     collect_selfplay_cache.add_argument(
         "--workers",
@@ -278,6 +307,26 @@ def _collect_training_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationFeatureMasks | None":
+    """Explicit encode-time masks when any mask flag was given, else None (use defaults
+    or checkpoint adoption). Flags equal to the defaults resolve to the default masks,
+    which checkpoint adoption may still override (same wrinkle as neural iterate)."""
+    budget = getattr(args, "transition_token_budget", None)
+    tier2 = getattr(args, "tier2_residuals", None)
+    no_stats = bool(getattr(args, "no_stats_block", False))
+    no_exact = bool(getattr(args, "no_exact_state", False))
+    if budget is None and tier2 is None and not no_stats and not no_exact:
+        return None
+    from .observation import TRANSITION_TOKEN_COUNT, ObservationFeatureMasks
+
+    return ObservationFeatureMasks(
+        stats_block=not no_stats,
+        exact_state=not no_exact,
+        transition_token_budget=TRANSITION_TOKEN_COUNT if budget is None else budget,
+        tier2_residuals=True if tier2 is None else bool(tier2),
+    )
+
+
 def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -289,6 +338,9 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.opponent_policy or (args.current_policy,))
     )
+    explicit_masks = _explicit_feature_masks_from_args(args)
+    if explicit_masks is not None:
+        env_config = dataclasses.replace(env_config, feature_masks=explicit_masks)
     env_config = env_config_with_policy_spec_masks(
         env_config, (current_policy, *opponent_policies), context="self-play training cache"
     )
@@ -313,6 +365,7 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         current_policy_spec=current_policy,
         opponent_policy_specs=opponent_policies,
         worker_count=args.workers,
+        training_cache_feature_masks=env_config.feature_masks,
     )
     _print_metrics(metrics.to_dict())
     for cache_path in cache_paths:
@@ -413,7 +466,7 @@ def _print_metrics(metrics: dict[str, object]) -> None:
 
 
 def _add_dataset_config_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    parser.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     parser.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     parser.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     parser.add_argument(

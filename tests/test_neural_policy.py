@@ -2161,7 +2161,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True)
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2233,7 +2233,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True)
         )
         captured = {}
 
@@ -2357,7 +2357,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         fake_model = object()
         fake_training_result = SimpleNamespace(
-            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128)
+            model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, format_id="gen3randombattle", stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True)
         )
         captured = {}
 
@@ -2414,7 +2414,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2531,7 +2531,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2619,7 +2619,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2694,7 +2694,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 6}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2763,7 +2763,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                 return {"matchups": 4}
 
         fake_model = object()
-        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128))
+        fake_training_result = SimpleNamespace(model_config=SimpleNamespace(policy_id="neural-smoke", window_size=1, stats_block_enabled=True, exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True))
         captured = {}
 
         def fake_benchmark_rollouts(**kwargs):
@@ -2819,7 +2819,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         fake_training_result = SimpleNamespace(
             model_config=SimpleNamespace(
                 policy_id="neural-smoke", window_size=1, stats_block_enabled=True,
-                exact_state_enabled=True, transition_token_budget=128,
+                exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True,
             )
         )
         captured = {}
@@ -2896,7 +2896,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         fake_training_result = SimpleNamespace(
             model_config=SimpleNamespace(
                 policy_id="neural-smoke", window_size=1, stats_block_enabled=True,
-                exact_state_enabled=True, transition_token_budget=128,
+                exact_state_enabled=True, transition_token_budget=128, tier2_residuals=True,
             )
         )
         captured = {}
