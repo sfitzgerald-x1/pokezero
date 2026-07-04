@@ -9,6 +9,7 @@ from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo
 from pokezero.observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     FIELD_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION,
     OPPONENT_POKEMON_TOKEN_COUNT,
     SELF_POKEMON_TOKEN_COUNT,
     STATS_TOKEN_COUNT,
@@ -118,6 +119,89 @@ class TransitionKindLockstepTest(unittest.TestCase):
         self.assertEqual(_TT_KIND_MOVE, TOKEN_KIND_MOVE)
         self.assertEqual(_TT_KIND_SWITCH, TOKEN_KIND_SWITCH)
         self.assertEqual(_TT_KIND_CANT, TOKEN_KIND_CANT)
+
+    def test_vocab_enum_tuples_match_transitions_constants(self) -> None:
+        # The vocabulary's mirrored enum tuples must equal the extraction module's closed
+        # value spaces EXACTLY — a hand-mirrored tuple that drifts silently OOVs live games.
+        from pokezero import transitions
+        from pokezero.randbat_vocab import (
+            TRANSITION_EFFECTIVENESS,
+            TRANSITION_KINDS,
+            TRANSITION_OUTCOMES,
+            TRANSITION_SIDE_EFFECTS,
+        )
+
+        self.assertEqual(
+            set(TRANSITION_KINDS),
+            {transitions.TOKEN_KIND_MOVE, transitions.TOKEN_KIND_SWITCH, transitions.TOKEN_KIND_CANT},
+        )
+        self.assertEqual(set(TRANSITION_OUTCOMES), set(transitions._OUTCOME_RANK))
+        self.assertEqual(set(TRANSITION_SIDE_EFFECTS), set(transitions._SIDE_EFFECT_RANK))
+        self.assertEqual(
+            set(TRANSITION_EFFECTIVENESS),
+            {
+                transitions.EFFECTIVENESS_NEUTRAL,
+                transitions.EFFECTIVENESS_SUPER,
+                transitions.EFFECTIVENESS_RESISTED,
+                transitions.EFFECTIVENESS_IMMUNE,
+            },
+        )
+
+    def test_cant_reason_vocabulary_covers_audited_gen3_emitters(self) -> None:
+        # Audited reachable |cant| reasons for the gen3 randbats pool (see GEN3_CANT_REASONS
+        # comment): status, flinch, attract, recharge, suppressions, broken Focus Punch
+        # (in-pool movesets), and the ability-sourced Truant/Damp.
+        from pokezero.randbat_vocab import GEN3_CANT_REASONS
+
+        required = {
+            "slp", "frz", "par", "flinch", "attract", "recharge",
+            "disable", "imprison", "taunt", "focuspunch", "truant", "damp",
+        }
+        self.assertLessEqual(required, set(GEN3_CANT_REASONS))
+
+    def test_broken_focus_punch_emits_enumerated_cant_action(self) -> None:
+        # |cant|POKEMON|Focus Punch|Focus Punch (data/moves.ts onMoveAborted, no gen3
+        # override) must normalize to an enumerated action id, never an OOV hash.
+        from pokezero.randbat_vocab import GEN3_CANT_REASONS
+        from pokezero.transitions import extract_transition_tokens
+
+        replay = parse_showdown_replay(
+            _BASE_LINES
+            + [
+                "|move|p1a: Charizard|Flamethrower|p2a: Xatu",
+                "|-damage|p2a: Xatu|60/100",
+                "|cant|p2a: Xatu|Focus Punch|Focus Punch",
+                "|turn|2",
+            ],
+            battle_id="battle-1",
+        )
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        cant_token = next(token for token in tokens if token.kind == TOKEN_KIND_CANT)
+        self.assertEqual(cant_token.action, "focuspunch")
+        self.assertIn(cant_token.action, GEN3_CANT_REASONS)
+
+    def test_combined_extraction_matches_independent_calls(self) -> None:
+        from pokezero.transitions import (
+            extract_tendency_stats,
+            extract_transition_tokens,
+            extract_transitions_and_tendencies,
+        )
+
+        replay = parse_showdown_replay(
+            _BASE_LINES
+            + [
+                "|move|p2a: Xatu|Psychic|p1a: Charizard",
+                "|-damage|p1a: Charizard|70/100",
+                "|turn|2",
+                "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+                "|turn|3",
+            ],
+            battle_id="battle-1",
+        )
+        for slot in ("p1", "p2"):
+            tokens, stats = extract_transitions_and_tendencies(replay, perspective_slot=slot)
+            self.assertEqual(tokens, extract_transition_tokens(replay, perspective_slot=slot))
+            self.assertEqual(stats, extract_tendency_stats(replay, perspective_slot=slot))
 
     def test_token_section_offsets(self) -> None:
         self.assertEqual(
@@ -424,6 +508,218 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
         self.assertEqual(len(default.attention_mask), len(masked.attention_mask))
         default.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
         masked.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+
+
+_TRANSFORM_REQUEST = (
+    '|request|{"active":[{"moves":[{"move":"Flamethrower","id":"flamethrower"}]}],'
+    '"side":{"id":"p1","name":"Us","pokemon":[{"ident":"p1a: Charizard",'
+    '"details":"Charizard, L78","condition":"250/250","active":true,'
+    '"stats":{"atk":200,"def":180,"spa":220,"spd":190,"spe":210}}]}}'
+)
+
+_TRANSFORM_LINES = [
+    "|player|p1|Us|",
+    "|player|p2|Them|",
+    _TRANSFORM_REQUEST,
+    "|switch|p1a: Charizard|Charizard, L78|250/250",
+    "|switch|p2a: Ditto|Ditto, L88|100/100",
+    "|turn|1",
+    "|move|p2a: Ditto|Transform|p1a: Charizard",
+    "|-transform|p2a: Ditto|p1a: Charizard",
+    "|turn|2",
+]
+
+
+def _transform_dex() -> ShowdownDex:
+    return ShowdownDex(
+        moves={},
+        species={
+            "ditto": SpeciesInfo(
+                id="ditto", name="Ditto", types=("Normal",),
+                base_stats={"hp": 48, "atk": 48, "def": 48, "spa": 48, "spd": 48, "spe": 48},
+            ),
+            "charizard": SpeciesInfo(
+                id="charizard", name="Charizard", types=("Fire", "Flying"),
+                base_stats={"hp": 78, "atk": 84, "def": 78, "spa": 109, "spd": 85, "spe": 100},
+            ),
+        },
+        type_chart={},
+    )
+
+
+class TransformExpectedStatsTest(unittest.TestCase):
+    """Engine-verified rule (vendored sim/pokemon.ts transformInto, no gen3 override):
+    Transform copies the TARGET's stored stat VALUES for every non-HP stat and never HP."""
+
+    def test_transformed_opponent_copies_target_actual_non_hp_stats(self) -> None:
+        replay = parse_showdown_replay(_TRANSFORM_LINES, battle_id="battle-1")
+        state = normalize_for_player(replay, player_id="agent", player_name="Us")
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_transform_dex()
+        )
+        ditto_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
+        # Non-HP expected stats are the copy TARGET's actual (player-known) values — never
+        # Ditto's own variant conditioning applied to the copied species.
+        self.assertAlmostEqual(ditto_row[NUMERIC_EXPECTED_DEF], 180 / 714)
+        self.assertAlmostEqual(ditto_row[NUMERIC_EXPECTED_SPE], 210 / 714)
+        for slot in (NUMERIC_EXPECTED_ATK, NUMERIC_EXPECTED_ATK_LOW, NUMERIC_EXPECTED_ATK_HIGH):
+            self.assertAlmostEqual(ditto_row[slot], 200 / 714)
+        # HP is never copied: Ditto's own species at Ditto's level (L88), collapsed bounds.
+        hp_expected = _gen3_stat(48, 88, ev=85, iv=31, hp=True) / 714
+        self.assertAlmostEqual(ditto_row[NUMERIC_EXPECTED_HP], hp_expected)
+        self.assertAlmostEqual(ditto_row[NUMERIC_EXPECTED_HP_LOW], hp_expected)
+
+    def test_unidentifiable_transform_target_leaves_expected_block_zero(self) -> None:
+        # No request -> self team unknown -> the copy target cannot be identified. Per the
+        # asymmetry principle the block must stay ZERO, not a wrong deterministic value.
+        lines = [line for line in _TRANSFORM_LINES if not line.startswith("|request|")]
+        replay = parse_showdown_replay(lines, battle_id="battle-1")
+        state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_transform_dex()
+        )
+        ditto_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
+        for slot in (
+            NUMERIC_EXPECTED_HP, NUMERIC_EXPECTED_HP_LOW, NUMERIC_EXPECTED_ATK,
+            NUMERIC_EXPECTED_ATK_LOW, NUMERIC_EXPECTED_ATK_HIGH, NUMERIC_EXPECTED_DEF,
+            NUMERIC_EXPECTED_SPE,
+        ):
+            self.assertEqual(ditto_row[slot], 0.0)
+
+
+class TransitionTokenFieldGateTest(unittest.TestCase):
+    def test_n_hits_is_zero_on_switch_and_cant_tokens(self) -> None:
+        from pokezero.showdown import NUMERIC_TT_N_HITS
+
+        state = _state([
+            "|move|p1a: Charizard|Flamethrower|p2a: Xatu",
+            "|-damage|p2a: Xatu|60/100",
+            "|cant|p2a: Xatu|slp",
+            "|turn|2",
+            "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+            "|turn|3",
+        ])
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        kinds = [token.kind for token in state.transition_tokens]
+        for index, kind in enumerate(kinds):
+            n_hits = observation.numeric_features[TRANSITION_TOKEN_OFFSET + index][NUMERIC_TT_N_HITS]
+            if kind == "move":
+                self.assertAlmostEqual(n_hits, 1 / 5)
+            else:
+                self.assertEqual(n_hits, 0.0)
+
+
+class WishRearmGuardTest(unittest.TestCase):
+    def test_failed_second_wish_does_not_extend_pending(self) -> None:
+        # A Wish declared while one is pending FAILS in gen 3; the pending window must not
+        # be extended by the failed re-declaration.
+        replay = parse_showdown_replay(
+            _BASE_LINES
+            + [
+                "|move|p1a: Charizard|Wish|p1a: Charizard",
+                "|turn|2",
+                "|move|p1a: Charizard|Wish|p1a: Charizard",
+                "|-fail|p1a: Charizard",
+                "|turn|3",
+            ],
+            battle_id="battle-1",
+        )
+        self.assertFalse(_wish_pending(replay, "p1"))
+
+    def test_wish_can_rearm_after_the_previous_wish_expires(self) -> None:
+        replay = parse_showdown_replay(
+            _BASE_LINES
+            + [
+                "|move|p1a: Charizard|Wish|p1a: Charizard",
+                "|turn|2",
+                "|turn|3",
+                "|move|p1a: Charizard|Wish|p1a: Charizard",
+                "|turn|4",
+            ],
+            battle_id="battle-1",
+        )
+        self.assertTrue(_wish_pending(replay, "p1"))
+
+
+class DataSideOneWayDoorTest(unittest.TestCase):
+    def test_rollout_and_cache_schema_strings_bumped_with_the_spec(self) -> None:
+        from pokezero.collection import ROLLOUT_RECORD_SCHEMA_VERSION
+        from pokezero.dataset import TRAINING_CACHE_SCHEMA_VERSION
+
+        self.assertEqual(ROLLOUT_RECORD_SCHEMA_VERSION, "pokezero.rollout_record.v2")
+        self.assertEqual(TRAINING_CACHE_SCHEMA_VERSION, "pokezero.training_cache.v2")
+
+    def _record_with_schema(self, schema_version: str):
+        from dataclasses import replace as dc_replace
+
+        from pokezero.collection import RolloutRecord
+        from pokezero.env import TerminalState
+        from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+
+        state = _state([])
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = dc_replace(observation, schema_version=schema_version)
+        trajectory = BattleTrajectory(battle_id="battle-1", format_id="gen3randombattle", seed=1)
+        action_index = next(
+            index for index, legal in enumerate(observation.legal_action_mask) if legal
+        )
+        trajectory.append(
+            TrajectoryStep(
+                player_id="p1",
+                turn_index=0,
+                observation=observation,
+                legal_action_mask=tuple(observation.legal_action_mask),
+                action_index=action_index,
+            )
+        )
+        terminal = TerminalState(winner="p1", turn_count=1)
+        trajectory.record_terminal(terminal)
+        return RolloutRecord(
+            battle_id="battle-1",
+            seed=1,
+            format_id="gen3randombattle",
+            policy_ids={"p1": "test"},
+            decision_round_count=1,
+            elapsed_seconds=0.0,
+            terminal=terminal,
+            trajectory=trajectory,
+        )
+
+    def test_examples_from_record_refuses_v1_observations_cleanly(self) -> None:
+        from pokezero.dataset import examples_from_record
+
+        record = self._record_with_schema("pokezero.observation.v1")
+        with self.assertRaisesRegex(ValueError, "pinned tag"):
+            list(examples_from_record(record))
+
+    def test_examples_from_record_accepts_current_schema(self) -> None:
+        from pokezero.dataset import examples_from_record
+
+        record = self._record_with_schema(OBSERVATION_SCHEMA_VERSION)
+        self.assertTrue(list(examples_from_record(record)))
+
+    def test_missing_observation_schema_version_is_refused_not_assumed_current(self) -> None:
+        from pokezero.trajectory import _observation_from_dict as obs_from_dict
+        from pokezero.trajectory import _observation_to_dict as obs_to_dict
+
+        state = _state([])
+        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        payload = dict(obs_to_dict(observation))
+        payload.pop("schema_version")
+        decoded = obs_from_dict(payload)
+        self.assertEqual(decoded.schema_version, "pokezero.observation.unversioned")
+        with self.assertRaisesRegex(ValueError, "pinned tag"):
+            decoded.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+
+    def test_missing_checkpoint_schema_version_is_refused(self) -> None:
+        from pokezero.neural_policy import TransformerPolicyConfig
+
+        payload = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",), category_oov_buckets=2
+        ).to_dict()
+        payload.pop("observation_schema_version")
+        with self.assertRaisesRegex(ValueError, "pinned tag"):
+            TransformerPolicyConfig.from_dict(payload)
 
 
 class SerializationRoundTripTest(unittest.TestCase):

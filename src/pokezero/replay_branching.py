@@ -22,6 +22,11 @@ from .trajectory import BattleTrajectory
 # First token index of the history-tail sections (stats + transition tokens in spec v2).
 # Board-state comparisons slice up to here: replay-from-root reconstructs the same board but a
 # different protocol history (fresh turn numbers / transition prefix / tendency counts).
+# SEARCH-HORIZON NOTE (for the H1 revival, so this isn't rediscovered): under spec v2 this
+# excludes 129/151 tokens from parity — branch-time observations see empty history/stats
+# blocks where training saw filled ones, a much larger off-distribution gap than v1's
+# 24-token event tail. Acceptable while search is paused; an H1 design must either replay
+# the transition prefix into branches or quantify the value-head sensitivity to a dark tail.
 _HISTORY_TAIL_TOKEN_OFFSET = (
     FIELD_TOKEN_COUNT
     + SELF_POKEMON_TOKEN_COUNT

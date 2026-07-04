@@ -332,8 +332,29 @@ def extract_tendency_stats(
 ) -> TendencyStats:
     """(count, opportunity) tendency pairs for ``perspective_slot`` against its opponent."""
     perspective = _validated_slot(perspective_slot)
-    opponent = _other_side(perspective)
     fold = _fold_replay(replay, perspective_slot=perspective)
+    return _tendency_stats_from_fold(fold, perspective_slot=perspective)
+
+
+def extract_transitions_and_tendencies(
+    replay: ShowdownReplayState,
+    *,
+    perspective_slot: str,
+) -> tuple[tuple[TransitionToken, ...], TendencyStats]:
+    """Both extraction products from ONE fold of the replay.
+
+    The per-observe hot path (``normalize_for_player``) needs both; folding the whole log
+    twice doubled an O(events) pass for no reason (~2x the encode-side history cost at the
+    stall-game tail).
+    """
+    perspective = _validated_slot(perspective_slot)
+    fold = _fold_replay(replay, perspective_slot=perspective)
+    return fold.tokens, _tendency_stats_from_fold(fold, perspective_slot=perspective)
+
+
+def _tendency_stats_from_fold(fold: _FoldResult, *, perspective_slot: str) -> TendencyStats:
+    perspective = perspective_slot
+    opponent = _other_side(perspective)
 
     opponent_switches = 0
     blocked_on_our_attack = 0

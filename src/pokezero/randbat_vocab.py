@@ -99,12 +99,17 @@ TRANSITION_SIDE_EFFECTS = (
     "boost", "drain", "heal", "charging",
 )
 
-# |cant| reasons the transition tokens can surface as action ids (normalized; ability-sourced
-# reasons like "ability: Truant"/"ability: Damp" normalize to the bare ability id). A
-# comprehensive superset of what gen 3 emits; unobserved reasons are harmless extra rows.
+# |cant| reasons the transition tokens can surface as action ids, audited against the pool's
+# reachable emitters (normalized by _side_condition_identifier, so "ability: Truant" ->
+# "truant" and the move-sourced "Focus Punch" -> "focuspunch"). Gen 3 |cant| sources:
+# status (slp/frz/par), flinch, attract, recharge, Disable/Imprison/Taunt suppression,
+# broken focus (|cant|POKEMON|Focus Punch| — vendored data/moves.ts onMoveAborted, no gen3
+# override; Focus Punch IS in the gen3 randbats movepools), ability: Truant (Slaking),
+# ability: Damp (Explosion/Self-Destruct block), and nopp. A comprehensive superset is fine —
+# unobserved reasons are harmless extra rows; a MISSING reason OOVs on a live game.
 GEN3_CANT_REASONS = (
     "slp", "frz", "par", "flinch", "attract", "recharge", "disable", "imprison",
-    "taunt", "nopp", "partiallytrapped", "truant", "damp",
+    "taunt", "nopp", "partiallytrapped", "truant", "damp", "focuspunch",
 )
 
 

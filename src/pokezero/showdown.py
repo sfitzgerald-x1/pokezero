@@ -555,7 +555,11 @@ class _ReplayParser:
         if event_type == "move" and len(parts) >= 4:
             slot = _slot_from_ident(parts[2])
             if slot in {"p1", "p2"} and _normalize_identifier(parts[3]) == "wish":
-                self.wish_set_turns[slot] = self.turn_number
+                # A Wish declared while one is already pending FAILS in gen 3; re-arming here
+                # would wrongly extend the pending bit by a turn on a double-click.
+                existing = self.wish_set_turns.get(slot)
+                if existing is None or (self.turn_number - existing) > 1:
+                    self.wish_set_turns[slot] = self.turn_number
             return
         if event_type in {"-heal", "-sethp"} and len(parts) > 2 and "[from] move: Wish" in line:
             slot = _slot_from_ident(parts[2])
@@ -672,12 +676,15 @@ def normalize_for_player(
         _relative_public_event(event, self_slot=showdown_slot, opponent_slot=opponent_slot)
         for event in replay.public_events[-recent_event_limit:]
     )
-    # Ordered transition history + tendency aggregates (PR B extraction functions). Local import:
-    # transitions.py imports this module's parse helpers, so a module-level import would cycle.
-    from .transitions import extract_tendency_stats, extract_transition_tokens
+    # Ordered transition history + tendency aggregates (PR B extraction functions), from a
+    # single shared fold of the replay (folding twice doubled the per-observe history cost).
+    # Local import: transitions.py imports this module's parse helpers, so a module-level
+    # import would cycle.
+    from .transitions import extract_transitions_and_tendencies
 
-    transition_tokens = extract_transition_tokens(replay, perspective_slot=showdown_slot)
-    tendency_stats = extract_tendency_stats(replay, perspective_slot=showdown_slot)
+    transition_tokens, tendency_stats = extract_transitions_and_tendencies(
+        replay, perspective_slot=showdown_slot
+    )
     weather_turns_remaining, weather_permanent = _weather_duration_features(replay)
     sleep_clause_holders = belief_engine.sleep_clause_holders
     return PlayerRelativeBattleState(
@@ -816,6 +823,11 @@ def observation_from_player_state(
         dex=dex,
         exact_beliefs_by_species=opponent_beliefs,
         tendency_by_species=tendency_by_species,
+        # Transform copy targets: in singles an opponent Transform copies OUR mon; species
+        # clause makes the by-species lookup unique within our team.
+        transform_targets_by_species={
+            _normalize_identifier(member.species): member for member in state.self_team
+        },
         masks=feature_masks,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
@@ -1585,6 +1597,7 @@ def _encode_pokemon_tokens(
     dex: "ShowdownDex | None" = None,
     exact_beliefs_by_species: Mapping[str, RevealedPokemonBelief] | None = None,
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
+    transform_targets_by_species: Mapping[str, ShowdownPokemon] | None = None,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
@@ -1674,6 +1687,12 @@ def _encode_pokemon_tokens(
                     battle_species=enc_species,
                     details=candidate.details,
                     belief=exact,
+                    transformed=transformed,
+                    transform_target=(
+                        (transform_targets_by_species or {}).get(_normalize_identifier(enc_species))
+                        if transformed
+                        else None
+                    ),
                 )
         if masks.stats_block and role == "opponent" and tendency_by_species:
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
@@ -1747,6 +1766,12 @@ def _encode_opponent_move_pp_fractions(
     Max PP is the randbat catalog rule (3 PP Ups) from the dex; ``move_uses`` already carries the
     engine-side charging rules (Pressure x2, Sleep-Talk-charges-caller, Transform scoping).
     Unrevealed bucket columns stay 0.0 — no PP knowledge is claimed for merely-possible moves.
+
+    KNOWN COLLISION (accepted for this spec revision): a REVEALED move ledgered to exactly
+    0 PP also encodes 0.0, indistinguishable in this channel from an unrevealed bucket. The
+    categorical bucket + revealed-move count disambiguate weakly; "confirmed empty" vs "no
+    knowledge" matters in pp-stall endgames, so a follow-up may add a numeric validity bit
+    (config-level, no spec break) rather than an epsilon floor.
     """
     if exact is None or dex is None:
         return
@@ -1782,6 +1807,8 @@ def _encode_expected_stats(
     battle_species: str,
     details: str | None,
     belief: RevealedPokemonBelief | None,
+    transformed: bool = False,
+    transform_target: ShowdownPokemon | None = None,
 ) -> None:
     """Deterministic opponent stat block from species + level + the fixed 85/31/neutral spread.
 
@@ -1789,11 +1816,30 @@ def _encode_expected_stats(
     variant-conditioned (corrections item 1): baseline 85/31 plus a [low, high] bound pair over
     the candidate variants — Atk-zeroing (0 EV / 0 IV) on no-physical-attack variants, HP-EV trim
     (0 EV lower bound) on Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum variants. Without
-    an attached set source the bounds collapse to the baseline. Transform note: non-HP stats key
-    on the effective battler (``battle_species``, matching the base-stat encoding), HP on the
-    original species (Transform never copies HP).
+    an attached set source the bounds collapse to the baseline.
+
+    Transform rule (ENGINE-VERIFIED against the vendored pokemon-showdown checkout,
+    ``sim/pokemon.ts`` ``transformInto``; no gen3 mod override): Transform copies the TARGET's
+    stored stat VALUES for every non-HP stat (``this.storedStats[statName] =
+    pokemon.storedStats[statName]``) — i.e. the target's own spread at the TARGET's level —
+    and never copies HP. In singles the copy target is OUR active mon at transform time, whose
+    actual stats are player-known from the request, so a transformed opponent's non-HP expected
+    stats are the target's EXACT values (bounds collapse); HP stays the actor's own species at
+    the actor's level. The actor's variant conditioning must NOT be applied to copied stats
+    (a Transform-only Ditto has no physical attack, but the copied Atk is the target's real
+    Atk). If the copy target cannot be identified, the whole block stays ZERO: per the
+    asymmetry principle, an unknown hard-state feature beats a deterministically wrong one.
     """
     if dex is None:
+        return
+    if transformed:
+        _encode_transformed_expected_stats(
+            num_row,
+            dex,
+            base_species=base_species,
+            details=details,
+            transform_target=transform_target,
+        )
         return
     level = _level_from_details(details)
     if level is None:
@@ -1852,6 +1898,45 @@ def _encode_expected_stats(
         (NUMERIC_EXPECTED_ATK_HIGH, atk_high),
     ):
         _set_numeric(num_row, slot, min(1.0, value / _ACTUAL_STAT_DIVISOR))
+
+
+def _encode_transformed_expected_stats(
+    num_row: list[float],
+    dex: "ShowdownDex",
+    *,
+    base_species: str,
+    details: str | None,
+    transform_target: ShowdownPokemon | None,
+) -> None:
+    """Expected stats for a transformed opponent: copied non-HP values are the target's actual
+    stats (exact, player-known); HP is the actor's own baseline. Unidentifiable target => the
+    block stays zero (see the Transform rule in ``_encode_expected_stats``)."""
+    target_stats = transform_target.stats if transform_target is not None else None
+    if not target_stats:
+        return
+    if any(key not in target_stats for key in ("atk", "def", "spa", "spd", "spe")):
+        return
+    for stat_key, slot in (
+        ("def", NUMERIC_EXPECTED_DEF),
+        ("spa", NUMERIC_EXPECTED_SPA),
+        ("spd", NUMERIC_EXPECTED_SPD),
+        ("spe", NUMERIC_EXPECTED_SPE),
+    ):
+        _set_numeric(num_row, slot, min(1.0, float(target_stats[stat_key]) / _ACTUAL_STAT_DIVISOR))
+    atk_value = min(1.0, float(target_stats["atk"]) / _ACTUAL_STAT_DIVISOR)
+    for slot in (NUMERIC_EXPECTED_ATK, NUMERIC_EXPECTED_ATK_LOW, NUMERIC_EXPECTED_ATK_HIGH):
+        _set_numeric(num_row, slot, atk_value)
+    # HP is never copied: the actor's own species at the actor's own level. Transform carriers
+    # (Ditto, Mew) have no HP-trim variants, so the baseline with collapsed bounds is exact
+    # to within the HP-IV point.
+    level = _level_from_details(details)
+    hp_info = dex.species_info(base_species)
+    hp_base = hp_info.base_stats.get("hp") if hp_info is not None else None
+    if level is None or not hp_base:
+        return
+    hp_value = min(1.0, _gen3_stat(hp_base, level, ev=85, iv=31, hp=True) / _ACTUAL_STAT_DIVISOR)
+    for slot in (NUMERIC_EXPECTED_HP, NUMERIC_EXPECTED_HP_LOW, NUMERIC_EXPECTED_HP_HIGH):
+        _set_numeric(num_row, slot, hp_value)
 
 
 def _is_physical_attack(dex: "ShowdownDex", move_id: str) -> bool:
@@ -1964,7 +2049,9 @@ def _encode_transition_tokens(
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
         if token.damage_fraction:
             _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, token.damage_fraction))
-        _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
+        if token.kind == _TT_KIND_MOVE:
+            # n_hits is a move-token field; switch/cant rows keep 0.0 (not a constant 1/5).
+            _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, token.n_hits / 5.0))
         for slot, flag in (
             (NUMERIC_TT_CALLED, token.called),
             (NUMERIC_TT_TRANSFORMED, token.transformed),
