@@ -27,6 +27,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from .local_showdown import belief_set_source_env_enabled
+from .randbat import load_gen3_randbat_source_cached
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
     normalize_for_player,
@@ -95,6 +97,11 @@ class OnlineBattleAgent:
     our_name: str
     spec: Any = DEFAULT_REPLAY_OBSERVATION_SPEC
     rng: random.Random = None  # type: ignore[assignment]
+    # Candidate-set source for belief views. None defers to the POKEZERO_BELIEF_SET_SOURCE env
+    # gate at build time (build_agent) — the online client is the cluster foul-play probes'
+    # bot path, so a mismatch here recreates the train/eval observation gap fixed in the
+    # controlled bridge (see foulplay_bridge._resolved_belief_set_source).
+    set_source: Any = None
 
     def __post_init__(self) -> None:
         if self.rng is None:
@@ -104,7 +111,9 @@ class OnlineBattleAgent:
         """Return the choice body (e.g. ``"move 1"``) for the latest request, or None to wait."""
         try:
             replay = parse_showdown_replay(room_lines, battle_id=room_id)
-            state = normalize_for_player(replay, player_id="bot", player_name=self.our_name)
+            state = normalize_for_player(
+                replay, player_id="bot", player_name=self.our_name, set_source=self.set_source
+            )
         except ValueError:
             return None  # our seat / request not resolvable yet
         if state.request is None or state.request_kind in {"wait", "none"}:
@@ -143,6 +152,11 @@ def build_agent(
         policy=policy,
         vocab=gen3_category_vocabulary(showdown_root),
         dex=load_showdown_dex_cached(showdown_root),
+        set_source=(
+            load_gen3_randbat_source_cached(showdown_root)
+            if belief_set_source_env_enabled()
+            else None
+        ),
         our_name=our_name,
         spec=spec,
         rng=random.Random(seed),
