@@ -99,11 +99,12 @@ TRANSITION_SIDE_EFFECTS = (
     "boost", "drain", "heal", "charging",
 )
 
-# |cant| reasons the transition tokens can surface as action ids (normalized). A comprehensive
-# superset of what gen 3 emits; unobserved reasons are harmless extra rows.
+# |cant| reasons the transition tokens can surface as action ids (normalized; ability-sourced
+# reasons like "ability: Truant"/"ability: Damp" normalize to the bare ability id). A
+# comprehensive superset of what gen 3 emits; unobserved reasons are harmless extra rows.
 GEN3_CANT_REASONS = (
     "slp", "frz", "par", "flinch", "attract", "recharge", "disable", "imprison",
-    "taunt", "nopp", "partiallytrapped",
+    "taunt", "nopp", "partiallytrapped", "truant", "damp",
 )
 
 
