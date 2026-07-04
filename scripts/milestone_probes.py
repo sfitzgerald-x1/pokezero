@@ -13,9 +13,14 @@ Subcommands:
                      away (checkpoint rotation, retention gaps) come back as
                      action=skip so the sweep records a SKIPPED ledger line
                      instead of probing the wrong checkpoint.
-  watchdog           --run-id ID [--timeline FILE]  (default: stdin)
+  watchdog           --run-id ID [--timeline FILE] [--baseline-file FILE]
+                     [--no-persist]  (timeline default: stdin)
                      Ecology watchdogs over eval-timeline.jsonl rows. Prints one
                      alarm/warning JSON object per line (empty output = healthy).
+                     --baseline-file persists the first-computed game-length
+                     drift baseline (read when present, written once) so the
+                     baseline cannot slide forward with the timeline tail
+                     window; --no-persist reads but never writes it (dry-run).
   record             Assemble one ledger JSONL line for a probed (or skipped)
                      milestone and append it. Idempotent; the check-then-append
                      runs under an exclusive flock on the ledger file.
@@ -26,15 +31,21 @@ Subcommands:
 Watchdog thresholds (the 4L lesson — see evaluate_watchdogs). All alarms fire
 strictly beyond their threshold (exactly-at-threshold is quiet):
   game-length drift        latest low-fi avg_game_length > 1.5x baseline (+50%).
-                           Baseline: the run's own low-fi rows in the 30k-100k
-                           band when present, else the earliest rows in the
-                           timeline window (continuation runs / truncated tails),
-                           else a LOUD "watchdog degraded" warning — never silence.
-  strength regression      latest max-damage win rate more than 10 points
-                           (absolute) below the run's own peak at matched fidelity
+                           Baseline: the per-run baseline persisted at first
+                           computation (--baseline-file — immune to the tail
+                           window sliding forward), else the run's own low-fi
+                           rows in the 30k-100k band, else the earliest rows in
+                           the timeline window (continuation runs / truncated
+                           tails), else a LOUD "watchdog degraded" warning —
+                           never silence.
+  strength regression      the latest max-damage win rate OF EACH fidelity more
+                           than 10 points (absolute) below that fidelity's own
+                           earlier peak (a newer healthy high-fi row must not
+                           mask a low-fi collapse)
   policy-entropy floor     latest policy_entropy < 0.35
-Non-finite (NaN/Infinity) watched values are quarantined before the math and
-surface as a timeline_data_quality warning; rows without a usable
+Non-finite (NaN/Infinity) watched values — completed_games, milestone_games,
+avg_game_length, policy_entropy, max-damage win_rate — are quarantined before
+the math and surface as a timeline_data_quality warning; rows without a usable
 completed_games sort last (they are plausibly the newest, file-tail rows).
 """
 from __future__ import annotations
@@ -50,6 +61,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = "pokezero.milestone_probe.v1"
 ALERT_SCHEMA_VERSION = "pokezero.ecology_alert.v1"
+BASELINE_SCHEMA_VERSION = "pokezero.drift_baseline.v1"
 
 MILESTONE_STEP = 100_000
 MILESTONE_MAX_DISTANCE_GAMES = 30_000
@@ -113,7 +125,7 @@ def _count_non_finite_rows(rows: list[dict]) -> int:
     """Rows carrying a watched field that is present but not a finite number."""
     bad = 0
     for row in rows:
-        watched = [row.get("completed_games")]
+        watched = [row.get("completed_games"), row.get("milestone_games")]
         collapse = row.get("collapse")
         if isinstance(collapse, dict):
             watched += [collapse.get("avg_game_length"), collapse.get("policy_entropy")]
@@ -125,6 +137,77 @@ def _count_non_finite_rows(rows: list[dict]) -> int:
     return bad
 
 
+def compute_drift_baseline(
+    rows: list,
+    *,
+    baseline_band: tuple[int, int] = BASELINE_BAND_GAMES,
+    fallback_baseline_rows: int = DRIFT_FALLBACK_BASELINE_ROWS,
+) -> dict | None:
+    """The game-length drift baseline the watchdog arms with over these rows.
+
+    Returns {"avg_game_length": mean, "source": "band"|"earliest_rows",
+    "rows": n}, or None while no baseline is usable: no length rows, the
+    latest row still inside the band (baseline being established), a single
+    length row, or a non-positive mean. Pure function — the CLI persists the
+    first non-None result per run (drift-baseline.json) and reuses it on
+    later sweeps, because both sources below are computed from the visible
+    ``tail -n`` timeline window and would otherwise slide forward with it,
+    letting drift slower than the alarm ratio per window escape unalarmed.
+    """
+    rows = _sorted_rows(rows)
+    length_rows = [
+        row
+        for row in _collapse_rows(rows)
+        if _finite(row["collapse"].get("avg_game_length")) is not None
+    ]
+    if not length_rows:
+        return None
+    latest_milestone = _finite(length_rows[-1].get("milestone_games")) or 0
+    band_rows = [
+        row
+        for row in length_rows
+        if baseline_band[0] <= (_finite(row.get("milestone_games")) or 0) <= baseline_band[1]
+    ]
+    if band_rows:
+        if latest_milestone <= baseline_band[1]:
+            return None  # still establishing the band baseline — expected quiet
+        values = [_finite(row["collapse"]["avg_game_length"]) for row in band_rows]
+        source = "band"
+    elif len(length_rows) >= 2:
+        values = [
+            _finite(row["collapse"]["avg_game_length"])
+            for row in length_rows[:-1][:fallback_baseline_rows]
+        ]
+        source = "earliest_rows"
+    else:
+        return None
+    mean = sum(values) / len(values)
+    if mean <= 0:
+        return None
+    return {"avg_game_length": mean, "source": source, "rows": len(values)}
+
+
+def _usable_baseline(baseline) -> dict | None:
+    """A normalized {avg_game_length, source, rows} baseline dict, or None
+    when ``baseline`` is not usable (wrong shape, non-finite or non-positive
+    mean) — an unusable persisted baseline must degrade to the window-computed
+    one, never poison the math."""
+    if not isinstance(baseline, dict):
+        return None
+    avg = _finite(baseline.get("avg_game_length"))
+    if avg is None or avg <= 0:
+        return None
+    source = baseline.get("source")
+    rows_count = baseline.get("rows")
+    return {
+        "avg_game_length": avg,
+        "source": source if isinstance(source, str) and source else "persisted",
+        "rows": rows_count
+        if isinstance(rows_count, int) and not isinstance(rows_count, bool)
+        else 0,
+    }
+
+
 def evaluate_watchdogs(
     rows: list[dict],
     *,
@@ -133,6 +216,7 @@ def evaluate_watchdogs(
     entropy_floor: float = POLICY_ENTROPY_FLOOR,
     baseline_band: tuple[int, int] = BASELINE_BAND_GAMES,
     fallback_baseline_rows: int = DRIFT_FALLBACK_BASELINE_ROWS,
+    persisted_baseline: dict | None = None,
 ) -> list[dict]:
     """Ecology watchdogs over eval-timeline.jsonl rows (dicts, file order).
 
@@ -143,6 +227,14 @@ def evaluate_watchdogs(
 
       game_length_drift    latest low-fi collapse.avg_game_length vs a baseline
                            mean. Baseline preference order:
+                             0. ``persisted_baseline`` — the baseline persisted
+                                the first time this run armed the dog
+                                (drift-baseline.json via --baseline-file). The
+                                window-computed fallbacks below slide with the
+                                ``tail -n`` timeline window; the persisted one
+                                does not, so drift slower than the alarm ratio
+                                per window cannot ratchet it forward. An
+                                unusable value degrades to the fallbacks;
                              1. the run's own low-fi rows with milestone_games
                                 inside ``baseline_band`` ("band") — quiet while
                                 the run is still inside the band;
@@ -155,12 +247,14 @@ def evaluate_watchdogs(
                                 game_length_drift_no_baseline WARNING — the dog
                                 degrades loudly, never silently.
                            Alarms when latest > drift_ratio * baseline.
-      strength_regression  latest max-damage win_rate vs the run's own earlier
-                           peak at the SAME fidelity (low-fi 600-game and high-fi
-                           2000-game reads are not comparable). Alarms when the
-                           drop strictly exceeds regression_points, with a float
-                           epsilon so 0.85->0.75 behaves exactly like
-                           0.80->0.70.
+      strength_regression  the latest max-damage win_rate of EACH fidelity vs
+                           that fidelity's own earlier peak (low-fi 600-game
+                           and high-fi 2000-game reads are not comparable, and
+                           a newer healthy high-fi row must not mask a low-fi
+                           collapse). One alarm per regressed fidelity; alarms
+                           when the drop strictly exceeds regression_points,
+                           with a float epsilon so 0.85->0.75 behaves exactly
+                           like 0.80->0.70.
       policy_entropy_floor latest low-fi collapse.policy_entropy < entropy_floor.
     """
     rows = _sorted_rows(rows)
@@ -191,28 +285,45 @@ def evaluate_watchdogs(
     if length_rows:
         latest = length_rows[-1]
         latest_length = _finite(latest["collapse"]["avg_game_length"])
-        latest_milestone = latest.get("milestone_games") or 0
-        band_rows = [
-            row
+        latest_milestone = _finite(latest.get("milestone_games"))
+        baseline = _usable_baseline(persisted_baseline)
+        from_persisted = baseline is not None
+        if baseline is None:
+            baseline = compute_drift_baseline(
+                rows,
+                baseline_band=baseline_band,
+                fallback_baseline_rows=fallback_baseline_rows,
+            )
+        if baseline is not None:
+            baseline_mean = baseline["avg_game_length"]
+            if latest_length - drift_ratio * baseline_mean > _EPSILON:
+                alarms.append(
+                    {
+                        "watchdog": "game_length_drift",
+                        "severity": "alarm",
+                        "milestone_games": latest_milestone,
+                        "completed_games": latest.get("completed_games"),
+                        "latest_avg_game_length": latest_length,
+                        "baseline_avg_game_length": round(baseline_mean, 4),
+                        "baseline_source": baseline["source"],
+                        "baseline_rows": baseline["rows"],
+                        "baseline_persisted": from_persisted,
+                        "threshold_ratio": drift_ratio,
+                        "message": (
+                            f"avg_game_length {latest_length:.1f} is "
+                            f"{latest_length / baseline_mean:.2f}x the "
+                            f"{baseline['source']} baseline {baseline_mean:.1f} "
+                            f"(alarm ratio {drift_ratio})"
+                        ),
+                    }
+                )
+        elif not any(
+            baseline_band[0] <= (_finite(row.get("milestone_games")) or 0) <= baseline_band[1]
             for row in length_rows
-            if baseline_band[0] <= (row.get("milestone_games") or 0) <= baseline_band[1]
-        ]
-        baseline_values: list[float] | None = None
-        baseline_source = None
-        if band_rows:
-            if latest_milestone > baseline_band[1]:
-                baseline_values = [
-                    _finite(row["collapse"]["avg_game_length"]) for row in band_rows
-                ]
-                baseline_source = "band"
-            # else: still establishing the band baseline — expected quiet
-        elif len(length_rows) >= 2:
-            earliest = length_rows[:-1][:fallback_baseline_rows]
-            baseline_values = [
-                _finite(row["collapse"]["avg_game_length"]) for row in earliest
-            ]
-            baseline_source = "earliest_rows"
-        else:
+        ):
+            # Band rows present with the run still inside the band is the
+            # quiet "establishing" case; here the band is EMPTY and no
+            # relative baseline was possible either — degrade loudly.
             alarms.append(
                 {
                     "watchdog": "game_length_drift_no_baseline",
@@ -223,68 +334,50 @@ def evaluate_watchdogs(
                     "message": (
                         "no baseline — game-length drift watchdog degraded "
                         f"(no rows in the {baseline_band[0] // 1000}k-"
-                        f"{baseline_band[1] // 1000}k band and too few rows in the "
-                        "timeline window for a relative baseline)"
+                        f"{baseline_band[1] // 1000}k band and no usable relative "
+                        "baseline in the timeline window)"
                     ),
                 }
             )
-        if baseline_values:
-            baseline_mean = sum(baseline_values) / len(baseline_values)
-            if baseline_mean > 0 and latest_length - drift_ratio * baseline_mean > _EPSILON:
-                alarms.append(
-                    {
-                        "watchdog": "game_length_drift",
-                        "severity": "alarm",
-                        "milestone_games": latest_milestone,
-                        "completed_games": latest.get("completed_games"),
-                        "latest_avg_game_length": latest_length,
-                        "baseline_avg_game_length": round(baseline_mean, 4),
-                        "baseline_source": baseline_source,
-                        "baseline_rows": len(baseline_values),
-                        "threshold_ratio": drift_ratio,
-                        "message": (
-                            f"avg_game_length {latest_length:.1f} is "
-                            f"{latest_length / baseline_mean:.2f}x the "
-                            f"{baseline_source} baseline {baseline_mean:.1f} "
-                            f"(alarm ratio {drift_ratio})"
-                        ),
-                    }
-                )
 
-    # -- matched-milestone strength regression ------------------------------
+    # -- matched-fidelity strength regression --------------------------------
+    # The latest read of EACH fidelity is checked against that fidelity's own
+    # earlier peak: a newer healthy high-fi row must not mask a low-fi
+    # collapse until the next low-fi row happens to arrive.
     strength_rows = _max_damage_rows(rows)
-    if len(strength_rows) >= 2:
-        latest = strength_rows[-1]
-        fidelity = latest.get("fidelity")
-        earlier = [
-            row for row in strength_rows[:-1] if row.get("fidelity") == fidelity
-        ]
-        if earlier:
-            peak_row = max(
-                earlier, key=lambda row: _finite(row["metrics"]["max-damage"]["win_rate"])
+    rows_by_fidelity: dict = {}
+    for row in strength_rows:
+        rows_by_fidelity.setdefault(row.get("fidelity"), []).append(row)
+    for fidelity, fidelity_rows in rows_by_fidelity.items():
+        if len(fidelity_rows) < 2:
+            continue
+        latest = fidelity_rows[-1]
+        peak_row = max(
+            fidelity_rows[:-1],
+            key=lambda row: _finite(row["metrics"]["max-damage"]["win_rate"]),
+        )
+        peak = _finite(peak_row["metrics"]["max-damage"]["win_rate"])
+        latest_rate = _finite(latest["metrics"]["max-damage"]["win_rate"])
+        if (peak - latest_rate) - regression_points > _EPSILON:
+            alarms.append(
+                {
+                    "watchdog": "strength_regression",
+                    "severity": "alarm",
+                    "milestone_games": latest.get("milestone_games"),
+                    "completed_games": latest.get("completed_games"),
+                    "fidelity": fidelity,
+                    "latest_max_damage_win_rate": latest_rate,
+                    "peak_max_damage_win_rate": peak,
+                    "peak_milestone_games": peak_row.get("milestone_games"),
+                    "threshold_points": regression_points,
+                    "message": (
+                        f"max-damage win rate {latest_rate:.3f} is "
+                        f"{(peak - latest_rate) * 100:.1f} points below the run peak "
+                        f"{peak:.3f} @ {peak_row.get('milestone_games')} games "
+                        f"({fidelity} fidelity, alarm beyond {regression_points * 100:.0f})"
+                    ),
+                }
             )
-            peak = _finite(peak_row["metrics"]["max-damage"]["win_rate"])
-            latest_rate = _finite(latest["metrics"]["max-damage"]["win_rate"])
-            if (peak - latest_rate) - regression_points > _EPSILON:
-                alarms.append(
-                    {
-                        "watchdog": "strength_regression",
-                        "severity": "alarm",
-                        "milestone_games": latest.get("milestone_games"),
-                        "completed_games": latest.get("completed_games"),
-                        "fidelity": fidelity,
-                        "latest_max_damage_win_rate": latest_rate,
-                        "peak_max_damage_win_rate": peak,
-                        "peak_milestone_games": peak_row.get("milestone_games"),
-                        "threshold_points": regression_points,
-                        "message": (
-                            f"max-damage win rate {latest_rate:.3f} is "
-                            f"{(peak - latest_rate) * 100:.1f} points below the run peak "
-                            f"{peak:.3f} @ {peak_row.get('milestone_games')} games "
-                            f"({fidelity} fidelity, alarm beyond {regression_points * 100:.0f})"
-                        ),
-                    }
-                )
 
     # -- policy-entropy floor ------------------------------------------------
     entropy_rows = [
@@ -488,7 +581,55 @@ def _cmd_watchdog(args: argparse.Namespace) -> int:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    for alarm in evaluate_watchdogs(rows):
+
+    baseline_path = Path(args.baseline_file) if args.baseline_file else None
+    persisted = None
+    alarms: list[dict] = []
+    if baseline_path is not None and baseline_path.exists():
+        try:
+            raw = json.loads(baseline_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = None
+        persisted = _usable_baseline(raw)
+        if persisted is None:
+            # Never overwrite the bad file: a quiet rewrite would reset the
+            # baseline to the current window — the ratchet this file exists to
+            # prevent. Warn every sweep until an operator fixes or removes it.
+            alarms.append(
+                {
+                    "watchdog": "drift_baseline_unreadable",
+                    "severity": "warning",
+                    "baseline_file": str(baseline_path),
+                    "message": (
+                        f"persisted drift baseline {baseline_path} is unreadable or "
+                        "invalid — falling back to the window-relative baseline; "
+                        "left in place for inspection: fix or remove it"
+                    ),
+                }
+            )
+
+    alarms += evaluate_watchdogs(rows, persisted_baseline=persisted)
+
+    if baseline_path is not None and not baseline_path.exists() and not args.no_persist:
+        fresh = compute_drift_baseline(rows)
+        if fresh is not None:
+            payload = {
+                "schema_version": BASELINE_SCHEMA_VERSION,
+                "run_id": args.run_id,
+                "computed_at_utc": _utc_now(),
+                **fresh,
+            }
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = baseline_path.with_name(baseline_path.name + ".tmp")
+            tmp_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(tmp_path, baseline_path)
+            print(
+                f"[watchdog] drift baseline persisted -> {baseline_path} "
+                f"({fresh['source']}, avg_game_length {fresh['avg_game_length']:.2f})",
+                file=sys.stderr,
+            )
+
+    for alarm in alarms:
         alarm = {
             "schema_version": ALERT_SCHEMA_VERSION,
             "recorded_at_utc": _utc_now(),
@@ -578,6 +719,20 @@ def main() -> int:
     watchdog = sub.add_parser("watchdog")
     watchdog.add_argument("--run-id", required=True)
     watchdog.add_argument("--timeline", default=None, help="eval-timeline.jsonl (default: stdin)")
+    watchdog.add_argument(
+        "--baseline-file",
+        default=None,
+        help=(
+            "per-run drift-baseline JSON (runs/milestone-probes/<run>/drift-baseline.json): "
+            "read when present so the drift baseline cannot slide with the timeline "
+            "window; written once, the first time a baseline is computed"
+        ),
+    )
+    watchdog.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="never write --baseline-file (dry-run); reading is unaffected",
+    )
     watchdog.set_defaults(func=_cmd_watchdog)
 
     record = sub.add_parser("record")

@@ -7,7 +7,9 @@ straight from the scripts directory.
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
+import sys
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "milestone_probes.py"
@@ -172,6 +174,244 @@ class TestGameLengthDriftContinuation:
         assert "game_length_drift" not in _alarm_names(rows)
 
 
+class TestDriftBaselineCompute:
+    """compute_drift_baseline: the pure baseline the CLI persists per run."""
+
+    def test_band_baseline_once_beyond_band(self) -> None:
+        rows = _baseline_rows() + [_row(200_000, avg_game_length=30.0)]
+        assert mp.compute_drift_baseline(rows) == {
+            "avg_game_length": 28.0,
+            "source": "band",
+            "rows": 3,
+        }
+
+    def test_none_while_still_inside_band(self) -> None:
+        rows = [
+            _row(30_000, avg_game_length=20.0),
+            _row(100_000, avg_game_length=200.0),
+        ]
+        assert mp.compute_drift_baseline(rows) is None
+
+    def test_none_for_empty_or_single_row(self) -> None:
+        assert mp.compute_drift_baseline([]) is None
+        assert mp.compute_drift_baseline([_row(600_000, avg_game_length=28.0)]) is None
+
+    def test_earliest_rows_fallback_for_continuation(self) -> None:
+        rows = [
+            _row(600_000, avg_game_length=28.0),
+            _row(700_000, avg_game_length=29.0),
+            _row(800_000, avg_game_length=280.0),
+        ]
+        assert mp.compute_drift_baseline(rows) == {
+            "avg_game_length": 28.5,
+            "source": "earliest_rows",
+            "rows": 2,
+        }
+
+    def test_fallback_caps_at_earliest_five(self) -> None:
+        rows = [
+            _row(600_000 + i * 10_000, avg_game_length=length)
+            for i, length in enumerate([28.0, 28.0, 28.0, 28.0, 28.0, 40.0, 43.0])
+        ]
+        assert mp.compute_drift_baseline(rows) == {
+            "avg_game_length": 28.0,
+            "source": "earliest_rows",
+            "rows": 5,
+        }
+
+    def test_non_positive_mean_is_unusable(self) -> None:
+        rows = [
+            _row(600_000, avg_game_length=0.0),
+            _row(700_000, avg_game_length=0.0),
+            _row(800_000, avg_game_length=0.0),
+        ]
+        assert mp.compute_drift_baseline(rows) is None
+
+
+class TestPersistedBaseline:
+    """Residual 1 of the #500 verify review: the earliest_rows fallback slides
+    with the tail window, so drift slower than +50% per window evades it.
+    A persisted first-computed baseline must defeat the slide."""
+
+    def test_persisted_baseline_defeats_window_slide(self) -> None:
+        # Only the tail of a slow drift is visible: self-window baseline is
+        # mean(40, 42) = 41 -> 45 stays quiet. The persisted baseline (28.0,
+        # frozen sweeps ago) must alarm.
+        rows = [
+            _row(900_000, avg_game_length=40.0),
+            _row(950_000, avg_game_length=42.0),
+            _row(1_000_000, avg_game_length=45.0),
+        ]
+        assert "game_length_drift" not in _alarm_names(rows)
+        persisted = {"avg_game_length": 28.0, "source": "earliest_rows", "rows": 2}
+        alarms = [
+            a
+            for a in mp.evaluate_watchdogs(rows, persisted_baseline=persisted)
+            if a["watchdog"] == "game_length_drift"
+        ]
+        (alarm,) = alarms
+        assert alarm["baseline_persisted"] is True
+        assert alarm["baseline_avg_game_length"] == 28.0
+        assert alarm["baseline_source"] == "earliest_rows"
+        assert alarm["latest_avg_game_length"] == 45.0
+
+    def test_persisted_baseline_wins_over_window_band(self) -> None:
+        # First-computed wins over any window recompute — that is the point.
+        rows = _baseline_rows() + [_row(200_000, avg_game_length=30.0)]
+        persisted = {"avg_game_length": 10.0, "source": "band", "rows": 3}
+        alarms = [
+            a
+            for a in mp.evaluate_watchdogs(rows, persisted_baseline=persisted)
+            if a["watchdog"] == "game_length_drift"
+        ]
+        (alarm,) = alarms
+        assert alarm["baseline_avg_game_length"] == 10.0
+        assert alarm["baseline_persisted"] is True
+
+    def test_persisted_baseline_arms_single_row_window(self) -> None:
+        # A single length row cannot self-baseline (degrades to a warning),
+        # but a persisted baseline keeps the dog fully armed.
+        rows = [_row(600_000, avg_game_length=300.0)]
+        persisted = {"avg_game_length": 28.0, "source": "band", "rows": 3}
+        alarms = mp.evaluate_watchdogs(rows, persisted_baseline=persisted)
+        names = {a["watchdog"] for a in alarms}
+        assert "game_length_drift" in names
+        assert "game_length_drift_no_baseline" not in names
+
+    def test_unusable_persisted_falls_back_to_window(self) -> None:
+        rows = _baseline_rows() + [_row(200_000, avg_game_length=56.0)]
+        for bad in (None, "junk", {}, {"avg_game_length": math.nan},
+                    {"avg_game_length": -5.0}, {"avg_game_length": True}):
+            alarms = [
+                a
+                for a in mp.evaluate_watchdogs(rows, persisted_baseline=bad)
+                if a["watchdog"] == "game_length_drift"
+            ]
+            (alarm,) = alarms
+            assert alarm["baseline_persisted"] is False, bad
+            assert alarm["baseline_avg_game_length"] == 28.0, bad
+            assert alarm["baseline_source"] == "band", bad
+
+    def test_persisted_baseline_healthy_latest_stays_quiet(self) -> None:
+        rows = _baseline_rows() + [_row(200_000, avg_game_length=41.0)]
+        persisted = {"avg_game_length": 28.0, "source": "band", "rows": 3}
+        alarms = mp.evaluate_watchdogs(rows, persisted_baseline=persisted)
+        assert "game_length_drift" not in {a["watchdog"] for a in alarms}
+
+
+def _write_timeline(path: Path, rows: list[dict]) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def _watchdog_cli(monkeypatch, capsys, *argv: str) -> list[dict]:
+    monkeypatch.setattr(
+        sys, "argv", ["milestone_probes.py", "watchdog", "--run-id", "test-run", *argv]
+    )
+    assert mp.main() == 0
+    out = capsys.readouterr().out
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
+class TestBaselineFileCLI:
+    """The watchdog subcommand persists the first-computed baseline to
+    --baseline-file and reuses it on later sweeps; dry-run never writes;
+    a corrupt file warns loudly and is left in place."""
+
+    def test_first_sweep_persists_baseline(self, tmp_path, monkeypatch, capsys) -> None:
+        timeline = tmp_path / "timeline.jsonl"
+        _write_timeline(timeline, _baseline_rows() + [_row(200_000, avg_game_length=30.0)])
+        baseline_file = tmp_path / "probes" / "test-run" / "drift-baseline.json"
+        alarms = _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file),
+        )
+        assert alarms == []  # healthy sweep: stdout stays pure (empty) JSONL
+        payload = json.loads(baseline_file.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == mp.BASELINE_SCHEMA_VERSION
+        assert payload["run_id"] == "test-run"
+        assert payload["avg_game_length"] == 28.0
+        assert payload["source"] == "band"
+        assert payload["rows"] == 3
+        assert "computed_at_utc" in payload
+
+    def test_second_sweep_reuses_persisted_across_window_slide(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        timeline = tmp_path / "timeline.jsonl"
+        baseline_file = tmp_path / "drift-baseline.json"
+        _write_timeline(timeline, _baseline_rows() + [_row(200_000, avg_game_length=30.0)])
+        _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file),
+        )
+        first_content = baseline_file.read_text(encoding="utf-8")
+
+        # the tail window has slid past the band: self-window would be quiet
+        _write_timeline(
+            timeline,
+            [
+                _row(900_000, avg_game_length=40.0),
+                _row(950_000, avg_game_length=42.0),
+                _row(1_000_000, avg_game_length=45.0),
+            ],
+        )
+        alarms = _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file),
+        )
+        (alarm,) = [a for a in alarms if a["watchdog"] == "game_length_drift"]
+        assert alarm["baseline_persisted"] is True
+        assert alarm["baseline_avg_game_length"] == 28.0
+        assert alarm["baseline_source"] == "band"
+        assert alarm["run_id"] == "test-run"
+        assert alarm["schema_version"] == mp.ALERT_SCHEMA_VERSION
+        # written once — the second sweep must not touch the file
+        assert baseline_file.read_text(encoding="utf-8") == first_content
+
+    def test_no_persist_never_writes(self, tmp_path, monkeypatch, capsys) -> None:
+        timeline = tmp_path / "timeline.jsonl"
+        _write_timeline(timeline, _baseline_rows() + [_row(200_000, avg_game_length=30.0)])
+        baseline_file = tmp_path / "drift-baseline.json"
+        _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file), "--no-persist",
+        )
+        assert not baseline_file.exists()
+
+    def test_corrupt_baseline_file_warns_and_is_left_alone(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        timeline = tmp_path / "timeline.jsonl"
+        _write_timeline(timeline, _baseline_rows() + [_row(200_000, avg_game_length=56.0)])
+        baseline_file = tmp_path / "drift-baseline.json"
+        baseline_file.write_text("{not json", encoding="utf-8")
+        alarms = _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file),
+        )
+        (warning,) = [a for a in alarms if a["watchdog"] == "drift_baseline_unreadable"]
+        assert warning["severity"] == "warning"
+        assert warning["baseline_file"] == str(baseline_file)
+        # the dog still evaluated, from the window baseline
+        (alarm,) = [a for a in alarms if a["watchdog"] == "game_length_drift"]
+        assert alarm["baseline_persisted"] is False
+        # never overwritten — a quiet rewrite would reset the baseline
+        assert baseline_file.read_text(encoding="utf-8") == "{not json"
+
+    def test_no_file_written_when_no_baseline_computable(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        timeline = tmp_path / "timeline.jsonl"
+        _write_timeline(timeline, [_row(600_000, avg_game_length=28.0)])
+        baseline_file = tmp_path / "drift-baseline.json"
+        alarms = _watchdog_cli(
+            monkeypatch, capsys, "--timeline", str(timeline),
+            "--baseline-file", str(baseline_file),
+        )
+        assert not baseline_file.exists()
+        assert "game_length_drift_no_baseline" in {a["watchdog"] for a in alarms}
+
+
 class TestStrengthRegression:
     def test_no_alarm_at_exact_ten_point_drop(self) -> None:
         # boundary unified with the other dogs: exactly -10 points is quiet
@@ -232,6 +472,49 @@ class TestStrengthRegression:
 
     def test_improving_run_no_alarm(self) -> None:
         rows = _baseline_rows() + [_row(200_000, max_damage=0.75)]
+        assert "strength_regression" not in _alarm_names(rows)
+
+
+class TestStrengthRegressionPerFidelity:
+    """L1 of the #500 review: the dog must evaluate the latest row of EACH
+    fidelity — a newer healthy high-fi row must not mask a low-fi collapse."""
+
+    def test_newer_high_fi_row_does_not_mask_low_fi_collapse(self) -> None:
+        rows = [
+            _row(150_000, max_damage=0.62),
+            _row(200_000, max_damage=0.45),
+            _row(200_000, fidelity="high", max_damage=0.80, completed=210_000),
+        ]
+        (alarm,) = _alarms_of(rows, "strength_regression")
+        assert alarm["fidelity"] == "low"
+        assert alarm["latest_max_damage_win_rate"] == 0.45
+        assert alarm["peak_max_damage_win_rate"] == 0.62
+
+    def test_alarm_per_collapsed_fidelity(self) -> None:
+        rows = [
+            _row(100_000, max_damage=0.60),
+            _row(100_000, fidelity="high", max_damage=0.70, completed=101_000),
+            _row(200_000, max_damage=0.40),
+            _row(200_000, fidelity="high", max_damage=0.50, completed=201_000),
+        ]
+        alarms = _alarms_of(rows, "strength_regression")
+        assert {alarm["fidelity"] for alarm in alarms} == {"low", "high"}
+
+    def test_healthy_fidelity_quiet_alongside_collapsed_one(self) -> None:
+        rows = [
+            _row(100_000, max_damage=0.60),
+            _row(100_000, fidelity="high", max_damage=0.70, completed=101_000),
+            _row(200_000, max_damage=0.40),
+            _row(200_000, fidelity="high", max_damage=0.68, completed=201_000),
+        ]
+        (alarm,) = _alarms_of(rows, "strength_regression")
+        assert alarm["fidelity"] == "low"
+
+    def test_single_row_per_fidelity_stays_quiet(self) -> None:
+        rows = [
+            _row(100_000, max_damage=0.60),
+            _row(200_000, fidelity="high", max_damage=0.20, completed=201_000),
+        ]
         assert "strength_regression" not in _alarm_names(rows)
 
 
@@ -329,6 +612,39 @@ class TestDataQuality:
 
     def test_healthy_timeline_has_no_data_quality_warning(self) -> None:
         assert "timeline_data_quality" not in _alarm_names(_baseline_rows())
+
+    def test_non_finite_milestone_games_on_latest_row_warns(self) -> None:
+        # Residual 2 of the #500 verify review: a NaN milestone_games on the
+        # latest row used to fall into the quiet "establishing the band"
+        # branch with ZERO output — it must be quarantined with a warning.
+        for bad in (math.nan, math.inf):
+            rows = _baseline_rows() + [
+                _row(bad, avg_game_length=300.0, completed=300_000),
+            ]
+            (warning,) = _alarms_of(rows, "timeline_data_quality")
+            assert warning["non_finite_rows"] == 1, bad
+
+    def test_nan_milestone_on_mid_row_does_not_poison_band(self) -> None:
+        rows = _baseline_rows() + [
+            _row(math.nan, avg_game_length=28.0, completed=150_000),
+            _row(200_000, avg_game_length=56.0),
+        ]
+        (alarm,) = _alarms_of(rows, "game_length_drift")
+        assert alarm["baseline_avg_game_length"] == 28.0  # band mean untouched
+        assert "timeline_data_quality" in _alarm_names(rows)
+
+    def test_string_milestone_games_warns_without_crashing(self) -> None:
+        # a string milestone_games used to raise TypeError in the band
+        # comparison; now it reads as missing and the row is warned about
+        rows = [
+            _row("60k", avg_game_length=27.0, completed=30_000),
+            _row(60_000, avg_game_length=28.0),
+            _row(100_000, avg_game_length=29.0),
+            _row(200_000, avg_game_length=56.0),
+        ]
+        (alarm,) = _alarms_of(rows, "game_length_drift")
+        assert alarm["baseline_avg_game_length"] == 28.5  # mean of 28, 29
+        assert "timeline_data_quality" in _alarm_names(rows)
 
 
 class TestRobustness:
