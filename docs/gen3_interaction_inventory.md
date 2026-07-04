@@ -31,10 +31,10 @@ listed carries no special mechanics (plain damage/status/boost moves).
 | hazards | spikes (single layer-stacking hazard; no Stealth Rock/T-Spikes in gen3) | covered: layer counts tracked; rapid spin clears (side-effect category `hazard-clear`). |
 | slot condition | wish | covered: pending-Wish counter (this audit re-confirms Wish as the only slot condition in the pool). |
 | trapping moves | meanlook, spiderweb, wrap | **DECIDED:** move-trapping is a *public volatile* on the target — state, not inference (simpler than ability-trapping, which stays in the trapper-alive flag family). Wrap chip is `[from]`-tagged. |
-| item manipulation | knockoff, trick | knockoff covered (explicit `-enditem`, item channel). **DECIDED: Trick requires item-state MUTATION, not just reveal** — post-swap, each side's *current* item is the other's former item; residual modifiers and non-proc pruning must consult current holder items (a CB we tricked away now boosts *their* damage). The belief engine must model held-item as mutable state with Trick as the only mutator (plus consumption/Knock Off as removers). |
+| item manipulation | knockoff, trick | knockoff covered (explicit `-enditem`, item channel). **DECIDED: Trick requires item-state MUTATION, not just reveal** — post-swap, each side's *current* item is the other's former item; residual modifiers and non-proc pruning must consult current holder items (a CB we tricked away now boosts *their* damage). The belief engine must model held-item as mutable state with Trick as the only mutator (plus consumption/Knock Off as removers). **Distribution (generator-verified): exactly 2 carriers (Furret, Kecleon) and `teams.ts` assigns Trick users Choice Band unconditionally** — Trick in a candidate set pins the item to CB before it is ever clicked, and the post-swap lock lands on the recipient. |
 | status inflictors | 4× sleep, 2× par, toxic, willowisp | covered: sleep clause, sleep counters, Lum non-proc, status-immunity abilities (announced on block → ability reveal). |
 | delayed status | yawn | covered by the derivability rule: the yawn volatile is public — the pending sleep is readable state, no counter needed (unlike Wish, whose latency is otherwise invisible). |
-| volatiles | curse, destinybond, encore, endure, leechseed, protect, substitute, perishsong | covered: all public `-start`/`-activate` events; outcome enum handles the damage interactions. |
+| volatiles | curse, destinybond, encore, endure, leechseed, protect, substitute, perishsong | covered: all public `-start`/`-activate` events; outcome enum handles the damage interactions. **Encore (~17 carriers) — DECIDED:** the locked move is derivable (target's previous action, one token back in the stream + the public volatile ⇒ "their next moves are known" for free); PP charges per repeat via the ordinary ledger; **no duration counter** — engine-confirmed `random(3,7)` hidden RNG, so a counter violates the tautology principle; the end is announced. |
 | self-stat-drop attacks | overheat, psychoboost, superpower | covered: drops are public boost events; residuals always use current public stages. |
 | high crit | crosschop, leafblade, razorleaf | covered: crit-conditioned residual is rate-independent (the flag, not the rate, conditions). |
 
@@ -114,6 +114,19 @@ rate), Shield Dust, Inner Focus, Hyper Cutter/Clear Body/White Smoke
 3. The full conditional-power set is {facade, solarbeam, pursuit,
    flail, reversal, hiddenpower, return} — seven moves, each with a
    stated disposition.
+
+## Per-token historical context (DECIDED — principled derivability exception)
+
+Transition tokens carry a **context trio: {own spikes layers, opponent
+spikes layers, weather id}** at that turn. Rationale: these are global
+fields whose *historical* values are recoverable only by replaying
+events through time — exactly the state-tracking burden transition
+tokens exist to remove — and they materially reinterpret actions
+(Rapid Spin's value ↔ layers at that moment, switch chip ↔ layers,
+Thunder/Solar Beam ↔ weather). This is the mechanism for the net to
+*discover* the spin↔spikes correlation from history rather than
+memorize it. Capped at these three by construction; anything else
+re-grows the snapshot.
 
 ## New rules this audit added (delta to the design doc)
 
