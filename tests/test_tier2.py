@@ -22,6 +22,7 @@ from pokezero.showdown import parse_showdown_replay
 from pokezero.tier2 import (
     OwnMon,
     Tier2Config,
+    Tier2LiveTracker,
     apply_residuals,
     build_cb_whitelist,
     infer_tier2,
@@ -1011,6 +1012,117 @@ class HelpersTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             apply_residuals(tokens[:-1], inference)
+
+
+
+
+class LiveTrackerTest(unittest.TestCase):
+    """The incremental live consumer must agree with the batch inference at the
+    observation boundaries the env actually annotates at."""
+
+    def _multi_turn_lines(self):
+        damage = _exceeding_damage()
+        median = int(median_damage(_bodyslam_rolls()))
+        lines = _leads()
+        # Turn 1: clean exceedance; turn 2: crit strike (residual crit-conditioned);
+        # turn 3: boosted strike (stat-stages CB disqualifier, residual conditioned);
+        # turn 4: second clean exceedance -> CB bit flips.
+        lines += _strike_lines(damage, turn=1)
+        prior = 330 - damage
+        crit = int(median_damage(_bodyslam_rolls(crit=True)))
+        lines += [
+            "|move|p2a: Snorlax|Body Slam|p1a: Slowbro",
+            "|-crit|p1a: Slowbro",
+            f"|-damage|p1a: Slowbro|{max(1, prior - crit)}/330",
+            "|",
+            "|upkeep",
+            "|turn|3",
+            "|-boost|p2a: Snorlax|atk|1",
+            "|move|p2a: Snorlax|Body Slam|p1a: Slowbro",
+            f"|-damage|p1a: Slowbro|{max(1, prior - crit - median)}/330",
+            "|",
+            "|upkeep",
+            "|turn|4",
+            "|-unboost|p2a: Snorlax|atk|1",
+        ]
+        # Heal to full so the second exceedance is unclipped, then strike again.
+        lines += [
+            "|move|p1a: Slowbro|Recover|p1a: Slowbro",
+            "|-heal|p1a: Slowbro|330/330",
+            "|move|p2a: Snorlax|Body Slam|p1a: Slowbro",
+            f"|-damage|p1a: Slowbro|{330 - damage}/330",
+            "|",
+            "|upkeep",
+            "|turn|5",
+        ]
+        return lines
+
+    def _turn_boundaries(self, lines):
+        """Line-count prefixes at each |turn| boundary plus the full log (the env's
+        observation points)."""
+        boundaries = []
+        for index, line in enumerate(lines):
+            if line.startswith("|turn|"):
+                boundaries.append(index + 1)
+        if not boundaries or boundaries[-1] != len(lines):
+            boundaries.append(len(lines))
+        return boundaries
+
+    def test_incremental_annotation_matches_batch_inference(self) -> None:
+        from pokezero.belief import PublicBattleBeliefEngine
+
+        lines = self._multi_turn_lines()
+        source = FakeSource({"snorlax": _SNORLAX_VARIANTS})
+        tracker = Tier2LiveTracker(
+            perspective_slot="p1",
+            own_team=_OWN_TEAM,
+            dex=_DEX,
+            whitelist=_WHITELIST,
+        )
+        engine = PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=source)
+        fed = 0
+        annotated = ()
+        for boundary in self._turn_boundaries(lines):
+            replay = parse_showdown_replay(lines[:boundary])
+            events = replay.public_events
+            while fed < len(events):
+                engine.ingest_event(events[fed])
+                fed += 1
+            tokens = extract_transition_tokens(replay, perspective_slot="p1")
+            annotated = tracker.annotate(replay, tokens, engine)
+
+        full_replay = parse_showdown_replay(lines)
+        batch = infer_tier2(
+            full_replay,
+            perspective_slot="p1",
+            own_team=_OWN_TEAM,
+            dex=_DEX,
+            set_source=FakeSource({"snorlax": _SNORLAX_VARIANTS}),
+            whitelist=_WHITELIST,
+        )
+        self.assertEqual(len(annotated), len(batch.tokens))
+        live_fields = [(t.residual, t.residual_valid) for t in annotated]
+        batch_fields = [(t.residual, t.residual_valid) for t in batch.tokens]
+        self.assertEqual(live_fields, batch_fields)
+        # The corpus exercises all three strike classes.
+        self.assertGreaterEqual(sum(1 for _, valid in live_fields if valid), 3)
+        self.assertEqual(tracker.cb_bits, dict(batch.cb_bits))
+        self.assertTrue(tracker.cb_bits.get("p2:snorlax"))
+
+    def test_annotate_rejects_misaligned_tokens(self) -> None:
+        from pokezero.belief import PublicBattleBeliefEngine
+
+        lines = _leads() + _strike_lines(40, turn=1)
+        replay = parse_showdown_replay(lines)
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        tracker = Tier2LiveTracker(
+            perspective_slot="p1", own_team=_OWN_TEAM, dex=_DEX, whitelist=_WHITELIST
+        )
+        engine = PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=None)
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        with self.assertRaisesRegex(ValueError, "do not align"):
+            tracker.annotate(replay, tokens[:-1], engine)
 
 
 if __name__ == "__main__":

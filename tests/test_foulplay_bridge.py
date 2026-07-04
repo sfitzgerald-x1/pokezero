@@ -1541,6 +1541,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             stats_block_enabled = True
             exact_state_enabled = True
             transition_token_budget = 128
+            tier2_residuals = True
 
         class FakeCheckpointResult:
             model_config = FakeModelConfig()
@@ -1648,6 +1649,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             stats_block_enabled = True
             exact_state_enabled = True
             transition_token_budget = 128
+            tier2_residuals = True
 
         class FakeCheckpointResult:
             model_config = FakeModelConfig()

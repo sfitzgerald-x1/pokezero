@@ -21,6 +21,7 @@ from .cli_audit import (
     validate_post_iteration_audit_evaluation_games,
 )
 from .collection import (
+    cache_feature_masks_by_path,
     BenchmarkMatchup,
     benchmark_rollouts,
     distinct_belief_set_source_hashes,
@@ -369,6 +370,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Optional checkpoint to warm-start from. Uses that checkpoint's model config; --policy-id can relabel the output.",
+    )
+    # Ablation-arm feature masks (config, not spec). Fresh train: the flags SET the model
+    # config's masks (which downstream harnesses latch back into env encode masks). With
+    # --initial-checkpoint the masks come from the checkpoint; explicitly-passed flags
+    # must AGREE with it or the command hard-fails (never silently retrain under
+    # different observation content — the #492 mismatch class).
+    train.add_argument(
+        "--transition-token-budget",
+        type=int,
+        default=None,
+        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+    )
+    train.add_argument(
+        "--no-stats-block",
+        action="store_true",
+        help="Ablation arm: zero + attention-mask the stats token and per-mon tendency triple.",
+    )
+    train.add_argument(
+        "--no-exact-state",
+        action="store_true",
+        help="Ablation arm: zero the exact-state layer (PP fractions, counters, expected stats).",
+    )
+    train.add_argument(
+        "--tier2-residuals",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Tier-2 residual channel (#505). Default for a fresh train: on.",
     )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
@@ -1288,6 +1316,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ablation arm: zero the exact-state layer (PP fractions, counters, expected stats).",
     )
+    iterate.add_argument(
+        "--tier2-residuals",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Populate + encode the Tier-2 residual channel (#505). Default: on.",
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -1784,6 +1818,71 @@ def _cache_data(args: argparse.Namespace) -> int:
     return 0
 
 
+_MASK_FLAG_FIELDS = (
+    ("--transition-token-budget", "transition_token_budget"),
+    ("--no-stats-block", "stats_block_enabled"),
+    ("--no-exact-state", "exact_state_enabled"),
+    ("--tier2-residuals/--no-tier2-residuals", "tier2_residuals"),
+)
+
+
+def _explicit_mask_requests(args: argparse.Namespace) -> dict[str, object]:
+    """Model-config mask fields the user explicitly requested on the command line."""
+    requested: dict[str, object] = {}
+    if args.transition_token_budget is not None:
+        requested["transition_token_budget"] = args.transition_token_budget
+    if args.no_stats_block:
+        requested["stats_block_enabled"] = False
+    if args.no_exact_state:
+        requested["exact_state_enabled"] = False
+    if args.tier2_residuals is not None:
+        requested["tier2_residuals"] = bool(args.tier2_residuals)
+    return requested
+
+
+def _require_mask_flags_agree_with_checkpoint(args: argparse.Namespace, model_config) -> None:
+    """With --initial-checkpoint the masks are the checkpoint's; explicit flags must agree.
+
+    Retraining a checkpoint under different observation masks silently changes what the
+    already-trained weights see (the #492 mismatch class), so a disagreement hard-fails.
+    """
+    requested_fields = _explicit_mask_requests(args)
+    flags_by_field = {field_name: flag for flag, field_name in _MASK_FLAG_FIELDS}
+    for field_name, requested in requested_fields.items():
+        current = getattr(model_config, field_name)
+        if current != requested:
+            raise ValueError(
+                f"{flags_by_field[field_name]} requests {field_name}={requested!r} but the "
+                f"initial checkpoint was trained with {field_name}={current!r}; masks cannot "
+                "change across a resume."
+            )
+
+
+def _require_cache_masks_match_model_config(paths, model_config) -> None:
+    """Hard-fail when a training cache records encode-time masks the model config lacks.
+
+    Collection stamps the resolved masks into cache metadata (the mask-axis twin of the
+    belief-provenance hash); a mismatch means the observations in the cache were encoded
+    under different masks than this training run declares — never train through it.
+    Legacy caches and JSONL inputs record none and cannot be checked.
+    """
+    expected = {
+        "stats_block": model_config.stats_block_enabled,
+        "exact_state": model_config.exact_state_enabled,
+        "transition_token_budget": model_config.transition_token_budget,
+        "tier2_residuals": model_config.tier2_residuals,
+    }
+    for cache_path, masks in cache_feature_masks_by_path(paths):
+        if masks is None:
+            continue
+        if masks != expected:
+            raise ValueError(
+                f"training cache {cache_path} was collected under feature masks {masks!r} "
+                f"but this train run's model config declares {expected!r}; "
+                "mask-mismatched observations must not be trained through."
+            )
+
+
 def _train(args: argparse.Namespace) -> int:
     command_started_at = datetime.now(timezone.utc)
     command_started = time.perf_counter()
@@ -1842,6 +1941,7 @@ def _train(args: argparse.Namespace) -> int:
             initial_training_result.model_config,
             policy_id=args.policy_id or initial_training_result.model_config.policy_id,
         )
+        _require_mask_flags_agree_with_checkpoint(args, model_config)
         print(
             f"category vocab (from initial checkpoint): {len(model_config.category_vocab):,} tokens + "
             f"{model_config.category_oov_buckets:,} oov -> embedding rows {model_config.categorical_vocab_size:,}",
@@ -1857,6 +1957,14 @@ def _train(args: argparse.Namespace) -> int:
             feedforward_dim=args.feedforward_dim,
             dropout=args.dropout,
             temporal_aggregator=args.temporal_aggregator,
+            stats_block_enabled=not args.no_stats_block,
+            exact_state_enabled=not args.no_exact_state,
+            transition_token_budget=(
+                TRANSITION_TOKEN_COUNT
+                if args.transition_token_budget is None
+                else args.transition_token_budget
+            ),
+            tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
         )
         # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
         # the env builds at encode time, so rows align deterministically. (The legacy training-data
@@ -1878,6 +1986,7 @@ def _train(args: argparse.Namespace) -> int:
         )
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
+    _require_cache_masks_match_model_config(args.data, model_config)
     if args.value_selection_data and training_config.objective != "value-only":
         print(
             "warning: --value-selection-data selects by held-out value calibration, not policy quality; "
@@ -3330,6 +3439,7 @@ def _iterate(args: argparse.Namespace) -> int:
         stats_block_enabled=not args.no_stats_block,
         exact_state_enabled=not args.no_exact_state,
         transition_token_budget=args.transition_token_budget,
+        tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
     )
     # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
     # model learns are exactly the rows the env encodes.

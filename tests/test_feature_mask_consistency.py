@@ -561,5 +561,204 @@ class SelfplayCliSpecMaskTest(unittest.TestCase):
         self.assertEqual(captured["env"].config.feature_masks, K32_MASKS)
 
 
+
+
+TIER2_OFF_MASKS = ObservationFeatureMasks(tier2_residuals=False)
+
+
+class Tier2ProvenanceLatchTest(unittest.TestCase):
+    """#505 follow-up MED: tier2_residuals must latch through checkpoint provenance —
+    a pre-#505 checkpoint (payload lacking the field) resolves to mask-OFF, never the
+    dataclass default."""
+
+    def test_payload_missing_field_resolves_off(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
+
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",), category_oov_buckets=2
+        )
+        self.assertTrue(config.tier2_residuals)  # new checkpoints self-describe as on
+        payload = config.to_dict()
+        payload.pop("tier2_residuals")  # a pre-#505 checkpoint payload
+        legacy = TransformerPolicyConfig.from_dict(payload)
+        self.assertFalse(legacy.tier2_residuals)
+        self.assertFalse(feature_masks_from_model_config(legacy).tier2_residuals)
+
+    def test_explicit_value_round_trips_and_derives(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
+
+        for value in (True, False):
+            config = TransformerPolicyConfig.compact_category(
+                category_vocab=("species:a",), category_oov_buckets=2, tier2_residuals=value
+            )
+            round_tripped = TransformerPolicyConfig.from_dict(config.to_dict())
+            self.assertEqual(round_tripped.tier2_residuals, value)
+            self.assertEqual(feature_masks_from_model_config(round_tripped).tier2_residuals, value)
+
+    def test_pre_505_v2_checkpoint_file_resolves_off(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        import torch
+
+        from pokezero.neural_policy import load_transformer_model_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "k32.pt"
+            _save_k32_checkpoint(path)
+            payload = torch.load(path, map_location="cpu", weights_only=True)
+            # Rewrite the file as a pre-#505 spec-v2 checkpoint: same schema, no field.
+            payload["model_config"].pop("tier2_residuals", None)
+            torch.save(payload, path)
+            legacy_config = load_transformer_model_config(path)
+            self.assertFalse(legacy_config.tier2_residuals)
+            fresh_path = Path(tmp) / "fresh.pt"
+            _save_k32_checkpoint(fresh_path)
+            self.assertTrue(load_transformer_model_config(fresh_path).tier2_residuals)
+
+    def test_env_adopts_tier2_off_and_conflicts_fail(self) -> None:
+        resolved = env_config_with_checkpoint_masks(
+            LocalShowdownConfig(), TIER2_OFF_MASKS, context="t"
+        )
+        self.assertEqual(resolved.feature_masks, TIER2_OFF_MASKS)
+        with self.assertRaisesRegex(ValueError, "conflict with the loaded checkpoint"):
+            env_config_with_checkpoint_masks(
+                LocalShowdownConfig(feature_masks=K32_MASKS), TIER2_OFF_MASKS, context="t"
+            )
+
+
+class TrainMaskFlagsTest(unittest.TestCase):
+    """Controller-path parity (#502 gap): the mask flags exist on `neural_cli train`
+    and `rollout_cli collect-selfplay-training-cache`, set fresh configs, and hard-fail
+    against a disagreeing checkpoint or cache."""
+
+    def _train_args(self, extra=()):
+        from pokezero.neural_cli import build_arg_parser
+
+        return build_arg_parser().parse_args(
+            ["train", "--data", "d", "--out", "o", *extra]
+        )
+
+    def test_fresh_train_flags_reach_model_config_fields(self) -> None:
+        args = self._train_args(
+            ["--transition-token-budget", "32", "--no-stats-block", "--no-tier2-residuals"]
+        )
+        self.assertEqual(args.transition_token_budget, 32)
+        self.assertTrue(args.no_stats_block)
+        self.assertFalse(args.no_exact_state)
+        self.assertIs(args.tier2_residuals, False)
+        defaults = self._train_args()
+        self.assertIsNone(defaults.transition_token_budget)
+        self.assertIsNone(defaults.tier2_residuals)
+
+    def test_resume_agreement_hard_fails_on_disagreement(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _require_mask_flags_agree_with_checkpoint
+
+        checkpoint_config = SimpleNamespace(
+            stats_block_enabled=True,
+            exact_state_enabled=True,
+            transition_token_budget=32,
+            tier2_residuals=False,
+        )
+        agreeing = SimpleNamespace(
+            transition_token_budget=32, no_stats_block=False, no_exact_state=False, tier2_residuals=False
+        )
+        _require_mask_flags_agree_with_checkpoint(agreeing, checkpoint_config)  # no raise
+        omitted = SimpleNamespace(
+            transition_token_budget=None, no_stats_block=False, no_exact_state=False, tier2_residuals=None
+        )
+        _require_mask_flags_agree_with_checkpoint(omitted, checkpoint_config)  # adoption, no raise
+        for kwargs, message in (
+            (dict(transition_token_budget=128, no_stats_block=False, no_exact_state=False, tier2_residuals=None), "transition_token_budget"),
+            (dict(transition_token_budget=None, no_stats_block=True, no_exact_state=False, tier2_residuals=None), "stats_block_enabled"),
+            (dict(transition_token_budget=None, no_stats_block=False, no_exact_state=False, tier2_residuals=True), "tier2_residuals"),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                _require_mask_flags_agree_with_checkpoint(SimpleNamespace(**kwargs), checkpoint_config)
+
+    def test_cache_mask_cross_check_both_directions(self) -> None:
+        import json
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _require_cache_masks_match_model_config
+
+        model_config = SimpleNamespace(
+            stats_block_enabled=True,
+            exact_state_enabled=True,
+            transition_token_budget=32,
+            tier2_residuals=True,
+        )
+        matching = {
+            "stats_block": True,
+            "exact_state": True,
+            "transition_token_budget": 32,
+            "tier2_residuals": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            cache.mkdir()
+            (cache / "metadata.json").write_text(json.dumps({"feature_masks": matching}))
+            _require_cache_masks_match_model_config([cache], model_config)  # no raise
+            # Direction 1: cache K=32, model K=128 -> fail.
+            wide_model = SimpleNamespace(**{**vars(model_config), "transition_token_budget": 128})
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], wide_model)
+            # Direction 2: cache tier2-on, model tier2-off -> fail.
+            masked_model = SimpleNamespace(**{**vars(model_config), "tier2_residuals": False})
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], masked_model)
+            # Legacy cache (no field) cannot be checked -> passes.
+            (cache / "metadata.json").write_text(json.dumps({}))
+            _require_cache_masks_match_model_config([cache], wide_model)
+
+    def test_collect_flags_resolve_explicit_masks_and_cache_metadata_records_them(self) -> None:
+        import json
+
+        from pokezero.dataset import TrainingCacheBuilder, TrajectoryDatasetConfig
+        from pokezero.rollout_cli import _explicit_feature_masks_from_args, build_arg_parser
+
+        args = build_arg_parser().parse_args(
+            [
+                "collect-selfplay-training-cache",
+                "--games", "1", "--out", "cache-out",
+                "--transition-token-budget", "32",
+            ]
+        )
+        masks = _explicit_feature_masks_from_args(args)
+        self.assertEqual(masks, K32_MASKS)
+        no_flags = build_arg_parser().parse_args(
+            ["collect-selfplay-training-cache", "--games", "1", "--out", "cache-out"]
+        )
+        self.assertIsNone(_explicit_feature_masks_from_args(no_flags))
+        # The resolved masks land in the cache metadata payload.
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(), feature_masks=masks)
+        self.assertEqual(
+            builder._feature_masks_payload,
+            {
+                "stats_block": True,
+                "exact_state": True,
+                "transition_token_budget": 32,
+                "tier2_residuals": True,
+            },
+        )
+
+    def test_window_size_defaults_are_spec_v2_consistent(self) -> None:
+        from pokezero.neural_cli import build_arg_parser as neural_parser
+        from pokezero.rollout_cli import build_arg_parser as rollout_parser
+
+        collect_args = rollout_parser().parse_args(
+            ["collect-selfplay-training-cache", "--games", "1", "--out", "x"]
+        )
+        self.assertEqual(collect_args.window_size, 1)
+        train_args = neural_parser().parse_args(["train", "--data", "d", "--out", "o"])
+        self.assertEqual(train_args.window_size, 1)
+
+
+
 if __name__ == "__main__":
     unittest.main()

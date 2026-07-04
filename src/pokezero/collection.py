@@ -600,6 +600,30 @@ _BELIEF_HASH_KEY = "belief_set_source_hash"
 BELIEF_PROVENANCE_MIXED = "<mixed-provenance-cache>"
 
 
+def cache_feature_masks_by_path(paths: Iterable[Path | str]) -> tuple[tuple[Path, dict | None], ...]:
+    """Per training-cache directory: the encode-time feature masks its metadata records.
+
+    The mask-axis twin of ``distinct_belief_set_source_hashes``: collection stamps the
+    resolved ``ObservationFeatureMasks`` into ``metadata.json`` so the trainer can
+    hard-fail on a cache-vs-model mask mismatch. None marks non-cache inputs (JSONL) and
+    pre-mask legacy caches, which cannot be checked.
+    """
+    results: list[tuple[Path, dict | None]] = []
+    for path in paths:
+        resolved = Path(path)
+        metadata_path = resolved / "metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            results.append((resolved, None))
+            continue
+        masks = payload.get("feature_masks")
+        results.append((resolved, dict(masks) if isinstance(masks, dict) else None))
+    return tuple(results)
+
+
 def distinct_belief_set_source_hashes(paths: Iterable[Path | str]) -> tuple[str | None, ...]:
     """Distinct belief provenance across training inputs (rollout jsonl or cache directories).
 

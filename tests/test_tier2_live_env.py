@@ -1,0 +1,292 @@
+"""Live-env integration for the Tier-2 residual channel (#505 follow-up).
+
+End-to-end through the real BattleStream env: collection populates the reserved
+residual/validity slots where the protocol says it should, the incremental live
+tracker is evidence-monotone-consistent with the batch inference (equal values
+wherever both are valid; divergence only in the live-sees-more-evidence direction),
+mask-off encodes are byte-identical to a population-free pipeline, and the collect
+CLI records the masks in cache metadata for the trainer's cross-check. All tests need
+a built Showdown checkout + node and skip cleanly without them.
+"""
+
+import json
+import os
+import random
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from pokezero.observation import ObservationFeatureMasks
+from pokezero.showdown import (
+    NUMERIC_TT_RESIDUAL,
+    NUMERIC_TT_RESIDUAL_VALID,
+    TRANSITION_TOKEN_OFFSET,
+    parse_showdown_replay,
+)
+
+_SEED = 303  # deterministic ~59-turn game with populated residuals on both sides
+
+
+def _integration_root() -> Path | None:
+    from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+
+    root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
+    if not (root / "dist" / "sim" / "index.js").exists():
+        return None
+    if shutil.which("node") is None:
+        return None
+    return root
+
+
+def _play(env, seed: int, max_steps: int = 400):
+    """Seeded random-legal self-play; observations collected per step per player."""
+    rng = random.Random(seed)
+    env.reset(seed=seed)
+    observations = []
+    steps = 0
+    while steps < max_steps and env.terminal() is None:
+        requested = env.requested_players()
+        if not requested:
+            break
+        actions = {}
+        for player in requested:
+            observation = env.observe(player)
+            observations.append((steps, player, observation))
+            legal = [index for index, ok in enumerate(observation.legal_action_mask) if ok]
+            actions[player] = rng.choice(legal)
+        env.step(actions)
+        steps += 1
+    return observations
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class LiveResidualPopulationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.root = _integration_root()
+
+    def _env(self, masks: ObservationFeatureMasks):
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+
+        return LocalShowdownEnv(
+            LocalShowdownConfig(
+                showdown_root=self.root, set_belief_source=True, feature_masks=masks
+            )
+        )
+
+    def test_populated_slots_match_batch_inference_and_encode_alignment(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.tier2 import cb_whitelist_for_source, infer_tier2, own_team_from_request
+
+        env = self._env(ObservationFeatureMasks())
+        try:
+            observations = _play(env, _SEED)
+            self.assertEqual(sorted(env._tier2_trackers), ["p1", "p2"])
+            dex = load_showdown_dex_cached(self.root)
+            source = load_gen3_randbat_source_cached(self.root)
+            whitelist = cb_whitelist_for_source(source, dex)
+            replay = parse_showdown_replay(env.protocol_lines)
+            budget = env.config.feature_masks.transition_token_budget
+
+            populated_total = 0
+            for player in ("p1", "p2"):
+                state = env._state_for_player(player)
+                live = [(t.residual, t.residual_valid) for t in state.transition_tokens]
+                batch = infer_tier2(
+                    replay,
+                    perspective_slot=player,
+                    own_team=own_team_from_request(env._first_requests[player]),
+                    dex=dex,
+                    set_source=source,
+                    whitelist=whitelist,
+                )
+                # At this pinned seed live and batch agree outright (empirically
+                # verified); the GENERAL invariant is only evidence-monotone
+                # consistency — see MonotoneConsistencySweepTest below.
+                self.assertEqual(live, [(t.residual, t.residual_valid) for t in batch.tokens])
+                self.assertEqual(env._tier2_trackers[player].cb_bits, dict(batch.cb_bits))
+                valid_count = sum(1 for _, valid in live if valid)
+                self.assertGreater(valid_count, 0, f"{player}: no populated residuals")
+                populated_total += valid_count
+
+                # Encode alignment: valid tokens write clamped residual + validity 1.0;
+                # everything else (disqualified strikes, switches, cants) stays 0/0.
+                observation = env.observe(player)
+                encoded = state.transition_tokens[-budget:]
+                for offset, token in enumerate(encoded):
+                    row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset]
+                    if token.residual_valid and token.residual is not None:
+                        self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 1.0)
+                        self.assertAlmostEqual(
+                            row[NUMERIC_TT_RESIDUAL], max(-1.0, min(1.0, token.residual)), places=5
+                        )
+                    else:
+                        self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
+                        self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
+            self.assertGreater(populated_total, 5)
+        finally:
+            env.close()
+
+    def test_mask_off_is_byte_identical_except_residual_columns(self) -> None:
+        env_on = self._env(ObservationFeatureMasks())
+        env_off = self._env(ObservationFeatureMasks(tier2_residuals=False))
+        try:
+            obs_on = _play(env_on, _SEED)
+            obs_off = _play(env_off, _SEED)
+            # Mask-off builds no trackers at all: zero hot-path cost, and the encodes
+            # must be byte-identical to the tier2-on run outside the two reserved
+            # residual columns (proving the wiring perturbs nothing else).
+            self.assertEqual(env_off._tier2_trackers, {})
+            self.assertEqual(len(obs_on), len(obs_off))
+            saw_residual_difference = False
+            for (step_a, player_a, a), (step_b, player_b, b) in zip(obs_on, obs_off):
+                self.assertEqual((step_a, player_a), (step_b, player_b))
+                self.assertEqual(a.categorical_ids, b.categorical_ids)
+                self.assertEqual(a.attention_mask, b.attention_mask)
+                self.assertEqual(a.token_type_ids, b.token_type_ids)
+                for row_a, row_b in zip(a.numeric_features, b.numeric_features):
+                    stripped_a = list(row_a)
+                    stripped_b = list(row_b)
+                    if (
+                        stripped_a[NUMERIC_TT_RESIDUAL] != stripped_b[NUMERIC_TT_RESIDUAL]
+                        or stripped_a[NUMERIC_TT_RESIDUAL_VALID] != stripped_b[NUMERIC_TT_RESIDUAL_VALID]
+                    ):
+                        saw_residual_difference = True
+                    stripped_a[NUMERIC_TT_RESIDUAL] = stripped_b[NUMERIC_TT_RESIDUAL] = 0.0
+                    stripped_a[NUMERIC_TT_RESIDUAL_VALID] = stripped_b[NUMERIC_TT_RESIDUAL_VALID] = 0.0
+                    self.assertEqual(stripped_a, stripped_b)
+                # The mask-off run's residual columns are all zero.
+                for row in b.numeric_features:
+                    self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
+                    self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
+            self.assertTrue(saw_residual_difference, "seed produced no populated residuals")
+        finally:
+            env_on.close()
+            env_off.close()
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class MonotoneConsistencySweepTest(unittest.TestCase):
+    """Live-vs-batch over a multi-game sweep: evidence-monotone consistency.
+
+    The live tracker assesses each strike at the first observation boundary after it,
+    which can carry strictly MORE belief evidence than the batch inference's
+    next-action cutoff (end-of-turn non-proc pruning lands in the same window). The
+    invariant (per the #507 review's 60-game sweep, which found 4 such divergences,
+    all in the more-evidence direction): divergences are ONLY live-stands-down (CB) or
+    live-invalidates (residual), and residual values are identical wherever both sides
+    are valid.
+    """
+
+    def test_ten_game_sweep_only_monotone_divergences(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.tier2 import cb_whitelist_for_source, infer_tier2, own_team_from_request
+
+        root = _integration_root()
+        dex = load_showdown_dex_cached(root)
+        source = load_gen3_randbat_source_cached(root)
+        whitelist = cb_whitelist_for_source(source, dex)
+
+        jointly_valid = 0
+        live_invalidations = 0
+        cb_stand_downs = 0
+        for seed in range(401, 411):
+            env = LocalShowdownEnv(
+                LocalShowdownConfig(showdown_root=root, set_belief_source=True)
+            )
+            try:
+                _play(env, seed)
+                replay = parse_showdown_replay(env.protocol_lines)
+                for player in ("p1", "p2"):
+                    state = env._state_for_player(player)
+                    batch = infer_tier2(
+                        replay,
+                        perspective_slot=player,
+                        own_team=own_team_from_request(env._first_requests[player]),
+                        dex=dex,
+                        set_source=source,
+                        whitelist=whitelist,
+                    )
+                    self.assertEqual(len(state.transition_tokens), len(batch.tokens))
+                    for live_token, batch_token in zip(state.transition_tokens, batch.tokens):
+                        if live_token.residual_valid and batch_token.residual_valid:
+                            jointly_valid += 1
+                            self.assertAlmostEqual(
+                                live_token.residual, batch_token.residual, places=12,
+                                msg=f"seed {seed} {player}: jointly-valid residuals differ",
+                            )
+                        elif batch_token.residual_valid and not live_token.residual_valid:
+                            live_invalidations += 1  # allowed: live saw more evidence
+                        elif live_token.residual_valid and not batch_token.residual_valid:
+                            self.fail(
+                                f"seed {seed} {player}: live claims a residual the batch "
+                                f"cutoff masks ({live_token.action}) — not evidence-monotone"
+                            )
+                    live_true = {k for k, v in env._tier2_trackers[player].cb_bits.items() if v}
+                    batch_true = {k for k, v in batch.cb_bits.items() if v}
+                    self.assertLessEqual(
+                        live_true, batch_true,
+                        f"seed {seed} {player}: live CB bit set where batch stands down",
+                    )
+                    cb_stand_downs += len(batch_true - live_true)
+            finally:
+                env.close()
+        # The sweep must actually exercise the value-equality assertion.
+        self.assertGreater(jointly_valid, 100)
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class CollectCacheMaskMetadataTest(unittest.TestCase):
+    def test_checkpointless_collect_records_masks_and_train_cross_checks(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _require_cache_masks_match_model_config
+        from pokezero.rollout_cli import main as rollout_main
+
+        root = _integration_root()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "cache"
+            exit_code = rollout_main(
+                [
+                    "collect-selfplay-training-cache",
+                    "--games", "1",
+                    "--out", str(out),
+                    "--seed-start", "17",
+                    "--showdown-root", str(root),
+                    "--transition-token-budget", "32",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+            metadata = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                metadata["feature_masks"],
+                {
+                    "stats_block": True,
+                    "exact_state": True,
+                    "transition_token_budget": 32,
+                    "tier2_residuals": True,
+                },
+            )
+            matching_model = SimpleNamespace(
+                stats_block_enabled=True,
+                exact_state_enabled=True,
+                transition_token_budget=32,
+                tier2_residuals=True,
+            )
+            _require_cache_masks_match_model_config([out], matching_model)  # no raise
+            mismatched_model = SimpleNamespace(
+                stats_block_enabled=True,
+                exact_state_enabled=True,
+                transition_token_budget=128,
+                tier2_residuals=True,
+            )
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([out], mismatched_model)
+
+
+if __name__ == "__main__":
+    unittest.main()

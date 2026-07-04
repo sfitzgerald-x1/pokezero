@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 import json
 from os import PathLike
 from pathlib import Path
@@ -239,6 +239,15 @@ class TrainingCacheSummary:
         }
 
 
+def _feature_masks_payload(feature_masks) -> dict | None:
+    """JSON payload for cache metadata from an ObservationFeatureMasks (or mapping)."""
+    if feature_masks is None:
+        return None
+    if is_dataclass(feature_masks):
+        return asdict(feature_masks)
+    return dict(feature_masks)
+
+
 class TrainingCacheBuilder:
     """Build a compact, array-backed training cache from rollout records.
 
@@ -247,7 +256,7 @@ class TrainingCacheBuilder:
     references. This keeps shard storage bounded while letting training batch with memmapped arrays.
     """
 
-    def __init__(self, *, config: TrajectoryDatasetConfig | None = None) -> None:
+    def __init__(self, *, config: TrajectoryDatasetConfig | None = None, feature_masks=None) -> None:
         self.config = config or TrajectoryDatasetConfig()
         self._record_count = 0
         self._categorical_rows: list[Any] = []
@@ -275,6 +284,7 @@ class TrainingCacheBuilder:
         # Belief provenance of ingested records; written to cache metadata as a single hash when
         # unanimous, else null (mixed/legacy) with a mixed flag for diagnostics.
         self._belief_set_source_hashes: set[str | None] = set()
+        self._feature_masks_payload = _feature_masks_payload(feature_masks)
 
     @property
     def record_count(self) -> int:
@@ -369,6 +379,10 @@ class TrainingCacheBuilder:
                     else None
                 ),
                 "belief_set_source_mixed": len(self._belief_set_source_hashes) > 1,
+                # Encode-time feature masks the collecting env observed under (None for
+                # legacy caches); the trainer hard-fails on a cache-vs-model mask
+                # mismatch — the mask-axis twin of the belief-provenance hash above.
+                "feature_masks": self._feature_masks_payload,
                 "format": "directory-of-npy-arrays",
                 "padding_row": 0,
                 "categorical_storage": {

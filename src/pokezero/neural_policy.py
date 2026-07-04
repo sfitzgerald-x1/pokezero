@@ -129,6 +129,12 @@ class TransformerPolicyConfig:
     stats_block_enabled: bool = True
     exact_state_enabled: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
+    # Tier-2 residual channel (#505). Dataclass default True: a NEW checkpoint under the
+    # mask-on decision self-describes as trained with the channel live. from_dict defaults
+    # the field FALSE for payloads that lack it: a pre-#505 checkpoint trained on
+    # constant-zero residual slots must never resolve to mask-on (the #492 mismatch class;
+    # same asymmetric-default pattern as value_activation).
+    tier2_residuals: bool = True
 
     @classmethod
     def compact_category(
@@ -265,6 +271,10 @@ class TransformerPolicyConfig:
             stats_block_enabled=bool(payload.get("stats_block_enabled", True)),
             exact_state_enabled=bool(payload.get("exact_state_enabled", True)),
             transition_token_budget=_int_field(payload, "transition_token_budget", TRANSITION_TOKEN_COUNT),
+            # Provenance latch: checkpoints saved before the Tier-2 channel existed carry no
+            # field and were trained on constant-zero slots -> resolve to mask-off, never the
+            # dataclass default.
+            tier2_residuals=bool(payload.get("tier2_residuals", False)),
         )
 
 
@@ -1296,6 +1306,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
         stats_block=config.stats_block_enabled,
         exact_state=config.exact_state_enabled,
         transition_token_budget=config.transition_token_budget,
+        tier2_residuals=config.tier2_residuals,
     )
 
 
