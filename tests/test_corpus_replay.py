@@ -113,8 +113,13 @@ class CorpusReplayGateTest(unittest.TestCase):
                             TRANSITION_TOKEN_OFFSET, TRANSITION_TOKEN_OFFSET + filled
                         ):
                             row = observation.numeric_features[row_index]
-                            self.assertEqual(row[117], 0.0)  # reserved Tier-2 residual
-                            self.assertEqual(row[118], 0.0)  # reserved Tier-2 validity
+                            # Tier-1 replay: all four materialized Tier-2 slots stay 0
+                            # (residual, validity, CB bit; 120 is the always-zero
+                            # investment reserve in every path).
+                            self.assertEqual(row[117], 0.0)  # Tier-2 residual
+                            self.assertEqual(row[118], 0.0)  # Tier-2 validity
+                            self.assertEqual(row[119], 0.0)  # Tier-2 CB bit
+                            self.assertEqual(row[120], 0.0)  # investment reserve
 
         self.assertGreater(boundaries, 100)
         self.assertGreater(observations, 500)

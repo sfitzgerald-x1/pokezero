@@ -98,8 +98,11 @@ ALLOW_NUMERIC: set[int] = {
     104,         # STAT_WEATHER_HAIL_ABILITY — structural (no hail ability exists in gen 3)
     108,         # TT_TRANSFORMED — situational (Ditto/Mew only; exercised by unit fixtures)
     112,         # TT_PURSUIT_INTERCEPT — situational (see 95)
-    117, 118,    # TT_RESIDUAL / TT_RESIDUAL_VALID — structural BY DESIGN: reserved zero-masked
-                 # Tier-2 slots (corrections items 9/10); PR D populates them behind its gate
+    117, 118,    # TT_RESIDUAL / TT_RESIDUAL_VALID — structural BY DESIGN in Tier-1 corpora:
+                 # populated only by pokezero.tier2 behind the #505 gate + tier2_residuals mask
+    119,         # TT_CB_BIT — structural BY DESIGN in Tier-1 corpora (same channel as 117/118)
+    120,         # TT_INVESTMENT_BIT — structural BY DESIGN everywhere: a true always-zero
+                 # reserve held for the H3 defender-side/investment inference
 }
 ALLOW_CATEGORICAL: set[int] = {
     16,               # BELIEF_ITEM[5]  — structural (6 buckets, Gen 3 cap is 5 items/species)

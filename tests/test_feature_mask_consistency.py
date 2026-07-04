@@ -760,5 +760,38 @@ class TrainMaskFlagsTest(unittest.TestCase):
 
 
 
+class NumericCensusGuardTest(unittest.TestCase):
+    """A 119-column artifact meeting 121-column code (or vice versa) must fail LOUDLY
+    with the census named — never a downstream matmul error."""
+
+    def test_numeric_width_mismatch_names_both_censuses(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_policy import _validate_tensor_shapes
+
+        config = SimpleNamespace(
+            window_size=1, token_count=4, categorical_feature_count=3, numeric_feature_count=121
+        )
+        def fake(shape):
+            return SimpleNamespace(shape=shape)
+
+        with self.assertRaisesRegex(ValueError, r"119.*121|121.*119"):
+            _validate_tensor_shapes(
+                fake((2, 1, 4, 3)),
+                fake((2, 1, 4, 119)),  # pre-widening artifact width
+                fake((2, 1, 4)),
+                fake((2, 1, 4)),
+                fake((2, 1)),
+                config,
+            )
+        try:
+            _validate_tensor_shapes(
+                fake((2, 1, 4, 3)), fake((2, 1, 4, 119)), fake((2, 1, 4)), fake((2, 1, 4)), fake((2, 1)), config
+            )
+        except ValueError as error:
+            self.assertIn("Tier-2", str(error))
+            self.assertIn("must not be mixed", str(error))
+
+
 if __name__ == "__main__":
     unittest.main()

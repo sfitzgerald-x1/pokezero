@@ -1824,6 +1824,31 @@ def _action_family_loss_weights(tensors: Mapping[str, Any], config: TransformerT
     )
 
 
+def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConfig", *, batched: bool) -> str:
+    """A LOUD, specific message for numeric-width mismatches (never a silent matmul).
+
+    The numeric column census widens within the v2 spec version when reserved Tier-2
+    slots materialize (119 -> 121 when the CB/investment slots landed), so a
+    pre-widening checkpoint or cache meeting post-widening code (or vice versa) must
+    name the exact disagreement and its likely cause.
+    """
+    observed_width = observed_shape[-1] if observed_shape else None
+    message = (
+        f"{'numeric_features' if batched else 'row_numeric_features'} shape does not match "
+        f"TransformerPolicyConfig: observed inner shape {observed_shape}, expected "
+        f"{'(window_size, token_count, numeric_feature_count)' if batched else '(token_count, numeric_feature_count)'} = "
+        f"{(config.window_size, config.token_count, config.numeric_feature_count) if batched else (config.token_count, config.numeric_feature_count)}."
+    )
+    if observed_width is not None and observed_width != config.numeric_feature_count:
+        message += (
+            f" Numeric column count {observed_width} != model's {config.numeric_feature_count}: "
+            "the observation numeric census widens when reserved Tier-2 slots materialize "
+            "(119 pre-CB/investment slots vs 121 after) — this artifact and this code were "
+            "built against different censuses and must not be mixed."
+        )
+    return message
+
+
 def _validate_tensor_shapes(
     categorical_ids: Any,
     numeric_features: Any,
@@ -1842,7 +1867,7 @@ def _validate_tensor_shapes(
     ):
         raise ValueError("categorical_ids shape does not match TransformerPolicyConfig.")
     if tuple(numeric_features.shape[1:]) != (config.window_size, config.token_count, config.numeric_feature_count):
-        raise ValueError("numeric_features shape does not match TransformerPolicyConfig.")
+        raise ValueError(_numeric_shape_message(tuple(numeric_features.shape[1:]), config, batched=True))
     if tuple(token_type_ids.shape[1:]) != (config.window_size, config.token_count):
         raise ValueError("token_type_ids shape does not match TransformerPolicyConfig.")
     if tuple(attention_mask.shape[1:]) != (config.window_size, config.token_count):
@@ -1870,7 +1895,7 @@ def _validate_row_indexed_tensor_shapes(
         raise ValueError("row_categorical_ids shape does not match TransformerPolicyConfig.")
     row_count = int(row_categorical_ids.shape[0])
     if tuple(row_numeric_features.shape) != (row_count, config.token_count, config.numeric_feature_count):
-        raise ValueError("row_numeric_features shape does not match TransformerPolicyConfig.")
+        raise ValueError(_numeric_shape_message(tuple(row_numeric_features.shape[1:]), config, batched=False))
     if tuple(row_token_type_ids.shape) != (row_count, config.token_count):
         raise ValueError("row_token_type_ids shape does not match TransformerPolicyConfig.")
     if tuple(row_attention_mask.shape) != (row_count, config.token_count):

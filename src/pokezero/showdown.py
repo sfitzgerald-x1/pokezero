@@ -55,7 +55,7 @@ CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
 DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=119,
+    numeric_feature_count=121,
 )
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
@@ -231,13 +231,23 @@ NUMERIC_TT_OPP_SPIKES = 114  # /3
 # turns-ago /64 (the token-budget turn scale), both clamped.
 NUMERIC_TT_ABS_TURN = 115
 NUMERIC_TT_TURNS_AGO = 116
-# Tier-2 slots (corrections items 9/10): residual scalar (signed fraction of defender max
-# HP, clamped) + validity bit. Populated ONLY for tokens whose Tier-2 fields were filled by
-# ``pokezero.tier2`` (``infer_tier2`` / ``apply_residuals``) behind PR D's precision gate,
-# and gated by ``ObservationFeatureMasks.tier2_residuals``; tokens from the plain extraction
-# path carry no residuals, so these stay 0.0 there — same spec version, no second break.
+# Tier-2 slots (corrections item 9 reserves FOUR: residual scalar + validity bit, CB bit,
+# investment bit — same spec version, no second break). Populated ONLY for tokens whose
+# Tier-2 fields were filled by ``pokezero.tier2`` (``infer_tier2`` / ``apply_residuals`` /
+# the live tracker) behind the #505 precision gate, all under the ONE
+# ``ObservationFeatureMasks.tier2_residuals`` switch (one tier2 channel, one provenance
+# story); tokens from the plain extraction path carry none, so all four stay 0.0 there.
 NUMERIC_TT_RESIDUAL = 117
 NUMERIC_TT_RESIDUAL_VALID = 118
+# The two-strike Choice Band conclusion for the ACTING mon, as of this strike (monotone
+# within a battle: once concluded, every later assessed strike token of that mon carries
+# it). Set on opponent move tokens only — the same rows the residual channel annotates.
+NUMERIC_TT_CB_BIT = 119
+# TRUE RESERVE — materialized but ALWAYS ZERO in this revision. Held for the H3
+# defender-side/offensive-investment inference (the symmetric Tier-2 extension in
+# docs/next_train_readiness_plan.md); nothing may write it until that work lands behind
+# its own gate. Kept at constant zero so flipping it on later is not a spec break.
+NUMERIC_TT_INVESTMENT_BIT = 120
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -2076,6 +2086,9 @@ def _encode_transition_tokens(
         if masks.tier2_residuals and token.residual_valid and token.residual is not None:
             _set_numeric(num_row, NUMERIC_TT_RESIDUAL, max(-1.0, min(1.0, token.residual)))
             _set_numeric(num_row, NUMERIC_TT_RESIDUAL_VALID, 1.0)
+        if masks.tier2_residuals and token.cb_bit:
+            _set_numeric(num_row, NUMERIC_TT_CB_BIT, 1.0)
+        # NUMERIC_TT_INVESTMENT_BIT stays 0.0 unconditionally: a true reserve (H3).
 
 
 def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
