@@ -67,14 +67,25 @@ exploiter arms + external bots. The one principled human-data role is as
 architecture demonstrates the module boundary) and evaluation material —
 which teaches the policy nothing.
 
-**T6 — Scale is the quiet axis we are underweighting.** The strongest
-published results run 10–100× our budget (Metamon: 5M human + 20M
-self-play trajectories, models to 200M params; challenge ladder tops out
-at 200M). Our 3m-belief head's Pearson plateau at ~2M games and the
-architecture saturation at ~0.53 are consistent with a small-model,
-small-data ceiling rather than a task ceiling. When weighing a new
-architecture arm against a longer/bigger run of the current recipe, the
-field's evidence favors the latter.
+**T6 — Scale means finishing the recipe's volume axis, not growing the
+model.** *(Revised 2026-07-03 after review: the first draft leaned on
+Metamon's 200M-param results; the MIT thesis recipe refutes the capacity
+half.)* The thesis is an existence proof that model capacity is not the
+constraint at our target: a 3-layer MLP (hidden 256) at ~3M battles with
+recipe-fidelity knobs reached rank 8 / 1693 Elo peak on the gen4 randbats
+ladder. Metamon's 200M transformers belong to a different regime — offline
+RL absorbing 25M mixed-quality trajectories needs capacity that
+from-scratch on-policy PPO demonstrably does not. What survives from the
+first draft: **game volume is unfinished business** — our arms run at
+0.5–1.5M battles against a recipe defined at ~3M, the gap the config audit
+itself calls dominant — so no strength verdict on the flagship line is
+valid short of recipe volume. Re-attribution of today's plateau: the
+3m-belief head's Pearson flatline at ~0.53 (2M→3M games) occurred *at*
+thesis-scale volume with thesis-scale capacity, which points the blame at
+coverage/data-distribution (T2) or the pool's noise ceiling — not at model
+size. Caveat both ways: the thesis's ladder number includes inference-time
+search and never measured value-head quality, so it bounds policy
+strength, not value learnability.
 
 **T7 — Measurement discipline is a first-class result.** This week's
 lessons, now standing rules: (a) never gate on an unmeasured or stale
@@ -106,9 +117,10 @@ aggregate — aggregates hid the hazard failure completely.
    per-node matrix solve (regret matching); also revisit deployment-time
    action sampling for mixed play. Gate: E0 final verdict says search
    earns compute. *(T3b, T3c, T4)*
-5. **Scale run**: the current best recipe (belief features, 256d-class or
-   wider) pushed to 3–5M games / larger trunk before further architecture
-   arms. *(T6)*
+5. **Volume completion**: the flagship recipe (belief features, current
+   trunk) run to its defined ~3M battles before any further architecture
+   arms. Model-scale escalation is explicitly off the table unless the
+   thesis regime demonstrably breaks at recipe volume. *(T6)*
 6. **PBS/ReBeL endgame**: belief-state value nets + depth-limited
    re-solving over the belief engine — the bet that randbats' closed
    universe makes uniquely winnable. Entry condition: stack items 1–4
