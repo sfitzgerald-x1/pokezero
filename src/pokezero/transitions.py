@@ -16,16 +16,32 @@ Emission rules implemented (corrections item 11 + 14):
   the reason as the action id (corrections item 14).
 - ``|drag|`` (Roar / Whirlwind) does NOT emit a token: the drag is RNG-forced, not a
   declared action — the phazer's move token is the declared action.
-- A Sleep Talk turn emits the Sleep Talk click token AND a second token for the called
-  execution with ``called=True`` (detected via ``[from] Sleep Talk`` /
-  ``[from]move: Sleep Talk``), so the damage-carrying token is self-describing without
-  charging set evidence to a click that never happened.
+- A Sleep Talk turn emits THREE tokens, matching the engine's three protocol lines:
+  the ``|cant|slp`` token, the Sleep Talk click token, and the called execution with
+  ``called=True`` (detected via ``[from] Sleep Talk`` / ``[from]move: Sleep Talk``), so
+  the damage-carrying token is self-describing without charging set evidence to a click
+  that never happened. Tendency opportunity counting collapses the turn to ONE decision
+  (see :class:`TendencyStats`).
+- Pursuit interception is detected via the engine's explicit marker
+  ``|-activate|<target>|move: Pursuit`` (emitted on every interception — through a
+  Substitute and on Baton Pass switch-outs included). Still protocol-tautological, no
+  mechanics model. Residual-phase ordering heuristics are deliberately NOT used: real
+  faint-replacements arrive BEFORE ``|upkeep|``, so any pre-upkeep ordering rule would
+  misread plain Pursuit KOs as intercepts.
 
 Attribution rules:
 - Damage fractions come only from untagged ``|-damage|`` lines on the pending move's
   defender. Chip damage (``[from] psn/brn/Sandstorm/Spikes/Leech Seed/...``) and recoil
   are ``[from]``-tagged and NEVER produce tokens or damage fractions; a tagged hit also
   vetoes KO attribution to the move (a chip faint is not a move KO).
+- Side effects attach only within the acting move's own contiguous event chunk: a
+  window closes at the next action line, at the blank ``|`` chunk separator the engine
+  emits between action chunks and the residual phase, and at ``|upkeep|`` — so
+  residual-phase events (Leech Seed transfers, Yawn's delayed sleep) can never stamp a
+  category onto an unrelated action token. ``[silent]``-tagged heals are excluded from
+  attribution entirely (Leech Seed's recipient heal is ``[silent]``; Rest's heal is too,
+  so Rest carries side_effect "none" at Tier 1 — its effect stays visible through the
+  status/sleep channels).
 - Healing is a side-effect category only, never a magnitude field (every gen-3 heal
   magnitude is derivable from public state).
 - History/stats attribution keys on slot + BASE species (the protocol ident) — the
@@ -39,10 +55,9 @@ Tier-2 deferrals (reserved here, populated by PR D behind its precision gate):
   Tier-2-gated (corrections item 12) and not computed.
 - The typing-explained immune split needs a type chart and is Tier-2-gated (corrections
   item 14); ``TendencyStats`` therefore carries no typing-explained-immune counter.
-- Pursuit KO-intercept switch completion is an open sim experiment (inventory item 6):
-  the event-order rule below detects a KO-intercept only if the engine completes the
-  declared switch before ``|upkeep|``; ordinary faint-replacements (post-``|upkeep|``)
-  never read as intercepts.
+- Pursuit KO-intercept switch COMPLETION semantics (whether the declared replacement's
+  entry counters double-count) remain the open sim experiment (inventory item 6); the
+  intercept flag itself is exact via the ``-activate`` marker regardless.
 """
 
 from __future__ import annotations
@@ -55,6 +70,7 @@ from .belief import _CALLER_MOVES, _called_move_source
 from .showdown import (
     ShowdownReplayState,
     _condition_features,
+    _line_mentions_baton_pass,
     _normalize_identifier,
     _side_condition_identifier,
     _slot_from_ident,
@@ -141,6 +157,12 @@ class TransitionToken:
     ``actor_slot``/``actor_species`` follow the Transform identity rule: always the
     protocol ident's side and BASE species, never the acting (copied) species.
 
+    ``action`` carries THREE vocabularies, disambiguated by ``kind`` — a normalized move
+    id (``"rockslide"``) for moves, a display-form species (``"Starmie"``, matching
+    ``ShowdownPokemon.species``) for switches, and a raw reason id (``"slp"``) for cant
+    tokens. PR C's encoder MUST branch on ``kind`` and embed per-kind; the vocabularies
+    are deliberately not merged into one id space here.
+
     ``residual``/``residual_valid`` are reserved Tier-2 fields (corrections item 10):
     always ``None``/``False`` in Tier 1; PR D populates them behind its precision gate.
     """
@@ -157,7 +179,7 @@ class TransitionToken:
     crit: bool = False
     miss: bool = False
     ko: bool = False  # the move's own damage fainted the defender (chip faints excluded)
-    pursuit_intercept: bool = False  # event-order detection; see module docstring
+    pursuit_intercept: bool = False  # |-activate|<target>|move: Pursuit marker; see docstring
     n_hits: int = 1  # from |-hitcount| (Bonemerang: always exactly 2 in this format)
     effectiveness: str = EFFECTIVENESS_NEUTRAL
     side_effect: str = SIDE_EFFECT_NONE
@@ -206,9 +228,14 @@ class TendencyStats:
     perspective_slot: str
     opponent_slot: str
     # Global switch tendency: voluntary opponent switches / opponent decision
-    # opportunities (declared non-called moves + voluntary switches + non-locked |cant|
-    # turns; lead send-outs, faint-replacements, drags, and Baton Pass completions are
-    # not stay-or-switch decisions and do not count on either side of the pair).
+    # opportunities. An opportunity is a (side, turn) with at least one controllable
+    # decision token — a non-called, non-locked move; a voluntary switch; or a |cant|
+    # whose reason leaves the switch choice open (sleep/para/flinch, NOT recharge) —
+    # counted at most ONCE per side per turn, so a RestTalk turn (cant + click + called
+    # execution, three tokens) is exactly one opportunity. Locked continuations (Solar
+    # Beam release, Thrash-class [from]lockedmove) contribute zero; lead send-outs,
+    # faint-replacements, drags, and Baton Pass completions are not stay-or-switch
+    # decisions and count on neither side of the pair.
     opponent_switch_count: int
     opponent_decision_opportunities: int
     opponent_mon_tendencies: tuple[OpponentMonTendency, ...]
@@ -249,6 +276,9 @@ class _Window:
     defender_hit_by_move: bool = False
     # Tendency meta (not token fields).
     voluntary_switch: bool = False
+    # Locked continuation (Solar Beam release / [from]lockedmove): the |move| line is
+    # real history but not a controllable decision — excluded from opportunities.
+    locked_continuation: bool = False
 
     def upgrade_outcome(self, outcome: str) -> None:
         if _OUTCOME_RANK[outcome] < _OUTCOME_RANK[self.outcome]:
@@ -306,20 +336,22 @@ def extract_tendency_stats(
     fold = _fold_replay(replay, perspective_slot=perspective)
 
     opponent_switches = 0
-    opportunities = 0
     blocked_on_our_attack = 0
     pursuit_predicts = 0
     my_switch_turns = 0
+    # One decision opportunity per (side, turn) at most: a RestTalk turn emits three
+    # tokens (cant + click + called execution) but is a single controllable decision.
+    opportunity_turns: set[tuple[str, int]] = set()
     for token, window in zip(fold.tokens, fold.windows):
         voluntary_switch = token.kind == TOKEN_KIND_SWITCH and window.voluntary_switch
-        is_opportunity = (
-            (token.kind == TOKEN_KIND_MOVE and not token.called)
+        is_decision = (
+            (token.kind == TOKEN_KIND_MOVE and not token.called and not window.locked_continuation)
             or voluntary_switch
             or (token.kind == TOKEN_KIND_CANT and token.action not in _CANT_NO_CHOICE_REASONS)
         )
+        if is_decision:
+            opportunity_turns.add((token.actor_slot, token.turn))
         if token.actor_slot == opponent:
-            if is_opportunity:
-                opportunities += 1
             if voluntary_switch:
                 opponent_switches += 1
             if token.kind == TOKEN_KIND_MOVE and token.pursuit_intercept:
@@ -329,6 +361,7 @@ def extract_tendency_stats(
                 my_switch_turns += 1
             if token.kind == TOKEN_KIND_MOVE and token.damage_outcome == DAMAGE_OUTCOME_BLOCKED:
                 blocked_on_our_attack += 1
+    opportunities = sum(1 for side, _ in opportunity_turns if side == opponent)
 
     mon_tendencies = tuple(
         OpponentMonTendency(
@@ -379,6 +412,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
     pending_baton_pass: dict[str, bool] = {"p1": False, "p2": False}
     pending_faint_replacement: dict[str, bool] = {"p1": False, "p2": False}
     lead_seen: dict[str, bool] = {"p1": False, "p2": False}
+    # Two-turn charge state (|-prepare|): the side's next use of the same move is the
+    # locked release, not a fresh decision. Cleared by any intervening action.
+    pending_charge: dict[str, Optional[str]] = {"p1": None, "p2": None}
 
     windows: list[_Window] = []
     current: Optional[_Window] = None
@@ -409,6 +445,12 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         parts = raw_line.split("|")
         event_type = parts[1] if len(parts) > 1 else ""
 
+        # Blank ``|`` chunk separators and ``|upkeep|`` bound the acting move's own
+        # contiguous event chunk: nothing in the residual phase may attach to a window.
+        if event_type in {"", "upkeep"}:
+            close_window()
+            continue
+
         if event_type == "turn":
             close_window()
             try:
@@ -429,30 +471,36 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                 continue
             stay = occupant.get(side)
             species = stay.species if stay is not None else _species_from_ident(parts[2])
-            called = _called_move_source(raw_line) in _CALLER_MOVES
+            called_source = _called_move_source(raw_line)
+            called = called_source in _CALLER_MOVES
+            move_id = _normalize_identifier(parts[3])
+            # Locked continuation: a Thrash-class [from]lockedmove line, or the release
+            # of a two-turn charge this side prepared (Solar Beam) — no fresh decision.
+            locked = called_source == "lockedmove" or pending_charge[side] == move_id
+            pending_charge[side] = None
             if stay is not None and not stay.moved:
                 stay.moved = True
                 counters_for(side, stay.species).stayed_and_attacked += 1
             # Any non-Baton-Pass move clears a stale pending-BP flag (mirrors the parser).
-            pending_baton_pass[side] = _normalize_identifier(parts[3]) == "batonpass"
+            pending_baton_pass[side] = move_id == "batonpass"
             defender = _slot_from_ident(parts[4]) if len(parts) > 4 else None
             own, opp, current_weather = context_trio()
-            open_window(
-                _Window(
-                    event_index=index,
-                    turn=turn_number,
-                    side=side,
-                    species=species,
-                    kind=TOKEN_KIND_MOVE,
-                    action=_normalize_identifier(parts[3]),
-                    defender_side=defender or _other_side(side),
-                    called=called,
-                    transformed=transformed[side],
-                    own_spikes_layers=own,
-                    opp_spikes_layers=opp,
-                    weather=current_weather,
-                )
+            window = _Window(
+                event_index=index,
+                turn=turn_number,
+                side=side,
+                species=species,
+                kind=TOKEN_KIND_MOVE,
+                action=move_id,
+                defender_side=defender or _other_side(side),
+                called=called,
+                transformed=transformed[side],
+                own_spikes_layers=own,
+                opp_spikes_layers=opp,
+                weather=current_weather,
             )
+            window.locked_continuation = locked
+            open_window(window)
             continue
 
         if event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
@@ -463,8 +511,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             lead_seen[side] = True
             is_faint_replacement = pending_faint_replacement[side]
             pending_faint_replacement[side] = False
-            is_baton_pass = pending_baton_pass[side] or "baton pass" in raw_line.lower()
+            is_baton_pass = pending_baton_pass[side] or _line_mentions_baton_pass(parts)
             pending_baton_pass[side] = False
+            pending_charge[side] = None
             voluntary = (
                 event_type == "switch" and not is_lead and not is_faint_replacement and not is_baton_pass
             )
@@ -506,6 +555,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                 continue
             stay = occupant.get(side)
             species = stay.species if stay is not None else _species_from_ident(parts[2])
+            # A prevented turn interrupts a two-turn charge; the next use is a fresh choice.
+            pending_charge[side] = None
             own, opp, current_weather = context_trio()
             open_window(
                 _Window(
@@ -553,7 +604,10 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             condition = _condition_features(parts[3])
             if condition.hp_fraction is not None:
                 hp_fraction[target] = condition.hp_fraction
-            if current is not None and event_type == "-heal" and target == current.side:
+            # [silent] heals (Leech Seed transfers, Rest) are excluded from attribution
+            # entirely — same hygiene class as [from]-tagged chip damage.
+            is_silent = "[silent]" in raw_line
+            if current is not None and event_type == "-heal" and target == current.side and not is_silent:
                 if from_payload is not None and _normalize_identifier(from_payload) == "drain":
                     current.upgrade_side_effect(SIDE_EFFECT_DRAIN)
                 elif from_payload is None:
@@ -597,6 +651,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         elif event_type == "-prepare":
             if current is not None:
                 current.upgrade_side_effect(SIDE_EFFECT_CHARGING)
+            prepare_side = _slot_from_ident(parts[2]) if len(parts) > 2 else None
+            if prepare_side in {"p1", "p2"} and len(parts) >= 4:
+                pending_charge[prepare_side] = _normalize_identifier(parts[3])
 
         elif event_type == "-crit":
             if current is not None and target == current.defender_side:
@@ -694,15 +751,23 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
     )
 
 
-def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -> None:
-    """Event-order Pursuit-intercept detection (protocol-tautological, no mechanics model).
+# Line types that end the backward scan for the interception marker: the marker is
+# emitted by the engine immediately before the Pursuit move executes, so any earlier
+# action line means there was no interception of THIS Pursuit.
+_PURSUIT_SCAN_BOUNDARY = frozenset({"move", "switch", "drag", "replace", "cant", "turn", "upkeep"})
 
-    A Pursuit move intercepted a switch iff, within the same turn and before ``|upkeep|``,
-    the defender's side switches without first declaring a move (a Baton Pass switch-out
-    is the defender's own move and therefore breaks the scan). Ordinary Pursuit-KO
-    faint-replacements arrive after ``|upkeep|`` and never match; a KO-intercept whose
-    declared switch completes pre-upkeep is detected (post-upkeep completion is the open
-    sim experiment — see module docstring).
+
+def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -> None:
+    """Pursuit-intercept detection via the engine's explicit interception marker.
+
+    The engine emits ``|-activate|<target>|move: Pursuit`` (``onBeforeSwitchOut`` in the
+    vendored ``data/moves.ts``) on every interception, immediately before the Pursuit
+    move line — including interceptions through a Substitute (no untagged ``-damage``)
+    and of Baton Pass switch-outs. A Pursuit move token is an intercept iff that marker
+    for its defender directly precedes it (scanning back past non-action lines only).
+    Plain Pursuit KOs never emit the marker, so faint-replacements — which the engine
+    places BEFORE ``|upkeep|`` — can never false-positive; ordering heuristics are
+    deliberately not used.
     """
     for window in windows:
         if window.kind != TOKEN_KIND_MOVE or window.action != "pursuit":
@@ -710,21 +775,18 @@ def _flag_pursuit_intercepts(windows: list[_Window], raw_lines: Sequence[str]) -
         defender = window.defender_side
         if defender is None:
             continue
-        damage_seen = False
-        for raw_line in raw_lines[window.event_index + 1 :]:
+        for raw_line in reversed(raw_lines[: window.event_index]):
             parts = raw_line.split("|")
             event_type = parts[1] if len(parts) > 1 else ""
-            if event_type in {"turn", "upkeep", "win"}:
+            if event_type in _PURSUIT_SCAN_BOUNDARY:
                 break
-            side = _slot_from_ident(parts[2]) if len(parts) > 2 else None
-            if side != defender:
-                continue
-            if event_type == "-damage" and "[from]" not in raw_line:
-                damage_seen = True
-            elif event_type in {"move", "cant"}:
-                break
-            elif event_type == "switch":
-                window.pursuit_intercept = damage_seen
+            if (
+                event_type == "-activate"
+                and len(parts) >= 4
+                and _slot_from_ident(parts[2]) == defender
+                and _side_condition_identifier(parts[3]) == "pursuit"
+            ):
+                window.pursuit_intercept = True
                 break
 
 

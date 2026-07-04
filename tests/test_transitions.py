@@ -338,14 +338,33 @@ class SwitchTokenTest(unittest.TestCase):
         self.assertEqual(completion.kind, TOKEN_KIND_SWITCH)
         self.assertEqual(completion.action, "Zapdos")
 
+    def test_nicknamed_baton_passer_switch_stays_voluntary(self) -> None:
+        # Regression (review F6): Baton Pass detection must check the protocol tag
+        # fields, not the whole line — a NICKNAME containing "Baton Passer" is not a
+        # Baton Pass completion and must still count as a voluntary switch.
+        lines = _leads("Skarmory", "Milotic") + [
+            "|switch|p2a: Baton Passer|Starmie, L76|100/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        replay = parse_showdown_replay(lines)
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        self.assertEqual(tokens[2].kind, TOKEN_KIND_SWITCH)
+        self.assertEqual(tokens[2].action, "Starmie")
+        stats = extract_tendency_stats(replay, perspective_slot="p1")
+        self.assertEqual(stats.opponent_switch_count, 1)
+
 
 class SleepTalkTest(unittest.TestCase):
-    def test_called_bit_on_sleep_talk_execution(self) -> None:
-        for from_tag in ("[from]Sleep Talk", "[from]move: Sleep Talk"):
+    def test_rest_talk_turn_emits_three_tokens_with_called_bit(self) -> None:
+        # The engine's real Sleep Talk shape is THREE lines: |cant|slp + the click +
+        # the called execution (verified against the captured audit games).
+        for from_tag in ("[from] Sleep Talk", "[from]move: Sleep Talk"):
             with self.subTest(from_tag=from_tag):
                 tokens = _tokens(
                     _leads("Snorlax", "Skarmory")
                     + [
+                        "|cant|p1a: Snorlax|slp",
                         "|move|p1a: Snorlax|Sleep Talk|p1a: Snorlax",
                         f"|move|p1a: Snorlax|Body Slam|p2a: Skarmory|{from_tag}",
                         "|-damage|p2a: Skarmory|70/100",
@@ -353,12 +372,31 @@ class SleepTalkTest(unittest.TestCase):
                         "|turn|2",
                     ]
                 )
-                click, execution = _moves_only(tokens)
+                self.assertEqual(
+                    [token.kind for token in tokens[2:]],
+                    [TOKEN_KIND_CANT, TOKEN_KIND_MOVE, TOKEN_KIND_MOVE],
+                )
+                cant, click, execution = tokens[2:]
+                self.assertEqual(cant.action, "slp")
                 self.assertEqual(click.action, "sleeptalk")
                 self.assertFalse(click.called)
                 self.assertEqual(execution.action, "bodyslam")
                 self.assertTrue(execution.called)
                 self.assertAlmostEqual(execution.damage_fraction, 0.30)
+
+    def test_rest_talk_turn_is_one_decision_opportunity(self) -> None:
+        # Three tokens, ONE controllable decision: the opportunity counter must not
+        # inflate the switch-tendency denominator on RestTalk turns.
+        lines = _leads("Skarmory", "Snorlax") + [
+            "|cant|p2a: Snorlax|slp",
+            "|move|p2a: Snorlax|Sleep Talk|p2a: Snorlax",
+            "|move|p2a: Snorlax|Body Slam|p1a: Skarmory|[from] Sleep Talk",
+            "|-damage|p1a: Skarmory|70/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        stats = extract_tendency_stats(parse_showdown_replay(lines), perspective_slot="p1")
+        self.assertEqual(stats.opponent_decision_opportunities, 1)
 
     def test_cant_emits_token_with_reason(self) -> None:
         tokens = _tokens(
@@ -412,7 +450,7 @@ class TransformTest(unittest.TestCase):
 
 
 class PursuitInterceptTest(unittest.TestCase):
-    def test_intercept_by_event_order(self) -> None:
+    def test_intercept_flagged_by_activate_marker(self) -> None:
         tokens = _tokens(
             _leads()
             + [
@@ -445,22 +483,68 @@ class PursuitInterceptTest(unittest.TestCase):
         pursuit = _moves_only(tokens)[0]
         self.assertFalse(pursuit.pursuit_intercept)
 
-    def test_no_intercept_on_ordinary_ko_replacement(self) -> None:
-        # A plain Pursuit KO's faint-replacement arrives after |upkeep| — event order
-        # distinguishes it from an intercepted switch.
+    def test_no_intercept_on_plain_ko_with_real_engine_ordering(self) -> None:
+        # Adversarial case from review: the REAL engine places faint-replacements
+        # BEFORE |upkeep| (faint -> | -> switch -> residuals -> upkeep). A plain
+        # Pursuit KO (no -activate marker) must NOT flag, and must NOT count as a
+        # switch-predict observation.
+        lines = _leads() + [
+            "|move|p1a: Tyranitar|Pursuit|p2a: Alakazam",
+            "|-damage|p2a: Alakazam|0 fnt",
+            "|faint|p2a: Alakazam",
+            "|",
+            "|switch|p2a: Starmie|Starmie, L76|100/100",
+            "|",
+            "|-heal|p1a: Tyranitar|100/100|[from] item: Leftovers",
+            "|upkeep",
+            "|turn|2",
+        ]
+        replay = parse_showdown_replay(lines)
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        pursuit = _moves_only(tokens)[0]
+        self.assertFalse(pursuit.pursuit_intercept)
+        self.assertTrue(pursuit.ko)
+        stats = extract_tendency_stats(replay, perspective_slot="p2")
+        self.assertEqual(stats.pursuit_intercept_predict_count, 0)
+
+    def test_intercept_through_substitute(self) -> None:
+        # Adversarial case from review: an intercepted switch by a mon behind a sub
+        # produces no untagged -damage — the marker must still flag the intercept.
         tokens = _tokens(
             _leads()
             + [
+                "|-activate|p2a: Alakazam|move: Pursuit",
                 "|move|p1a: Tyranitar|Pursuit|p2a: Alakazam",
-                "|-damage|p2a: Alakazam|0 fnt",
-                "|faint|p2a: Alakazam",
-                "|upkeep",
+                "|-activate|p2a: Alakazam|Substitute|[damage]",
                 "|switch|p2a: Starmie|Starmie, L76|100/100",
+                "|upkeep",
                 "|turn|2",
             ]
         )
         pursuit = _moves_only(tokens)[0]
-        self.assertFalse(pursuit.pursuit_intercept)
+        self.assertTrue(pursuit.pursuit_intercept)
+        self.assertEqual(pursuit.damage_outcome, DAMAGE_OUTCOME_HIT_SUB)
+        self.assertEqual(pursuit.damage_fraction, 0.0)
+
+    def test_ko_intercept_flagged_via_marker(self) -> None:
+        # KO during interception: the marker makes detection exact regardless of how
+        # the declared switch completes (completion semantics stay the open experiment).
+        tokens = _tokens(
+            _leads()
+            + [
+                "|-activate|p2a: Alakazam|move: Pursuit",
+                "|move|p1a: Tyranitar|Pursuit|p2a: Alakazam",
+                "|-damage|p2a: Alakazam|0 fnt",
+                "|faint|p2a: Alakazam",
+                "|",
+                "|switch|p2a: Starmie|Starmie, L76|100/100",
+                "|",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        pursuit = _moves_only(tokens)[0]
+        self.assertTrue(pursuit.pursuit_intercept)
         self.assertTrue(pursuit.ko)
 
 
@@ -577,6 +661,41 @@ class SideEffectCategoryTest(unittest.TestCase):
             SIDE_EFFECT_CHARGING,
         )
 
+    def test_residual_silent_heal_does_not_leak_onto_action_tokens(self) -> None:
+        # Adversarial case from review (F3): Leech Seed's recipient heal is [silent]
+        # and lands in the residual phase — it must not stamp side_effect=heal onto
+        # the actor's unrelated attack token. Real chunk shape from captured game 4.
+        lines = _leads("Jumpluff", "Whiscash") + [
+            "|move|p2a: Whiscash|Surf|p1a: Jumpluff",
+            "|-damage|p1a: Jumpluff|55/100",
+            "|",
+            "|move|p1a: Jumpluff|Return|p2a: Whiscash",
+            "|-damage|p2a: Whiscash|88/100",
+            "|",
+            "|-damage|p2a: Whiscash|82/100|[from] Leech Seed|[of] p1a: Jumpluff",
+            "|-heal|p1a: Jumpluff|63/100|[silent]",
+            "|upkeep",
+            "|turn|2",
+        ]
+        surf, return_move = _moves_only(_tokens(lines))
+        self.assertEqual(return_move.action, "return")
+        self.assertEqual(return_move.side_effect, SIDE_EFFECT_NONE)
+        self.assertAlmostEqual(return_move.damage_fraction, 0.12)
+        self.assertEqual(surf.side_effect, SIDE_EFFECT_NONE)
+
+    def test_rest_heal_is_silent_and_classifies_as_none(self) -> None:
+        # Pinned Tier-1 behavior: Rest's heal is [silent] (excluded by attribution
+        # hygiene) and its self-status is not "status-inflicted" -> side_effect none.
+        lines = _leads("Snorlax", "Skarmory") + [
+            "|move|p1a: Snorlax|Rest|p1a: Snorlax",
+            "|-status|p1a: Snorlax|slp|[from] move: Rest",
+            "|-heal|p1a: Snorlax|100/100 slp|[silent]",
+            "|upkeep",
+            "|turn|2",
+        ]
+        rest = _moves_only(_tokens(lines))[0]
+        self.assertEqual(rest.side_effect, SIDE_EFFECT_NONE)
+
 
 class TendencyStatsTest(unittest.TestCase):
     def _small_game(self) -> list[str]:
@@ -672,6 +791,27 @@ class TendencyStatsTest(unittest.TestCase):
             (type(reveal)(weather="sandstorm", from_ability=True),),
         )
 
+    def test_solar_beam_release_turn_is_not_an_opportunity(self) -> None:
+        # Review F5: the release of a two-turn charge is locked — no stay-or-switch
+        # decision. The charge turn counts; the release turn contributes zero.
+        lines = _leads("Skarmory", "Venusaur") + [
+            "|move|p2a: Venusaur|Solar Beam||[still]",
+            "|-prepare|p2a: Venusaur|Solar Beam",
+            "|upkeep",
+            "|turn|2",
+            "|move|p2a: Venusaur|Solar Beam|p1a: Skarmory",
+            "|-damage|p1a: Skarmory|60/100",
+            "|upkeep",
+            "|turn|3",
+        ]
+        replay = parse_showdown_replay(lines)
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        charge, release = [t for t in tokens if t.actor_slot == "p2" and t.kind == TOKEN_KIND_MOVE]
+        self.assertEqual(charge.side_effect, SIDE_EFFECT_CHARGING)
+        self.assertAlmostEqual(release.damage_fraction, 0.40)
+        stats = extract_tendency_stats(replay, perspective_slot="p1")
+        self.assertEqual(stats.opponent_decision_opportunities, 1)
+
     def test_prediction_channel_tier1_inputs(self) -> None:
         lines = _leads("Machamp", "Blissey") + [
             "|move|p2a: Blissey|Protect|p2a: Blissey",
@@ -722,10 +862,11 @@ class FixtureReplayTest(unittest.TestCase):
             fixture_lines("p2_seat_replay.txt"), battle_id="battle-gen3randombattle-1"
         )
         stats = extract_tendency_stats(replay, perspective_slot="p2")
-        # p1's Xatu switch (Arcanine out before attacking) is the one voluntary switch;
-        # its decision points are that switch plus Xatu's Psychic.
+        # p1's Xatu switch (Arcanine out before attacking) is the one voluntary switch.
+        # The fixture has no |turn| lines, so the switch and Xatu's Psychic share the
+        # turn-0 bucket: opportunities are per side per turn, hence 1.
         self.assertEqual(stats.opponent_switch_count, 1)
-        self.assertEqual(stats.opponent_decision_opportunities, 2)
+        self.assertEqual(stats.opponent_decision_opportunities, 1)
         by_species = {entry.species: entry for entry in stats.opponent_mon_tendencies}
         self.assertEqual(by_species["Arcanine"].switched_out_before_attacking, 1)
         self.assertEqual(by_species["Xatu"].stayed_and_attacked, 1)
