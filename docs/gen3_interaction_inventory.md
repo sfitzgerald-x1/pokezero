@@ -103,6 +103,31 @@ crit *rates*, and the residual conditions on the crit *flag*, not the
 rate), Shield Dust, Inner Focus, Hyper Cutter/Clear Body/White Smoke
 (stat-drop blocks are announced → reveal channel only).
 
+## Secondary effects (complete census: 27 entries over 113 moves)
+
+All secondaries are protocol-announced when they fire. Dispositions:
+
+- **Mud Shot is the pool's only 100% target secondary** (guaranteed
+  spe −1) — and therefore the format's single deterministic
+  Shield-Dust detector: normal damage lands, no drop event fires,
+  announced blockers (Clear Body/White Smoke are `[from]`-tagged) and
+  `hit-sub` outcomes excluded ⇒ Shield Dust confirmed. Joins the
+  non-proc family as its one move-secondary member; valid *only*
+  because the chance is 100%.
+- **Every other target secondary is ≤50%** (10% brn/par/frz on the
+  elemental moves, 20–30% drops/flinches/confusion, Sacred Fire 50%)
+  ⇒ positive-reveal-only; non-firing is never evidence (probabilistic
+  boundary, verified move-side).
+- **Self-effects** (Meteor Mash/Silver Wind/Steel Wing raises;
+  Overheat/Psychoboost/Superpower drops; Hyper Beam recharge) are
+  public boost/volatile events — residuals already condition on
+  current public stages; no rules needed.
+- **Interactions:** flinch surfaces as `|cant|flinch`; Synchronize
+  reflections are tagged; Serene Grace doubles chances
+  (probabilistic → soft); gen-3 Substitute blocks target secondaries,
+  so secondary non-fire on `hit-sub` is masked from all inference
+  (including the Mud Shot rule).
+
 ## Format simplifications this audit certifies
 
 1. No OHKO moves, no semi-invulnerable turns, no rampage locks, no
