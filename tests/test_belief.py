@@ -300,3 +300,236 @@ def _belief(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExactStateLedgerTest(unittest.TestCase):
+    """Exact-state belief layer (observation_compression_design.md): PP ledger, non-proc
+    pruning, sleep/clause bookkeeping, turns-in-battle, Natural Cure / Early Bird / Shield
+    Dust identification, Trick mutation freeze."""
+
+    @staticmethod
+    def engine_from(lines: list[str]) -> PublicBattleBeliefEngine:
+        replay = parse_showdown_replay(["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines], battle_id="b")
+        engine = PublicBattleBeliefEngine()
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        return engine
+
+    @staticmethod
+    def opponent(engine: PublicBattleBeliefEngine, species: str) -> RevealedPokemonBelief:
+        for belief in engine.snapshot().sides["p2"]:
+            if belief.species == species:
+                return belief
+        raise AssertionError(f"no belief for {species}")
+
+    def test_pp_ledger_charges_uses_pressure_and_called_moves(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Entei|Entei, L78|307/307",
+            "|-ability|p1a: Entei|Pressure",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p2a: Blissey|Ice Beam|p1a: Entei",
+            "|turn|2",
+            "|move|p2a: Blissey|Ice Beam|p1a: Entei",
+            "|turn|3",
+            "|move|p2a: Blissey|Rest|p2a: Blissey",
+            "|-status|p2a: Blissey|slp|[from] move: Rest",
+            "|turn|4",
+            "|cant|p2a: Blissey|slp",
+            "|move|p2a: Blissey|Sleep Talk|p2a: Blissey",
+            "|move|p2a: Blissey|Ice Beam|p1a: Entei|[from]Sleep Talk",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        uses = dict(blissey.move_uses)
+        # Pressure doubles every charge; the called Ice Beam charges nothing extra —
+        # only Sleep Talk's own line pays (x2 under Pressure).
+        self.assertEqual(uses.get("icebeam"), 4)
+        self.assertEqual(uses.get("rest"), 2)
+        self.assertEqual(uses.get("sleeptalk"), 2)
+
+    def test_sleep_talk_move_line_charges_caller_only(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Arcanine|Arcanine, L80|400/400",
+            "|turn|1",
+            "|move|p2a: Arcanine|Rest|p2a: Arcanine",
+            "|-status|p2a: Arcanine|slp|[from] move: Rest",
+            "|turn|2",
+            "|move|p2a: Arcanine|Sleep Talk|p2a: Arcanine",
+            "|move|p2a: Arcanine|Flamethrower|p1a: Snorlax|[from]Sleep Talk",
+        ])
+        arcanine = self.opponent(engine, "Arcanine")
+        uses = dict(arcanine.move_uses)
+        self.assertEqual(uses.get("sleeptalk"), 1)
+        self.assertEqual(uses.get("rest"), 1)
+        self.assertNotIn("flamethrower", uses)
+        # revealed moves keep existing caller suppression: Flamethrower is not set evidence
+        self.assertNotIn("Flamethrower", arcanine.revealed_moves)
+
+    def test_sleep_counters_rest_flag_and_early_bird(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Dodrio|Dodrio, L80|300/300",
+            "|turn|1",
+            "|move|p2a: Dodrio|Rest|p2a: Dodrio",
+            "|-status|p2a: Dodrio|slp|[from] move: Rest",
+            "|turn|2",
+            "|cant|p2a: Dodrio|slp",
+            "|turn|3",
+            "|-curestatus|p2a: Dodrio|slp|[msg]",
+        ])
+        dodrio = self.opponent(engine, "Dodrio")
+        self.assertIsNone(dodrio.status)
+        self.assertEqual(dodrio.revealed_ability, "Early Bird")
+
+    def test_sleep_clause_holder_is_live(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Breloom|Breloom, L80|300/300",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Breloom|Spore|p2a: Blissey",
+            "|-status|p2a: Blissey|slp",
+        ])
+        from pokezero.belief import belief_key as _bk
+        self.assertEqual(engine.sleep_clause_holders["p1"], _bk("p2", "Blissey"))
+        engine2 = self.engine_from([
+            "|switch|p1a: Breloom|Breloom, L80|300/300",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Breloom|Spore|p2a: Blissey",
+            "|-status|p2a: Blissey|slp",
+            "|turn|2",
+            "|-curestatus|p2a: Blissey|slp|[msg]",
+        ])
+        self.assertIsNone(engine2.sleep_clause_holders["p1"])
+
+    def test_non_proc_pruning_family(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L76|350/350",
+            "|switch|p2a: Salamence|Salamence, L76|320/320",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Rock Slide|p2a: Salamence",
+            "|-damage|p2a: Salamence|60/320",
+            "|move|p2a: Salamence|Toxic|p1a: Tyranitar",
+            "|-status|p1a: Tyranitar|tox",
+            "|upkeep",
+        ])
+        salamence = self.opponent(engine, "Salamence")
+        # damaged end of turn, no Leftovers heal, ended at <=25% with no berry, healthy status
+        self.assertIn("leftovers", salamence.ruled_out_items)
+        self.assertIn("salacberry", salamence.ruled_out_items)
+        self.assertNotIn("lumberry", salamence.ruled_out_items)
+        # our own statused Tyranitar (p1 side) also gets Lum ruled out
+        tyranitar = [b for b in engine.snapshot().sides["p1"] if b.species == "Tyranitar"][0]
+        self.assertIn("lumberry", tyranitar.ruled_out_items)
+
+    def test_leftovers_heal_blocks_pruning_and_reveal_registers(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Tyranitar|Tyranitar, L76|350/350",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Tyranitar|Rock Slide|p2a: Blissey",
+            "|-damage|p2a: Blissey|400/600",
+            "|-heal|p2a: Blissey|437/600|[from] item: Leftovers",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertNotIn("leftovers", blissey.ruled_out_items)
+        self.assertEqual(blissey.revealed_item, "Leftovers")
+
+    def test_turns_active_and_switch_reset(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Skarmory|Skarmory, L80|300/300",
+            "|turn|1",
+            "|turn|2",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|3",
+        ])
+        skarmory = self.opponent(engine, "Skarmory")
+        blissey = self.opponent(engine, "Blissey")
+        self.assertEqual(skarmory.turns_active, 2)
+        self.assertEqual(blissey.turns_active, 1)
+
+    def test_natural_cure_detected_on_clean_reentry(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Breloom|Breloom, L80|300/300",
+            "|switch|p2a: Starmie|Starmie, L80|280/280",
+            "|turn|1",
+            "|move|p1a: Breloom|Spore|p2a: Starmie",
+            "|-status|p2a: Starmie|slp",
+            "|turn|2",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|3",
+            "|switch|p2a: Starmie|Starmie, L80|280/280",
+        ])
+        starmie = self.opponent(engine, "Starmie")
+        self.assertEqual(starmie.revealed_ability, "Natural Cure")
+        self.assertIsNone(starmie.status)
+
+    def test_natural_cure_not_claimed_after_heal_bell(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Breloom|Breloom, L80|300/300",
+            "|switch|p2a: Starmie|Starmie, L80|280/280",
+            "|turn|1",
+            "|move|p1a: Breloom|Spore|p2a: Starmie",
+            "|-status|p2a: Starmie|slp",
+            "|turn|2",
+            "|switch|p2a: Miltank|Miltank, L80|400/400",
+            "|move|p2a: Miltank|Heal Bell|p2a: Miltank",
+            "|turn|3",
+            "|switch|p2a: Starmie|Starmie, L80|280/280",
+        ])
+        starmie = self.opponent(engine, "Starmie")
+        self.assertIsNone(starmie.revealed_ability)
+
+    def test_trick_mutation_freezes_non_proc_pruning(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Kecleon|Kecleon, L80|300/300",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Kecleon|Trick|p2a: Blissey",
+            "|-activate|p1a: Kecleon|move: Trick|[of] p2a: Blissey",
+            "|-item|p2a: Blissey|Choice Band|[from] move: Trick",
+            "|move|p1a: Kecleon|Shadow Ball|p2a: Blissey",
+            "|-damage|p2a: Blissey|400/600",
+            "|upkeep",
+        ])
+        blissey = self.opponent(engine, "Blissey")
+        self.assertTrue(blissey.item_mutated)
+        self.assertEqual(blissey.revealed_item, "Choice Band")
+        # pruning frozen post-mutation: no Leftovers rule-out despite a damaged, heal-free turn
+        self.assertNotIn("leftovers", blissey.ruled_out_items)
+
+    def test_mudshot_shield_dust_identification_requires_clean_hit(self) -> None:
+        class DustSource(FakeSetSource):
+            def summarize(self, *, format_id, species, revealed_moves, **kwargs):
+                summary = super().summarize(format_id=format_id, species=species, revealed_moves=revealed_moves)
+                return CandidateSetSummary(
+                    species=species,
+                    candidate_count=summary.candidate_count,
+                    uncertainty=summary.uncertainty,
+                    possible_abilities=("Shield Dust", "Swarm") if species == "Dustox" else ("Natural Cure",),
+                )
+
+        lines = [
+            "|switch|p1a: Swampert|Swampert, L78|340/340",
+            "|switch|p2a: Dustox|Dustox, L84|280/280",
+            "|turn|1",
+            "|move|p1a: Swampert|Mud Shot|p2a: Dustox",
+            "|-damage|p2a: Dustox|200/280",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines], battle_id="b")
+        engine = PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=DustSource())
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        dustox = self.opponent(engine, "Dustox")
+        self.assertEqual(dustox.revealed_ability, "Shield Dust")
+        # and the drop firing cancels the inference
+        lines_dropped = lines[:-1] + ["|-unboost|p2a: Dustox|spe|1", "|upkeep"]
+        replay2 = parse_showdown_replay(["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines_dropped], battle_id="b")
+        engine2 = PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=DustSource())
+        for event in replay2.public_events:
+            engine2.ingest_event(event)
+        self.assertIsNone(self.opponent(engine2, "Dustox").revealed_ability)

@@ -97,6 +97,7 @@ class Gen3RandbatVariant:
         revealed_ability: Optional[str] = None,
         revealed_item: Optional[str] = None,
         ruled_out_abilities: Sequence[str] = (),
+        ruled_out_items: Sequence[str] = (),
     ) -> bool:
         normalized_moves = {_normalize_move(move) for move in self.moves}
         if any(not _revealed_move_matches_variant(move, normalized_moves) for move in revealed_moves):
@@ -106,6 +107,8 @@ class Gen3RandbatVariant:
         if revealed_ability and _normalize_id(self.ability) != _normalize_id(revealed_ability):
             return False
         if revealed_item and _normalize_id(self.item) != _normalize_id(revealed_item):
+            return False
+        if _normalize_id(self.item) in {_normalize_id(item) for item in ruled_out_items}:
             return False
         return True
 
@@ -134,6 +137,7 @@ class Gen3RandbatSpeciesUniverse:
         revealed_ability: Optional[str] = None,
         revealed_item: Optional[str] = None,
         ruled_out_abilities: Sequence[str] = (),
+        ruled_out_items: Sequence[str] = (),
     ) -> tuple[Gen3RandbatVariant, ...]:
         return tuple(
             variant
@@ -143,6 +147,7 @@ class Gen3RandbatSpeciesUniverse:
                 revealed_ability=revealed_ability,
                 revealed_item=revealed_item,
                 ruled_out_abilities=ruled_out_abilities,
+                ruled_out_items=ruled_out_items,
             )
         )
 
@@ -334,6 +339,7 @@ class Gen3RandbatSource:
         revealed_ability: Optional[str] = None,
         revealed_item: Optional[str] = None,
         ruled_out_abilities: tuple[str, ...] = (),
+        ruled_out_items: tuple[str, ...] = (),
     ) -> CandidateSetSummary | None:
         if not self.supports(format_id):
             return None
@@ -345,6 +351,7 @@ class Gen3RandbatSource:
             revealed_ability=revealed_ability,
             revealed_item=revealed_item,
             ruled_out_abilities=ruled_out_abilities,
+            ruled_out_items=ruled_out_items,
         )
         total = max(1, len(universe.variants))
         notes: list[str] = []
