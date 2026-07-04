@@ -576,7 +576,7 @@ class ExactStateLedgerTest(unittest.TestCase):
             "|move|p2a: Venusaur|Solar Beam||[still]",
             "|-prepare|p2a: Venusaur|Solar Beam",
             "|turn|2",
-            "|move|p2a: Venusaur|Solar Beam|p1a: Snorlax|[from]lockedmove",
+            "|move|p2a: Venusaur|Solar Beam|p1a: Snorlax|[from] lockedmove",
             "|-damage|p1a: Snorlax|300/500",
         ])
         venusaur = self.opponent(engine, "Venusaur")

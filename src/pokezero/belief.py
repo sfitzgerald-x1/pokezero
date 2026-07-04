@@ -435,8 +435,9 @@ class PublicBattleBeliefEngine:
                     # The called execution spends no PP of its own; the caller was already
                     # charged on its own |move| line (Showdown always emits it first).
                     return
-                if raw_line and "[from]lockedmove" in raw_line:
+                if _called_move_source(raw_line) == "lockedmove":
                     # Locked continuations (Solar Beam release) already paid on initiation.
+                    # _called_move_source normalizes both the spaced and unspaced [from] forms.
                     return
                 if move_id != "struggle":
                     foe_targeted = bool(target_slot) and target_slot != actor_slot
