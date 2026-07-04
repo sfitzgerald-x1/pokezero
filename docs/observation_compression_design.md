@@ -152,6 +152,21 @@ accordingly:
   averages public HP) — healing encodes nothing hidden, so it gets no
   inference channel. Leftovers heals route to the item channel as
   already specified.
+- **Drain moves and Leech Seed.** The side-effect category carries a
+  distinct `drain` value (damage + self-heal in one action); heal
+  magnitude stays derivable (50% of observed damage). Interactions:
+  *drain vs Substitute* — the attacker's public heal reconstructs the
+  hidden sub damage exactly (damage = 2×heal), so for drain moves
+  `hit-sub` upgrades from inequality evidence to an exact residual (do
+  not blindly mask); *Liquid Ooze* reverses the drain and is a
+  confirmation-grade ability reveal, already consumed by the generic
+  `[from] ability` machinery. Leech Seed: seeded state is a tracked
+  public volatile and the 1/8-max transfer is derivable (no storage —
+  unlike Wish there is no hidden latency); chip arrives
+  `[from] Leech Seed`-tagged so residual attribution already excludes
+  it; the **recipient is the slot occupant, not the original seeder**
+  (credit follows the slot, consistent with the Transform identity
+  rule); Grass-type immunity routes as typing-explained negation.
 - **Pending-effect rule: store latent state, never derivable
   expectations.** Next-turn Leftovers/Leech Seed/Ingrain expectations
   are rule applications over tracked state — storing them repeats the
