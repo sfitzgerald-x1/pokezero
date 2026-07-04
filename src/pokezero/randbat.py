@@ -369,7 +369,11 @@ class Gen3RandbatSource:
         # Degrade to the unconstrained species pool (assume anything in the universe is possible)
         # rather than returning an empty, uncertainty-0.0 state that reads as "fully certain".
         inconsistent = not surviving and (
-            bool(revealed_moves) or bool(revealed_ability) or bool(revealed_item) or bool(ruled_out_abilities)
+            bool(revealed_moves)
+            or bool(revealed_ability)
+            or bool(revealed_item)
+            or bool(ruled_out_abilities)
+            or bool(ruled_out_items)
         )
         if inconsistent:
             surviving = universe.variants

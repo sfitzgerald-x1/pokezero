@@ -344,8 +344,9 @@ class ExactStateLedgerTest(unittest.TestCase):
         # Pressure doubles every charge; the called Ice Beam charges nothing extra —
         # only Sleep Talk's own line pays (x2 under Pressure).
         self.assertEqual(uses.get("icebeam"), 4)
-        self.assertEqual(uses.get("rest"), 2)
-        self.assertEqual(uses.get("sleeptalk"), 2)
+        # self-targeted moves are never pressured in gen3
+        self.assertEqual(uses.get("rest"), 1)
+        self.assertEqual(uses.get("sleeptalk"), 1)
 
     def test_sleep_talk_move_line_charges_caller_only(self) -> None:
         engine = self.engine_from([
@@ -533,3 +534,80 @@ class ExactStateLedgerTest(unittest.TestCase):
         for event in replay2.public_events:
             engine2.ingest_event(event)
         self.assertIsNone(self.opponent(engine2, "Dustox").revealed_ability)
+
+
+    def test_residual_chip_does_not_manufacture_leftovers_evidence(self) -> None:
+        # Review finding: gen3 runs the Leftovers slot before status chip. A full-HP mon that
+        # gets toxic'd and only chips during residuals gave Leftovers no chance to fire.
+        engine = self.engine_from([
+            "|switch|p1a: Blissey|Blissey, L80|600/600",
+            "|switch|p2a: Lugia|Lugia, L70|400/400",
+            "|turn|1",
+            "|move|p1a: Blissey|Toxic|p2a: Lugia",
+            "|-status|p2a: Lugia|tox",
+            "|-damage|p2a: Lugia|375/400 tox|[from] psn",
+            "|upkeep",
+        ])
+        lugia = self.opponent(engine, "Lugia")
+        self.assertNotIn("leftovers", lugia.ruled_out_items)
+        # but Lum is still correctly ruled out (status stuck)
+        self.assertIn("lumberry", lugia.ruled_out_items)
+
+    def test_spikes_chip_counts_as_action_phase_for_leftovers(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Skarmory|Skarmory, L80|300/300",
+            "|switch|p2a: Blissey|Blissey, L80|600/600",
+            "|turn|1",
+            "|move|p1a: Skarmory|Spikes|p2a: Blissey",
+            "|-sidestart|p2: Rival|Spikes",
+            "|turn|2",
+            "|switch|p2a: Starmie|Starmie, L80|280/280",
+            "|-damage|p2a: Starmie|245/280|[from] Spikes",
+            "|upkeep",
+        ])
+        starmie = self.opponent(engine, "Starmie")
+        self.assertIn("leftovers", starmie.ruled_out_items)
+
+    def test_solar_beam_release_charges_once(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Snorlax|Snorlax, L80|500/500",
+            "|switch|p2a: Venusaur|Venusaur, L80|360/360",
+            "|turn|1",
+            "|move|p2a: Venusaur|Solar Beam||[still]",
+            "|-prepare|p2a: Venusaur|Solar Beam",
+            "|turn|2",
+            "|move|p2a: Venusaur|Solar Beam|p1a: Snorlax|[from]lockedmove",
+            "|-damage|p1a: Snorlax|300/500",
+        ])
+        venusaur = self.opponent(engine, "Venusaur")
+        self.assertEqual(dict(venusaur.move_uses).get("solarbeam"), 1)
+
+    def test_sethp_updates_condition_for_pinch_sweep(self) -> None:
+        engine = self.engine_from([
+            "|switch|p1a: Misdreavus|Misdreavus, L80|280/280",
+            "|switch|p2a: Snorlax|Snorlax, L80|500/500",
+            "|turn|1",
+            "|move|p1a: Misdreavus|Pain Split|p2a: Snorlax",
+            "|-sethp|p2a: Snorlax|180/500|[from] move: Pain Split|[silent]",
+            "|-sethp|p1a: Misdreavus|230/280|[from] move: Pain Split",
+            "|upkeep",
+        ])
+        snorlax = self.opponent(engine, "Snorlax")
+        self.assertEqual(snorlax.condition, "180/500")
+
+    def test_mudshot_ko_never_claims_shield_dust(self) -> None:
+        lines = [
+            "|switch|p1a: Swampert|Swampert, L78|340/340",
+            "|switch|p2a: Dustox|Dustox, L84|20/280",
+            "|turn|1",
+            "|move|p1a: Swampert|Mud Shot|p2a: Dustox",
+            "|-damage|p2a: Dustox|0 fnt",
+            "|faint|p2a: Dustox",
+            "|upkeep",
+        ]
+        replay = parse_showdown_replay(["|player|p1|PokeZeroBot|1", "|player|p2|Rival|2", *lines], battle_id="b")
+        engine = PublicBattleBeliefEngine()
+        for event in replay.public_events:
+            engine.ingest_event(event)
+        dustox = self.opponent(engine, "Dustox")
+        self.assertIsNone(dustox.revealed_ability)
