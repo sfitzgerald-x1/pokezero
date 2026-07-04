@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TextIO
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
 
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
@@ -45,6 +45,53 @@ _DEFAULT_PLAYER_NAMES: Mapping[PlayerId, str] = {"p1": "PokeZero p1", "p2": "Pok
 
 class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
+
+
+def env_config_with_checkpoint_masks(
+    env_config: LocalShowdownConfig,
+    required_masks: "ObservationFeatureMasks | Sequence[ObservationFeatureMasks]",
+    *,
+    context: str,
+) -> "LocalShowdownConfig":
+    """Derive the env's encode-time feature masks from loaded checkpoint provenance.
+
+    The train/eval consistency latch for the mask axis (same failure shape as the #492
+    belief-source mismatch): a checkpoint stamped with ablation masks (K=32 budget, stats-off,
+    exact-state-off) must be evaluated on observations encoded the same way. Semantics:
+
+    - no transformer checkpoints in play -> env config unchanged;
+    - checkpoints agree on one mask set -> env adopts it (overriding the untouched default);
+    - checkpoints DISAGREE -> hard fail (one env cannot encode two ways);
+    - env carries an EXPLICIT non-default mask config that differs from the checkpoints'
+      -> hard fail loudly (never silently prefer either side).
+    """
+    from .observation import ObservationFeatureMasks
+
+    if isinstance(required_masks, ObservationFeatureMasks):
+        required_masks = (required_masks,)
+    distinct: list[ObservationFeatureMasks] = []
+    for masks in required_masks:
+        if masks not in distinct:
+            distinct.append(masks)
+    if not distinct:
+        return env_config
+    if len(distinct) > 1:
+        raise ValueError(
+            f"{context}: checkpoints require conflicting observation feature masks "
+            f"({', '.join(repr(masks) for masks in distinct)}); one env cannot encode both — "
+            "evaluate them in separate runs."
+        )
+    required = distinct[0]
+    if env_config.feature_masks == required:
+        return env_config
+    if env_config.feature_masks != DEFAULT_OBSERVATION_FEATURE_MASKS:
+        raise ValueError(
+            f"{context}: env feature masks {env_config.feature_masks!r} conflict with the "
+            f"loaded checkpoint's trained masks {required!r}. Refusing to encode observations "
+            "the model never trained on (the #492 train/eval-mismatch class); drop the "
+            "explicit env masks or evaluate a matching checkpoint."
+        )
+    return replace(env_config, feature_masks=required)
 
 
 def belief_set_source_env_enabled() -> bool:

@@ -809,7 +809,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
     def test_neural_cli_iterate_can_disable_fixed_opponents_for_mirror_self_play(self) -> None:
         fake_result = SimpleNamespace(run_dir=Path("run"), iterations=(), latest_checkpoint_path=None)
-        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run:
+        # The HIGH-1 mask latch inspects neural: spec checkpoints at CLI time; the fake
+        # bootstrap path has no file, so stub the config-only loader with a default-mask config.
+        fake_spec_config = _entity_test_model_config()
+        with patch("pokezero.neural_cli.run_neural_selfplay_iterations", return_value=fake_result) as run, patch(
+            "pokezero.neural_cli.load_transformer_model_config", return_value=fake_spec_config
+        ):
             with patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
                 exit_code = neural_cli_main(
                     [

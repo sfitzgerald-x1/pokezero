@@ -23,6 +23,8 @@ from .observation import (
     LEGACY_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
     TRANSITION_TOKEN_COUNT,
+    UNVERSIONED_OBSERVATION_SCHEMA,
+    ObservationFeatureMasks,
     PokeZeroObservationV0,
 )
 from .padding import zeros_like as _zeros_like
@@ -160,13 +162,17 @@ class TransformerPolicyConfig:
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
-            if self.observation_schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS:
+            if (
+                self.observation_schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS
+                or self.observation_schema_version == UNVERSIONED_OBSERVATION_SCHEMA
+                or not self.observation_schema_version
+            ):
                 raise ValueError(
                     f"This checkpoint was trained under observation spec "
-                    f"{self.observation_schema_version!r}; this build encodes "
-                    f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens + exact-state "
-                    "layer). Old checkpoints cannot run under the new spec — replay them from "
-                    "their pinned tag per docs/model_versioning.md."
+                    f"{self.observation_schema_version or UNVERSIONED_OBSERVATION_SCHEMA!r}; "
+                    f"this build encodes {OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition "
+                    "tokens + exact-state layer). Old checkpoints cannot run under the new spec "
+                    "— replay them from their pinned tag per docs/model_versioning.md."
                 )
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.window_size <= 0:
@@ -245,7 +251,11 @@ class TransformerPolicyConfig:
             feedforward_dim=_int_field(payload, "feedforward_dim", 256),
             dropout=_float_field(payload, "dropout", 0.1),
             action_schema_version=_str_field(payload, "action_schema_version", ACTION_SCHEMA_VERSION),
-            observation_schema_version=_str_field(payload, "observation_schema_version", OBSERVATION_SCHEMA_VERSION),
+            # One-way-door posture: a checkpoint payload MISSING the observation schema version
+            # is an unknown/legacy artifact and must refuse — never "assume current spec".
+            observation_schema_version=_str_field(
+                payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA
+            ),
             category_vocab=tuple(str(value) for value in (payload.get("category_vocab") or ())),
             category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
             # Historical checkpoints were trained with an unbounded linear value head. Keep that
@@ -1272,6 +1282,45 @@ def save_transformer_checkpoint(
         },
         checkpoint_path,
     )
+
+
+def feature_masks_from_model_config(config: TransformerPolicyConfig) -> ObservationFeatureMasks:
+    """Encode-time feature masks a checkpoint's observations were trained under.
+
+    THE single derivation point from stamped provenance to env behavior. Every harness that
+    builds an env for a loaded checkpoint must route through this (via
+    ``local_showdown.env_config_with_checkpoint_masks``) — provenance nothing reads back is
+    how the #492 train/eval observation mismatch happened.
+    """
+    return ObservationFeatureMasks(
+        stats_block=config.stats_block_enabled,
+        exact_state=config.exact_state_enabled,
+        transition_token_budget=config.transition_token_budget,
+    )
+
+
+def transformer_model_configs_from_policies(policies: Iterable[Any]) -> tuple[TransformerPolicyConfig, ...]:
+    """Model configs of every transformer-backed policy in ``policies`` (duck-typed sweep).
+
+    Non-neural policies (scripted, linear, ...) contribute nothing — they read legal masks and
+    metadata, not the observation tensors, so encode-time masks cannot affect them.
+    """
+    configs: list[TransformerPolicyConfig] = []
+    for policy in policies:
+        result = getattr(policy, "result", None)
+        config = getattr(result, "model_config", None)
+        if isinstance(config, TransformerPolicyConfig):
+            configs.append(config)
+    return tuple(configs)
+
+
+def load_transformer_model_config(path: str | PathLike[str] | Path) -> TransformerPolicyConfig:
+    """Load ONLY the model config from a checkpoint (cheap provenance/mask inspection)."""
+    torch_module = require_torch()
+    payload = torch_module.load(Path(path), map_location="cpu", weights_only=True)
+    if payload.get("schema_version") != NEURAL_POLICY_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported neural policy schema: {payload.get('schema_version')!r}.")
+    return TransformerPolicyConfig.from_dict(payload["model_config"])
 
 
 def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_location: str | Any | None = None) -> tuple[Any, TransformerTrainingResult]:

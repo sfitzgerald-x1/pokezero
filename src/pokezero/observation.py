@@ -14,6 +14,9 @@ from .actions import ACTION_COUNT
 # (docs/model_versioning.md).
 OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v2"
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
+# Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
+# door, absent means unknown/legacy and must refuse — never "assume current spec".
+UNVERSIONED_OBSERVATION_SCHEMA = "pokezero.observation.unversioned"
 SHOWDOWN_PLAYER_SLOTS = ("p1", "p2")
 FIELD_TOKEN_COUNT = 1
 SELF_POKEMON_TOKEN_COUNT = 6
@@ -121,15 +124,7 @@ class PokeZeroObservationV0:
     schema_version: str = OBSERVATION_SCHEMA_VERSION
 
     def validate(self, spec: ObservationSpec) -> None:
-        if self.schema_version != OBSERVATION_SCHEMA_VERSION:
-            if self.schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS:
-                raise ValueError(
-                    f"Observation schema {self.schema_version!r} predates the current spec "
-                    f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens). Legacy data "
-                    "and checkpoints must be replayed from their pinned tag "
-                    "(docs/model_versioning.md)."
-                )
-            raise ValueError(f"Unsupported observation schema version: {self.schema_version!r}.")
+        require_current_observation_schema(self.schema_version, context="observation")
         _require_outer_length("categorical_ids", self.categorical_ids, spec.token_count)
         _require_outer_length("numeric_features", self.numeric_features, spec.token_count)
         _require_outer_length("token_type_ids", self.token_type_ids, spec.token_count)
@@ -137,6 +132,30 @@ class PokeZeroObservationV0:
         _require_outer_length("legal_action_mask", self.legal_action_mask, ACTION_COUNT)
         _require_inner_length("categorical_ids", self.categorical_ids, spec.categorical_feature_count)
         _require_inner_length("numeric_features", self.numeric_features, spec.numeric_feature_count)
+
+
+def require_current_observation_schema(schema_version: str | None, *, context: str) -> None:
+    """Refuse any observation schema that is not the current spec, with a clean message.
+
+    This is the data-side latch of the one-way door: production ingest paths call it so a
+    stale v1 (or unversioned) artifact dies here — with the replay-from-pinned-tag guidance —
+    instead of surfacing later as a bare tensor-shape error mid-training.
+    """
+    if schema_version == OBSERVATION_SCHEMA_VERSION:
+        return
+    if (
+        schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS
+        or schema_version == UNVERSIONED_OBSERVATION_SCHEMA
+        or not schema_version
+    ):
+        described = schema_version or UNVERSIONED_OBSERVATION_SCHEMA
+        raise ValueError(
+            f"{context}: observation schema {described!r} predates the current spec "
+            f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens + exact-state "
+            "layer). Legacy data and checkpoints must be replayed from their pinned tag "
+            "(docs/model_versioning.md)."
+        )
+    raise ValueError(f"{context}: unsupported observation schema version: {schema_version!r}.")
 
 
 def opponent_showdown_slot(showdown_slot: str) -> str:

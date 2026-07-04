@@ -24,6 +24,7 @@ from .collection import (
     BenchmarkMatchup,
     benchmark_rollouts,
     distinct_belief_set_source_hashes,
+    neural_checkpoint_paths_from_policy_specs,
     policy_from_spec,
     policy_spec_with_showdown_root,
     reject_eval_only_specs,
@@ -37,7 +38,8 @@ from .dataset import (
     training_cache_root_byte_size,
     write_training_cache_from_rollouts,
 )
-from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
+from .observation import TRANSITION_TOKEN_COUNT
 from .neural_policy import (
     CONSTANT_LEARNING_RATE_SCHEDULE,
     DEFAULT_CATEGORY_OOV_BUCKETS,
@@ -51,8 +53,11 @@ from .neural_policy import (
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
+    feature_masks_from_model_config,
     load_transformer_checkpoint,
+    load_transformer_model_config,
     load_transformer_policy,
+    transformer_model_configs_from_policies,
     require_torch,
     resolve_torch_device,
     save_transformer_checkpoint,
@@ -1264,6 +1269,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="mean",
         help="How to combine encoded observation history for value/opponent heads.",
     )
+    # Ablation-arm feature masks (config, not spec): recorded on the model config and read back
+    # into the env's encode-time masks, so collection, benchmarks, and later eval harnesses all
+    # see the same masked observations (never a train/eval mask mismatch).
+    iterate.add_argument(
+        "--transition-token-budget",
+        type=int,
+        default=TRANSITION_TOKEN_COUNT,
+        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+    )
+    iterate.add_argument(
+        "--no-stats-block",
+        action="store_true",
+        help="Ablation arm: zero + attention-mask the stats token and per-mon tendency triple.",
+    )
+    iterate.add_argument(
+        "--no-exact-state",
+        action="store_true",
+        help="Ablation arm: zero the exact-state layer (PP fractions, counters, expected stats).",
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -2356,6 +2380,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                 checkpoint_policy,
             )
         )
+    env_config = _env_config_with_matchup_masks(env_config, matchups, context="neural benchmark")
     report = benchmark_rollouts(
         games=args.games,
         env_factory=lambda: LocalShowdownEnv(env_config),
@@ -2411,6 +2436,13 @@ def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     leaf_rollout_rounds_values = _root_puct_leaf_rollout_rounds_values(args)
     tag_leaf_policy_ids = args.leaf_rollout_rounds_sweep is not None
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    # HIGH-1 latch: encode-time masks come from the checkpoint(s) observing through this env.
+    env_config = _env_config_with_spec_masks(
+        env_config,
+        tuple(args.opponent_policy or ()),
+        extra_model_configs=(result.model_config,),
+        context="root-puct play benchmark",
+    )
     raw_policy_id = str(result.model_config.policy_id)
 
     def search_policy_id_for(leaf_rollout_rounds: int) -> str:
@@ -2723,6 +2755,13 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
         format_id=args.format_id,
     )
     model, result = load_transformer_checkpoint(args.checkpoint, map_location=args.device)
+    # HIGH-1 latch: encode-time masks come from the checkpoint(s) observing through this env.
+    env_config = _env_config_with_spec_masks(
+        env_config,
+        (args.p1_policy, args.p2_policy),
+        extra_model_configs=(result.model_config,),
+        context="root-puct benchmark",
+    )
 
     def value_fn(history):
         return evaluate_transformer_observation_value(
@@ -2802,6 +2841,17 @@ def _root_puct_counterfactual(args: argparse.Namespace) -> int:
             device=args.device,
         )
 
+    env_config = _env_config_with_spec_masks(
+        env_config,
+        (
+            args.p1_policy,
+            args.p2_policy,
+            args.continuation_p1_policy,
+            args.continuation_p2_policy,
+        ),
+        extra_model_configs=(result.model_config,),
+        context="root-puct counterfactual",
+    )
     report = benchmark_root_puct_counterfactual_rollouts(
         env_factory=lambda: LocalShowdownEnv(env_config),
         policies=policies,
@@ -3277,6 +3327,9 @@ def _iterate(args: argparse.Namespace) -> int:
         feedforward_dim=args.feedforward_dim,
         dropout=args.dropout,
         temporal_aggregator=args.temporal_aggregator,
+        stats_block_enabled=not args.no_stats_block,
+        exact_state_enabled=not args.no_exact_state,
+        transition_token_budget=args.transition_token_budget,
     )
     # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
     # model learns are exactly the rows the env encodes.
@@ -3327,6 +3380,15 @@ def _iterate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     auto_promotion_config = _auto_promotion_config_from_args(args)
+    # HIGH-1 latch: the collection/benchmark env must encode with the candidate's masks; any
+    # neural opponent/reference checkpoint with DIFFERENT masks cannot share this env and
+    # refuses loudly here rather than producing silently-mismatched observations.
+    env_config = _env_config_with_spec_masks(
+        env_config,
+        (initial_policy, *opponent_policies, *benchmark_references),
+        extra_model_configs=(model_config,),
+        context="neural iterate",
+    )
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,
         iterations=args.iterations,
@@ -6119,6 +6181,26 @@ def print_root_puct_counterfactual_report(report: RootPUCTCounterfactualBenchmar
         )
     if len(report.decisions) > 20:
         print(f"... {len(report.decisions) - 20} more decisions omitted; use --json for full details.")
+
+
+def _env_config_with_matchup_masks(env_config, matchups, *, context: str):
+    """Adopt the encode-time masks the matchup checkpoints trained under (HIGH-1 latch)."""
+    policies = [policy for matchup in matchups for policy in (matchup.p1_policy, matchup.p2_policy)]
+    required = [
+        feature_masks_from_model_config(config)
+        for config in transformer_model_configs_from_policies(policies)
+    ]
+    return env_config_with_checkpoint_masks(env_config, required, context=context)
+
+
+def _env_config_with_spec_masks(env_config, specs, *, extra_model_configs=(), context: str):
+    """Adopt masks from ``neural:`` policy specs plus any directly-loaded model configs."""
+    required = [
+        feature_masks_from_model_config(load_transformer_model_config(path))
+        for path in neural_checkpoint_paths_from_policy_specs(specs)
+    ]
+    required.extend(feature_masks_from_model_config(config) for config in extra_model_configs)
+    return env_config_with_checkpoint_masks(env_config, required, context=context)
 
 
 def _policy_from_checkpoint(
