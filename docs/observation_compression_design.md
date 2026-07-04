@@ -1,5 +1,75 @@
 # Observation compression: opponent-signal stats replace the 4-turn window
 
+> **CORRECTIONS LAYER (2026-07-04, dual-review — AUTHORITATIVE, supersedes
+> conflicting body text below; full editorial restructure lands with the
+> implementation PRs):**
+>
+> **Mechanics (engine-verified):**
+> 1. The randbats spread is NOT fully deterministic: the generator zeroes
+>    Atk EV/IV on no-physical-attack sets and trims HP EVs on
+>    Sub+Flail/Reversal, Sub+pinch-berry, and Belly Drum sets. Def/SpA/
+>    SpD/Spe stay exact 85/31/neutral; **HP and Atk are
+>    variant-conditioned**. Computed-stats features carry exact values
+>    for the four fixed stats and per-variant values (or bounds) for
+>    HP/Atk; residual margins absorb the ±few-% HP-denominator ambiguity.
+> 2. Pinch berries activate **end-of-turn only** in gen3 → non-proc rule
+>    3 prunes only after an end of turn at ≤25%, never mid-turn.
+> 3. Drain-vs-sub reconstruction is **±1 HP** (heal = ceil(damage/2)),
+>    not exact.
+> 4. **Pursuit accuracy SETTLED**: the engine bypasses accuracy against a
+>    switching target — removed from the Tier-2 open list.
+> 5. Solar Beam is halved in rain, **sand, and hail** (sand reachable).
+> 6. Wish heals 50% of the **recipient's** max HP.
+>
+> **Spec decisions closing review P0/P1s:**
+> 7. The Tier-2 CB specification (whitelist, max-explanation margin,
+>    two-strike, precision gate) is canonical; the exact-state section's
+>    single-exceedance version is STRUCK.
+> 8. The Rest flag is **candidate-conditioned on Early Bird** (5 reachable
+>    carriers): wake known-2 iff Early Bird absent from candidates;
+>    ambiguous {1,2} otherwise; a 1-turn Rest-wake confirms Early Bird
+>    and restores determinism thereafter. The sleep-clause bit has LIVE
+>    semantics (clears on wake/faint; tracks the currently-slept mon).
+> 9. Canonical Tier-1 token field list (closes the schema): actor, action,
+>    **`called` bit** (Sleep Talk executions — new, same mislearning class
+>    as `transformed`), `transformed` bit, damage fraction,
+>    `damage_outcome` enum {normal, blocked, immune, absorbed, hit-sub,
+>    broke-sub, endured}, flags {crit, miss, KO, `pursuit-intercept`},
+>    `n_hits`, effectiveness class, side-effect category, context trio
+>    {own layers, opp layers, weather}, positional pair {absolute turn,
+>    turns-ago}. Tier-2 reserved zero-masked slots: residual scalar +
+>    validity bit, CB bit, investment bit — same spec version, no second
+>    break.
+> 10. Residual encoding: signed fraction of defender max HP (observed
+>    minus expected-median under the candidate-conservative baseline),
+>    with a separate validity bit (masked ⇒ invalid, value 0); populated
+>    on opponent attacks only in base Tier 2; margins ≥ protocol
+>    quantization (1% HP) — "tight" bounds are tight only for our own
+>    mons' exact HP.
+> 11. Token emission rules: one token per *declared action* (move or
+>    switch), so faint-replacements, Baton Pass completions, Pursuit
+>    interceptions, and turn-1 lead send-outs each emit their own switch
+>    token; **K is specified in tokens (128), not turns**; `turns-ago`
+>    ties break by within-turn resolution order.
+> 12. The ablation matrix re-anchors control arms at **512d** (the width
+>    result makes 256d controls uninformative); all arms carry the
+>    exact-state layer (isolating history encoding); the midground stat
+>    ships **Tier-2-gated**, not in Tier-1 arms; E/C train at K=64 with
+>    K=16 as the masked ablation.
+> 13. The protect-pattern / prediction-channel observations route into
+>    the midground stat's existing counters (no new dedicated stats —
+>    subsumption principle holds): `blocked`-on-our-attack and
+>    typing-explained-immune increment "no-predict"; doubled Pursuit
+>    increments "predict".
+> 14. Status-move clicks and no-action turns (`|cant|`: sleep, para,
+>    flinch, recharge) emit tokens with action id + outcome; the
+>    immune typing-split's type-chart computation is **Tier-2-gated**
+>    with a fixture test (per the hard-rule asymmetry).
+> 15. Trick × pruning: post-swap the recipient's item is **known**
+>    (identity of the given item), variant pruning on the *original* item
+>    freezes at its pre-swap state; non-proc rules apply to the current
+>    known item only.
+
 Status: design, 2026-07-03. Motivated by the width result (512d arm leading
 its cohort on trajectory: 74.4% max-damage at 208k games) and the cost
 structure that blocks scaling width further. Companion to
@@ -90,12 +160,150 @@ accordingly:
   from the omniscient logs of controlled foul-play games (we own the
   BattleStream; true sets are recoverable) before any training run
   consumes the bit.
-- **Called moves (Sleep Talk / Metronome — common on gen3 RestTalk
-  sets):** the PP ledger charges the *calling* move (called moves spend
-  no PP of their own in gen 3); the residual computes damage against the
-  *executed* move's power; and no set evidence attaches to the called
-  move (matching the belief engine's existing caller suppression). The
-  `[from] Sleep Talk` protocol tag distinguishes the cases.
+- **Called moves (Sleep Talk — verified the only reachable caller in the
+  gen3 randbats movepool, on 40 species; Metronome/Assist/Mirror
+  Move/Nature Power never appear):** the PP ledger charges the *calling*
+  move (called moves spend no PP of their own in gen 3); the residual
+  computes damage against the *executed* move's power; and no set
+  evidence attaches to the called move (matching the belief engine's
+  existing caller suppression). The `[from] Sleep Talk` protocol tag
+  distinguishes the cases. Implementation may hard-code the Sleep Talk
+  path; generic caller plumbing is unreachable in this format.
+- **Transform (Ditto and Mew only in the pool; Ditto is all-transform):**
+  transition tokens carry a **`transformed` bit** so copied-move usage
+  is self-describing in the history stream — without it the net sees
+  "Ditto used Flamethrower" as ordinary history and can mislearn set
+  associations the belief engine already suppresses. The PP ledger
+  scopes copied moves to the **transform instance**: gen-3 Transform
+  grants 5 PP per copied move and a re-entry + re-transform grants a
+  fresh 5, so copied-move PP is ephemeral (per instance, max 5,
+  discarded on switch-out) and never charges the real set's ledger.
+  Residual attribution keys on `transform_species` (stats are the
+  copied target's, except HP), consistent with existing belief
+  semantics.
+  **Identity rule:** all history/stats/PP attribution keys on **slot +
+  base species** (the protocol ident, e.g. `p2a: Ditto`), never on the
+  acting species, and Transform never creates or updates an
+  opponent-roster entry. This matters beyond bookkeeping hygiene: Ditto
+  copies *our* active mon, and the opponent's team may legitimately
+  contain the same species (no cross-team species clause) — acting-
+  species attribution would charge copied-move usage against the real
+  teammate's PP ledger and pollute its tendency stats. The
+  `transformed` bit + `transform_species` are what let every consumer
+  explain a foreign species acting for a known slot.
+- **Damage-outcome enum, in two evidence classes (negate vs truncate):**
+  attack tokens carry `damage_outcome ∈ {normal, blocked, immune,
+  hit-sub, broke-sub, endured}`, self-describing without cross-token
+  joins (the defender's own Protect/Sub click is a separate token the
+  same turn). The classes have opposite residual semantics:
+  - **Negation (`blocked`, `immune`) — no damage event occurred.** The
+    attack connected with nothing; magnitude evidence is *undefined*,
+    not zero. Residual: no evidence. Move-reveal/set evidence is
+    unaffected (the click is always informative). `blocked` feeds the
+    protect-pattern tendency stat. `immune` splits by explanation, with
+    opposite inference content:
+    - *typing-explained* (Earthquake into a Flying-type): tautological
+      given public state — contributes **no** ability evidence (the
+      attribution order is typing first, ability only as the residual
+      explanation; without this check every EQ into a Skarmory pollutes
+      candidate pruning). Its information lives in the prediction
+      channel instead: attacking into a known immunity almost always
+      means the attack targeted the mon that was leaving — an
+      unambiguous "did not predict the switch" observation for the
+      midground/prediction stat.
+    - *not typing-explained* (EQ immune on a non-Flying): the immunity
+      must be ability-sourced — confirmation-grade ability
+      identification, variant pruning fires.
+- **Healing: a side-effect category value, never a magnitude field.**
+  Unlike damage, every gen-3 heal magnitude is deterministic given the
+  action plus public state (Recover-class 50%, Rest 100%,
+  Synthesis-class weather-scaled with weather public, drains =
+  f(observed damage), Leech Seed = 1/8 seeded max HP, Pain Split
+  averages public HP) — healing encodes nothing hidden, so it gets no
+  inference channel. Leftovers heals route to the item channel as
+  already specified.
+- **Absorb-class abilities (Volt Absorb, Water Absorb, Flash Fire).**
+  The outcome enum gains **`absorbed`** — negation class (residual: no
+  evidence) but distinct from `immune`: the defender *gained* from the
+  attack (25% heal, or Flash Fire's boost state), which is the one
+  history lesson the net must never re-learn mid-game. Ability
+  identification rides the existing `[from] ability:` machinery.
+  Flash Fire's boost is **state, not just an event**: tracked as a
+  volatile (protocol `-start`), and the Tier-2 residual must include it
+  among public modifiers when the boosted mon attacks Fire moves
+  (1.5×), else every post-absorb Flamethrower reads as phantom CB
+  evidence. **Elimination direction:** landing normal damage on a mon
+  whose candidate set includes the absorbing ability deterministically
+  rules it out — variant pruning via the same non-trigger pattern the
+  engine already implements for Intimidate ({Volt/Water Absorb, Flash
+  Fire, Levitate} × "move connected normally").
+- **Turn-order inference REMOVED (decided 2026-07-04).** Speed brackets
+  were cut entirely, not conditioned. The payoff is near zero — base
+  stats are computable from public info (see computed expected stats),
+  so turn order's only inference content is weather-ability
+  identification (Swift Swim/Chlorophyll) — while the cost is a full
+  priority/action-order mechanics model (priority table, switch
+  ordering, Pursuit interception, charge turns, speed ties, skip
+  states), every row of which can corrupt a bracket. The asymmetry
+  decides it: hard state features are trusted, so one engine error is
+  persistent adversarial input; soft inference degrades gracefully.
+  **Principle: hard rules only where the protocol makes them
+  tautological** (PP, procs, duration timers — event bookkeeping, no
+  mechanics model); anything needing a broad mechanics model stays raw.
+  The net keeps the soft path for free: transition tokens are emitted
+  in action order (within-turn sequence is implicit — no field, no
+  model), and weather + candidate abilities are already features. If
+  probes later show rain-sweeper identification failing, a narrow
+  trigger rule can be added behind Tier-2-style validation.
+- **Pursuit (variable power + out-of-order execution).** If the target
+  is switching, Pursuit executes before the switch at doubled power
+  (40→80) against the outgoing mon. Detection is protocol-tautological
+  — event order alone (Pursuit's damage against a mon whose switch or
+  faint-then-declared-replacement follows in the same turn) yields a
+  `pursuit-intercept` flag, no mechanics model. Rules: the residual
+  uses scenario-correct power (80 when intercepting) but **Pursuit is
+  excluded from the CB whitelist entirely** (scenario-dependent power +
+  an unverified gen-3 accuracy-bypass quirk on switching targets — on
+  the Tier-2 engine-verification list — make it a poor CB probe at 40
+  BP regardless). A doubled Pursuit is an *affirmative* switch-predict
+  observation for the midground/prediction stat (sharper than the
+  immunity-based no-predict signal). Faint-during-intercept still
+  completes the declared switch — slot-first attribution covers the
+  unusual transition; entry counters must not double-count.
+- **Drain moves and Leech Seed.** The side-effect category carries a
+  distinct `drain` value (damage + self-heal in one action); heal
+  magnitude stays derivable (50% of observed damage). Interactions:
+  *drain vs Substitute* — the attacker's public heal reconstructs the
+  hidden sub damage exactly (damage = 2×heal), so for drain moves
+  `hit-sub` upgrades from inequality evidence to an exact residual (do
+  not blindly mask); *Liquid Ooze* reverses the drain and is a
+  confirmation-grade ability reveal, already consumed by the generic
+  `[from] ability` machinery. Leech Seed: seeded state is a tracked
+  public volatile and the 1/8-max transfer is derivable (no storage —
+  unlike Wish there is no hidden latency); chip arrives
+  `[from] Leech Seed`-tagged so residual attribution already excludes
+  it; the **recipient is the slot occupant, not the original seeder**
+  (credit follows the slot, consistent with the Transform identity
+  rule); Grass-type immunity routes as typing-explained negation.
+- **Pending-effect rule: store latent state, never derivable
+  expectations.** Next-turn Leftovers/Leech Seed/Ingrain expectations
+  are rule applications over tracked state — storing them repeats the
+  snapshot-replay mistake in miniature. But **pending Wish** (50% heal
+  landing end of next turn on whatever occupies the slot; 16 species in
+  the pool) is latent state no rule can reconstruct, and it is
+  currently untracked — `showdown.py` tracks Future Sight's pending
+  counter and has no Wish equivalent. Wish joins the exact-state
+  pending/duration-counter family (same pattern as
+  `future_sight_turns`), both sides.
+  - **Truncation (`hit-sub`, `broke-sub`, `endured`) — full computed
+    damage WAS dealt**, to a proxy or clipped at survival, so magnitude
+    evidence exists in inequality form: `broke-sub` ⇒ damage ≥ sub HP;
+    `hit-sub` on a **fresh** sub ⇒ damage < 25% of max HP (mild
+    anti-CB evidence — masking this discards real information);
+    `endured` ⇒ damage ≥ (pre-hit HP − 1), a *tight* lower bound since
+    HP is exactly known. Conservative rule: sub bounds apply only when
+    sub freshness is known (first hit on a just-set sub); cumulative
+    multi-hit sub bookkeeping (sum ≥ 25% at break) is Tier-2 detail.
 - **Tier-2 extension (note only): defender-side ability inference.** The
   same residual machinery on *our* attacks reveals the defender's
   ability (e.g. Thick Fat halving our Fire damage is observable against
@@ -171,6 +379,38 @@ structure). The stats block (below) is retained alongside transition
 tokens: cross-turn aggregates spare the trunk from recomputing counts
 over the token sequence, and they remain the z-descriptor vocabulary.
 
+### Whole-game memory: two channels, two retention policies (decided 2026-07-04)
+
+The observation stores the whole game **twice, in channels with
+different retention properties**, and truncation is safe precisely
+because durable information is routed out of the ordered channel:
+
+1. **Unbounded aggregates (whole game, order-free, never truncated):**
+   the exact-state layer and stats block — PP ledger, belief facts,
+   non-proc prunings, counters, (count, opportunity) pairs — accumulate
+   at constant size. Everything durable about a 40-turn-old turn
+   (reveals, spend, tendencies) already lives here.
+2. **Ordered transition window (recency/momentum):** fixed slot budget,
+   zero-padded, masked, filled as turns arrive. Two positional signals
+   per token: **absolute turn number** (game phase) and **turns-ago**
+   (recency). Ordering carries short-range structure (the h8 > h4
+   evidence); nothing suggests order at range 100 adds anything the
+   aggregates miss.
+
+**Budget: 64 turns (128 transition tokens), truncate oldest-first** —
+the prefix is exactly what the aggregates have absorbed. Rationale:
+healthy games run ~25–30 turns (50–60 tokens — whole-game coverage is
+nearly free), while the long tail is RestTalk stall loops whose ordered
+detail is worthless and whose real content (PP attrition) lives in the
+ledger; attention is quadratic and every training example pays the full
+slot budget, so size to ~p95 of healthy length, not the 250-turn cap;
+and a 2-layer trunk attends poorly over 500 tokens — freed compute is
+worth more as width. **K is a masked config, not a spec change**: the
+ablation gets K ∈ {16, 64} for free, testing whether ordered range
+beyond 16 pays at all once aggregates exist. If K=16 matches K=64, the
+compression program has fully delivered: whole-game memory at a
+twentieth of the original sequence cost.
+
 ## Design principle: evidence mass, not rates
 
 Every tendency feature is a **(count, opportunity) pair**, never a bare
@@ -187,10 +427,13 @@ estimates) — no oracle leakage.
 These are deterministic bookkeeping the engine can do perfectly; they live
 beside the PP ledger, not in the stats block. All approved 2026-07-03.
 
-- **Speed brackets from turn order.** Every observed turn order is an exact
-  inequality against a known stat of ours. Two scalars per opponent mon:
-  best lower / upper bound on speed observed so far. Pins randbats sets
-  fast; the belief engine does not consume turn order today.
+- **Computed expected stats** (REPLACES the earlier speed-bracket
+  feature — removed 2026-07-04, rationale in the turn-order section
+  below): opponent actual stats are *computable*, not inferable — the
+  generator's fixed 85 EV / 31 IV / neutral spread plus public
+  species+level determines them to within the HP-IV point. Expose the
+  computed stat block as deterministic numeric features on opponent
+  tokens. Pure arithmetic, zero inference, zero error surface.
 - **Sleep clause consumed** (one bit per side): once a side has put an
   opposing mon to sleep, its remaining sleep moves are dead weight.
 - **Sleep turn counters** per sleeping mon, both sides, with a
