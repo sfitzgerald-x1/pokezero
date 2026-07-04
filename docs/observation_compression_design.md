@@ -111,6 +111,16 @@ accordingly:
   Residual attribution keys on `transform_species` (stats are the
   copied target's, except HP), consistent with existing belief
   semantics.
+  **Identity rule:** all history/stats/PP attribution keys on **slot +
+  base species** (the protocol ident, e.g. `p2a: Ditto`), never on the
+  acting species, and Transform never creates or updates an
+  opponent-roster entry. This matters beyond bookkeeping hygiene: Ditto
+  copies *our* active mon, and the opponent's team may legitimately
+  contain the same species (no cross-team species clause) — acting-
+  species attribution would charge copied-move usage against the real
+  teammate's PP ledger and pollute its tendency stats. The
+  `transformed` bit + `transform_species` are what let every consumer
+  explain a foreign species acting for a known slot.
 - **Tier-2 extension (note only): defender-side ability inference.** The
   same residual machinery on *our* attacks reveals the defender's
   ability (e.g. Thick Fat halving our Fire damage is observable against
