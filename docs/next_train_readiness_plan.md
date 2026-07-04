@@ -32,7 +32,11 @@ Four PRs, in order, all against the frozen spec + corrections layer:
   Shield-Dust rule), sleep counters (Rest flag candidate-conditioned on
   Early Bird; live sleep-clause bit), weather/screen durations + source,
   pending-Wish counters, turns-in-battle, Natural Cure & Early Bird
-  eliminations, Trick item-mutation with pruning freeze.
+  eliminations, Trick item-mutation with pruning freeze, and
+  **trapper-alive flags** (revealed Shadow Tag/Arena Trap/Magnet Pull
+  persists while the trapper is benched, cleared on its faint —
+  approved in the original feature review but omitted from the design
+  doc's exact-state list; this plan is the corrective record).
   *Gate: unit fixtures per rule + replay of the 5-game audit corpus
   asserting every rule fires where the logs say it should.*
 - **B — extraction functions**: transition tokens (canonical schema
@@ -57,6 +61,12 @@ Four PRs, in order, all against the frozen spec + corrections layer:
   from omniscient controlled-game logs; residual calibration ≈ 0-mean
   roll-shaped on known-set control games. Ships zero-masked if the
   gate fails — launch does NOT wait for D.*
+
+**Standing condition, stated explicitly: the wave trains and evaluates
+belief-on** (`POKEZERO_BELIEF_SET_SOURCE=1` everywhere) — the new spec
+makes candidate-set features standard input, and the twin-pool
+experiment (WS-3) is what validates the interpretation of belief-on
+reads, not whether to enable them.
 
 ## WS-2 — Deploy side (private repo)
 
