@@ -84,6 +84,24 @@ class RevealedPokemonBelief:
     # from ``transform_species`` and must not treat moves used while transformed as its real set.
     transformed: bool = False
     transform_species: Optional[str] = None
+    # Exact-state ledger (observation_compression_design.md, exact-state class).
+    # ``move_uses`` counts PP charged per revealed move id (Pressure double-charges included;
+    # Sleep-Talk-called moves charge the caller; moves used while transformed charge nothing).
+    move_uses: tuple[tuple[str, int], ...] = ()
+    # Sleep bookkeeping: observed |cant …|slp turns since the status landed; ``rest_sleep``
+    # marks Rest self-sleep (wake deterministic modulo Early Bird candidates).
+    sleep_turns: int = 0
+    rest_sleep: bool = False
+    # Turns this mon has been active in its current stint (reset on entry).
+    turns_active: int = 0
+    # Deterministic non-proc pruning results (Leftovers / Lum / pinch berries). Frozen once the
+    # held item is mutated (Trick / Knock Off): pruning applies to the original assignment only.
+    ruled_out_items: tuple[str, ...] = ()
+    item_mutated: bool = False
+    # Natural Cure detection: status carried out on switch + the side's cure-all (Heal Bell /
+    # Aromatherapy) counter at exit; a clean re-entry with an unchanged counter confirms.
+    status_on_exit: Optional[str] = None
+    cure_all_count_on_exit: int = -1
 
     @property
     def key(self) -> str:
@@ -110,6 +128,12 @@ class RevealedPokemonBelief:
             "evidence": [item.to_payload() for item in self.evidence],
             "transformed": self.transformed,
             "transform_species": self.transform_species,
+            "move_uses": [list(pair) for pair in self.move_uses],
+            "sleep_turns": self.sleep_turns,
+            "rest_sleep": self.rest_sleep,
+            "turns_active": self.turns_active,
+            "ruled_out_items": list(self.ruled_out_items),
+            "item_mutated": self.item_mutated,
         }
 
 
@@ -295,6 +319,20 @@ class PublicBattleBeliefEngine:
         self._event_count = 0
         self._sides: dict[str, list[RevealedPokemonBelief]] = {"p1": [], "p2": []}
         self._pending_switches: list[_PendingSwitch] = []
+        # Exact-state engine bookkeeping (all protocol-tautological; no mechanics model).
+        self._turn_number = 0
+        self._cure_all_count: dict[str, int] = {"p1": 0, "p2": 0}
+        # Sleep Clause Mod (live semantics): the belief key of the opposing mon this side put to
+        # sleep, cleared on its wake or faint. Rest self-sleep never engages the clause.
+        self._sleep_clause_holder: dict[str, Optional[str]] = {"p1": None, "p2": None}
+        # Per-turn proc tracking for the non-proc pruning family. Leftovers pruning keys off the
+        # PRE-RESIDUAL damage state: gen3's Leftovers slot precedes status/Leech chip, so a mon
+        # chipped only during residuals gives no Leftovers evidence (its slot ran at full HP).
+        self._leftovers_healed_this_turn: set[str] = set()
+        self._berry_ate_this_turn: set[str] = set()
+        self._hp_after_actions: dict[str, Optional[float]] = {}
+        # Pending Mud Shot Shield-Dust check: (target_key, saw_damage, cancelled).
+        self._pending_mudshot: Optional[dict[str, Any]] = None
 
     @classmethod
     def from_events(
@@ -328,6 +366,7 @@ class PublicBattleBeliefEngine:
         self._record_item_reveal(event)
 
         if event_type in {"switch", "drag", "replace"} and actor_slot and primary:
+            self._record_switch_out_state(actor_slot)
             self._mark_side_inactive(actor_slot)
             belief = self._upsert(
                 showdown_slot=actor_slot,
@@ -335,6 +374,7 @@ class PublicBattleBeliefEngine:
                 condition=_string_or_none(secondary),
                 active=True,
             )
+            belief = self._on_switch_in(belief, condition=_string_or_none(secondary), raw_line=raw_line)
             if self._can_queue_intimidate_non_trigger(belief):
                 self._pending_switches.append(
                     _PendingSwitch(
@@ -369,13 +409,39 @@ class PublicBattleBeliefEngine:
             return
 
         if event_type == "move" and actor_slot and primary:
+            self._resolve_pending_mudshot()
             species = self._active_species(actor_slot) or _species_from_ident(actor_ident)
             if species:
                 belief = self._upsert(showdown_slot=actor_slot, species=species)
-                # A move called by another move (Metronome, Sleep Talk, ...) or used while
-                # transformed (Ditto) is not part of this mon's own set — do not record it.
-                if _called_move_source(raw_line) in _CALLER_MOVES or belief.transformed:
+                move_id = _normalize_identifier(str(primary))
+                caller = _called_move_source(raw_line)
+                if move_id in {"healbell", "aromatherapy"}:
+                    self._cure_all_count[actor_slot] = self._cure_all_count.get(actor_slot, 0) + 1
+                if move_id == "mudshot":
+                    target_belief = self._active_belief(_other_side(actor_slot))
+                    if target_belief is not None:
+                        self._pending_mudshot = {
+                            "target_key": target_belief.key,
+                            "target_side": _other_side(actor_slot),
+                            "saw_damage": False,
+                            "cancelled": False,
+                        }
+                # PP ledger: called moves charge the CALLER's PP (they spend none of their own);
+                # transformed mons charge nothing (copied moves are instance-scoped, 5 PP,
+                # discarded on switch-out — never the real set's ledger); Struggle has no PP.
+                if belief.transformed:
                     return
+                if caller in _CALLER_MOVES:
+                    # The called execution spends no PP of its own; the caller was already
+                    # charged on its own |move| line (Showdown always emits it first).
+                    return
+                if _called_move_source(raw_line) == "lockedmove":
+                    # Locked continuations (Solar Beam release) already paid on initiation.
+                    # _called_move_source normalizes both the spaced and unspaced [from] forms.
+                    return
+                if move_id != "struggle":
+                    foe_targeted = bool(target_slot) and target_slot != actor_slot
+                    belief = self._charge_move_use(belief, move_id, foe_targeted=foe_targeted)
                 revealed_moves = _append_unique(belief.revealed_moves, str(primary))
                 evidence = belief.evidence
                 if revealed_moves != belief.revealed_moves:
@@ -397,25 +463,126 @@ class PublicBattleBeliefEngine:
         if event_type in {"-damage", "-heal"} and target_slot:
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
+                if event_type == "-heal" and raw_line and "[from] item: Leftovers" in raw_line:
+                    self._leftovers_healed_this_turn.add(belief.key)
+                if _is_action_phase_hp_change(raw_line):
+                    self._hp_after_actions[belief.key] = _hp_fraction_from_condition(_string_or_none(primary))
+                if (
+                    event_type == "-damage"
+                    and self._pending_mudshot is not None
+                    and not self._pending_mudshot.get("cancelled")
+                    and belief.key == self._pending_mudshot.get("target_key")
+                    and not (raw_line and "[from]" in raw_line)
+                ):
+                    self._pending_mudshot["saw_damage"] = True
                 self._replace_belief(belief, condition=_string_or_none(primary))
+            return
+
+        if event_type == "-unboost" and target_slot:
+            if (
+                self._pending_mudshot is not None
+                and not self._pending_mudshot.get("cancelled")
+            ):
+                belief = self._target_belief(target_slot, target_ident)
+                if belief is not None and belief.key == self._pending_mudshot.get("target_key"):
+                    self._pending_mudshot["cancelled"] = True
             return
 
         if event_type == "-status" and target_slot:
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
-                self._replace_belief(belief, status=_string_or_none(primary))
+                rest = bool(raw_line and "move: Rest" in raw_line)
+                status_value = _string_or_none(primary)
+                changes: dict[str, Any] = {"status": status_value}
+                if status_value == "slp":
+                    changes["sleep_turns"] = 0
+                    changes["rest_sleep"] = rest
+                    # Sleep Clause Mod engages only for opponent-inflicted sleep (never Rest,
+                    # never Synchronize-style reflections, which carry a [from] ability tag).
+                    if not rest and not (raw_line and "[from] ability:" in raw_line):
+                        self._sleep_clause_holder[_other_side(target_slot)] = belief_key(
+                            belief.showdown_slot, belief.species
+                        )
+                self._replace_belief(belief, **changes)
             return
 
         if event_type == "-curestatus" and target_slot:
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
-                self._replace_belief(belief, status=None)
+                if belief.status == "slp" and belief.rest_sleep and belief.sleep_turns == 1:
+                    # Rest sleeps exactly 2 turns in gen 3; a 1-turn Rest wake is deterministic
+                    # Early Bird identification (5 reachable carriers).
+                    if not belief.revealed_ability:
+                        belief = self._replace_belief(
+                            belief,
+                            revealed_ability="Early Bird",
+                            evidence=_append_evidence(
+                                belief.evidence,
+                                BeliefEvidence(
+                                    kind="confirmed-ability",
+                                    detail="Woke from Rest after 1 turn; only Early Bird halves Rest sleep.",
+                                    source_line=raw_line,
+                                ),
+                            ),
+                        )
+                self._clear_sleep_clause_for(belief)
+                self._replace_belief(belief, status=None, sleep_turns=0, rest_sleep=False)
+            return
+
+        if event_type == "cant" and raw_line and "|slp" in raw_line:
+            # ``|cant|p2a: Snorlax|slp`` — the parser does not decompose cant lines, so read the
+            # ident from the raw line. Each observed sleeping turn ticks the counter.
+            parts = raw_line.split("|")
+            cant_ident = parts[2] if len(parts) > 2 else None
+            cant_slot = _slot_from_ident(cant_ident)
+            if cant_slot:
+                species = self._active_species(cant_slot) or _species_from_ident(cant_ident)
+                if species:
+                    belief = self._upsert(showdown_slot=cant_slot, species=species)
+                    self._replace_belief(belief, sleep_turns=belief.sleep_turns + 1)
             return
 
         if event_type == "faint" and target_slot:
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
-                self._replace_belief(belief, condition="0 fnt", active=False)
+                if self._pending_mudshot is not None and self._pending_mudshot.get("target_key") == belief.key:
+                    # A KO'd target never runs the secondary; no Shield Dust evidence.
+                    self._pending_mudshot = None
+                self._clear_sleep_clause_for(belief)
+                self._replace_belief(
+                    belief, condition="0 fnt", active=False, status_on_exit=None, cure_all_count_on_exit=-1
+                )
+            return
+
+        if event_type == "-sethp" and raw_line:
+            # Pain Split: ``|-sethp|p1a: X|155/307`` — keep condition (and the pre-residual
+            # snapshot) current or later pinch-berry sweeps read stale HP.
+            parts = raw_line.split("|")
+            sethp_ident = parts[2] if len(parts) > 2 else None
+            sethp_slot = _slot_from_ident(sethp_ident)
+            sethp_condition = parts[3].strip() if len(parts) > 3 else None
+            if sethp_slot and sethp_condition:
+                belief = self._target_belief(sethp_slot, sethp_ident)
+                if belief is not None:
+                    self._replace_belief(belief, condition=sethp_condition)
+                    self._hp_after_actions[belief.key] = _hp_fraction_from_condition(sethp_condition)
+            return
+
+        if event_type == "turn":
+            self._turn_number += 1
+            for side in ("p1", "p2"):
+                active = self._active_belief(side)
+                if active is not None:
+                    self._replace_belief(active, turns_active=active.turns_active + 1)
+            return
+
+        if event_type == "upkeep":
+            # The |upkeep| line follows all residuals (Leftovers heals, pinch-berry eats), so
+            # end-of-turn non-proc pruning runs here with this turn's proc sets fully populated.
+            self._sweep_end_of_turn_non_procs()
+            self._resolve_pending_mudshot()
+            self._leftovers_healed_this_turn = set()
+            self._berry_ate_this_turn = set()
             return
 
         if event_type in {"-ability", "ability"} and target_slot and primary:
@@ -438,10 +605,9 @@ class PublicBattleBeliefEngine:
         if event_type == "-item" and target_slot and primary:
             belief = self._target_belief(target_slot, target_ident)
             if belief is not None:
-                self._replace_belief(
-                    belief,
-                    revealed_item=str(primary),
-                    evidence=_append_evidence(
+                changes: dict[str, Any] = {
+                    "revealed_item": str(primary),
+                    "evidence": _append_evidence(
                         belief.evidence,
                         BeliefEvidence(
                             kind="revealed-item",
@@ -449,7 +615,10 @@ class PublicBattleBeliefEngine:
                             source_line=raw_line,
                         ),
                     ),
-                )
+                }
+                if raw_line and "move: Trick" in raw_line:
+                    changes["item_mutated"] = True
+                self._replace_belief(belief, **changes)
 
     def _record_item_reveal(self, event: Any) -> None:
         """Record an item reveal that the explicit ``-item`` branch misses.
@@ -484,6 +653,12 @@ class PublicBattleBeliefEngine:
         belief = self._target_belief(slot, ident)
         if belief is None:
             return
+        if event_type == "-enditem":
+            if "[eat]" in raw_line:
+                self._berry_ate_this_turn.add(belief.key)
+            if "move: Knock Off" in raw_line or "move: Trick" in raw_line:
+                # Held-item mutation: non-proc pruning applies to the ORIGINAL assignment only.
+                belief = self._replace_belief(belief, item_mutated=True)
         if _normalize_identifier(belief.revealed_item or "") == _normalize_identifier(item):
             return  # already known
         self._replace_belief(
@@ -515,6 +690,13 @@ class PublicBattleBeliefEngine:
         twin._event_count = self._event_count
         twin._sides = copy.deepcopy(self._sides)
         twin._pending_switches = copy.deepcopy(self._pending_switches)
+        twin._turn_number = self._turn_number
+        twin._cure_all_count = dict(self._cure_all_count)
+        twin._sleep_clause_holder = dict(self._sleep_clause_holder)
+        twin._leftovers_healed_this_turn = set(self._leftovers_healed_this_turn)
+        twin._hp_after_actions = dict(self._hp_after_actions)
+        twin._berry_ate_this_turn = set(self._berry_ate_this_turn)
+        twin._pending_mudshot = copy.deepcopy(self._pending_mudshot)
         twin.resolve_pending_switches_at_boundary()
         return twin.snapshot().for_player(showdown_slot)
 
@@ -596,6 +778,167 @@ class PublicBattleBeliefEngine:
             return None
         return self._upsert(showdown_slot=showdown_slot, species=species)
 
+    @property
+    def sleep_clause_holders(self) -> dict[str, Optional[str]]:
+        """Per side: the belief key of the opposing mon this side currently has asleep (live)."""
+        return dict(self._sleep_clause_holder)
+
+    @property
+    def turn_number(self) -> int:
+        return self._turn_number
+
+    def _charge_move_use(
+        self, belief: RevealedPokemonBelief, move_id: str, *, foe_targeted: bool = True
+    ) -> RevealedPokemonBelief:
+        # Pressure on the OPPOSING active doubles PP spent, but only for FOE-TARGETED moves
+        # (gen3 engine behavior — self-targeted Rest/Swords Dance are never pressured). Gen 3
+        # announces Pressure on entry, so the opposing ability is public when the double applies.
+        opposing = self._active_belief(_other_side(belief.showdown_slot))
+        charge = (
+            2
+            if foe_targeted
+            and opposing is not None
+            and _normalize_identifier(opposing.revealed_ability or "") == "pressure"
+            else 1
+        )
+        normalized = _normalize_identifier(move_id)
+        uses = dict(belief.move_uses)
+        uses[normalized] = uses.get(normalized, 0) + charge
+        return self._replace_belief(belief, move_uses=tuple(sorted(uses.items())))
+
+    def _record_switch_out_state(self, showdown_slot: str) -> None:
+        outgoing = self._active_belief(showdown_slot)
+        if outgoing is None or outgoing.condition == "0 fnt":
+            return
+        self._replace_belief(
+            outgoing,
+            status_on_exit=outgoing.status,
+            cure_all_count_on_exit=self._cure_all_count.get(showdown_slot, 0),
+        )
+
+    def _on_switch_in(
+        self,
+        belief: RevealedPokemonBelief,
+        *,
+        condition: Optional[str],
+        raw_line: Optional[str],
+    ) -> RevealedPokemonBelief:
+        changes: dict[str, Any] = {"turns_active": 0}
+        self._hp_after_actions[belief.key] = _hp_fraction_from_condition(condition)
+        condition_status = _status_token_from_condition(condition)
+        if belief.status_on_exit and condition_status is None:
+            # Natural Cure elimination: carried a status out, returned clean, and no public
+            # cure-all (Heal Bell / Aromatherapy) happened in between. All cure paths in this
+            # pool are public events, so this is deterministic identification.
+            if belief.cure_all_count_on_exit == self._cure_all_count.get(belief.showdown_slot, 0):
+                if not belief.revealed_ability:
+                    changes["revealed_ability"] = "Natural Cure"
+                    changes["evidence"] = _append_evidence(
+                        belief.evidence,
+                        BeliefEvidence(
+                            kind="confirmed-ability",
+                            detail="Returned status-free with no public cure-all between exits; only Natural Cure explains it.",
+                            source_line=raw_line,
+                        ),
+                    )
+            changes["status"] = None
+            changes["sleep_turns"] = 0
+            changes["rest_sleep"] = False
+        elif condition_status is not None:
+            changes["status"] = condition_status
+        changes["status_on_exit"] = None
+        changes["cure_all_count_on_exit"] = -1
+        return self._replace_belief(belief, **changes)
+
+    def _clear_sleep_clause_for(self, belief: RevealedPokemonBelief) -> None:
+        for side, holder in list(self._sleep_clause_holder.items()):
+            if holder == belief.key:
+                self._sleep_clause_holder[side] = None
+
+    def _rule_out_items(
+        self,
+        belief: RevealedPokemonBelief,
+        items: tuple[str, ...],
+        detail: str,
+    ) -> RevealedPokemonBelief:
+        new_items = tuple(item for item in items if item not in belief.ruled_out_items)
+        if not new_items:
+            return belief
+        return self._replace_belief(
+            belief,
+            ruled_out_items=belief.ruled_out_items + new_items,
+            evidence=_append_evidence(
+                belief.evidence,
+                BeliefEvidence(kind="ruled-out-item", detail=detail, source_line=None),
+            ),
+        )
+
+    def _sweep_end_of_turn_non_procs(self) -> None:
+        for side in ("p1", "p2"):
+            belief = self._active_belief(side)
+            if belief is None or belief.item_mutated or belief.revealed_item:
+                continue
+            hp_fraction = _hp_fraction_from_condition(belief.condition)
+            if hp_fraction is None or hp_fraction <= 0.0:
+                continue
+            # Leftovers evidence keys off the PRE-RESIDUAL state: gen3 runs the Leftovers slot
+            # before status/Leech chip, so a mon damaged only by later residuals gave its
+            # Leftovers no chance to fire. No snapshot => no evidence (conservative).
+            hp_pre_residual = self._hp_after_actions.get(belief.key)
+            if (
+                hp_pre_residual is not None
+                and hp_pre_residual < 1.0
+                and belief.key not in self._leftovers_healed_this_turn
+            ):
+                belief = self._rule_out_items(
+                    belief,
+                    ("leftovers",),
+                    "Ended a damaged turn with no Leftovers heal; Leftovers variants removed.",
+                )
+            if belief.status:
+                belief = self._rule_out_items(
+                    belief,
+                    ("lumberry",),
+                    "Status persisted without an instant Lum cure; Lum variants removed.",
+                )
+            if hp_fraction <= 0.25 and belief.key not in self._berry_ate_this_turn:
+                belief = self._rule_out_items(
+                    belief,
+                    ("salacberry", "petayaberry", "liechiberry"),
+                    "Ended a turn at or below 25% HP with no pinch-berry activation; pinch variants removed.",
+                )
+
+    def _resolve_pending_mudshot(self) -> None:
+        pending = self._pending_mudshot
+        self._pending_mudshot = None
+        if not pending or pending.get("cancelled") or not pending.get("saw_damage"):
+            return
+        side = pending.get("target_side")
+        for belief in self._sides.get(str(side), []):
+            if belief.key != pending.get("target_key"):
+                continue
+            # Mud Shot is the pool's only 100% target secondary: damage landed (not on a sub —
+            # sub hits report no plain -damage) with no spe drop and no tagged blocker ⇒ the
+            # only remaining explanation is Shield Dust. Conservative: candidates must allow it.
+            if belief.revealed_ability:
+                return
+            candidates = {_normalize_identifier(a) for a in belief.possible_abilities}
+            if candidates and "shielddust" not in candidates:
+                return
+            self._replace_belief(
+                belief,
+                revealed_ability="Shield Dust",
+                evidence=_append_evidence(
+                    belief.evidence,
+                    BeliefEvidence(
+                        kind="confirmed-ability",
+                        detail="Mud Shot's guaranteed Speed drop did not fire on a clean hit; only Shield Dust explains it.",
+                        source_line=None,
+                    ),
+                ),
+            )
+            return
+
     def _with_set_summary(self, belief: RevealedPokemonBelief) -> RevealedPokemonBelief:
         if self.set_source is None:
             return belief
@@ -605,15 +948,29 @@ class PublicBattleBeliefEngine:
                 species=belief.species,
                 revealed_moves=belief.revealed_moves,
                 revealed_ability=belief.revealed_ability,
-                revealed_item=belief.revealed_item,
+                # Post-mutation (Trick/Knock Off) the CURRENT item is not the generator's
+                # assignment: exclude it from variant matching but keep the frozen pre-swap
+                # rule-outs, which still constrain the original set (correction #15).
+                revealed_item=None if belief.item_mutated else belief.revealed_item,
                 ruled_out_abilities=belief.ruled_out_abilities,
+                ruled_out_items=belief.ruled_out_items,
             )
         except TypeError:
-            summary = self.set_source.summarize(
-                format_id=self.format_id,
-                species=belief.species,
-                revealed_moves=belief.revealed_moves,
-            )
+            try:
+                summary = self.set_source.summarize(
+                    format_id=self.format_id,
+                    species=belief.species,
+                    revealed_moves=belief.revealed_moves,
+                    revealed_ability=belief.revealed_ability,
+                    revealed_item=belief.revealed_item,
+                    ruled_out_abilities=belief.ruled_out_abilities,
+                )
+            except TypeError:
+                summary = self.set_source.summarize(
+                    format_id=self.format_id,
+                    species=belief.species,
+                    revealed_moves=belief.revealed_moves,
+                )
         if summary is None:
             return belief
         return replace(
@@ -837,6 +1194,69 @@ def _event_value(event: Any, name: str) -> Optional[str]:
 _CALLER_MOVES = frozenset(
     {"metronome", "mirrormove", "sleeptalk", "assist", "naturepower", "copycat"}
 )
+
+
+_RESIDUAL_HP_TAGS = (
+    "[from] psn",
+    "[from] brn",
+    "[from] Sandstorm",
+    "[from] Hail",
+    "[from] Leech Seed",
+    "[from] item: Leftovers",
+    "[from] ability: Rain Dish",
+    "[from] Curse",
+    "[from] Nightmare",
+    "[from] move: Wrap",
+    "[from] partiallytrapped",
+)
+
+
+def _is_action_phase_hp_change(raw_line: Optional[str]) -> bool:
+    """True for HP changes that land before the end-of-turn residual slots.
+
+    Untagged damage/heals are action-phase; Spikes switch-in chip is action-phase (it fires on
+    entry, before any residual). Residual-tagged sources must NOT update the pre-residual
+    snapshot or gen3's residual order (Leftovers before status/Leech chip) manufactures false
+    Leftovers evidence.
+    """
+    if not raw_line:
+        return True
+    if "[from] Spikes" in raw_line or "[from] drain" in raw_line or "Recoil" in raw_line:
+        return True
+    return not any(tag in raw_line for tag in _RESIDUAL_HP_TAGS)
+
+
+def _other_side(showdown_slot: str) -> str:
+    return "p2" if showdown_slot == "p1" else "p1"
+
+
+def _hp_fraction_from_condition(condition: Optional[str]) -> Optional[float]:
+    """Parse an HP fraction from a protocol condition string ('155/307 par', '0 fnt')."""
+    if not condition:
+        return None
+    head = condition.split()[0]
+    if head == "0" or "fnt" in condition:
+        return 0.0
+    if "/" not in head:
+        return None
+    try:
+        current, maximum = head.split("/", 1)
+        maximum_value = float(maximum)
+        if maximum_value <= 0:
+            return None
+        return max(0.0, min(1.0, float(current) / maximum_value))
+    except ValueError:
+        return None
+
+
+def _status_token_from_condition(condition: Optional[str]) -> Optional[str]:
+    """Status token from a condition string ('250/250 slp' -> 'slp'), None when healthy."""
+    if not condition:
+        return None
+    parts = condition.split()
+    if len(parts) < 2 or parts[1] == "fnt":
+        return None
+    return parts[1]
 
 
 def _called_move_source(raw_line: Optional[str]) -> Optional[str]:
