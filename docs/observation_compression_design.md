@@ -167,13 +167,24 @@ accordingly:
   rules it out — variant pruning via the same non-trigger pattern the
   engine already implements for Intimidate ({Volt/Water Absorb, Flash
   Fire, Levitate} × "move connected normally").
-- **Speed brackets are candidate-ability-conditioned.** Swift
-  Swim/Chlorophyll double speed in weather, so an observed outspeed
-  under rain is evidence about {base speed OR ability}, not base speed
-  alone. Bounds bind only under the candidate-favorable assumption
-  (max-explanation philosophy, as with CB); otherwise one rain game
-  corrupts a bracket permanently. Paralysis and public stage changes
-  condition bounds the same way.
+- **Turn-order inference REMOVED (decided 2026-07-04).** Speed brackets
+  were cut entirely, not conditioned. The payoff is near zero — base
+  stats are computable from public info (see computed expected stats),
+  so turn order's only inference content is weather-ability
+  identification (Swift Swim/Chlorophyll) — while the cost is a full
+  priority/action-order mechanics model (priority table, switch
+  ordering, Pursuit interception, charge turns, speed ties, skip
+  states), every row of which can corrupt a bracket. The asymmetry
+  decides it: hard state features are trusted, so one engine error is
+  persistent adversarial input; soft inference degrades gracefully.
+  **Principle: hard rules only where the protocol makes them
+  tautological** (PP, procs, duration timers — event bookkeeping, no
+  mechanics model); anything needing a broad mechanics model stays raw.
+  The net keeps the soft path for free: transition tokens are emitted
+  in action order (within-turn sequence is implicit — no field, no
+  model), and weather + candidate abilities are already features. If
+  probes later show rain-sweeper identification failing, a narrow
+  trigger rule can be added behind Tier-2-style validation.
 - **Drain moves and Leech Seed.** The side-effect category carries a
   distinct `drain` value (damage + self-heal in one action); heal
   magnitude stays derivable (50% of observed damage). Interactions:
@@ -299,10 +310,13 @@ estimates) — no oracle leakage.
 These are deterministic bookkeeping the engine can do perfectly; they live
 beside the PP ledger, not in the stats block. All approved 2026-07-03.
 
-- **Speed brackets from turn order.** Every observed turn order is an exact
-  inequality against a known stat of ours. Two scalars per opponent mon:
-  best lower / upper bound on speed observed so far. Pins randbats sets
-  fast; the belief engine does not consume turn order today.
+- **Computed expected stats** (REPLACES the earlier speed-bracket
+  feature — removed 2026-07-04, rationale in the turn-order section
+  below): opponent actual stats are *computable*, not inferable — the
+  generator's fixed 85 EV / 31 IV / neutral spread plus public
+  species+level determines them to within the HP-IV point. Expose the
+  computed stat block as deterministic numeric features on opponent
+  tokens. Pure arithmetic, zero inference, zero error surface.
 - **Sleep clause consumed** (one bit per side): once a side has put an
   opposing mon to sleep, its remaining sleep moves are dead weight.
 - **Sleep turn counters** per sleeping mon, both sides, with a
