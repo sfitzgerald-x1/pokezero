@@ -14,7 +14,11 @@ from .cli_audit import (
     post_iteration_audit_config_from_args,
     validate_post_iteration_audit_evaluation_games,
 )
-from .collection import policy_spec_with_showdown_root, reject_eval_only_specs
+from .collection import (
+    env_config_with_policy_spec_masks,
+    policy_spec_with_showdown_root,
+    reject_eval_only_specs,
+)
 from .evaluation_profiles import EVALUATION_PROFILES
 from .linear_policy import LinearTrainingConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -219,6 +223,13 @@ def _iterate(args: argparse.Namespace) -> int:
     benchmark_references = tuple(
         policy_spec_with_showdown_root(spec, policy_showdown_root)
         for spec in (args.benchmark_reference_policy or ())
+    )
+    # Any neural: checkpoint spec observes through the env, so the env must encode with the
+    # checkpoint's stamped feature masks (torch-free no-op when no neural specs are present).
+    env_config = env_config_with_policy_spec_masks(
+        env_config,
+        (initial_policy, *fixed_opponents, *benchmark_references),
+        context="self-play harness",
     )
     auto_promotion_config = _auto_promotion_config_from_args(args)
     result = run_selfplay_iterations(

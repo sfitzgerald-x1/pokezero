@@ -109,7 +109,8 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, corpus, va
 
     def priors(state):
         obs = observation_from_player_state(
-            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+            **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
         )
         return evaluate_transformer_action_priors(
             model=agent.policy.model, result=agent.policy.result, observations=[obs]
@@ -148,7 +149,10 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, corpus, va
                 spin_states += 1
                 for k in (0, 1, 2, 3):
                     cf = _with_self_spikes(st, k)
-                    obs = observation_from_player_state(cf, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex)
+                    obs = observation_from_player_state(
+                        cf, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+                        **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
+                    )
                     all_p = evaluate_transformer_action_priors(
                         model=agent.policy.model, result=agent.policy.result, observations=[obs]
                     )
@@ -161,7 +165,8 @@ def probe_checkpoint(label: str, checkpoint: str, showdown_root: str, corpus, va
     # --- dV: value-head response to injected hazards (credit-assignment decomposition) ---
     def value_of(state) -> float:
         obs = observation_from_player_state(
-            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex
+            state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
+            **({"feature_masks": agent.feature_masks} if agent.feature_masks is not None else {}),
         )
         return evaluate_transformer_observation_value(
             model=agent.policy.model, result=agent.policy.result, observations=[obs]
