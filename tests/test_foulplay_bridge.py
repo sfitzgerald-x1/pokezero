@@ -17,6 +17,7 @@ from pokezero.foulplay_bridge import (
     ControlledFoulPlayComparisonResult,
     ControlledFoulPlayConfig,
     ControlledFoulPlayGameResult,
+    FoulPlayProcessExitError,
     _ControlledBattleState,
     _choice_body_from_outgoing_message,
     _build_policy,
@@ -976,6 +977,176 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["foulplay_random_seed_schedule"]["seeds"], [456, 457])
         self.assertEqual(payload["runs"]["raw"]["foulplay_random_seed_schedule"]["seeds"], [456, 457])
         self.assertEqual(payload["runs"]["root_puct"]["foulplay_random_seed_schedule"]["seeds"], [456, 457])
+
+    def test_per_seed_comparison_skips_seed_and_records_crash_when_foulplay_exits_early(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=3,
+            policy_mode="raw",
+            opponent_crash_retries=0,
+        )
+        observed_arms: list[tuple[str, int]] = []
+
+        async def fake_benchmark(
+            benchmark_config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayBenchmarkResult:
+            observed_arms.append((benchmark_config.policy_mode, benchmark_config.seed_start))
+            if benchmark_config.policy_mode == "root-puct" and benchmark_config.seed_start == 2:
+                raise FoulPlayProcessExitError(
+                    stage="choosing",
+                    returncode=1,
+                    log_tail="stderr:\n_pickle.PicklingError: Can't pickle pyo3_runtime.PanicException",
+                )
+            return ControlledFoulPlayBenchmarkResult(
+                config=benchmark_config,
+                policy_id=f"checkpoint-{benchmark_config.policy_mode}",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id=f"battle-{benchmark_config.policy_mode}-{benchmark_config.seed_start}",
+                        seed=benchmark_config.seed_start,
+                        winner="PokeZeroBot",
+                        pokezero_won=True,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+
+        with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+            comparison = asyncio.run(run_controlled_foulplay_comparison(config))
+
+        self.assertEqual(
+            observed_arms,
+            [
+                ("raw", 1),
+                ("root-puct", 1),
+                ("raw", 2),
+                ("root-puct", 2),
+                ("raw", 3),
+                ("root-puct", 3),
+            ],
+        )
+        self.assertEqual([game.seed for game in comparison.raw.games], [1, 3])
+        self.assertEqual([game.seed for game in comparison.root_puct.games], [1, 3])
+        self.assertTrue(comparison.complete)
+        payload = comparison.to_dict()
+        self.assertEqual(payload["status"], "complete")
+        self.assertEqual(payload["runs"]["raw"]["foulplay_random_seed_schedule"]["seeds"], [1, 3])
+        self.assertEqual(payload["runs"]["root_puct"]["foulplay_random_seed_schedule"]["seeds"], [1, 3])
+        self.assertEqual(payload["comparison"]["paired_by_seed"]["games"], 2)
+        self.assertEqual(
+            payload["comparison"]["opponent_crashed_seeds"],
+            {
+                "count": 1,
+                "seeds": [2],
+                "handling": "seed_excluded_from_paired_stats_and_aggregates",
+            },
+        )
+        self.assertEqual(len(payload["opponent_crashes"]), 1)
+        crash = payload["opponent_crashes"][0]
+        self.assertEqual(crash["seed"], 2)
+        self.assertEqual(crash["policy_mode"], "root-puct")
+        self.assertEqual(crash["returncode"], 1)
+        self.assertEqual(crash["attempts"], 1)
+        self.assertEqual(crash["stage"], "choosing")
+        self.assertIn("PanicException", crash["stderr_tail"])
+
+    def test_per_seed_comparison_retries_crashed_arm_once_by_default(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=1,
+            policy_mode="raw",
+        )
+        raw_attempts = 0
+
+        async def fake_benchmark(
+            benchmark_config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayBenchmarkResult:
+            nonlocal raw_attempts
+            if benchmark_config.policy_mode == "raw":
+                raw_attempts += 1
+                if raw_attempts == 1:
+                    raise FoulPlayProcessExitError(stage="challenging", returncode=2, log_tail="stderr:\nboom")
+            return ControlledFoulPlayBenchmarkResult(
+                config=benchmark_config,
+                policy_id=f"checkpoint-{benchmark_config.policy_mode}",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id=f"battle-{benchmark_config.policy_mode}",
+                        seed=benchmark_config.seed_start,
+                        winner="PokeZeroBot",
+                        pokezero_won=True,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+
+        with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+            comparison = asyncio.run(run_controlled_foulplay_comparison(config))
+
+        self.assertEqual(raw_attempts, 2)
+        self.assertEqual(comparison.opponent_crashes, ())
+        self.assertEqual(comparison.raw.completed_games, 1)
+        self.assertEqual(comparison.root_puct.completed_games, 1)
+        self.assertTrue(comparison.complete)
+
+    def test_per_seed_comparison_skips_root_puct_arm_when_raw_arm_crashes(self) -> None:
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            games=2,
+            policy_mode="raw",
+            opponent_crash_retries=0,
+        )
+        observed_arms: list[tuple[str, int]] = []
+
+        async def fake_benchmark(
+            benchmark_config: ControlledFoulPlayConfig,
+            *,
+            progress_callback=None,
+        ) -> ControlledFoulPlayBenchmarkResult:
+            observed_arms.append((benchmark_config.policy_mode, benchmark_config.seed_start))
+            if benchmark_config.policy_mode == "raw" and benchmark_config.seed_start == 1:
+                raise FoulPlayProcessExitError(stage="choosing", returncode=137, log_tail="stderr:\nkilled")
+            return ControlledFoulPlayBenchmarkResult(
+                config=benchmark_config,
+                policy_id=f"checkpoint-{benchmark_config.policy_mode}",
+                games=(
+                    ControlledFoulPlayGameResult(
+                        battle_id=f"battle-{benchmark_config.policy_mode}-{benchmark_config.seed_start}",
+                        seed=benchmark_config.seed_start,
+                        winner="FoulPlayBot",
+                        pokezero_won=False,
+                        decision_rounds=1,
+                        pokezero_decisions=1,
+                        root_puct_searches=0,
+                        root_puct_fallbacks=0,
+                    ),
+                ),
+            )
+
+        with patch("pokezero.foulplay_bridge.run_controlled_foulplay_benchmark", side_effect=fake_benchmark):
+            comparison = asyncio.run(run_controlled_foulplay_comparison(config))
+
+        self.assertEqual(observed_arms, [("raw", 1), ("raw", 2), ("root-puct", 2)])
+        self.assertEqual([game.seed for game in comparison.raw.games], [2])
+        self.assertEqual([game.seed for game in comparison.root_puct.games], [2])
+        self.assertEqual(len(comparison.opponent_crashes), 1)
+        self.assertEqual(comparison.opponent_crashes[0].seed, 1)
+        self.assertEqual(comparison.opponent_crashes[0].policy_mode, "raw")
+        self.assertEqual(comparison.opponent_crashes[0].returncode, 137)
+        self.assertTrue(comparison.complete)
 
     def test_run_controlled_foulplay_comparison_can_preserve_per_arm_order(self) -> None:
         config = ControlledFoulPlayConfig(
