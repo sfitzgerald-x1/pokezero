@@ -121,22 +121,27 @@ accordingly:
   teammate's PP ledger and pollute its tendency stats. The
   `transformed` bit + `transform_species` are what let every consumer
   explain a foreign species acting for a known slot.
-- **Damage-outcome enum (Protect / Substitute / Endure / immunity):**
-  attack tokens carry `damage_outcome ∈ {normal, blocked, hit-sub,
-  broke-sub, endured, immune}` — one enum for the whole class of events
-  that truncate or absorb the observed damage number, so history is
-  self-describing without cross-token joins (the defender's own
-  Protect/Sub click is a separate token the same turn). Residual
-  semantics per value: `blocked` and `hit-sub` mask it (the protocol
-  reports no number against a sub); `broke-sub` converts it to a lower
-  bound (gen-3 subs have 25% of max HP) and `hit-sub` implies the
-  complementary upper bound — coarse inequality evidence Tier 2 may
-  consume where no exact number exists; `endured` is lower-bound-only
-  (naive computation systematically understates the hit → false
-  "not CB" evidence); `immune` masks it and, where the immunity must be
-  ability-sourced (Levitate vs Earthquake), doubles as
-  ability-identification evidence for candidate pruning. `blocked`
-  events additionally feed the protect-pattern tendency stat.
+- **Damage-outcome enum, in two evidence classes (negate vs truncate):**
+  attack tokens carry `damage_outcome ∈ {normal, blocked, immune,
+  hit-sub, broke-sub, endured}`, self-describing without cross-token
+  joins (the defender's own Protect/Sub click is a separate token the
+  same turn). The classes have opposite residual semantics:
+  - **Negation (`blocked`, `immune`) — no damage event occurred.** The
+    attack connected with nothing; magnitude evidence is *undefined*,
+    not zero. Residual: no evidence. Move-reveal/set evidence is
+    unaffected (the click is always informative). `immune` doubles as
+    ability-identification evidence where the immunity must be
+    ability-sourced (Levitate vs Earthquake); `blocked` feeds the
+    protect-pattern tendency stat.
+  - **Truncation (`hit-sub`, `broke-sub`, `endured`) — full computed
+    damage WAS dealt**, to a proxy or clipped at survival, so magnitude
+    evidence exists in inequality form: `broke-sub` ⇒ damage ≥ sub HP;
+    `hit-sub` on a **fresh** sub ⇒ damage < 25% of max HP (mild
+    anti-CB evidence — masking this discards real information);
+    `endured` ⇒ damage ≥ (pre-hit HP − 1), a *tight* lower bound since
+    HP is exactly known. Conservative rule: sub bounds apply only when
+    sub freshness is known (first hit on a just-set sub); cumulative
+    multi-hit sub bookkeeping (sum ≥ 25% at break) is Tier-2 detail.
 - **Tier-2 extension (note only): defender-side ability inference.** The
   same residual machinery on *our* attacks reveals the defender's
   ability (e.g. Thick Fat halving our Fire damage is observable against
