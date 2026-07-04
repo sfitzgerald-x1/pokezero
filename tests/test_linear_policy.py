@@ -312,7 +312,9 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertIn("def _zeros_from_shape", payload["padding_sources"]["_zeros_from_shape"])
         self.assertEqual(
             linear_feature_fingerprint(),
-            "53a4b9608ddb3c7f092e173af1f5350b03e5984b683a43db7932bb2322c21fc7",
+            # Pinned hash tracks the fingerprint payload; the observation spec v2 bump
+            # (pokezero.observation.v2) is intentionally part of it.
+            "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",
         )
 
     def test_linear_feature_fingerprint_changes_when_extractor_source_changes(self) -> None:

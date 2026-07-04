@@ -19,7 +19,12 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
 from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
-from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
+from .observation import (
+    LEGACY_OBSERVATION_SCHEMA_VERSIONS,
+    OBSERVATION_SCHEMA_VERSION,
+    TRANSITION_TOKEN_COUNT,
+    PokeZeroObservationV0,
+)
 from .padding import zeros_like as _zeros_like
 from .policy import PolicyDecision, legal_action_indices
 from .showdown import (
@@ -96,7 +101,10 @@ class TransformerPolicyConfig:
     """Entity-token transformer architecture for `PokeZeroObservationV0` batches."""
 
     policy_id: str = "entity-transformer"
-    window_size: int = 4
+    # Spec v2 default: window=1 current-state snapshots — temporal context lives in the
+    # observation's transition-token block, not in stacked history copies. Deeper windows remain
+    # a config choice (the window machinery is unchanged).
+    window_size: int = 1
     categorical_vocab_size: int = 2
     token_type_vocab_size: int = DEFAULT_TOKEN_TYPE_VOCAB_SIZE
     categorical_feature_count: int = DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count
@@ -113,6 +121,12 @@ class TransformerPolicyConfig:
     category_oov_buckets: int = 0
     value_activation: str = "tanh"
     temporal_aggregator: str = "mean"
+    # Ablation-arm feature masks (config, not spec — see ObservationFeatureMasks). Recorded here
+    # so a checkpoint is self-describing about the observation content it was trained on; the
+    # encode-time masks (LocalShowdownConfig.feature_masks) must be kept consistent with these.
+    stats_block_enabled: bool = True
+    exact_state_enabled: bool = True
+    transition_token_budget: int = TRANSITION_TOKEN_COUNT
 
     @classmethod
     def compact_category(
@@ -146,9 +160,21 @@ class TransformerPolicyConfig:
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
         if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
+            if self.observation_schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS:
+                raise ValueError(
+                    f"This checkpoint was trained under observation spec "
+                    f"{self.observation_schema_version!r}; this build encodes "
+                    f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens + exact-state "
+                    "layer). Old checkpoints cannot run under the new spec — replay them from "
+                    "their pinned tag per docs/model_versioning.md."
+                )
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
+        if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
+            raise ValueError(
+                f"transition_token_budget must be in 1..{TRANSITION_TOKEN_COUNT}."
+            )
         if self.categorical_vocab_size <= 1:
             raise ValueError("categorical_vocab_size must be greater than 1.")
         if self.token_type_vocab_size <= 1:
@@ -199,7 +225,7 @@ class TransformerPolicyConfig:
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
         return cls(
             policy_id=_str_field(payload, "policy_id", "entity-transformer"),
-            window_size=_int_field(payload, "window_size", 4),
+            window_size=_int_field(payload, "window_size", 1),
             categorical_vocab_size=_int_field(payload, "categorical_vocab_size", 2),
             token_type_vocab_size=_int_field(payload, "token_type_vocab_size", DEFAULT_TOKEN_TYPE_VOCAB_SIZE),
             categorical_feature_count=_int_field(
@@ -226,6 +252,9 @@ class TransformerPolicyConfig:
             # behavior when loading configs that predate the explicit value activation field.
             value_activation=_str_field(payload, "value_activation", "linear"),
             temporal_aggregator=_str_field(payload, "temporal_aggregator", "mean"),
+            stats_block_enabled=bool(payload.get("stats_block_enabled", True)),
+            exact_state_enabled=bool(payload.get("exact_state_enabled", True)),
+            transition_token_budget=_int_field(payload, "transition_token_budget", TRANSITION_TOKEN_COUNT),
         )
 
 
@@ -239,7 +268,7 @@ class TransformerTrainingConfig:
     learning_rate_progress_start: float = 0.0
     learning_rate_progress_end: float = 0.0
     weight_decay: float = 0.0
-    window_size: int = 4
+    window_size: int = 1
     discount: float = 1.0
     capped_terminal_value: float = 0.0
     hp_delta_return_weight: float = 0.0

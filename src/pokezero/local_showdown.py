@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 from .belief import PublicBattleBeliefEngine
 from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
-from .observation import ObservationSpec, PokeZeroObservationV0
+from .observation import (
+    DEFAULT_OBSERVATION_FEATURE_MASKS,
+    ObservationFeatureMasks,
+    ObservationSpec,
+    PokeZeroObservationV0,
+)
 from .randbat import load_gen3_randbat_source_cached
 from .randbat_vocab import gen3_category_vocabulary
 from .showdown import (
@@ -57,6 +62,11 @@ class LocalShowdownConfig:
     bridge_path: Path | str = BRIDGE_PATH
     node_binary: str = "node"
     observation_spec: ObservationSpec = DEFAULT_REPLAY_OBSERVATION_SPEC
+    # Ablation-arm feature masks (config, not spec): masked-off blocks are zeroed +
+    # attention-masked at encode time. Callers pairing the env with a model must keep these
+    # consistent with the model config's stats_block_enabled / exact_state_enabled /
+    # transition_token_budget fields.
+    feature_masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS
     # Category vocabulary used to convert token strings to embedding rows. When None it is built
     # from showdown_root; callers that pair the env with a specific model MUST pass the model's
     # vocabulary here so encode-time rows match the embedding exactly (no silent row drift).
@@ -231,6 +241,7 @@ class LocalShowdownEnv:
             category_vocab=vocab,
             spec=self.config.observation_spec,
             dex=load_showdown_dex_cached(root),
+            feature_masks=self.config.feature_masks,
         )
 
     def legal_actions(self, player: PlayerId) -> tuple[bool, ...]:

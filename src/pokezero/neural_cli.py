@@ -393,7 +393,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Global training progress at the end of this standalone train call, in [0, 1].",
     )
     train.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
-    train.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     train.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     train.add_argument(
@@ -1110,7 +1110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
-    iterate.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     iterate.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     iterate.add_argument("--capped-terminal-value", type=float, default=-0.25, help="Return assigned to each player in capped games.")
     iterate.add_argument(
@@ -2152,7 +2152,7 @@ def _paths_overlap(left: Path, right: Path) -> bool:
 
 
 def _add_training_dataset_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--window-size", type=int, default=4, help="Per-player observation history window.")
+    parser.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     parser.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
     parser.add_argument("--capped-terminal-value", type=float, default=0.0, help="Return assigned to each player in capped games.")
     parser.add_argument(
