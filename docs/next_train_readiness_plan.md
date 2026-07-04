@@ -87,10 +87,14 @@ switchover — probe comparability).
 
 ## WS-4 — Wave composition (decision required)
 
-Anchor: 512d, new spec. Controls are **historical** — the completed
-width-wave curves at matched milestones (no GPU spent re-running A/A8;
-the spec's masked-config keeps within-wave ablation cheap). Candidate
-slots for ~4 concurrent arms:
+Anchor: 512d, new spec. **Standard budget: every test arm runs to
+500k** (decided 2026-07-04) — matching the bake-off yardstick so all
+reads compare at matched milestones against the historical controls;
+volume beyond 500k is exclusively the designated continuation run
+(open decision 2), never a test arm. Controls are **historical** — the
+completed width-wave curves at matched milestones (no GPU spent
+re-running A/A8; the spec's masked-config keeps within-wave ablation
+cheap). Candidate slots for ~4 concurrent arms:
 
 | slot | arm | tests |
 |---|---|---|
