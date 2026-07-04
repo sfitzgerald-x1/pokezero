@@ -1,11 +1,12 @@
 """Live-env integration for the Tier-2 residual channel (#505 follow-up).
 
 End-to-end through the real BattleStream env: collection populates the reserved
-residual/validity slots exactly where the protocol says it should, the incremental
-live tracker agrees with the batch inference, mask-off encodes are byte-identical to
-a population-free pipeline, and the collect CLI records the masks in cache metadata
-for the trainer's cross-check. All tests need a built Showdown checkout + node and
-skip cleanly without them.
+residual/validity slots where the protocol says it should, the incremental live
+tracker is evidence-monotone-consistent with the batch inference (equal values
+wherever both are valid; divergence only in the live-sees-more-evidence direction),
+mask-off encodes are byte-identical to a population-free pipeline, and the collect
+CLI records the masks in cache metadata for the trainer's cross-check. All tests need
+a built Showdown checkout + node and skip cleanly without them.
 """
 
 import json
@@ -101,8 +102,9 @@ class LiveResidualPopulationTest(unittest.TestCase):
                     set_source=source,
                     whitelist=whitelist,
                 )
-                # The incremental live consumer agrees with the batch inference
-                # exactly — same residuals, same validity, same CB tallies.
+                # At this pinned seed live and batch agree outright (empirically
+                # verified); the GENERAL invariant is only evidence-monotone
+                # consistency — see MonotoneConsistencySweepTest below.
                 self.assertEqual(live, [(t.residual, t.residual_valid) for t in batch.tokens])
                 self.assertEqual(env._tier2_trackers[player].cb_bits, dict(batch.cb_bits))
                 valid_count = sum(1 for _, valid in live if valid)
@@ -163,6 +165,78 @@ class LiveResidualPopulationTest(unittest.TestCase):
         finally:
             env_on.close()
             env_off.close()
+
+
+@unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
+class MonotoneConsistencySweepTest(unittest.TestCase):
+    """Live-vs-batch over a multi-game sweep: evidence-monotone consistency.
+
+    The live tracker assesses each strike at the first observation boundary after it,
+    which can carry strictly MORE belief evidence than the batch inference's
+    next-action cutoff (end-of-turn non-proc pruning lands in the same window). The
+    invariant (per the #507 review's 60-game sweep, which found 4 such divergences,
+    all in the more-evidence direction): divergences are ONLY live-stands-down (CB) or
+    live-invalidates (residual), and residual values are identical wherever both sides
+    are valid.
+    """
+
+    def test_ten_game_sweep_only_monotone_divergences(self) -> None:
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.tier2 import cb_whitelist_for_source, infer_tier2, own_team_from_request
+
+        root = _integration_root()
+        dex = load_showdown_dex_cached(root)
+        source = load_gen3_randbat_source_cached(root)
+        whitelist = cb_whitelist_for_source(source, dex)
+
+        jointly_valid = 0
+        live_invalidations = 0
+        cb_stand_downs = 0
+        for seed in range(401, 411):
+            env = LocalShowdownEnv(
+                LocalShowdownConfig(showdown_root=root, set_belief_source=True)
+            )
+            try:
+                _play(env, seed)
+                replay = parse_showdown_replay(env.protocol_lines)
+                for player in ("p1", "p2"):
+                    state = env._state_for_player(player)
+                    batch = infer_tier2(
+                        replay,
+                        perspective_slot=player,
+                        own_team=own_team_from_request(env._first_requests[player]),
+                        dex=dex,
+                        set_source=source,
+                        whitelist=whitelist,
+                    )
+                    self.assertEqual(len(state.transition_tokens), len(batch.tokens))
+                    for live_token, batch_token in zip(state.transition_tokens, batch.tokens):
+                        if live_token.residual_valid and batch_token.residual_valid:
+                            jointly_valid += 1
+                            self.assertAlmostEqual(
+                                live_token.residual, batch_token.residual, places=12,
+                                msg=f"seed {seed} {player}: jointly-valid residuals differ",
+                            )
+                        elif batch_token.residual_valid and not live_token.residual_valid:
+                            live_invalidations += 1  # allowed: live saw more evidence
+                        elif live_token.residual_valid and not batch_token.residual_valid:
+                            self.fail(
+                                f"seed {seed} {player}: live claims a residual the batch "
+                                f"cutoff masks ({live_token.action}) — not evidence-monotone"
+                            )
+                    live_true = {k for k, v in env._tier2_trackers[player].cb_bits.items() if v}
+                    batch_true = {k for k, v in batch.cb_bits.items() if v}
+                    self.assertLessEqual(
+                        live_true, batch_true,
+                        f"seed {seed} {player}: live CB bit set where batch stands down",
+                    )
+                    cb_stand_downs += len(batch_true - live_true)
+            finally:
+                env.close()
+        # The sweep must actually exercise the value-equality assertion.
+        self.assertGreater(jointly_valid, 100)
 
 
 @unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")

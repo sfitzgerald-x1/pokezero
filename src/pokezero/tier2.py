@@ -969,10 +969,17 @@ class Tier2LiveTracker:
     - each protocol line is context-folded once (``_IncrementalContextFold``);
     - each opponent move token is assessed once, at the first ``annotate`` call that
       sees it — i.e. against the belief state at the first observation boundary after
-      the strike. Observations happen at decision boundaries (end of turn / forced
-      replacement), so this matches ``infer_tier2``'s feed-to-next-action framing at
-      those boundaries (the batch form's evaluation point for a turn's last action is
-      the same upkeep boundary the env observes at).
+      the strike.
+
+    Live-vs-batch invariant (evidence-monotone consistency, NOT exact equality): the
+    live boundary can carry strictly MORE belief evidence than ``infer_tier2``'s
+    next-action cutoff for the same strike (end-of-turn non-proc pruning lands inside
+    the same observation window), so live may conservatively diverge from batch —
+    standing a CB strike down (e.g. ``cb-pinned-by-elimination`` once Leftovers is
+    pruned) or masking a residual — but never the reverse, and residual VALUES are
+    identical wherever both sides are valid. Most games are outright equal; the
+    divergence classes are rare (4 perspective-level cases in a 120-perspective
+    review sweep) and always in the more-evidence direction.
 
     Per-``annotate`` work is O(new lines + new strikes); memory is O(actions).
     """
