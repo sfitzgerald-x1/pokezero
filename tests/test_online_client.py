@@ -96,3 +96,32 @@ class OnlineBattleAgentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BeliefSetSourceGateTest(unittest.TestCase):
+    def test_agent_threads_set_source_and_env_gate_controls_build(self) -> None:
+        # Regression (readiness plan WS-2/H6): the online client is the cluster foul-play
+        # probes' bot path; without set-source threading, probes evaluate belief-trained nets
+        # with candidate features ablated regardless of pod env.
+        import os
+        from unittest.mock import patch
+
+        from pokezero.online_client import OnlineBattleAgent
+
+        captured: dict[str, object] = {}
+
+        def fake_normalize(replay, *, player_id, player_name, set_source=None, **kwargs):
+            captured["set_source"] = set_source
+            raise ValueError("stop here")
+
+        agent = OnlineBattleAgent(
+            policy=None, vocab=None, dex=None, our_name="PokeZeroBot", set_source="SENTINEL"
+        )
+        with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
+            self.assertIsNone(agent.choose(["|player|p1|PokeZeroBot|1"], "room"))
+        self.assertEqual(captured["set_source"], "SENTINEL")
+
+        with patch.dict(os.environ, {"POKEZERO_BELIEF_SET_SOURCE": "0"}):
+            from pokezero.local_showdown import belief_set_source_env_enabled
+
+            self.assertFalse(belief_set_source_env_enabled())
