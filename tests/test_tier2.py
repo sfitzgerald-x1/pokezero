@@ -969,6 +969,68 @@ class ObservationWiringTest(unittest.TestCase):
         self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL], 0.0)
         self.assertEqual(plain.numeric_features[row_index][NUMERIC_TT_RESIDUAL_VALID], 0.0)
 
+    def test_cb_pinned_encodes_on_the_opp_mon_row_from_a_real_conclusion(self) -> None:
+        """v2.1 per-mon pinned surface, wired from a REAL two-strike inference (not a
+        hand-stamped token): pinned on Snorlax's opp-mon row, dark under the mask, and
+        the investment twin stays a reserve. Layer separation: the conclusion reaches
+        the observation through the tier2 token annotation only — the Tier-1 belief
+        engine's candidate sets are never written by tier2 (no belief-column change)."""
+        from dataclasses import replace as dataclass_replace
+
+        from pokezero.category_vocab import build_category_vocabulary
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.showdown import (
+            NUMERIC_TIER2_CB_PINNED,
+            NUMERIC_TIER2_INVESTMENT_PINNED,
+            OPPONENT_POKEMON_TOKEN_OFFSET,
+            normalize_for_player,
+            observation_from_player_state,
+        )
+
+        damage = _exceeding_damage()
+        lines = _leads()
+        lines += _strike_lines(damage, turn=1)
+        lines += _strike_lines(damage, turn=2, prior_hp=330 - damage)
+        request_line = (
+            '|request|{"active":[{"moves":[{"move":"Surf","id":"surf"}]}],'
+            '"side":{"id":"p1","name":"Alice","pokemon":[{"ident":"p1a: Slowbro",'
+            '"details":"Slowbro, L80","condition":"330/330","active":true}]}}'
+        )
+        full = lines[:2] + [request_line] + lines[2:]
+        inference = _infer(full)
+        self.assertTrue(inference.cb_bits.get("p2:snorlax"))
+
+        replay = parse_showdown_replay(full)
+        state = normalize_for_player(replay, player_id="agent", player_name="Alice")
+        wired = dataclass_replace(
+            state, transition_tokens=apply_residuals(state.transition_tokens, inference)
+        )
+        vocab = build_category_vocabulary(
+            [
+                "species:Slowbro", "species:Snorlax", "move:bodyslam",
+                "transition:self", "transition:opponent",
+                "tt_kind:move", "tt_kind:switch",
+                "tt_outcome:normal", "tt_effectiveness:neutral", "tt_side_effect:none",
+            ]
+        )
+        snorlax_index = next(
+            index for index, mon in enumerate(state.opponent_team) if mon.species == "Snorlax"
+        )
+        observation = observation_from_player_state(wired, category_vocab=vocab)
+        row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + snorlax_index]
+        self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 1.0)
+        self.assertEqual(row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
+
+        masked = observation_from_player_state(
+            wired, category_vocab=vocab, feature_masks=ObservationFeatureMasks(tier2_residuals=False)
+        )
+        self.assertEqual(
+            masked.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + snorlax_index][
+                NUMERIC_TIER2_CB_PINNED
+            ],
+            0.0,
+        )
+
 
 class HelpersTest(unittest.TestCase):
     def test_own_team_from_request(self) -> None:

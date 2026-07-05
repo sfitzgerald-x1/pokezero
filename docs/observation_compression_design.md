@@ -57,9 +57,15 @@
 >    mon's substitute HP fraction (column 137) as presence + the
 >    engine-verified initial floor(maxhp/4) — sub chip is not
 >    protocol-derivable (the surviving-hit `-activate` carries no
->    magnitude; the drain heal leak is Tier-2 residual territory). The
->    investment reserve (120) carries forward, still constant zero;
->    populating it is batch 2 behind its own gate.)*
+>    magnitude; the drain heal leak is Tier-2 residual territory);
+>    (d) per-mon PINNED Tier-2 conclusions on the opp-mon token surface
+>    (CB pinned 138, investment pinned 139 — the current-state belief
+>    channel, authoritative and switch-persistent; the tt-row cb_bit
+>    stays the as-of-strike history record, self-describing under
+>    K-truncation). Tier-2 conclusions never mutate the Tier-1
+>    candidate sets — layer separation holds. The investment reserves
+>    (120 tt-row, 139 per-mon) carry forward, still constant zero;
+>    populating them is batch 2 behind its own gate.)*
 > 10. Residual encoding: signed fraction of defender max HP (observed
 >    minus expected-median under the candidate-conservative baseline),
 >    with a separate validity bit (masked ⇒ invalid, value 0); populated
