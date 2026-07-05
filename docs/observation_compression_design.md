@@ -105,6 +105,68 @@
 >    freezes at its pre-swap state; non-proc rules apply to the current
 >    known item only.
 
+> **TURN-MERGED ADDENDUM (2026-07-05, v2.1 batch 3 — supersedes item 11's
+> one-token-per-action emission for the turn-merged mode; the per-action
+> extraction remains available and unchanged):**
+>
+> **Schema.** One token per TURN carries the two DECLARED actions as
+> ordered sub-blocks: first mover / second mover — resolution (speed)
+> order becomes EXPLICIT structure instead of positional convention.
+> Each sub-block carries the item-9 action fields (kind, move-or-species,
+> called, transformed, damage fraction, outcome enum, crit/miss/KO/
+> pursuit-intercept, n_hits, effectiveness, side-effect, Tier-2
+> residual+validity+CB reserves). The context trio and the positional
+> pair are stored ONCE per token (captured at the first sub-block's
+> declaration). A sub-block is NEGATED when the side's declared action
+> was consumed with zero protocol trace, and ABSENT when no declaration
+> was expected (the empty half of a single replacement token).
+> RestTalk's three protocol lines collapse to one sub-block
+> (called-execution + `cant_reason`); Baton Pass completions collapse to
+> `baton_pass_species`; both resynthesize exactly on flatten.
+>
+> **Engine-verified dispositions (vendored gen3 sim, 2026-07-05; live
+> tests in `test_turn_merged_engine.py`):**
+> - *Hazard sack*: a switch-in that faints to Spikes pauses the turn
+>   (forceSwitch/wait); the opponent's declared action FIZZLES ENTIRELY —
+>   no `|move|` line, no redirect to the replacement, even for
+>   non-targeted moves (a declared Spikes layer also vanishes). Hazard
+>   sacking is a true free pivot; the NEGATED sub-block is what makes it
+>   learnable.
+> - *Explosion/Selfdestruct double-faint*: both replacements are ONE
+>   engine forceSwitch cycle, emitted back-to-back before `|upkeep` —
+>   represented as one cold replacement-PAIR token (two switch
+>   sub-blocks, engine emission order). Sequential same-turn faints
+>   (move KO now, residual faint later) are separate request cycles and
+>   stay single replacement tokens; the pairing signal is "other side
+>   also pending a replacement at emission", never log adjacency.
+> - *Pursuit KO of a switching target*: previously chosen switches
+>   continue in Gen 2-4 (engine hint line) with no forceSwitch cycle —
+>   the completion IS the target's declared switch sub-block. This
+>   settles the completion-semantics question item 9's implementation
+>   left open.
+> - *Leads*: merged as a blind pair token (same simultaneity class as the
+>   cold double replacement; turn 0 carries no real speed order).
+>
+> **Equivalence.** `flatten_turn_merged_tokens` reconstructs the
+> per-action stream field-for-field; the ONE lossy merge is the
+> second sub-block's context trio (inherits the first mover's), which
+> can differ only under a trio-changing first mover (side-effect ∈
+> {hazard-set, hazard-clear, weather-set}). Corpus gate: 5 games ×
+> both seats × every boundary — 313 per-action → 172 merged tokens
+> (**45.0% reduction**), 1 trio allowance total.
+>
+> **K BUDGET UNIT CHANGE (loud).** The transition budget flag
+> (`transition_token_budget`) counts TOKENS in BOTH modes — but in
+> turn-merged mode a token is a whole TURN, so an unchanged K roughly
+> DOUBLES the temporal horizon. The old 64-action default horizon is
+> ≈ **32 turn tokens**; K=64 turn-merged ≈ the old K=128. Existing K=64
+> configs that intend "the last ~32 turns" must move to
+> `transition_token_budget=32` when turn-merged encoding lands; ablation
+> arms comparing modes at fixed FLOPs should match TOKEN counts, arms
+> comparing at fixed horizon should halve K. The flag's semantics
+> (fill most-recent-N, oldest-first truncation, zero+mask the rest) are
+> unchanged.
+
 Status: design, 2026-07-03. Motivated by the width result (512d arm leading
 its cohort on trajectory: 74.4% max-damage at 208k games) and the cost
 structure that blocks scaling width further. Companion to
