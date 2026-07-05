@@ -543,6 +543,7 @@ def collect_selfplay_rollouts(
     training_cache_root: Path | None = None,
     training_cache_paths_out: list[Path] | None = None,
     training_cache_feature_masks=None,
+    training_cache_observation_schema=None,
     games: int,
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -586,6 +587,7 @@ def collect_selfplay_rollouts(
             cache_root=training_cache_root,
             paths_out=training_cache_paths_out,
             feature_masks=training_cache_feature_masks,
+            observation_schema=training_cache_observation_schema,
         )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_output_setup")
     collection_start = perf_counter()
@@ -753,17 +755,23 @@ class _TrainingCacheChunkWriter:
         cache_root: Path | None,
         paths_out: list[Path] | None,
         feature_masks=None,
+        observation_schema: str | None = None,
     ) -> None:
         self._output_path = output_path
         self._chunk_games = chunk_games
         self._dataset_config = dataset_config or TrajectoryDatasetConfig()
         self._feature_masks = feature_masks
+        self._observation_schema = observation_schema
         self._max_cache_root_bytes = max_cache_root_bytes
         self._cache_root = cache_root or (output_path if chunk_games is not None else output_path.parent)
         self._paths_out = paths_out
         self._paths: list[Path] = []
         self._chunk_index = 0
-        self._builder = TrainingCacheBuilder(config=self._dataset_config, feature_masks=self._feature_masks)
+        self._builder = TrainingCacheBuilder(
+            config=self._dataset_config,
+            feature_masks=self._feature_masks,
+            observation_schema=self._observation_schema,
+        )
 
     @property
     def paths(self) -> tuple[Path, ...]:
@@ -796,7 +804,11 @@ class _TrainingCacheChunkWriter:
             cache_root=self._cache_root,
         )
         self._paths.append(output_path)
-        self._builder = TrainingCacheBuilder(config=self._dataset_config, feature_masks=self._feature_masks)
+        self._builder = TrainingCacheBuilder(
+            config=self._dataset_config,
+            feature_masks=self._feature_masks,
+            observation_schema=self._observation_schema,
+        )
 
     def _next_output_path(self) -> Path:
         if self._chunk_games is None:

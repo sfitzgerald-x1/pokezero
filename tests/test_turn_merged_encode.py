@@ -34,12 +34,14 @@ from pokezero.showdown import (
     NUMERIC_TIER2_INVESTMENT_PINNED,
     NUMERIC_TM2_CB_BIT,
     NUMERIC_TM2_INVESTMENT,
+    NUMERIC_TM2_SELF_HP_COST,
     NUMERIC_TM2_DAMAGE_FRACTION,
     NUMERIC_TM2_PRESENT,
     NUMERIC_TT_CALLED,
     NUMERIC_TT_CB_BIT,
     NUMERIC_TT_DAMAGE_FRACTION,
     NUMERIC_TT_INVESTMENT_BIT,
+    NUMERIC_TT_SELF_HP_COST,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
     TRANSITION_TOKEN_OFFSET,
@@ -82,7 +84,7 @@ class SchemaTableTest(unittest.TestCase):
     def test_v2_2_widths_extend_the_v2_1_census(self) -> None:
         self.assertEqual(
             V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
-            V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 13,
+            V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count + 15,
         )
         self.assertEqual(
             V2_2_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
@@ -255,6 +257,43 @@ class TurnMergedEncodeTest(unittest.TestCase):
             observation.categorical_ids[TRANSITION_TOKEN_OFFSET][CATEGORY_SLOT],
             self._vocab().encode("tt_phase:turn"),
         )
+
+    def test_self_hp_cost_columns_fill_for_both_sub_blocks(self) -> None:
+        # First mover explodes (full remaining fraction); on the NEXT turn the second
+        # mover's Double-Edge recoil fills the TM2 twin. v2/v2.1 cannot carry these
+        # columns at all (they sit above the 140 census), so both legacy modes stay
+        # byte-frozen structurally.
+        lines = [
+            "|player|p1|Alice|",
+            "|player|p2|Bob|",
+            "|switch|p1a: Golem|Golem, L74|100/100",
+            "|switch|p2a: Tauros|Tauros, L72|100/100",
+            "|turn|1",
+            "|move|p2a: Tauros|Double-Edge|p1a: Golem",
+            "|-damage|p1a: Golem|70/100",
+            "|-damage|p2a: Tauros|92/100|[from] Recoil|[of] p1a: Golem",
+            "|move|p1a: Golem|Explosion|p2a: Tauros",
+            "|-damage|p2a: Tauros|0 fnt",
+            "|faint|p1a: Golem",
+            "|faint|p2a: Tauros",
+            "|",
+            "|switch|p1a: Sandslash|Sandslash, L80|100/100",
+            "|switch|p2a: Starmie|Starmie, L76|100/100",
+            "|",
+            "|upkeep",
+            "|turn|2",
+        ]
+        state = self._state(lines)
+        observation = self._encode(state)
+        turn_row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + 1]
+        # First mover (Tauros, Double-Edge): recoil cost 0.08 on the first-half column.
+        self.assertAlmostEqual(turn_row[NUMERIC_TT_SELF_HP_COST], 0.08)
+        # Second mover (Golem, Explosion at 70/100): entire remaining fraction.
+        self.assertAlmostEqual(turn_row[NUMERIC_TM2_SELF_HP_COST], 0.70)
+        # The cold-pair replacement row carries no costs.
+        pair_row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + 2]
+        self.assertEqual(pair_row[NUMERIC_TT_SELF_HP_COST], 0.0)
+        self.assertEqual(pair_row[NUMERIC_TM2_SELF_HP_COST], 0.0)
 
     def test_v2_2_encode_refuses_a_base_vocabulary(self) -> None:
         # Review MED-2: a vocabulary without the turn-merged families must refuse, not

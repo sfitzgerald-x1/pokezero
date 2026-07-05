@@ -149,6 +149,29 @@ _ABSORB_ABILITIES = frozenset({"voltabsorb", "waterabsorb", "flashfire"})
 # a recharge turn is a locked no-choice turn and is excluded from opportunity counts.
 _CANT_NO_CHOICE_REASONS = frozenset({"recharge"})
 
+# SELF_HP_COST source classification (v2.2 batch; engine emission shapes verified
+# against the vendored gen3 sim 2026-07-05). A cost is HP the ACTOR lost to its OWN
+# declared action, within that action's contiguous chunk:
+# - [from]-tagged actor damage: only the recoil family counts (Double-Edge / Volt
+#   Tackle / Struggle). Opponent-sourced tags (ability: Rough Skin / Liquid Ooze) and
+#   environmental tags (Spikes on a switch-in — derivable from the context trio) are
+#   NOT costs of the chosen action and stay excluded.
+# - UNTAGGED actor damage inside the actor's own MOVE window is always a cost: the
+#   self-target class (Substitute, Belly Drum — where it also remains the window's
+#   damage_fraction, defender == actor) and the actor-pays class (verified: High Jump
+#   Kick crash on miss and Ghost-type Curse both emit a bare |-damage| on the actor).
+# - Pain Split's down-side: the actor's |-sethp ... [from] move: Pain Split| when the
+#   actor is the loser.
+# - Self-faint moves (below): the cost is the actor's ENTIRE remaining HP fraction at
+#   strike (no -damage line is emitted for the user; the |faint| in the actor's own
+#   chunk is the protocol fact). Move-id whitelist rather than "any own-chunk actor
+#   faint" because Destiny Bond also faints the actor inside its own chunk — an
+#   opponent-set trap, not a cost of the chosen action.
+# - Confusion self-hits never reach a window (the replaced move emits no |move| line),
+#   and residual-phase chip stays excluded by the existing chunk boundaries.
+_SELF_COST_FROM_TAGS = frozenset({"recoil", "strugglerecoil"})
+_SELF_FAINT_COST_MOVES = frozenset({"explosion", "selfdestruct", "memento"})
+
 _FROM_TAG_RE = re.compile(r"\[from\]\s*([^|\[\]]*)")
 _OF_TAG_RE = re.compile(r"\[of\]\s*(p[12])")
 
@@ -191,6 +214,11 @@ class TransitionToken:
     n_hits: int = 1  # from |-hitcount| (Bonemerang: always exactly 2 in this format)
     effectiveness: str = EFFECTIVENESS_NEUTRAL
     side_effect: str = SIDE_EFFECT_NONE
+    # Fraction of the ACTOR'S max HP lost to its OWN declared action within the
+    # action's chunk (recoil, crash on miss, Substitute/Belly Drum cost, Ghost Curse,
+    # Pain Split down-side, self-faint moves = entire remaining fraction). Encoded only
+    # under spec v2.2; see _SELF_COST_FROM_TAGS for the classification rationale.
+    self_hp_cost: float = 0.0
     # Context trio (gen3 inventory: the principled derivability exception), captured at
     # action-declaration time (before the action's own effects land). "own" is the
     # perspective side.
@@ -290,6 +318,7 @@ class _Window:
     opp_spikes_layers: int = 0
     weather: Optional[str] = None
     damage_fraction: float = 0.0
+    self_hp_cost: float = 0.0
     outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
@@ -699,11 +728,46 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                     # Chip landed on the defender after the move's own damage: a
                     # subsequent faint is the chip's, not the move's.
                     current.defender_hit_by_move = False
+            # SELF_HP_COST: HP the actor lost to its own move, inside its own chunk.
+            # Untagged actor damage covers the self-target class (Substitute / Belly
+            # Drum, where defender == actor and the delta above already fed
+            # damage_fraction) AND the actor-pays class (crash on miss, Ghost Curse —
+            # both engine-verified bare |-damage| on the actor); tagged actor damage
+            # counts only for the recoil family (opponent-sourced ability tags and
+            # environmental tags are not costs of the chosen action).
+            if (
+                current is not None
+                and target == current.side
+                and current.kind == TOKEN_KIND_MOVE
+                and new_fraction is not None
+            ):
+                normalized_from = (
+                    _side_condition_identifier(from_payload) if from_payload is not None else None
+                )
+                if from_payload is None or normalized_from in _SELF_COST_FROM_TAGS:
+                    cost_delta = hp_fraction.get(target, 1.0) - new_fraction
+                    if cost_delta > 0:
+                        current.self_hp_cost += cost_delta
             if new_fraction is not None:
                 hp_fraction[target] = new_fraction
 
         elif event_type in {"-heal", "-sethp"} and target in {"p1", "p2"} and len(parts) >= 4:
             condition = _condition_features(parts[3])
+            # Pain Split's down-side: the actor's own -sethp (tagged move: Pain Split)
+            # below its previous fraction is a cost of the chosen action. Computed
+            # against the ledger BEFORE it updates.
+            if (
+                event_type == "-sethp"
+                and current is not None
+                and target == current.side
+                and current.kind == TOKEN_KIND_MOVE
+                and condition.hp_fraction is not None
+                and from_payload is not None
+                and _side_condition_identifier(from_payload) == "painsplit"
+            ):
+                sethp_delta = hp_fraction.get(target, 1.0) - condition.hp_fraction
+                if sethp_delta > 0:
+                    current.self_hp_cost += sethp_delta
             if condition.hp_fraction is not None:
                 hp_fraction[target] = condition.hp_fraction
             # [silent] heals (Leech Seed transfers, Rest) are excluded from attribution
@@ -716,6 +780,16 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                     current.upgrade_side_effect(SIDE_EFFECT_HEAL)
 
         elif event_type == "faint" and target in {"p1", "p2"}:
+            # Self-faint moves: the user's entire remaining fraction is the cost (no
+            # -damage line exists for it). Whitelisted by move id — Destiny Bond also
+            # faints the actor inside its own chunk and must NOT count.
+            if (
+                current is not None
+                and target == current.side
+                and current.kind == TOKEN_KIND_MOVE
+                and current.action in _SELF_FAINT_COST_MOVES
+            ):
+                current.self_hp_cost += hp_fraction.get(target, 1.0)
             hp_fraction[target] = 0.0
             pending_faint_replacement[target] = True
             fainted_turns.add(turn_number)
@@ -832,6 +906,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             called=window.called,
             transformed=window.transformed,
             damage_fraction=window.damage_fraction,
+            self_hp_cost=window.self_hp_cost,
             damage_outcome=window.outcome,
             crit=window.crit,
             miss=window.miss,

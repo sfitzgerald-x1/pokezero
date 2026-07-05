@@ -21,6 +21,7 @@ from .cli_audit import (
     validate_post_iteration_audit_evaluation_games,
 )
 from .collection import (
+    cache_observation_schemas_by_path,
     cache_feature_masks_by_path,
     cache_shaping_configs_by_path,
     BenchmarkMatchup,
@@ -42,7 +43,12 @@ from .dataset import (
     write_training_cache_from_rollouts,
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv, env_config_with_checkpoint_masks
-from .observation import TRANSITION_TOKEN_COUNT
+from .observation import (
+    OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
+    TRANSITION_TOKEN_COUNT,
+)
+from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
 from .neural_policy import (
     CONSTANT_LEARNING_RATE_SCHEDULE,
     DEFAULT_CATEGORY_OOV_BUCKETS,
@@ -380,10 +386,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # must AGREE with it or the command hard-fails (never silently retrain under
     # different observation content — the #492 mismatch class).
     train.add_argument(
+        "--observation-schema",
+        choices=("v2.1", "v2.2"),
+        default=None,
+        help=(
+            "Observation schema for a FRESH train: v2.1 (default) or v2.2 (turn-merged "
+            "transition tokens; stamps the model config, sizes the widths, and flips the "
+            "schema-derived vocabulary). With --initial-checkpoint the checkpoint's stamped "
+            "schema wins and an explicitly disagreeing flag hard-fails (mask-conflict "
+            "semantics)."
+        ),
+    )
+    train.add_argument(
         "--transition-token-budget",
         type=int,
         default=None,
-        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+        help="Most-recent transition-token slots filled at encode time. UNIT IS SCHEMA-DEPENDENT: under v2/v2.1 a token is one declared ACTION (32 = the K=16-turn ablation arm); under --observation-schema v2.2 a token is a whole TURN, so budget 32 covers roughly what 64 action-tokens did.",
     )
     train.add_argument(
         "--no-stats-block",
@@ -1324,10 +1342,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # into the env's encode-time masks, so collection, benchmarks, and later eval harnesses all
     # see the same masked observations (never a train/eval mask mismatch).
     iterate.add_argument(
+        "--observation-schema",
+        choices=("v2.1", "v2.2"),
+        default=None,
+        help=(
+            "Observation schema for a FRESH iterate run: v2.1 (default) or v2.2 "
+            "(turn-merged transition tokens; sizes the model config, the env spec, and the "
+            "schema-derived vocabulary). On --resume the run's stored model config wins; a "
+            "disagreeing explicit flag fails the model-config equality validation."
+        ),
+    )
+    iterate.add_argument(
         "--transition-token-budget",
         type=int,
         default=TRANSITION_TOKEN_COUNT,
-        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+        help="Most-recent transition-token slots filled at encode time. UNIT IS SCHEMA-DEPENDENT: under v2/v2.1 a token is one declared ACTION (32 = the K=16-turn ablation arm); under --observation-schema v2.2 a token is a whole TURN, so budget 32 covers roughly what 64 action-tokens did.",
     )
     iterate.add_argument(
         "--no-stats-block",
@@ -1881,6 +1910,50 @@ def _require_mask_flags_agree_with_checkpoint(args: argparse.Namespace, model_co
             )
 
 
+def _require_schema_flag_agrees_with_checkpoint(args: argparse.Namespace, model_config) -> None:
+    """With --initial-checkpoint the observation schema is the checkpoint's; an explicit
+    --observation-schema must agree or hard-fail (the schema axis of the mask latch —
+    retraining under a different schema silently changes every observation column)."""
+    requested = observation_schema_version_from_choice(args.observation_schema)
+    if requested is None:
+        return
+    current = model_config.observation_schema_version
+    if current != requested:
+        raise ValueError(
+            f"--observation-schema {args.observation_schema} requests {requested!r} but the "
+            f"initial checkpoint was trained under {current!r}; the observation schema "
+            "cannot change across a resume (drop the flag to adopt the checkpoint's schema)."
+        )
+
+
+def _require_cache_observation_schema_matches(paths, model_config) -> None:
+    """Hard-fail (both directions) when cache schema provenance disagrees with this run.
+
+    The schema-axis twin of the mask cross-check: collection stamps the encoding env's
+    observation schema into cache metadata. A cache without the field is LEGACY —
+    recorded before schema stamping shipped, which is by definition pre-v2.2 data: it
+    passes under a v2/v2.1 model (indistinguishable from today) but REFUSES under a
+    v2.2 model (turn-merged rows cannot have come from a legacy collector).
+    """
+    expected = model_config.observation_schema_version
+    for cache_path, recorded in cache_observation_schemas_by_path(paths):
+        if recorded is None:
+            if expected == OBSERVATION_SCHEMA_VERSION_V2_2:
+                raise ValueError(
+                    f"training cache {cache_path} records no observation schema (legacy "
+                    "collector) but this train run declares "
+                    f"{OBSERVATION_SCHEMA_VERSION_V2_2!r}; v2.2 (turn-merged) observations "
+                    "must come from a collector run with --observation-schema v2.2."
+                )
+            continue
+        if recorded != expected:
+            raise ValueError(
+                f"training cache {cache_path} was collected under observation schema "
+                f"{recorded!r} but this train run's model config declares {expected!r}; "
+                "cross-schema observations must not be trained through."
+            )
+
+
 def _require_cache_masks_match_model_config(paths, model_config) -> None:
     """Hard-fail when a training cache records encode-time masks the model config lacks.
 
@@ -2030,6 +2103,7 @@ def _train(args: argparse.Namespace) -> int:
             reward_shaping=shaping_weights_json,
         )
         _require_mask_flags_agree_with_checkpoint(args, model_config)
+        _require_schema_flag_agrees_with_checkpoint(args, model_config)
         print(
             f"category vocab (from initial checkpoint): {len(model_config.category_vocab):,} tokens + "
             f"{model_config.category_oov_buckets:,} oov -> embedding rows {model_config.categorical_vocab_size:,}",
@@ -2055,6 +2129,20 @@ def _train(args: argparse.Namespace) -> int:
             tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
             reward_shaping=shaping_weights_json,
         )
+        # Fresh train: --observation-schema SETS the stamped schema + widths (default
+        # v2.1, the current default spec); v2.2 also needs the turn-merged vocabulary
+        # families (the schema-derived vocab latch).
+        schema_version = (
+            observation_schema_version_from_choice(args.observation_schema)
+            or OBSERVATION_SCHEMA_VERSION
+        )
+        schema_spec = observation_spec_for_schema(schema_version)
+        model_config_kwargs.update(
+            observation_schema_version=schema_version,
+            categorical_feature_count=schema_spec.categorical_feature_count,
+            numeric_feature_count=schema_spec.numeric_feature_count,
+            token_count=schema_spec.token_count,
+        )
         # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
         # the env builds at encode time, so rows align deterministically. (The legacy training-data
         # vocab source is retired: observations now store rows, not collectible hash ids.)
@@ -2062,7 +2150,11 @@ def _train(args: argparse.Namespace) -> int:
             raise ValueError("neural training requires --showdown-root for the Gen 3 randbat category vocabulary.")
         from .randbat_vocab import gen3_category_vocabulary
 
-        category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
+        category_vocab = gen3_category_vocabulary(
+            args.showdown_root,
+            oov_buckets=args.category_oov_buckets,
+            include_turn_merged=schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+        )
         model_config = TransformerPolicyConfig.compact_category(
             category_vocab=category_vocab.tokens,
             category_oov_buckets=category_vocab.oov_buckets,
@@ -2076,6 +2168,7 @@ def _train(args: argparse.Namespace) -> int:
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
     _require_cache_masks_match_model_config(args.data, model_config)
+    _require_cache_observation_schema_matches(args.data, model_config)
     _require_cache_shaping_matches_training_config(args.data, shaping_weights_json)
     if args.value_selection_data and training_config.objective != "value-only":
         print(
@@ -3487,11 +3580,21 @@ def _iterate(args: argparse.Namespace) -> int:
         raise ValueError("neural self-play requires --showdown-root (used for the category vocabulary and the env).")
     from .randbat_vocab import gen3_category_vocabulary
 
-    category_vocab = gen3_category_vocabulary(args.showdown_root, oov_buckets=args.category_oov_buckets)
+    iterate_schema_version = (
+        observation_schema_version_from_choice(args.observation_schema)
+        or OBSERVATION_SCHEMA_VERSION
+    )
+    iterate_schema_spec = observation_spec_for_schema(iterate_schema_version)
+    category_vocab = gen3_category_vocabulary(
+        args.showdown_root,
+        oov_buckets=args.category_oov_buckets,
+        include_turn_merged=iterate_schema_version == OBSERVATION_SCHEMA_VERSION_V2_2,
+    )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
         category_vocab=category_vocab,
+        observation_spec=iterate_schema_spec,
     )
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
@@ -3548,6 +3651,10 @@ def _iterate(args: argparse.Namespace) -> int:
         transition_token_budget=args.transition_token_budget,
         tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
         reward_shaping=iterate_shaping_json,
+        observation_schema_version=iterate_schema_version,
+        categorical_feature_count=iterate_schema_spec.categorical_feature_count,
+        numeric_feature_count=iterate_schema_spec.numeric_feature_count,
+        token_count=iterate_schema_spec.token_count,
     )
     # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
     # model learns are exactly the rows the env encodes.

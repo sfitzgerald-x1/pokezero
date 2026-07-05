@@ -1949,7 +1949,7 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
             f"materialized), {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
             "(revealed-move PP-validity bits + substitute HP fraction + per-mon pinned "
             f"Tier-2 conclusions + the investment surfaces), and "
-            f"{OBSERVATION_SCHEMA_VERSION_V2_2!r} is the 153-column family (turn-merged "
+            f"{OBSERVATION_SCHEMA_VERSION_V2_2!r} is the 155-column family (turn-merged "
             "transition tokens: the appended second-sub-block block). This artifact and "
             "this model were built against different censuses "
             "and must not be mixed; the schema + width an env encodes resolve from the "
