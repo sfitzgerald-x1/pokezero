@@ -624,6 +624,34 @@ def cache_feature_masks_by_path(paths: Iterable[Path | str]) -> tuple[tuple[Path
     return tuple(results)
 
 
+def cache_observation_schemas_by_path(
+    paths: Iterable[Path | str],
+) -> tuple[tuple[Path, str | None], ...]:
+    """(cache path, recorded observation schema or None) per training-cache input.
+
+    The schema-axis twin of ``cache_feature_masks_by_path``: collection stamps the
+    encoding env's observation schema into cache metadata so the trainer can refuse a
+    cross-schema train. ``None`` = legacy cache (predates recording — by definition NOT
+    v2.2, since recording shipped with the v2.2 fresh-selection latch) or non-cache
+    input (JSONL).
+    """
+    results: list[tuple[Path, str | None]] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        metadata_path = path / "metadata.json"
+        schema: str | None = None
+        if metadata_path.is_file():
+            try:
+                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = None
+            if isinstance(payload, Mapping):
+                recorded = payload.get("observation_schema")
+                schema = str(recorded) if recorded else None
+        results.append((path, schema))
+    return tuple(results)
+
+
 def cache_shaping_configs_by_path(
     paths: Iterable[Path | str],
 ) -> tuple[tuple[Path, dict | None, bool], ...]:

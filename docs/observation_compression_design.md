@@ -175,6 +175,31 @@
 > deliberately NOT carried; this paragraph exists so "documented
 > merge" is never mistaken for an accepted information hole.
 >
+> **SELF_HP_COST (v2.2 follow-up, census 153 → 155).** Each sub-block
+> carries the fraction of the ACTOR'S max HP lost to its OWN declared
+> action within that action's chunk (`NUMERIC_TT_SELF_HP_COST` /
+> `NUMERIC_TM2_SELF_HP_COST`, v2.2-only columns — v2/v2.1 stay
+> byte-frozen). Source classification (engine emission shapes verified
+> against the vendored gen3 sim): INCLUDED — recoil family
+> (`[from] Recoil` / Struggle recoil), crash on miss (verified: a bare
+> untagged `|-damage|` on the actor after `|-miss|`), Substitute and
+> Belly Drum costs (untagged self-target damage; also still the
+> window's damage_fraction), Ghost-type Curse (verified: bare untagged
+> actor damage), Pain Split's down-side (the actor's
+> `-sethp … [from] move: Pain Split` below its previous ledger value),
+> and self-faint moves (Explosion / Selfdestruct / Memento) where the
+> cost is the actor's ENTIRE remaining fraction at strike — no
+> self-damage line exists, the own-chunk `|faint|` is the protocol
+> fact, and the move-id whitelist (not "any own-chunk actor faint")
+> exists because Destiny Bond also faints the attacker inside its own
+> chunk. EXCLUDED — confusion self-hits (the replaced move emits no
+> `|move|` line, so no window exists; and it is not a cost of the
+> CHOSEN action), entry-hazard damage on switch-ins (environmental,
+> `[from] Spikes`-tagged, already derivable from the context trio),
+> opponent-sourced tags (`ability: Rough Skin` / `Liquid Ooze`),
+> Destiny Bond (opponent-set trap), and all residual-phase chip
+> (unchanged chunk boundaries + KO-attribution vetoes).
+>
 > **NEGATED requires proof (review MED-1).** A missing second half is
 > encoded `negated` only when consumption is CERTAIN: the turn closed
 > (`|upkeep`/`|turn|N+1`/`|win`) or a mid-turn faint occurred (the

@@ -23,6 +23,7 @@ from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
+from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
 from .shaping import parse_shaping_spec
 
 
@@ -123,10 +124,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # resolved masks are recorded in the cache metadata either way, so the subsequent
     # train cross-checks them against the model config.
     collect_selfplay_cache.add_argument(
+        "--observation-schema",
+        choices=("v2.1", "v2.2"),
+        default=None,
+        help=(
+            "Observation schema for a FRESH (checkpoint-less) collect: v2.1 (default) or "
+            "v2.2 (turn-merged transition tokens; also flips the schema-derived vocabulary). "
+            "With a neural: policy the checkpoint's stamped schema wins and an explicitly "
+            "disagreeing flag hard-fails (mask-conflict semantics). Recorded in cache "
+            "metadata for the train-side cross-check."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
         "--transition-token-budget",
         type=int,
         default=None,
-        help="Most-recent transition-token slots filled at encode time (32 = the K=16-turn ablation arm).",
+        help="Most-recent transition-token slots filled at encode time. UNIT IS SCHEMA-DEPENDENT: under v2/v2.1 a token is one declared ACTION (32 = the K=16-turn ablation arm); under --observation-schema v2.2 a token is a whole TURN, so budget 32 covers roughly what 64 action-tokens did.",
     )
     collect_selfplay_cache.add_argument(
         "--no-stats-block",
@@ -342,9 +355,25 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     explicit_masks = _explicit_feature_masks_from_args(args)
     if explicit_masks is not None:
         env_config = dataclasses.replace(env_config, feature_masks=explicit_masks)
+    requested_schema = observation_schema_version_from_choice(args.observation_schema)
+    if requested_schema is not None:
+        env_config = dataclasses.replace(
+            env_config, observation_spec=observation_spec_for_schema(requested_schema)
+        )
     env_config = env_config_with_policy_spec_masks(
         env_config, (current_policy, *opponent_policies), context="self-play training cache"
     )
+    # Explicit flag vs checkpoint schema: hard-fail BOTH directions. (An explicit v2.2
+    # against a v2.1 checkpoint already fails inside the latch; an explicit v2.1 equals
+    # the default spec, which the latch would silently override with a v2.2 checkpoint's
+    # — catch that here.)
+    if requested_schema is not None and env_config.observation_spec.schema_version != requested_schema:
+        raise ValueError(
+            f"--observation-schema {args.observation_schema} conflicts with the checkpoint-"
+            f"stamped schema {env_config.observation_spec.schema_version!r}; the schema "
+            "cannot change across a resume/adoption (drop the flag to adopt the "
+            "checkpoint's schema)."
+        )
     rollout_config = RolloutConfig(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
@@ -367,6 +396,7 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         opponent_policy_specs=opponent_policies,
         worker_count=args.workers,
         training_cache_feature_masks=env_config.feature_masks,
+        training_cache_observation_schema=env_config.observation_spec.schema_version,
     )
     _print_metrics(metrics.to_dict())
     for cache_path in cache_paths:

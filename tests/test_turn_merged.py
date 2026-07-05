@@ -677,6 +677,16 @@ class ExplosionFixtureTest(unittest.TestCase):
         self.assertEqual(pair.first.kind, TOKEN_KIND_SWITCH)
         self.assertEqual(pair.second.kind, TOKEN_KIND_SWITCH)
         self.assertEqual({pair.first.actor_slot, pair.second.actor_slot}, {"p1", "p2"})
+        # SELF_HP_COST on the real engine game: Weezing exploded from full HP, so its
+        # sub-block carries the entire remaining fraction; the Gligar (defender) side
+        # of the token is untouched by the cost channel.
+        self.assertAlmostEqual(explosion_sub.self_hp_cost, 1.0)
+        gligar_sub = next(
+            sub
+            for sub in (explosion_turn.first, explosion_turn.second)
+            if sub is not explosion_sub and sub.status == SUB_BLOCK_ACTION
+        )
+        self.assertEqual(gligar_sub.self_hp_cost, 0.0)
         # No other double-faint in the game produced a false pair, no EXTRA fallback
         # fired, and the whole real game reconstructs per-action exactly (this fixture
         # happens to contain no intra-turn trio changer, so the bijection is total).
