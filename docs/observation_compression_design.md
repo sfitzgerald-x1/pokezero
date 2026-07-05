@@ -41,8 +41,11 @@
 >    validity bit, CB bit, investment bit — same spec version, no second
 >    break. *(Implementation note, 2026-07-04: all four slots are now
 >    materialized — residual 117 / validity 118 / CB bit 119 populated
->    behind the tier2 gate + mask; investment 120 held at constant zero
->    as the H3 reserve.)*
+>    behind the tier2 gate + mask; investment 120 populated by the
+>    defender-side inference (`pokezero.investment`) behind its own
+>    precision gate (`runs/investment-gate-2026-07-04`, PASS) and the
+>    separate `tier2_investment` mask, which defaults OFF until v2.1
+>    training adopts the column — pre-v2.1 encodes stay byte-identical.)*
 >    *(Implementation note, spec v2.1 — `pokezero.observation.v2.1`,
 >    checkpoint-driven dual schema, NOT a one-way break: the schema +
 >    numeric width an env encodes resolve from the loaded checkpoint's
@@ -63,9 +66,15 @@
 >    channel, authoritative and switch-persistent; the tt-row cb_bit
 >    stays the as-of-strike history record, self-describing under
 >    K-truncation). Tier-2 conclusions never mutate the Tier-1
->    candidate sets — layer separation holds. The investment reserves
->    (120 tt-row, 139 per-mon) carry forward, still constant zero;
->    populating them is batch 2 behind its own gate.)*
+>    candidate sets — layer separation holds. Batch 2 populates BOTH
+>    investment surfaces behind the `tier2_investment` mask under the
+>    v2.1 schema ONLY: the per-mon pinned form (139, derived from the
+>    annotated stream like CB pinned — the authoritative current-state
+>    conclusion) and the tt-row as-of-strike code (120). Column 120
+>    sits below the v2 census end, but the write is schema-gated on
+>    top of the double mask, so the legacy v2 encode path never
+>    touches it and v2-mode encodes stay byte-identical
+>    unconditionally.)*
 > 10. Residual encoding: signed fraction of defender max HP (observed
 >    minus expected-median under the candidate-conservative baseline),
 >    with a separate validity bit (masked ⇒ invalid, value 0); populated

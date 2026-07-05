@@ -41,6 +41,8 @@ from pokezero.showdown import (
     NUMERIC_STAT_WEATHER_REVEAL_OFFSET,
     NUMERIC_TRAPPER_ALIVE,
     NUMERIC_TT_ABS_TURN,
+    NUMERIC_TIER2_INVESTMENT_PINNED,
+    NUMERIC_TT_INVESTMENT_BIT,
     NUMERIC_TT_RESIDUAL,
     NUMERIC_TT_RESIDUAL_VALID,
     NUMERIC_TT_TURNS_AGO,
@@ -50,6 +52,8 @@ from pokezero.showdown import (
     OPPONENT_POKEMON_TOKEN_OFFSET,
     STATS_TOKEN_OFFSET,
     TRANSITION_TOKEN_OFFSET,
+    V2_1_REPLAY_OBSERVATION_SPEC,
+    V2_REPLAY_OBSERVATION_SPEC,
     _gen3_stat,
     _weather_duration_features,
     _wish_pending,
@@ -110,6 +114,154 @@ _BASE_LINES = [
 def _state(lines, **kwargs):
     replay = parse_showdown_replay(_BASE_LINES + lines, battle_id="battle-1")
     return normalize_for_player(replay, player_id="agent", player_name="Us", **kwargs)
+
+
+class InvestmentColumnEncodeTest(unittest.TestCase):
+    """The investment column (120) is double-masked (tier2_residuals AND the
+    default-OFF tier2_investment provenance switch) and SCHEMA-GATED: the matrix runs
+    on the dual-schema fixture, and the legacy v2 encode path never writes the column
+    even when a hand-crafted v2-schema config carries the mask (review MED-2a)."""
+
+    _BOTH_SPECS = (V2_REPLAY_OBSERVATION_SPEC, V2_1_REPLAY_OBSERVATION_SPEC)
+
+    def _state_with_code(self, code):
+        from dataclasses import replace as dc_replace
+
+        state = _state([
+            "|move|p1a: Charizard|Flamethrower|p2a: Xatu",
+            "|-damage|p2a: Xatu|60/100",
+            "|turn|2",
+        ])
+        tokens = list(state.transition_tokens)
+        index = next(
+            i for i, t in enumerate(tokens) if t.kind == TOKEN_KIND_MOVE and t.actor_slot == "p1"
+        )
+        tokens[index] = dc_replace(tokens[index], investment=code)
+        return dc_replace(state, transition_tokens=tuple(tokens)), index
+
+    def test_default_masks_keep_the_column_zero(self) -> None:
+        for spec in self._BOTH_SPECS:
+            with self.subTest(schema=spec.schema_version):
+                state, index = self._state_with_code(-1.0)
+                observation = observation_from_player_state(
+                    state, category_vocab=_VOCAB, spec=spec
+                )
+                row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + index]
+                self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+
+    def test_investment_mask_populates_the_column_under_v2_1(self) -> None:
+        for code in (-1.0, 1.0, 0.5, -0.5):
+            state, index = self._state_with_code(code)
+            masks = ObservationFeatureMasks(tier2_investment=True)
+            observation = observation_from_player_state(
+                state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC,
+                feature_masks=masks,
+            )
+            row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + index]
+            self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], code)
+            # Other rows stay zero.
+            for offset, token in enumerate(state.transition_tokens):
+                if offset == index:
+                    continue
+                other = observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset]
+                self.assertEqual(other[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+
+    def test_v2_legacy_path_never_writes_the_column(self) -> None:
+        # Review MED-2a: no v2 checkpoint was ever trained on a populated column 120,
+        # so a (hand-crafted) v2-schema config carrying tier2_investment=True must be
+        # a NO-OP on the legacy encode path — column 120 physically exists in the v2
+        # row (it sits below the v2 census end) but stays 0.0 unconditionally.
+        for code in (-1.0, 1.0, 0.5, -0.5):
+            state, index = self._state_with_code(code)
+            masks = ObservationFeatureMasks(tier2_investment=True)
+            observation = observation_from_player_state(
+                state, category_vocab=_VOCAB, spec=V2_REPLAY_OBSERVATION_SPEC,
+                feature_masks=masks,
+            )
+            for offset in range(len(state.transition_tokens)):
+                row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset]
+                self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+
+    def test_residuals_mask_off_darkens_investment_too(self) -> None:
+        for spec in self._BOTH_SPECS:
+            with self.subTest(schema=spec.schema_version):
+                state, index = self._state_with_code(1.0)
+                masks = ObservationFeatureMasks(tier2_residuals=False, tier2_investment=True)
+                observation = observation_from_player_state(
+                    state, category_vocab=_VOCAB, spec=spec, feature_masks=masks
+                )
+                row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + index]
+                self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+                if spec is V2_1_REPLAY_OBSERVATION_SPEC:
+                    opp_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
+                    self.assertEqual(opp_row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
+
+    def test_per_mon_pinned_column_carries_the_code_under_v2_1(self) -> None:
+        # NUMERIC_TIER2_INVESTMENT_PINNED (139): the authoritative current-state surface
+        # — the struck mon's opp-row carries the annotated code under v2.1 + both masks
+        # (CB_PINNED's derivation convention, inverted to token.defender_species);
+        # default masks keep it dark.
+        state, index = self._state_with_code(0.5)
+        self.assertEqual(state.transition_tokens[index].defender_species, "Xatu")
+        masks = ObservationFeatureMasks(tier2_investment=True)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC,
+            feature_masks=masks,
+        )
+        opp_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
+        self.assertEqual(opp_row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.5)
+        dark = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertEqual(
+            dark.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET][NUMERIC_TIER2_INVESTMENT_PINNED],
+            0.0,
+        )
+
+    def test_per_mon_code_is_last_annotated_and_truncation_robust(self) -> None:
+        # Monotone semantics: the LAST annotated strike's code wins (an HP conclusion
+        # upgrading over an earlier defense-only pin). K-truncation robustness: with a
+        # budget that truncates every annotated strike out of the tt block, the history
+        # column goes dark but the per-mon pinned form still stands — it derives from
+        # the FULL untruncated stream, exactly like CB_PINNED.
+        from dataclasses import replace as dc_replace
+
+        state = _state([
+            "|move|p1a: Charizard|Flamethrower|p2a: Xatu",
+            "|-damage|p2a: Xatu|60/100",
+            "|turn|2",
+            "|move|p1a: Charizard|Flamethrower|p2a: Xatu",
+            "|-damage|p2a: Xatu|30/100",
+            "|turn|3",
+            "|move|p2a: Xatu|Psychic|p1a: Charizard",
+            "|-damage|p1a: Charizard|70/100",
+            "|turn|4",
+        ])
+        tokens = list(state.transition_tokens)
+        own_moves = [
+            i for i, t in enumerate(tokens)
+            if t.kind == TOKEN_KIND_MOVE and t.actor_slot == "p1"
+        ]
+        self.assertEqual(len(own_moves), 2)
+        tokens[own_moves[0]] = dc_replace(tokens[own_moves[0]], investment=0.5)
+        tokens[own_moves[1]] = dc_replace(tokens[own_moves[1]], investment=-1.0)
+        state = dc_replace(state, transition_tokens=tuple(tokens))
+        # A later unannotated opponent token must exist so K=1 truncates both strikes.
+        self.assertGreater(len(state.transition_tokens), own_moves[1] + 1)
+
+        masks = ObservationFeatureMasks(tier2_investment=True, transition_token_budget=1)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC,
+            feature_masks=masks,
+        )
+        # The K=1 window holds only the final (unannotated, opponent) token: the
+        # history column is dark everywhere...
+        for offset in range(TRANSITION_TOKEN_COUNT):
+            row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset]
+            self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
+        # ...but the pinned per-mon form survives, carrying the LAST code.
+        opp_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
+        self.assertEqual(opp_row[NUMERIC_TIER2_INVESTMENT_PINNED], -1.0)
 
 
 class TransitionKindLockstepTest(unittest.TestCase):

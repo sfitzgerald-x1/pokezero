@@ -245,12 +245,18 @@ NUMERIC_TT_RESIDUAL_VALID = 118
 # within a battle: once concluded, every later assessed strike token of that mon carries
 # it). Set on opponent move tokens only — the same rows the residual channel annotates.
 NUMERIC_TT_CB_BIT = 119
-# TRUE RESERVE — materialized but ALWAYS ZERO in this revision. Held for the H3
-# defender-side/offensive-investment inference (the symmetric Tier-2 extension in
-# docs/next_train_readiness_plan.md); nothing may write it until that work lands behind
-# its own gate. Kept at constant zero so flipping it on later is not a spec break.
-# Carried forward unchanged (same column, still constant zero) into the v2.1 table below;
-# populating it is the v2.1 window's batch-2 PR, gated separately.
+# Defender-side investment conclusion code for the STRUCK opponent mon, as of the
+# strike (monotone within a battle; the mirror of the CB bit, set on assessed OWN move
+# tokens only). This is the v2.1 window's batch-2 population of the former H3 reserve:
+# written by ``pokezero.investment`` behind its precision gate
+# (runs/investment-gate-2026-07-04) under masks.tier2_residuals AND the SEPARATE
+# masks.tier2_investment switch (default False — checkpoints trained post-#505 but
+# pre-investment latched residuals live over a constant-zero investment column, so the
+# channels need independent provenance masks). Codes: +/-1 HP investment full/trimmed,
+# +/-0.5 defensive stat full/reduced; 0 = no damage-evidence conclusion. The column
+# number predates the v2.1 split (it sits below the v2 census end), but the WRITE is
+# v2.1-schema-gated on top of the double mask: the legacy v2 encode path never
+# populates it, even under a hand-crafted v2-schema config carrying the mask.
 NUMERIC_TT_INVESTMENT_BIT = 120
 # The v2 numeric census ends here.
 _V2_NUMERIC_FEATURE_COUNT = NUMERIC_TT_INVESTMENT_BIT + 1
@@ -302,9 +308,14 @@ NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_
 # engine's Tier-1 candidate sets — the exact/protocol layer stays inference-free; this is
 # a parallel tier2-layer feature carried on the same token, not a belief-fact write.
 NUMERIC_TIER2_CB_PINNED = NUMERIC_SUB_HP_FRACTION + 1  # 138
-# TRUE RESERVE — the per-mon twin of NUMERIC_TT_INVESTMENT_BIT: materialized but ALWAYS
-# ZERO in this revision; the v2.1 window's batch-2 gated inference populates it. Kept at
-# constant zero so flipping it on later is not a spec break.
+# The per-mon twin of NUMERIC_TT_INVESTMENT_BIT — the AUTHORITATIVE current-state form of
+# the defender-side investment conclusion (the CB_PINNED derivation mirrored to the
+# defender): the code of the LAST tier2_investment-annotated own strike against this mon,
+# switch-persistent, derived from the FULL untruncated token stream (robust to the
+# K-budget truncation the tt-row history record is subject to). Same codes as the tt
+# column (+/-1 HP full/trimmed, +/-0.5 defense full/reduced, 0 = no conclusion); gated by
+# masks.tier2_residuals AND masks.tier2_investment (default OFF — see the tt column's
+# provenance note) on top of the v2.1 schema this column only exists under.
 NUMERIC_TIER2_INVESTMENT_PINNED = NUMERIC_TIER2_CB_PINNED + 1  # 139
 # The v2.1 numeric census ends here.
 _V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_TIER2_INVESTMENT_PINNED + 1
@@ -946,6 +957,28 @@ def observation_from_player_state(
             for token in state.transition_tokens
             if token.cb_bit and token.kind == _TT_KIND_MOVE and token.actor_slot == opponent_slot
         )
+    # Per-mon pinned investment conclusions (v2.1, NUMERIC_TIER2_INVESTMENT_PINNED): the
+    # CB derivation's mirror, inverted to the defender — investment codes ride OUR
+    # assessed move tokens and describe the STRUCK opponent mon (token.defender_species,
+    # the #512 identity channel). The as-of-strike code is monotone (conclusions freeze;
+    # an HP conclusion upgrades over a defense-only pin, never retracts), so the LAST
+    # annotated strike of each defender carries the tracker's current per-mon conclusion,
+    # and reading the FULL untruncated token list keeps the pinned form robust to
+    # K-budget truncation. Triple-gated like the tt-row write (v2.1 schema + both
+    # masks); layer separation holds — Tier-1 candidate sets are never touched.
+    tier2_investment_pinned: dict[str, float] = {}
+    if schema_v2_1 and feature_masks.tier2_residuals and feature_masks.tier2_investment:
+        self_slot = state.perspective.showdown_slot
+        for token in state.transition_tokens:
+            if (
+                token.investment
+                and token.kind == _TT_KIND_MOVE
+                and token.actor_slot == self_slot
+                and token.defender_species
+            ):
+                tier2_investment_pinned[_normalize_identifier(token.defender_species)] = max(
+                    -1.0, min(1.0, token.investment)
+                )
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
     _encode_field_token(categorical_ids, numeric_features, state, masks=feature_masks)
@@ -1000,6 +1033,7 @@ def observation_from_player_state(
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
         tier2_cb_pinned_species=tier2_cb_pinned_species,
+        tier2_investment_pinned=tier2_investment_pinned,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
@@ -1813,6 +1847,7 @@ def _encode_pokemon_tokens(
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
     schema_v2_1: bool = False,
     tier2_cb_pinned_species: frozenset[str] = frozenset(),
+    tier2_investment_pinned: Mapping[str, float] | None = None,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
@@ -1928,19 +1963,25 @@ def _encode_pokemon_tokens(
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
             if tendency is not None:
                 _encode_mon_tendency(numeric_features[token_index], tendency)
-        # v2.1 pinned Tier-2 conclusions (current-state surface; the tt cb_bit stays the
-        # as-of-strike history record). Gated upstream: the set is empty unless the spec
-        # is v2.1, masks.tier2_residuals is on, AND the tokens were tier2-annotated (the
-        # belief-source double-gate). Keyed on BASE species (Transform identity rule) and
-        # persistent across switches — a per-mon fact, not a per-strike one. The
-        # investment twin (NUMERIC_TIER2_INVESTMENT_PINNED) stays 0.0 unconditionally: a
-        # true reserve until the v2.1 window's batch-2 gated inference lands.
+        # v2.1 pinned Tier-2 conclusions (current-state surface; the tt cb_bit and
+        # tt investment code stay the as-of-strike history records). Gated upstream:
+        # the CB set is empty unless the spec is v2.1, masks.tier2_residuals is on,
+        # AND the tokens were tier2-annotated (the belief-source double-gate); the
+        # investment map additionally requires masks.tier2_investment (its separate
+        # provenance switch). Keyed on BASE species (Transform identity rule) and
+        # persistent across switches — per-mon facts, not per-strike ones.
         if (
             role == "opponent"
             and tier2_cb_pinned_species
             and _normalize_identifier(candidate.species) in tier2_cb_pinned_species
         ):
             _set_numeric(numeric_features[token_index], NUMERIC_TIER2_CB_PINNED, 1.0)
+        if role == "opponent" and tier2_investment_pinned:
+            investment_code = tier2_investment_pinned.get(_normalize_identifier(candidate.species))
+            if investment_code:
+                _set_numeric(
+                    numeric_features[token_index], NUMERIC_TIER2_INVESTMENT_PINNED, investment_code
+                )
 
 
 def _encode_mon_exact_state(
@@ -2377,7 +2418,16 @@ def _encode_transition_tokens(
             _set_numeric(num_row, NUMERIC_TT_RESIDUAL_VALID, 1.0)
         if masks.tier2_residuals and token.cb_bit:
             _set_numeric(num_row, NUMERIC_TT_CB_BIT, 1.0)
-        # NUMERIC_TT_INVESTMENT_BIT stays 0.0 unconditionally: a true reserve (H3).
+        # Investment column: double-masked (the tier2 channel gate AND its own
+        # provenance switch — see NUMERIC_TT_INVESTMENT_BIT's comment) AND schema-gated:
+        # the column physically sits below the v2 census end, but no v2 checkpoint was
+        # ever trained on a populated 120, so the LEGACY encode path never writes it —
+        # a (hand-crafted) v2-schema config carrying tier2_investment=True is a no-op
+        # here (review MED-2a), keeping v2-mode encodes byte-identical to the
+        # pre-investment encoder unconditionally. Tokens from the plain extraction
+        # path carry 0.0, so pre-investment pipelines are byte-identical regardless.
+        if schema_v2_1 and masks.tier2_residuals and masks.tier2_investment and token.investment:
+            _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, token.investment)))
 
 
 def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:

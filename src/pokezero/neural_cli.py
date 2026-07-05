@@ -1894,10 +1894,16 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         "exact_state": model_config.exact_state_enabled,
         "transition_token_budget": model_config.transition_token_budget,
         "tier2_residuals": model_config.tier2_residuals,
+        # getattr: duck-typed/legacy config objects without the field are
+        # pre-investment by definition (same asymmetric default as the payload latch).
+        "tier2_investment": getattr(model_config, "tier2_investment", False),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
             continue
+        # Caches collected before the investment channel record no field; they were
+        # encoded with the column constant zero, i.e. tier2_investment=False.
+        masks = {"tier2_investment": False, **masks}
         if masks != expected:
             raise ValueError(
                 f"training cache {cache_path} was collected under feature masks {masks!r} "

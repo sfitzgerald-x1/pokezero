@@ -36,6 +36,7 @@ from .showdown import (
     observation_from_player_state,
     showdown_choice_for_action,
 )
+from .investment import InvestmentLiveTracker
 from .tier2 import Tier2LiveTracker, cb_whitelist_for_source, own_team_from_request
 
 DEFAULT_SHOWDOWN_ROOT = Path("/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
@@ -235,6 +236,10 @@ class LocalShowdownEnv:
         # nothing and encode byte-identically.
         self._first_requests: dict[PlayerId, Mapping[str, Any]] = {}
         self._tier2_trackers: dict[PlayerId, Tier2LiveTracker] = {}
+        # Defender-side investment trackers (v2.1 batch 2): same lazy per-perspective
+        # pattern, active only under the tier2 channel AND the tier2_investment mask
+        # (default off — see ObservationFeatureMasks).
+        self._investment_trackers: dict[PlayerId, InvestmentLiveTracker] = {}
         # Warm pool: the bridge process is reused across battles. Each battle gets a unique routing
         # token; events from a prior battle carry a stale token and are ignored (see _apply_event).
         self._battle_counter = 0
@@ -299,6 +304,7 @@ class LocalShowdownEnv:
         self._belief_fed_count = 0
         self._first_requests = {}
         self._tier2_trackers = {}
+        self._investment_trackers = {}
         # Reuse a live bridge process across battles (warm pool); only spawn when there is none or
         # the previous one died. Stale events from the prior battle carry previous_token and are
         # ignored by _apply_event, so a clean queue drain is not required.
@@ -678,6 +684,19 @@ class LocalShowdownEnv:
                     replay, state.transition_tokens, self._belief_engine
                 ),
             )
+        investment_tracker = self._investment_tracker_for(player)
+        if investment_tracker is not None:
+            codes = investment_tracker.observe(
+                replay, state.transition_tokens, self._belief_engine
+            )
+            if codes:
+                state = replace(
+                    state,
+                    transition_tokens=tuple(
+                        replace(token, investment=codes[index]) if index in codes else token
+                        for index, token in enumerate(state.transition_tokens)
+                    ),
+                )
         return state
 
     def tier2_residuals_active(self) -> bool:
@@ -711,6 +730,36 @@ class LocalShowdownEnv:
             whitelist=cb_whitelist_for_source(self._belief_set_source, dex),
         )
         self._tier2_trackers[player] = tracker
+        return tracker
+
+    def investment_active(self) -> bool:
+        """Whether this env populates defender-side investment codes into tokens.
+
+        Requires the tier2 channel (mask + candidate-set source) AND the separate
+        tier2_investment provenance mask — default off, so existing pipelines encode
+        byte-identically until v2.1 training adopts the column.
+        """
+        return self.tier2_residuals_active() and bool(self.config.feature_masks.tier2_investment)
+
+    def _investment_tracker_for(self, player: PlayerId) -> InvestmentLiveTracker | None:
+        if not self.investment_active():
+            return None
+        tracker = self._investment_trackers.get(player)
+        if tracker is not None:
+            return tracker
+        request = self._first_requests.get(player) or self._latest_requests.get(player)
+        if request is None:
+            return None
+        own_team = own_team_from_request(request)
+        if not own_team:
+            return None
+        dex = load_showdown_dex_cached(self.config.resolved_showdown_root())
+        tracker = InvestmentLiveTracker(
+            perspective_slot=player,
+            own_team=own_team,
+            dex=dex,
+        )
+        self._investment_trackers[player] = tracker
         return tracker
 
     def _winner_slot(self, winner_name: str) -> PlayerId | None:

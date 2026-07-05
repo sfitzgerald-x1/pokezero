@@ -128,7 +128,9 @@ class LiveResidualPopulationTest(unittest.TestCase):
                         self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
                         self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
                     self.assertEqual(row[NUMERIC_TT_CB_BIT], 1.0 if token.cb_bit else 0.0)
-                    # The investment slot is a true reserve: zero in every path.
+                    # The investment column stays zero under default masks
+                    # (tier2_investment defaults off; see test_investment_live_env
+                    # for the mask-on path).
                     self.assertEqual(row[NUMERIC_TT_INVESTMENT_BIT], 0.0)
             self.assertGreater(populated_total, 5)
         finally:
@@ -165,7 +167,7 @@ class LiveResidualPopulationTest(unittest.TestCase):
                     stripped_a[NUMERIC_TT_CB_BIT] = stripped_b[NUMERIC_TT_CB_BIT] = 0.0
                     self.assertEqual(stripped_a, stripped_b)
                 # The mask-off run's tier2 columns are all zero; the investment
-                # reserve is zero under BOTH masks.
+                # column is zero under BOTH configs (tier2_investment defaults off).
                 for row in b.numeric_features:
                     self.assertEqual(row[NUMERIC_TT_RESIDUAL], 0.0)
                     self.assertEqual(row[NUMERIC_TT_RESIDUAL_VALID], 0.0)
@@ -441,6 +443,7 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                     "exact_state": True,
                     "transition_token_budget": 32,
                     "tier2_residuals": True,
+                    "tier2_investment": False,
                 },
             )
             matching_model = SimpleNamespace(
@@ -448,6 +451,7 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                 exact_state_enabled=True,
                 transition_token_budget=32,
                 tier2_residuals=True,
+                tier2_investment=False,
             )
             _require_cache_masks_match_model_config([out], matching_model)  # no raise
             mismatched_model = SimpleNamespace(
@@ -455,6 +459,7 @@ class CollectCacheMaskMetadataTest(unittest.TestCase):
                 exact_state_enabled=True,
                 transition_token_budget=128,
                 tier2_residuals=True,
+                tier2_investment=False,
             )
             with self.assertRaisesRegex(ValueError, "mask-mismatched"):
                 _require_cache_masks_match_model_config([out], mismatched_model)

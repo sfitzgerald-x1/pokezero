@@ -154,6 +154,11 @@ class TransformerPolicyConfig:
     # constant-zero residual slots must never resolve to mask-on (the #492 mismatch class;
     # same asymmetric-default pattern as value_activation).
     tier2_residuals: bool = True
+    # Defender-side investment channel (v2.1 batch 2). Dataclass default False — unlike
+    # tier2_residuals, NO current training run consumes the column; the default flips
+    # only when v2.1 training adopts it. from_dict also defaults False (pre-investment
+    # payloads carry no field and trained on a constant-zero column).
+    tier2_investment: bool = False
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -319,6 +324,7 @@ class TransformerPolicyConfig:
             # field and were trained on constant-zero slots -> resolve to mask-off, never the
             # dataclass default.
             tier2_residuals=bool(payload.get("tier2_residuals", False)),
+            tier2_investment=bool(payload.get("tier2_investment", False)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -1378,6 +1384,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
         exact_state=config.exact_state_enabled,
         transition_token_budget=config.transition_token_budget,
         tier2_residuals=config.tier2_residuals,
+        tier2_investment=config.tier2_investment,
     )
 
 
