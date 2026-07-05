@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .local_showdown import belief_set_source_env_enabled
+from .observation import OBSERVATION_SCHEMA_VERSION_V2_2
 from .randbat import load_gen3_randbat_source_cached
 from .showdown import (
     DEFAULT_REPLAY_OBSERVATION_SPEC,
@@ -154,7 +155,14 @@ def build_agent(
     spec = observation_spec_from_model_config(config)
     return OnlineBattleAgent(
         policy=policy,
-        vocab=gen3_category_vocabulary(showdown_root),
+        # Vocabulary latches with the schema (review MED-2): v2.2 needs the
+        # turn-merged families.
+        vocab=gen3_category_vocabulary(
+            showdown_root,
+            include_turn_merged=(
+                spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+            ),
+        ),
         dex=load_showdown_dex_cached(showdown_root),
         feature_masks=feature_masks_from_model_config(config),
         set_source=(

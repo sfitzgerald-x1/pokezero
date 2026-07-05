@@ -36,13 +36,18 @@ class ObservationSpecTest(unittest.TestCase):
             1 + 6 + 6 + ACTION_COUNT + STATS_TOKEN_COUNT + TRANSITION_TOKEN_COUNT,
         )
 
-    def test_schema_version_is_v2_1_with_v2_supported_and_v1_legacy(self) -> None:
-        # Dual-schema window: v2.1 is the fresh-artifact default, v2 stays a fully
-        # supported checkpoint-driven mode, v1 stays legacy-refused.
+    def test_schema_version_is_v2_1_with_v2_v2_2_supported_and_v1_legacy(self) -> None:
+        # Checkpoint-driven schema window: v2.1 is the fresh-artifact default, v2 stays
+        # a fully supported checkpoint-driven mode, v2.2 (turn-merged transitions) is
+        # the supported opt-in third entry, v1 stays legacy-refused.
         self.assertEqual(OBSERVATION_SCHEMA_VERSION, "pokezero.observation.v2.1")
         self.assertEqual(
             SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
-            ("pokezero.observation.v2", "pokezero.observation.v2.1"),
+            (
+                "pokezero.observation.v2",
+                "pokezero.observation.v2.1",
+                "pokezero.observation.v2.2",
+            ),
         )
         self.assertIn("pokezero.observation.v1", LEGACY_OBSERVATION_SCHEMA_VERSIONS)
 

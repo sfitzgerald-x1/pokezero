@@ -47,6 +47,7 @@ from .neural_policy import (
 )
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     ObservationFeatureMasks,
     PokeZeroObservationV0,
 )
@@ -1108,7 +1109,14 @@ async def run_controlled_foulplay_benchmark(
     # Schema + widths from the checkpoint's stamped provenance (dual-schema resolution): a v2
     # checkpoint is probed under the v2 encode, a v2.1 checkpoint under v2.1.
     observation_spec = observation_spec_from_model_config(result.model_config)
-    vocab = gen3_category_vocabulary(config.showdown_root)
+    # The vocabulary axis latches with the schema (review MED-2): a v2.2 checkpoint
+    # needs the turn-merged label families or every merged label OOV-hashes silently.
+    vocab = gen3_category_vocabulary(
+        config.showdown_root,
+        include_turn_merged=(
+            observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        ),
+    )
     dex = load_showdown_dex_cached(config.showdown_root)
     # Encode-time feature masks come FROM the checkpoint's stamped provenance (never the
     # defaults): a K=32 / stats-off / exact-state-off arm must be probed on observations

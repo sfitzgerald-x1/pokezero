@@ -265,5 +265,130 @@ class CorpusReplayGateTest(unittest.TestCase):
         self.assertEqual(vocab.observed_oov_tokens, frozenset())
 
 
+@unittest.skipUnless(
+    (SHOWDOWN_ROOT / "data" / "random-battles" / "gen3" / "sets.json").exists(),
+    "requires a local Gen 3 Pokemon Showdown checkout",
+)
+class TurnMergedCorpusReplayGateTest(unittest.TestCase):
+    """The corpus gate in schema v2.2 (TURN-MERGED transition tokens).
+
+    Same 5-game corpus, both perspectives, every boundary — through the v2.2 spec with
+    the turn-merged vocabulary, asserting shape/mask invariants and ZERO OOV for the
+    tt_phase/tt2_* families. K BUDGET UNIT NOTE: the budget=16 variant here keeps 16
+    TURN tokens (~16 turns), not 16 actions — the unit changed with the schema (see the
+    design doc's turn-merged addendum)."""
+
+    def test_corpus_replays_through_v2_2_with_zero_oov(self) -> None:
+        from pokezero.belief import PublicBattleBeliefEngine
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.observation import ObservationFeatureMasks
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import (
+            NUMERIC_TM2_PRESENT,
+            TRANSITION_TOKEN_OFFSET,
+            V2_2_REPLAY_OBSERVATION_SPEC,
+            _ReplayParser,
+            normalize_for_player,
+            observation_from_player_state,
+        )
+        from pokezero.turn_merged import SUB_BLOCK_ACTION
+
+        spec = V2_2_REPLAY_OBSERVATION_SPEC
+        dex = load_showdown_dex_cached(SHOWDOWN_ROOT)
+        vocab = gen3_category_vocabulary(SHOWDOWN_ROOT, include_turn_merged=True)
+        set_source = load_gen3_randbat_source_cached(SHOWDOWN_ROOT)
+        mask_variants = (
+            ObservationFeatureMasks(),
+            ObservationFeatureMasks(transition_token_budget=16),
+        )
+
+        capture_paths = sorted(CAPTURE_ROOT.glob("lines-*.log"))
+        self.assertEqual(len(capture_paths), 5, capture_paths)
+
+        observations = 0
+        merged_seen = 0
+        second_action_rows = 0
+        for corpus_index, path in enumerate(capture_paths):
+            lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+            if corpus_index == 0:
+                lines = lines + _SYNTHETIC_FOCUS_PUNCH
+            engines = {
+                slot: PublicBattleBeliefEngine(format_id="gen3randombattle", set_source=set_source)
+                for slot in ("p1", "p2")
+            }
+            parser = _ReplayParser(battle_id=path.stem)
+            fed_events = 0
+            for line in lines:
+                parser.feed([line])
+                events = parser.public_events
+                for event in events[fed_events:]:
+                    for engine in engines.values():
+                        engine.ingest_event(event)
+                fed_events = len(events)
+                if not (line.startswith("|turn|") or line.startswith("|win|")):
+                    continue
+                replay = parser.snapshot()
+                for slot in ("p1", "p2"):
+                    state = normalize_for_player(
+                        replay,
+                        player_id=slot,
+                        configured_showdown_slot=slot,
+                        format_id="gen3randombattle",
+                        belief_engine=engines[slot],
+                        include_turn_merged=True,
+                    )
+                    merged_seen = max(merged_seen, len(state.turn_merged_tokens))
+                    second_action_rows += sum(
+                        1
+                        for token in state.turn_merged_tokens
+                        if token.second.status == SUB_BLOCK_ACTION
+                    )
+                    for masks in mask_variants:
+                        observation = observation_from_player_state(
+                            state, category_vocab=vocab, spec=spec, dex=dex, feature_masks=masks
+                        )
+                        observation.validate(spec)
+                        observations += 1
+                        filled = min(
+                            len(state.turn_merged_tokens), masks.transition_token_budget
+                        )
+                        tail = observation.attention_mask[TRANSITION_TOKEN_OFFSET:]
+                        self.assertEqual(
+                            list(tail), [index < filled for index in range(len(tail))]
+                        )
+                        for row_index in range(
+                            TRANSITION_TOKEN_OFFSET + filled, spec.token_count
+                        ):
+                            self.assertEqual(
+                                set(observation.numeric_features[row_index]), {0.0}
+                            )
+                            self.assertEqual(set(observation.categorical_ids[row_index]), {0})
+                        # Tier-1 replay: sub-block Tier-2 columns stay dark in both halves.
+                        for row_index in range(
+                            TRANSITION_TOKEN_OFFSET, TRANSITION_TOKEN_OFFSET + filled
+                        ):
+                            row = observation.numeric_features[row_index]
+                            self.assertEqual(row[117], 0.0)  # first residual
+                            self.assertEqual(row[118], 0.0)  # first validity
+                            self.assertEqual(row[119], 0.0)  # first CB bit
+                            self.assertEqual(row[120], 0.0)  # investment reserve
+                        # NUMERIC_TM2_PRESENT fires exactly on executed second halves.
+                        visible = state.turn_merged_tokens[-filled:] if filled else ()
+                        for offset, token in enumerate(visible):
+                            self.assertEqual(
+                                observation.numeric_features[TRANSITION_TOKEN_OFFSET + offset][
+                                    NUMERIC_TM2_PRESENT
+                                ],
+                                1.0 if token.second.status == SUB_BLOCK_ACTION else 0.0,
+                            )
+
+        self.assertGreater(observations, 500)
+        self.assertGreater(merged_seen, 20)
+        self.assertGreater(second_action_rows, 100)
+        # Zero OOV across the merged families (tt_phase / tt2_*), both perspectives.
+        self.assertEqual(vocab.observed_oov_tokens, frozenset())
+
+
 if __name__ == "__main__":
     unittest.main()

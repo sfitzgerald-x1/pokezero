@@ -65,6 +65,16 @@ class CategoryVocabulary:
         """Distinct out-of-vocabulary strings seen by :meth:`encode` (drift signal; empty is healthy)."""
         return frozenset(self._observed_oov)  # type: ignore[attr-defined]
 
+    def is_enumerated(self, value: str | None) -> bool:
+        """True when ``value`` resolves to an enumerated row (never the OOV band).
+
+        Side-effect-free (no drift-warning state): the schema-conditional encode guards
+        use this to refuse a vocabulary that lacks a schema's label families instead of
+        silently hashing known-family tokens (review MED-2).
+        """
+        normalized = normalize_category_value(value)
+        return bool(normalized) and normalized in self._index  # type: ignore[attr-defined]
+
     def encode(self, value: str | None) -> int:
         """Return the embedding row for a category string (0 = padding for empty)."""
         normalized = normalize_category_value(value)

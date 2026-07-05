@@ -112,6 +112,17 @@ GEN3_CANT_REASONS = (
     "taunt", "nopp", "partiallytrapped", "truant", "damp", "focuspunch",
 )
 
+# Turn-merged transition families (v2.1 batch 3; OPT-IN via include_turn_merged so the
+# base vocabulary — and therefore every existing checkpoint's embedding size — is
+# unchanged until the dual-schema resolution wires the mode in post-#512). tt_phase
+# rides the SLOT column; the SECOND sub-block's categoricals need tt2_-prefixed
+# families because categorical columns embed as an unordered bag per row — the prefix
+# is what binds a label to the second mover. First-mover labels reuse the existing
+# families/columns unchanged (including the per-action precedent that actor species and
+# switch-target species share one family).
+TURN_MERGED_PHASES = ("turn", "lead", "replacement", "extra")
+TURN_MERGED_SECOND_STATUSES = ("negated", "pending", "absent")
+
 
 def _gen3_sets_path(showdown_root: str | Path) -> Path:
     return Path(showdown_root) / "data" / "random-battles" / "gen3" / "sets.json"
@@ -143,14 +154,18 @@ def gen3_randbat_entities(showdown_root: str | Path) -> dict[str, tuple[str, ...
     }
 
 
-def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[str]]:
+def gen3_randbat_category_strings(
+    showdown_root: str | Path, *, include_turn_merged: bool = False
+) -> dict[str, list[str]]:
     """Enumerate the categorical strings the encoder emits for the closed Gen 3 universe.
 
     Grouped by source so the vocabulary breakdown is auditable. Mirrors the templates in
     ``showdown.py``: ``species:<id>``, ``move:<id>``, ``belief:possible_move:<id>``,
     ``belief:possible_ability:<id>``, ``belief:possible_item:<id>``, ``status:<id>``, plus
     the bounded structural tokens. Inherently-dynamic strings (``condition:``, ``player:``,
-    ``winner:<name>``) are excluded by design.
+    ``winner:<name>``) are excluded by design. ``include_turn_merged`` adds the
+    turn-merged transition families (tt_phase / tt2_*) on top — opt-in, so the base
+    vocabulary size (and existing checkpoints' embedding tables) stay unchanged.
     """
     entities = gen3_randbat_entities(showdown_root)
     dex = load_showdown_dex_cached(showdown_root)
@@ -215,6 +230,29 @@ def gen3_randbat_category_strings(showdown_root: str | Path) -> dict[str, list[s
     # Encoder fallbacks for empty action slots.
     structural += [f"move:slot:{i}" for i in range(1, 5)] + [f"species:slot:{i}" for i in range(1, 6)]
     groups["structural"] = structural
+
+    if include_turn_merged:
+        # Turn-merged transition families (v2.1 batch 3). The first sub-block reuses the
+        # existing families above; the second sub-block gets tt2_-prefixed rows (bag
+        # binding — see the constants' comment), and tt_phase replaces tt_kind on the
+        # SLOT column for merged rows.
+        turn_merged: list[str] = [f"tt_phase:{phase}" for phase in TURN_MERGED_PHASES]
+        turn_merged += [f"tt2_status:{status}" for status in TURN_MERGED_SECOND_STATUSES]
+        turn_merged += [f"tt2_kind:{kind}" for kind in TRANSITION_KINDS]
+        turn_merged += [f"tt2_outcome:{outcome}" for outcome in TRANSITION_OUTCOMES]
+        turn_merged += [f"tt2_effectiveness:{eff}" for eff in TRANSITION_EFFECTIVENESS]
+        turn_merged += [f"tt2_side_effect:{effect}" for effect in TRANSITION_SIDE_EFFECTS]
+        turn_merged += [f"tt2_cant:{reason}" for reason in GEN3_CANT_REASONS]
+        # Second-mover species (actor, switch-target, and Baton Pass follow-up share the
+        # family — the same collapse the per-action PRIMARY/SECONDARY columns accept) and
+        # second-mover move actions (extraction-normalized ids only; display forms are
+        # never emitted in the action field).
+        turn_merged += [f"tt2_species:{_species_display(species)}" for species in entities["species"]]
+        turn_merged += [
+            f"tt2_move:{_normalize_identifier(move)}"
+            for move in (*entities["moves"], *UNIVERSAL_MOVES)
+        ]
+        groups["turn_merged"] = turn_merged
 
     # Raw mechanical type facts the encoder emits for pokemon/move tokens (closed + tiny).
     groups["types"] = (
@@ -297,13 +335,14 @@ def gen3_randbat_cosmetic_aliases(showdown_root: str | Path) -> tuple[tuple[int,
     return tuple(sorted(set(aliases)))
 
 
-def gen3_category_string_aliases(showdown_root: str | Path) -> dict[str, str]:
+def gen3_category_string_aliases(
+    showdown_root: str | Path, *, include_turn_merged: bool = False
+) -> dict[str, str]:
     """Category string aliases onto existing base rows."""
     entities = gen3_randbat_entities(showdown_root)
     aliases: dict[str, str] = {}
-    if not any(_normalize_identifier(species) == "unown" for species in entities["species"]):
-        pass
-    else:
+    has_unown = any(_normalize_identifier(species) == "unown" for species in entities["species"])
+    if has_unown:
         aliases.update({f"species:{forme}": "species:Unown" for forme in UNOWN_FORMES})
     move_universe = {_normalize_identifier(move) for move in entities["moves"]} | {
         _normalize_identifier(move) for move in UNIVERSAL_MOVES
@@ -313,23 +352,47 @@ def gen3_category_string_aliases(showdown_root: str | Path) -> dict[str, str]:
             continue
         for power in range(1, 103):
             aliases[f"move:{move}{power}"] = f"move:{move}"
+    if include_turn_merged:
+        # Mirror the base-family collapses for the second-mover families.
+        if has_unown:
+            aliases.update({f"tt2_species:{forme}": "tt2_species:Unown" for forme in UNOWN_FORMES})
+        for move in DYNAMIC_POWER_MOVE_ALIASES:
+            if move not in move_universe:
+                continue
+            for power in range(1, 103):
+                aliases[f"tt2_move:{move}{power}"] = f"tt2_move:{move}"
     return aliases
 
 
 @lru_cache(maxsize=8)
-def _cached_category_vocabulary(showdown_root_key: str, oov_buckets: int) -> CategoryVocabulary:
-    strings = [s for group in gen3_randbat_category_strings(showdown_root_key).values() for s in group]
-    aliases = gen3_category_string_aliases(showdown_root_key)
+def _cached_category_vocabulary(
+    showdown_root_key: str, oov_buckets: int, include_turn_merged: bool
+) -> CategoryVocabulary:
+    strings = [
+        s
+        for group in gen3_randbat_category_strings(
+            showdown_root_key, include_turn_merged=include_turn_merged
+        ).values()
+        for s in group
+    ]
+    aliases = gen3_category_string_aliases(showdown_root_key, include_turn_merged=include_turn_merged)
     return build_category_vocabulary(strings, oov_buckets=oov_buckets, aliases=aliases)
 
 
-def gen3_category_vocabulary(showdown_root: str | Path, *, oov_buckets: int = 16) -> CategoryVocabulary:
+def gen3_category_vocabulary(
+    showdown_root: str | Path, *, oov_buckets: int = 16, include_turn_merged: bool = False
+) -> CategoryVocabulary:
     """Build (cached) the string->row CategoryVocabulary for the closed Gen 3 randbat universe.
 
     This is the single source of truth used at BOTH observation-encode time (the env) and for
     the model's embedding size/config, so rows align deterministically from the closed universe.
+    ``include_turn_merged`` appends the turn-merged transition families (v2.1 batch 3) —
+    opt-in because it changes the vocabulary size and therefore the embedding-table shape;
+    only turn-merged-mode configs may set it.
     """
-    return _cached_category_vocabulary(str(Path(showdown_root).expanduser().resolve()), oov_buckets)
+    return _cached_category_vocabulary(
+        str(Path(showdown_root).expanduser().resolve()), oov_buckets, include_turn_merged
+    )
 
 
 def canonicalize_with_cosmetic_aliases(

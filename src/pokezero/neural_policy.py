@@ -24,6 +24,7 @@ from .observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TRANSITION_TOKEN_COUNT,
     UNVERSIONED_OBSERVATION_SCHEMA,
@@ -210,9 +211,9 @@ class TransformerPolicyConfig:
                 raise ValueError(
                     f"This checkpoint was trained under observation spec "
                     f"{self.observation_schema_version or UNVERSIONED_OBSERVATION_SCHEMA!r}; "
-                    f"this build encodes {OBSERVATION_SCHEMA_VERSION_V2!r} and "
-                    f"{OBSERVATION_SCHEMA_VERSION_V2_1!r} (window=1 + transition tokens + "
-                    "exact-state layer). Old checkpoints cannot run under the new specs "
+                    f"this build encodes {', '.join(repr(v) for v in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)} "
+                    "(window=1 + transition tokens + exact-state layer). "
+                    "Old checkpoints cannot run under the new specs "
                     "— replay them from their pinned tag per docs/model_versioning.md."
                 )
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
@@ -278,7 +279,7 @@ class TransformerPolicyConfig:
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
         # Feature-width defaults are keyed on the PAYLOAD's stamped observation schema, never
         # the build's current default: a v2 payload that omitted its widths must resolve to
-        # the v2 census (121), not silently inherit the v2.1 one (138). Real checkpoints
+        # the v2 census (121), not silently inherit the v2.1 one (140). Real checkpoints
         # serialize widths explicitly (asdict), so this only guards hand-written payloads.
         payload_schema = _str_field(
             payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA
@@ -1945,10 +1946,12 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
             f" Numeric column count {observed_width} != model's {config.numeric_feature_count}: "
             f"the numeric census is schema-keyed — {OBSERVATION_SCHEMA_VERSION_V2!r} is the "
             "121-column family (119 before the reserved Tier-2 CB/investment slots "
-            f"materialized) and {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
+            f"materialized), {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
             "(revealed-move PP-validity bits + substitute HP fraction + per-mon pinned "
-            "Tier-2 conclusions + the investment reserves). This artifact and this model "
-            "were built against different censuses "
+            f"Tier-2 conclusions + the investment surfaces), and "
+            f"{OBSERVATION_SCHEMA_VERSION_V2_2!r} is the 153-column family (turn-merged "
+            "transition tokens: the appended second-sub-block block). This artifact and "
+            "this model were built against different censuses "
             "and must not be mixed; the schema + width an env encodes resolve from the "
             "loaded checkpoint's model_config (observation_spec_from_model_config)."
         )

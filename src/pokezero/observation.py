@@ -21,12 +21,26 @@ OBSERVATION_SCHEMA_VERSION_V2 = "pokezero.observation.v2"
 # env_config_with_checkpoint_masks latch family), so v2 checkpoints keep scoring through every
 # harness while fresh trains stamp v2.1.
 OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
+# v2.2 (checkpoint-driven, third entry in the same dual-schema table): TURN-MERGED transition
+# tokens — the transition block carries one token per turn/lead/replacement phase with two
+# ordered sub-blocks (speed order explicit, negated/absent declarations representable) instead
+# of one token per declared action. All v2.1 blocks (defender identity semantics, PP-validity
+# bits, sub HP, per-mon pinned Tier-2 bits) carry forward; the appended second-sub-block
+# columns extend the v2.1 census. Same resolution mechanism: the schema an env encodes comes
+# from the loaded checkpoint's stamped model_config, so v2/v2.1 artifacts stay first-class.
+# K BUDGET UNIT CHANGE (loud): the transition budget flag counts TOKENS in every schema, but
+# a v2.2 token covers a WHOLE TURN — the v2/v2.1 K=64 horizon (~32 turns) is budget=32 under
+# v2.2; an unchanged K roughly doubles the temporal horizon.
+OBSERVATION_SCHEMA_VERSION_V2_2 = "pokezero.observation.v2.2"
 # The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
 # with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
+# v2.2 is deliberately NOT the default: turn-merged is the batch-3 ablation arm until it earns
+# the slot; flipping the default is a one-line change after those reads.
 OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_1
 SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
 )
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 # Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
@@ -88,6 +102,9 @@ class ObservationFeatureMasks:
       sleep-clause / trapper / pending-Wish bits, computed expected stats).
     - ``transition_token_budget``: how many of the most recent transition tokens are filled
       (32 tokens = the K=16-turn ablation arm); the remaining slots stay zero + masked.
+      UNIT NOTE: under schema v2.2 (turn-merged) each transition token is a WHOLE TURN,
+      so the same number roughly doubles the temporal horizon — the v2/v2.1 K=64
+      horizon is budget=32 under v2.2.
     - ``tier2_residuals``: whether transition tokens that CARRY Tier-2 residuals (populated
       by ``pokezero.tier2`` behind PR D's precision gate) write the reserved
       residual/validity slots. Tokens from the plain extraction path carry none, so the

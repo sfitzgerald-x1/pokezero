@@ -135,6 +135,14 @@ TOKEN_KIND_MOVE = "move"
 TOKEN_KIND_SWITCH = "switch"
 TOKEN_KIND_CANT = "cant"
 
+# Switch-window classification (why this |switch| line happened). Not a token field —
+# per-action tokens stay unchanged — but the turn-merged layer (pokezero.turn_merged)
+# needs it to distinguish declared switches from forced replacement phases.
+SWITCH_REASON_LEAD = "lead"
+SWITCH_REASON_VOLUNTARY = "voluntary"
+SWITCH_REASON_REPLACEMENT = "replacement"
+SWITCH_REASON_BATON_PASS = "baton-pass"
+
 # Absorb-class abilities (negation outcome distinct from immune: the defender gained).
 _ABSORB_ABILITIES = frozenset({"voltabsorb", "waterabsorb", "flashfire"})
 # |cant| reasons that are still a decision opportunity (the player could have switched);
@@ -298,6 +306,13 @@ class _Window:
     # Locked continuation (Solar Beam release / [from]lockedmove): the |move| line is
     # real history but not a controllable decision — excluded from opportunities.
     locked_continuation: bool = False
+    # Switch classification (SWITCH_REASON_*; None for move/cant windows) and the
+    # cold-pair signal: True when the OTHER side also had a faint pending replacement
+    # at the moment this replacement switch-in was emitted (Explosion-class simultaneous
+    # double-faints — both sides replace blind in one forceSwitch cycle; engine-verified
+    # 2026-07-05). Consumed by pokezero.turn_merged, not by per-action tokens.
+    switch_reason: Optional[str] = None
+    other_side_pending_replacement: bool = False
 
     def upgrade_outcome(self, outcome: str) -> None:
         if _OUTCOME_RANK[outcome] < _OUTCOME_RANK[self.outcome]:
@@ -329,6 +344,19 @@ class _FoldResult:
     weather_reveals: tuple[tuple[str, str, bool], ...] = ()
     # (side, species) -> counters.
     mon_counters: dict[tuple[str, str], _MonCounters] = field(default_factory=dict)
+    # turn number -> {side: species active when |turn|N was announced}. Drag-safe (the
+    # fold's occupant map tracks |drag| lines that emit no token); the turn-merged layer
+    # uses it to name the mon whose declared action was consumed without a protocol
+    # trace (negated sub-blocks).
+    turn_start_occupants: dict[int, dict[str, str]] = field(default_factory=dict)
+    # Consumption-confirmation signals for the turn-merged NEGATED gate (review MED-1):
+    # a missing declared action is only provably CONSUMED once its turn reached the
+    # residual boundary (|upkeep| / a later |turn| / |win|) or a mid-turn faint occurred
+    # (engine-verified: any mid-turn faint cancels every remaining action). A replay
+    # prefix cut at a mid-turn forceSwitch boundary (Baton Pass completion choice)
+    # satisfies neither -> the pending opponent action must NOT read as negated.
+    completed_turns: set[int] = field(default_factory=set)
+    fainted_turns: set[int] = field(default_factory=set)
 
 
 def extract_transition_tokens(
@@ -460,6 +488,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
     current: Optional[_Window] = None
     weather_reveals: list[tuple[str, str, bool]] = []
     mon_counters: dict[tuple[str, str], _MonCounters] = {}
+    turn_start_occupants: dict[int, dict[str, str]] = {}
+    completed_turns: set[int] = set()
+    fainted_turns: set[int] = set()
 
     def counters_for(side: str, species: str) -> _MonCounters:
         return mon_counters.setdefault((side, species), _MonCounters())
@@ -489,20 +520,27 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         # contiguous event chunk: nothing in the residual phase may attach to a window.
         if event_type in {"", "upkeep"}:
             close_window()
+            if event_type == "upkeep":
+                completed_turns.add(turn_number)
             continue
 
         if event_type == "turn":
             close_window()
+            completed_turns.add(turn_number)  # |turn|N+1 closes turn N even sans |upkeep|
             try:
                 turn_number = int(parts[2])
             except (IndexError, TypeError, ValueError):
                 pass
             for side, stay in occupant.items():
                 counters_for(side, stay.species).turns_active += 1
+            turn_start_occupants[turn_number] = {
+                side: stay.species for side, stay in occupant.items()
+            }
             continue
 
         if event_type == "win":
             close_window()
+            completed_turns.add(turn_number)
             continue
 
         if event_type == "move" and len(parts) >= 4:
@@ -561,6 +599,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             is_lead = not lead_seen[side]
             lead_seen[side] = True
             is_faint_replacement = pending_faint_replacement[side]
+            # Cold-pair signal, read BEFORE clearing this side's own flag: were BOTH
+            # sides waiting on a replacement when this switch-in was emitted?
+            other_pending = is_faint_replacement and pending_faint_replacement[_other_side(side)]
             pending_faint_replacement[side] = False
             is_baton_pass = pending_baton_pass[side] or _line_mentions_baton_pass(parts)
             pending_baton_pass[side] = False
@@ -568,6 +609,14 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             voluntary = (
                 event_type == "switch" and not is_lead and not is_faint_replacement and not is_baton_pass
             )
+            if is_lead:
+                switch_reason = SWITCH_REASON_LEAD
+            elif is_faint_replacement:
+                switch_reason = SWITCH_REASON_REPLACEMENT
+            elif is_baton_pass:
+                switch_reason = SWITCH_REASON_BATON_PASS
+            else:
+                switch_reason = SWITCH_REASON_VOLUNTARY
             previous = occupant.get(side)
             if previous is not None and voluntary and not previous.moved:
                 counters_for(side, previous.species).switched_out_before_attacking += 1
@@ -597,6 +646,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                 weather=current_weather,
             )
             window.voluntary_switch = voluntary
+            window.switch_reason = switch_reason
+            window.other_side_pending_replacement = other_pending
             open_window(window)
             continue
 
@@ -667,6 +718,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         elif event_type == "faint" and target in {"p1", "p2"}:
             hp_fraction[target] = 0.0
             pending_faint_replacement[target] = True
+            fainted_turns.add(turn_number)
             if current is not None and target == current.defender_side and current.defender_hit_by_move:
                 current.ko = True
 
@@ -800,6 +852,9 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         windows=tuple(windows),
         weather_reveals=tuple(weather_reveals),
         mon_counters=mon_counters,
+        turn_start_occupants=turn_start_occupants,
+        completed_turns=completed_turns,
+        fainted_turns=fainted_turns,
     )
 
 
