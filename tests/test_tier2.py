@@ -23,6 +23,7 @@ from pokezero.tier2 import (
     OwnMon,
     Tier2Config,
     Tier2LiveTracker,
+    _IncrementalContextFold,
     apply_residuals,
     build_cb_whitelist,
     infer_tier2,
@@ -60,6 +61,7 @@ _DEX = showdown_dex_from_payload(
     {
         "moves": {
             "bodyslam": _move_payload("bodyslam", "Body Slam", "Normal", "Physical", 85),
+            "brickbreak": _move_payload("brickbreak", "Brick Break", "Fighting", "Physical", 75),
             "return": _move_payload("return", "Return", "Normal", "Physical", 0),
             "earthquake": _move_payload("earthquake", "Earthquake", "Ground", "Physical", 100),
             "rockslide": _move_payload("rockslide", "Rock Slide", "Rock", "Physical", 75, accuracy=90),
@@ -311,6 +313,43 @@ class ChoiceBandTwoStrikeTest(unittest.TestCase):
         self.assertAlmostEqual(
             strike.expected_median_hp, median_damage(_bodyslam_rolls(screen=True))
         )
+
+    def test_brick_break_conditions_unscreened_through_reflect(self) -> None:
+        # Brick Break shatters Reflect in its onTryHit BEFORE dealing damage, so its own
+        # strike lands unscreened even though Reflect is live at the |move| line. The
+        # residual must condition on the UNSCREENED lattice (the observed high roll is
+        # impossible under the screened one), and the strike must NOT be screen-disqualified.
+        stats = _snorlax_stats()
+
+        def bb_rolls(screen):
+            return gen3_damage_rolls(
+                Gen3DamageContext(
+                    level=_LEVEL, base_power=75, category="Physical",
+                    attack=stats["atk"], defense=_OWN_SLOWBRO.stats["def"],
+                    stab=False, effectiveness=1.0, screen=screen,
+                )
+            )
+
+        unscreened, screened = bb_rolls(False), bb_rolls(True)
+        observed = max(unscreened)
+        self.assertNotIn(observed, screened, "fixture: high unscreened roll must miss the screened lattice")
+        source = FakeSource(
+            {"snorlax": [{"variant_id": "bb", "moves": ["brickbreak", "earthquake", "rest", "sleeptalk"],
+                          "ability": "Immunity", "item": "Leftovers", "level": _LEVEL}]}
+        )
+        lines = _leads()
+        lines += ["|move|p1a: Slowbro|Reflect|p1a: Slowbro", "|-sidestart|p1: Alice|Reflect"]
+        # Engine order: the shatter -sideend precedes the -damage of this same strike.
+        lines += _strike_lines(observed, turn=1, move="Brick Break",
+                               extra_before=["|-sideend|p1: Alice|Reflect"])
+        inference = _infer(lines, source=source, whitelist={"snorlax": frozenset({"brickbreak"})})
+        strike = next(s for s in inference.strikes if s.move_id == "brickbreak")
+        self.assertNotIn("screen", strike.disqualifiers)
+        self.assertTrue(strike.residual_valid)
+        self.assertAlmostEqual(strike.expected_median_hp, median_damage(unscreened))
+        self.assertNotAlmostEqual(strike.expected_median_hp, median_damage(screened))
+        self.assertGreater(strike.residual, 0)
+        self.assertAlmostEqual(strike.residual, (observed - median_damage(unscreened)) / 330.0)
 
     def test_stat_stages_disqualify_cb_but_condition_residual(self) -> None:
         damage = _exceeding_damage()
@@ -852,6 +891,43 @@ class ContextFoldTest(unittest.TestCase):
         inference = _infer(plain_lines, source=source, whitelist={"flareon": frozenset({"bodyslam"})})
         strike = next(s for s in inference.strikes if s.attacker_key == "p2:flareon")
         self.assertNotIn("stat-stages", strike.disqualifiers)
+
+    def test_brick_break_strips_screen_from_its_own_strike_only(self) -> None:
+        # Fold-level guarantee behind the residual/CB fix: a screen-shattering move's own
+        # strike context drops Reflect (its onTryHit removes screens before it hits), while
+        # a same-screen non-shatter strike keeps it and the NEXT strike sees the shatter.
+        bodyslam = "|move|p2a: Snorlax|Body Slam|p1a: Slowbro"
+        brickbreak = "|move|p2a: Snorlax|Brick Break|p1a: Slowbro"
+        lines = _leads()
+        lines += [
+            "|move|p1a: Slowbro|Reflect|p1a: Slowbro",
+            "|-sidestart|p1: Alice|Reflect",
+            "|", "|upkeep", "|turn|2",
+            # Non-shatter physical strike into the live screen: keeps reflect.
+            bodyslam,
+            "|-damage|p1a: Slowbro|300/330",
+            "|", "|upkeep", "|turn|3",
+            # Brick Break shatters the screen (onTryHit) before its own damage lands.
+            brickbreak,
+            "|-sideend|p1: Alice|Reflect",
+            "|-damage|p1a: Slowbro|270/330",
+            "|", "|upkeep", "|turn|4",
+            # Strike after the shatter: reflect is gone from the fold state too.
+            bodyslam,
+            "|-damage|p1a: Slowbro|240/330",
+            "|", "|upkeep", "|turn|5",
+        ]
+        idx_before = lines.index(bodyslam)
+        idx_brick = lines.index(brickbreak)
+        idx_after = len(lines) - 1 - lines[::-1].index(bodyslam)
+        self.assertLess(idx_before, idx_brick)
+        self.assertLess(idx_brick, idx_after)
+
+        fold = _IncrementalContextFold()
+        fold.process(lines)
+        self.assertEqual(fold.contexts[idx_before].defender_screens, ("reflect",))
+        self.assertEqual(fold.contexts[idx_brick].defender_screens, ())
+        self.assertEqual(fold.contexts[idx_after].defender_screens, ())
 
 
 class WhitelistTest(unittest.TestCase):

@@ -281,6 +281,16 @@ def canonical_move_id(move: str) -> str:
     return move_id
 
 
+# Moves whose gen3 ``onTryHit`` shatters the defender's Reflect/Light Screen BEFORE
+# dealing damage (data/mods/gen3/moves.ts brickbreak onTryHit: ``foe.removeSideCondition``
+# for both screens, "before you hit"). The screens are still present in ``side_counts``
+# at the ``|move|`` line where the strike context is snapshotted, but the strike itself
+# lands unscreened, so the assessed move's own context must drop them. Brick Break is the
+# only gen3 move with this behaviour; later-gen shatterers (Psychic Fangs, etc.) are
+# out of pool.
+_SCREEN_SHATTERING_MOVES = frozenset({"brickbreak"})
+
+
 class _IncrementalContextFold:
     """Incremental public-modifier context fold over the protocol lines.
 
@@ -318,7 +328,14 @@ class _IncrementalContextFold:
             self._process_line(index, raw_lines[index])
         self._processed = len(raw_lines)
 
-    def _snapshot(self, attacker: str, defender: Optional[str], attacker_species: str) -> StrikeContext:
+    def _snapshot(
+        self,
+        attacker: str,
+        defender: Optional[str],
+        attacker_species: str,
+        *,
+        shatters_screens: bool = False,
+    ) -> StrikeContext:
         defender = defender or _other(attacker)
         defender_species = self.occupant.get(defender, "")
         boosts = self.boosts
@@ -339,21 +356,30 @@ class _IncrementalContextFold:
             defender_item_mutated=(defender, _species_key(defender_species)) in self.item_mutated,
             attacker_ability_overridden=self.ability_overridden[attacker],
             defender_ability_overridden=self.ability_overridden[defender],
-            defender_screens=tuple(
+            # A screen-shattering move (Brick Break) removes the defender's screens in
+            # its ``onTryHit``, BEFORE dealing damage, so its own strike lands unscreened
+            # even though ``side_counts`` still carries the screens at this ``|move|`` line.
+            # Drop them from this strike's context to stay engine-exact; the shatter
+            # ``-sideend`` lines fold in below, so the NEXT strike's snapshot sees no screens.
+            defender_screens=()
+            if shatters_screens
+            else tuple(
                 name for name in ("reflect", "lightscreen") if self.side_counts[defender].get(name)
             ),
         )
 
     def _record_action(self, index: int, event_type: str, parts: Sequence[str], side: str) -> None:
         species = self.occupant.get(side) or _species_from_ident(parts[2]) or ""
+        shatters_screens = False
         if event_type == "move":
             defender = _slot_from_ident(parts[4]) if len(parts) > 4 else None
+            shatters_screens = normalize_id(parts[3]) in _SCREEN_SHATTERING_MOVES
         elif event_type == "switch":
             species = _species_from_details(parts[3]) or _species_from_ident(parts[2]) or ""
             defender = None
         else:  # cant
             defender = None
-        self.contexts[index] = self._snapshot(side, defender, species)
+        self.contexts[index] = self._snapshot(side, defender, species, shatters_screens=shatters_screens)
         self.token_line_indices.append(index)
 
     def _process_line(self, index: int, raw_line: str) -> None:
