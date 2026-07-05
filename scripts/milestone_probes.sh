@@ -13,8 +13,15 @@
 #          checkpoints/curated/<run>-i<iter>.pt (byte-size verified); milestones
 #          whose nearest checkpoint is >30k games away are recorded as SKIPPED
 #          ledger lines instead of probing the wrong checkpoint
-#        - cross-pool Pearson: pokezero-neural value-calibration on pool-self-v1
-#          (and pool-fp-v1 when present)
+#        - cross-pool Pearson: pokezero-neural value-calibration on the self
+#          pool (and the foul-play pool when its file is present); pools
+#          resolve via POKEZERO_POOL_SELF / POKEZERO_POOL_FP with frozen-v2
+#          defaults (see the v1 DEPRECATION note below). Each pool file is
+#          sha256-hashed once per sweep; the hash pins every pearson artifact
+#          (pearson-<label>-<hash8>-<milestone>.json filename + a pool pin in
+#          the payload) and ledger line to the exact pool bytes, so repointing
+#          an env var at a different same-stem file can never present stale
+#          numbers as the new pool's results
 #        - dV hazard probe: scripts/hazard_probe.py (main carries the value-
 #          response section since #501; verified at startup)
 #        - append one JSONL line to runs/milestone-probes/<run>/ledger.jsonl
@@ -43,12 +50,26 @@
 #   POKEZERO_SHOWDOWN_ROOT       local pokemon-showdown (sim) checkout, for the
 #                                hazard-probe state corpus (not needed in --dry-run)
 # Optional env:
+#   POKEZERO_POOL_SELF           self-play eval pool JSONL for the Pearson read
+#                                (missing file is FATAL)   [default: frozen v2]
+#   POKEZERO_POOL_FP             foul-play-side eval pool JSONL (skipped when
+#                                the default is absent, FATAL when an explicit
+#                                override is absent)       [default: frozen v2]
 #   POKEZERO_HAZARD_GAMES        hazard-probe corpus games            [default 150]
 #   POKEZERO_MILESTONE_STEP      milestone spacing in games           [default 100000]
 #   POKEZERO_MILESTONE_MAX_DIST  max |checkpoint games - milestone|   [default 30000]
 #   POKEZERO_TIMELINE_TAIL       eval-timeline rows fed to watchdogs  [default 500]
 #   POKEZERO_KUBECTL_TIMEOUT     --request-timeout for kubectl calls  [default 60s]
 #   POKEZERO_CP_TIMEOUT          hard timeout for kubectl cp, seconds [default 1800]
+#
+# DEPRECATION — v1 pools: the defaults are the frozen v2 pools
+# (runs/pool-self-v2-20260705/pool-self-v2.jsonl and
+# runs/pool-fp-v2-20260705/pool-fp-v2.jsonl, built from the 50k obsv2
+# checkpoint; DEFAULT_POOL_* in scripts/milestone_probes.py). The retired v1
+# pools (V1_POOL_* there) store v1-encoded observations that the v2 schema
+# guards refuse, so they CANNOT score v2 (obsv2) checkpoints — the sweep
+# warns loudly when an env override explicitly selects a v1 pool, which is
+# now the only way one gets used.
 #
 # Usage (from repo root, `uv sync` done once):
 #   scripts/milestone_probes.sh [--dry-run]
@@ -92,11 +113,44 @@ PROBE_ROOT="$REPO/runs/milestone-probes"
 ALERTS="$PROBE_ROOT/ALERTS.jsonl"
 LOCKFILE="$PROBE_ROOT/.sweep.lock"
 CURATED="$REPO/checkpoints/curated"
-POOL_SELF="$REPO/runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl"
-POOL_FP="$REPO/runs/pool-fp-v1-20260704/pool-fp-v1.jsonl"
-
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/milestone-probes.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
+
+# Eval pools for the cross-pool Pearson read: POKEZERO_POOL_SELF /
+# POKEZERO_POOL_FP override the frozen-v2 defaults (see the DEPRECATION note
+# in the header — explicitly selecting a v1 pool warns loudly: v1 pools
+# cannot score v2 checkpoints). Resolution, labels, v1 detection, and the
+# per-sweep pool sha256 (--hash: hashed ONCE here, streamed — it pins every
+# pearson artifact and ledger line to the exact pool bytes) live in the
+# python helper (`pools`). The transport is NUL-delimited key/value pairs:
+# unlike a TSV row, a path containing tabs or newlines cannot mis-split.
+POOL_HASH_ARGS=()
+[ "$DRY_RUN" -eq 1 ] || POOL_HASH_ARGS+=(--hash)
+POOLS_NUL="$TMP/pools.nul"
+# ${arr[@]+...}: empty-array expansion is an unbound-variable error under
+# bash 3.2 (stock macOS) with set -u.
+"${HELPER[@]}" pools --repo "$REPO" --format nul \
+  ${POOL_HASH_ARGS[@]+"${POOL_HASH_ARGS[@]}"} > "$POOLS_NUL" || {
+  echo "[milestone-probes] FATAL: eval-pool resolution failed (see message above)" >&2; exit 1; }
+POOL_SELF=""; POOL_SELF_LABEL=""; POOL_SELF_SOURCE=""; POOL_SELF_SHA256=""
+POOL_FP="";   POOL_FP_LABEL="";   POOL_FP_SOURCE="";   POOL_FP_SHA256=""
+POOL_FP_ACTIVE=0
+POOL_DEPRECATIONS=""
+while IFS= read -r -d '' pool_key && IFS= read -r -d '' pool_value; do
+  case "$pool_key" in
+    self.path)   POOL_SELF="$pool_value" ;;
+    self.label)  POOL_SELF_LABEL="$pool_value" ;;
+    self.source) POOL_SELF_SOURCE="$pool_value" ;;
+    self.sha256) POOL_SELF_SHA256="$pool_value" ;;
+    fp.path)     POOL_FP="$pool_value" ;;
+    fp.label)    POOL_FP_LABEL="$pool_value" ;;
+    fp.source)   POOL_FP_SOURCE="$pool_value" ;;
+    fp.sha256)   POOL_FP_SHA256="$pool_value" ;;
+    warning)     POOL_DEPRECATIONS="${POOL_DEPRECATIONS:+$POOL_DEPRECATIONS$'\n'}$pool_value" ;;
+  esac
+done < "$POOLS_NUL"
+[ -n "$POOL_SELF" ] && [ -n "$POOL_FP" ] || {
+  echo "[milestone-probes] FATAL: eval-pool resolution returned no usable rows (helper/script version skew?)" >&2; exit 1; }
 
 log()   { echo "[milestone-probes] $*"; }
 loud()  { echo; echo "################################################################"; printf '%s\n' "$@" | sed 's/^/### /'; echo "################################################################"; echo; }
@@ -151,28 +205,41 @@ probe_milestone() {
     fi
   fi
 
-  # -- cross-pool Pearson (value-calibration, pool-self-v1 [+ pool-fp-v1]) --
-  local pearson_self="$ledger_dir/pearson-pool-self-v1-$milestone.json"
+  # -- cross-pool Pearson (value-calibration on the resolved eval pools) ----
+  # Artifact names carry the pool sha256 prefix (pearson-<label>-<hash8>-
+  # <milestone>.json) and the payload carries the full pool pin (annotate-
+  # pearson), so the reuse check below treats a pool-file change as a NEW
+  # probe: repointing an env var at a different same-stem file can never
+  # present a previous pool's numbers as the new pool's results.
+  local self_hash8="${POOL_SELF_SHA256:0:8}"
+  local pearson_self="$ledger_dir/pearson-$POOL_SELF_LABEL-$self_hash8-$milestone.json"
   if [ ! -s "$pearson_self" ]; then
-    log "  value-calibration on pool-self-v1 -> $pearson_self"
+    log "  value-calibration on $POOL_SELF_LABEL -> $pearson_self"
     uv run pokezero-neural value-calibration --checkpoint "$ckpt" \
       --data "$POOL_SELF" --json > "$pearson_self.tmp" \
+      && "${HELPER[@]}" annotate-pearson --json "$pearson_self.tmp" \
+           --label "$POOL_SELF_LABEL" --pool-path "$POOL_SELF" \
+           --pool-sha256 "$POOL_SELF_SHA256" \
       && mv "$pearson_self.tmp" "$pearson_self" || {
         rm -f "$pearson_self.tmp"
-        log "  FAIL $run@$milestone: value-calibration (pool-self-v1) failed"; return 1; }
+        log "  FAIL $run@$milestone: value-calibration ($POOL_SELF_LABEL) failed"; return 1; }
   fi
-  local pearson_args=(--pearson "pool-self-v1=$pearson_self")
-  if [ -f "$POOL_FP" ]; then
-    local pearson_fp="$ledger_dir/pearson-pool-fp-v1-$milestone.json"
+  local pearson_args=(--pearson "$POOL_SELF_LABEL=$pearson_self")
+  if [ "$POOL_FP_ACTIVE" -eq 1 ]; then
+    local fp_hash8="${POOL_FP_SHA256:0:8}"
+    local pearson_fp="$ledger_dir/pearson-$POOL_FP_LABEL-$fp_hash8-$milestone.json"
     if [ ! -s "$pearson_fp" ]; then
-      log "  value-calibration on pool-fp-v1 -> $pearson_fp"
+      log "  value-calibration on $POOL_FP_LABEL -> $pearson_fp"
       uv run pokezero-neural value-calibration --checkpoint "$ckpt" \
         --data "$POOL_FP" --json > "$pearson_fp.tmp" \
+        && "${HELPER[@]}" annotate-pearson --json "$pearson_fp.tmp" \
+             --label "$POOL_FP_LABEL" --pool-path "$POOL_FP" \
+             --pool-sha256 "$POOL_FP_SHA256" \
         && mv "$pearson_fp.tmp" "$pearson_fp" || {
           rm -f "$pearson_fp.tmp"
-          log "  FAIL $run@$milestone: value-calibration (pool-fp-v1) failed"; return 1; }
+          log "  FAIL $run@$milestone: value-calibration ($POOL_FP_LABEL) failed"; return 1; }
     fi
-    pearson_args+=(--pearson "pool-fp-v1=$pearson_fp")
+    pearson_args+=(--pearson "$POOL_FP_LABEL=$pearson_fp")
   fi
 
   # -- dV hazard probe (atomic out: tmp + rename, so a killed probe can't ---
@@ -279,13 +346,35 @@ process_run() {
 
 # ---------------------------------------------------------------------------
 log "sweep start (dry-run=$DRY_RUN, step=$STEP, kubectl timeout=$REQ_TIMEOUT)"
+log "pool self: $POOL_SELF_LABEL at $POOL_SELF ($POOL_SELF_SOURCE, sha256 ${POOL_SELF_SHA256:-unhashed})"
+log "pool fp:   $POOL_FP_LABEL at $POOL_FP ($POOL_FP_SOURCE, sha256 ${POOL_FP_SHA256:-unhashed})"
+if [ -n "$POOL_DEPRECATIONS" ]; then
+  loud "DEPRECATED v1 EVAL POOL(S) EXPLICITLY SELECTED — v1 pools cannot score v2 checkpoints" "$POOL_DEPRECATIONS"
+fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
   # Pre-flights before taking the lock or touching the cluster.
   [ -f "$POOL_SELF" ] || {
-    echo "[milestone-probes] FATAL: pool-self-v1 not found at $POOL_SELF — the cross-pool Pearson read needs the frozen belief-1.5m held-out pool (see docs/next_train_readiness_plan.md WS-3)" >&2
+    echo "[milestone-probes] FATAL: self pool $POOL_SELF_LABEL not found at $POOL_SELF (source: $POOL_SELF_SOURCE) — the cross-pool Pearson read needs a frozen self-play pool whose observation encoding matches the probed checkpoints: the default is the frozen v2 pool (runs/pool-self-v2-20260705/); override via POKEZERO_POOL_SELF for non-default pools (see docs/next_train_readiness_plan.md WS-3)" >&2
     exit 1
   }
+  [ -n "$POOL_SELF_SHA256" ] || {
+    echo "[milestone-probes] FATAL: self pool $POOL_SELF_LABEL at $POOL_SELF could not be sha256-hashed at sweep start (appeared or became readable only after pool resolution?) — every pearson artifact/ledger line must pin the exact pool bytes; re-run the sweep" >&2
+    exit 1
+  }
+  if [ "$POOL_FP_SOURCE" = "env" ] && { [ ! -f "$POOL_FP" ] || [ -z "$POOL_FP_SHA256" ]; }; then
+    echo "[milestone-probes] FATAL: POKEZERO_POOL_FP is set but $POOL_FP does not exist (or could not be sha256-hashed at sweep start) — refusing to silently drop an explicitly requested foul-play pool (unset the variable to skip the foul-play read)" >&2
+    exit 1
+  fi
+  # The foul-play read runs only against the pool snapshot hashed at sweep
+  # start; a default-path pool file appearing mid-sweep waits for the next
+  # sweep (its hash — and so its artifact names/ledger pins — would be
+  # unknown to this one).
+  if [ -f "$POOL_FP" ] && [ -n "$POOL_FP_SHA256" ]; then
+    POOL_FP_ACTIVE=1
+  elif [ -f "$POOL_FP" ]; then
+    log "NOTE: fp pool $POOL_FP appeared after pool resolution (no sha256) — skipping the foul-play read this sweep"
+  fi
   grep -q "value_self_hazard_response" "$HAZARD_PROBE" || {
     echo "[milestone-probes] FATAL: $HAZARD_PROBE has no dV section — this checkout predates the re-landed value-response hazard probe (#501); update main" >&2
     exit 1
