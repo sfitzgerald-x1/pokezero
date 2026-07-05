@@ -13,8 +13,10 @@
 #          checkpoints/curated/<run>-i<iter>.pt (byte-size verified); milestones
 #          whose nearest checkpoint is >30k games away are recorded as SKIPPED
 #          ledger lines instead of probing the wrong checkpoint
-#        - cross-pool Pearson: pokezero-neural value-calibration on pool-self-v1
-#          (and pool-fp-v1 when present)
+#        - cross-pool Pearson: pokezero-neural value-calibration on the self
+#          pool (and the foul-play pool when its file is present); pools
+#          resolve via POKEZERO_POOL_SELF / POKEZERO_POOL_FP with frozen-v1
+#          defaults — see the DEPRECATION note below
 #        - dV hazard probe: scripts/hazard_probe.py (main carries the value-
 #          response section since #501; verified at startup)
 #        - append one JSONL line to runs/milestone-probes/<run>/ledger.jsonl
@@ -40,12 +42,28 @@
 #   POKEZERO_SHOWDOWN_ROOT       local pokemon-showdown (sim) checkout, for the
 #                                hazard-probe state corpus (not needed in --dry-run)
 # Optional env:
+#   POKEZERO_POOL_SELF           self-play eval pool JSONL for the Pearson read
+#                                (missing file is FATAL)   [default: frozen v1]
+#   POKEZERO_POOL_FP             foul-play-side eval pool JSONL (skipped when
+#                                the default is absent, FATAL when an explicit
+#                                override is absent)       [default: frozen v1]
 #   POKEZERO_HAZARD_GAMES        hazard-probe corpus games            [default 150]
 #   POKEZERO_MILESTONE_STEP      milestone spacing in games           [default 100000]
 #   POKEZERO_MILESTONE_MAX_DIST  max |checkpoint games - milestone|   [default 30000]
 #   POKEZERO_TIMELINE_TAIL       eval-timeline rows fed to watchdogs  [default 500]
 #   POKEZERO_KUBECTL_TIMEOUT     --request-timeout for kubectl calls  [default 60s]
 #   POKEZERO_CP_TIMEOUT          hard timeout for kubectl cp, seconds [default 1800]
+#
+# DEPRECATION — v1 pool defaults: the default pools are still the frozen v1
+# pools (runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl
+# and runs/pool-fp-v1-20260704/pool-fp-v1.jsonl). They store v1-encoded
+# observations that the v2 schema guards refuse, so they CANNOT score obsv2
+# checkpoints — obsv2 runs must set POKEZERO_POOL_SELF / POKEZERO_POOL_FP to
+# the frozen v2 pools (being built under runs/pool-self-v2-20260705/ and
+# runs/pool-fp-v2-20260705/ from the 50k obsv2 checkpoint). The defaults
+# switch to v2 once those pools are frozen (see DEFAULT_POOL_* in
+# scripts/milestone_probes.py); until then the sweep warns loudly whenever a
+# v1 pool is in use.
 #
 # Usage (from repo root, `uv sync` done once):
 #   scripts/milestone_probes.sh [--dry-run]
@@ -89,8 +107,24 @@ PROBE_ROOT="$REPO/runs/milestone-probes"
 ALERTS="$PROBE_ROOT/ALERTS.jsonl"
 LOCKFILE="$PROBE_ROOT/.sweep.lock"
 CURATED="$REPO/checkpoints/curated"
-POOL_SELF="$REPO/runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl"
-POOL_FP="$REPO/runs/pool-fp-v1-20260704/pool-fp-v1.jsonl"
+# Eval pools for the cross-pool Pearson read: POKEZERO_POOL_SELF /
+# POKEZERO_POOL_FP override the frozen-v1 defaults (see the DEPRECATION note
+# in the header — v1 pools cannot score obsv2 checkpoints). Resolution,
+# labels, and the deprecation text live in the python helper (`pools`); the
+# labels key each pool's ledger entries and pearson output filenames.
+POOLS_TSV="$("${HELPER[@]}" pools --repo "$REPO")" || {
+  echo "[milestone-probes] FATAL: eval-pool resolution failed (see message above)" >&2; exit 1; }
+POOL_SELF=""; POOL_SELF_LABEL=""; POOL_SELF_SOURCE=""
+POOL_FP="";   POOL_FP_LABEL="";   POOL_FP_SOURCE=""
+while IFS=$'\t' read -r pool_role pool_path pool_label pool_source; do
+  case "$pool_role" in
+    self) POOL_SELF="$pool_path"; POOL_SELF_LABEL="$pool_label"; POOL_SELF_SOURCE="$pool_source" ;;
+    fp)   POOL_FP="$pool_path";   POOL_FP_LABEL="$pool_label";   POOL_FP_SOURCE="$pool_source" ;;
+  esac
+done < <(printf '%s\n' "$POOLS_TSV" | grep -v '^#')
+[ -n "$POOL_SELF" ] && [ -n "$POOL_FP" ] || {
+  echo "[milestone-probes] FATAL: eval-pool resolution returned no usable rows (helper/script version skew?)" >&2; exit 1; }
+POOL_DEPRECATIONS="$(printf '%s\n' "$POOLS_TSV" | sed -n 's/^# WARNING: //p')"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/milestone-probes.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
@@ -148,28 +182,28 @@ probe_milestone() {
     fi
   fi
 
-  # -- cross-pool Pearson (value-calibration, pool-self-v1 [+ pool-fp-v1]) --
-  local pearson_self="$ledger_dir/pearson-pool-self-v1-$milestone.json"
+  # -- cross-pool Pearson (value-calibration on the resolved eval pools) ----
+  local pearson_self="$ledger_dir/pearson-$POOL_SELF_LABEL-$milestone.json"
   if [ ! -s "$pearson_self" ]; then
-    log "  value-calibration on pool-self-v1 -> $pearson_self"
+    log "  value-calibration on $POOL_SELF_LABEL -> $pearson_self"
     uv run pokezero-neural value-calibration --checkpoint "$ckpt" \
       --data "$POOL_SELF" --json > "$pearson_self.tmp" \
       && mv "$pearson_self.tmp" "$pearson_self" || {
         rm -f "$pearson_self.tmp"
-        log "  FAIL $run@$milestone: value-calibration (pool-self-v1) failed"; return 1; }
+        log "  FAIL $run@$milestone: value-calibration ($POOL_SELF_LABEL) failed"; return 1; }
   fi
-  local pearson_args=(--pearson "pool-self-v1=$pearson_self")
+  local pearson_args=(--pearson "$POOL_SELF_LABEL=$pearson_self")
   if [ -f "$POOL_FP" ]; then
-    local pearson_fp="$ledger_dir/pearson-pool-fp-v1-$milestone.json"
+    local pearson_fp="$ledger_dir/pearson-$POOL_FP_LABEL-$milestone.json"
     if [ ! -s "$pearson_fp" ]; then
-      log "  value-calibration on pool-fp-v1 -> $pearson_fp"
+      log "  value-calibration on $POOL_FP_LABEL -> $pearson_fp"
       uv run pokezero-neural value-calibration --checkpoint "$ckpt" \
         --data "$POOL_FP" --json > "$pearson_fp.tmp" \
         && mv "$pearson_fp.tmp" "$pearson_fp" || {
           rm -f "$pearson_fp.tmp"
-          log "  FAIL $run@$milestone: value-calibration (pool-fp-v1) failed"; return 1; }
+          log "  FAIL $run@$milestone: value-calibration ($POOL_FP_LABEL) failed"; return 1; }
     fi
-    pearson_args+=(--pearson "pool-fp-v1=$pearson_fp")
+    pearson_args+=(--pearson "$POOL_FP_LABEL=$pearson_fp")
   fi
 
   # -- dV hazard probe (atomic out: tmp + rename, so a killed probe can't ---
@@ -271,13 +305,22 @@ process_run() {
 
 # ---------------------------------------------------------------------------
 log "sweep start (dry-run=$DRY_RUN, step=$STEP, kubectl timeout=$REQ_TIMEOUT)"
+log "pool self: $POOL_SELF_LABEL at $POOL_SELF ($POOL_SELF_SOURCE)"
+log "pool fp:   $POOL_FP_LABEL at $POOL_FP ($POOL_FP_SOURCE)"
+if [ -n "$POOL_DEPRECATIONS" ]; then
+  loud "DEPRECATED v1 EVAL POOL(S) IN USE — v1 pools cannot score obsv2 checkpoints" "$POOL_DEPRECATIONS"
+fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
   # Pre-flights before taking the lock or touching the cluster.
   [ -f "$POOL_SELF" ] || {
-    echo "[milestone-probes] FATAL: pool-self-v1 not found at $POOL_SELF — the cross-pool Pearson read needs the frozen belief-1.5m held-out pool (see docs/next_train_readiness_plan.md WS-3)" >&2
+    echo "[milestone-probes] FATAL: self pool $POOL_SELF_LABEL not found at $POOL_SELF (source: $POOL_SELF_SOURCE) — the cross-pool Pearson read needs a frozen self-play pool whose observation encoding matches the probed checkpoints: v1 default is the belief-1.5m held-out pool; obsv2 runs must point POKEZERO_POOL_SELF at the frozen v2 pool (see docs/next_train_readiness_plan.md WS-3)" >&2
     exit 1
   }
+  if [ "$POOL_FP_SOURCE" = "env" ] && [ ! -f "$POOL_FP" ]; then
+    echo "[milestone-probes] FATAL: POKEZERO_POOL_FP is set but $POOL_FP does not exist — refusing to silently drop an explicitly requested foul-play pool (unset the variable to skip the foul-play read)" >&2
+    exit 1
+  fi
   grep -q "value_self_hazard_response" "$HAZARD_PROBE" || {
     echo "[milestone-probes] FATAL: $HAZARD_PROBE has no dV section — this checkout predates the re-landed value-response hazard probe (#501); update main" >&2
     exit 1

@@ -22,6 +22,16 @@ Subcommands:
   lock               --fd N: take a non-blocking exclusive flock on inherited
                      file descriptor N (exit 1 if already held). The caller keeps
                      the fd open so the lock lives for the caller's lifetime.
+  pools              --repo DIR [--format tsv|json]
+                     Resolve the value-calibration eval pools from
+                     POKEZERO_POOL_SELF / POKEZERO_POOL_FP (falling back to the
+                     frozen v1 defaults) and print one TSV row per pool
+                     (role, path, label, source) plus "# WARNING:" comment
+                     lines. A pool's label keys its ledger entries and pearson
+                     output filenames. Resolving to a v1 pool emits a
+                     deprecation warning: v1 pools store v1-encoded
+                     observations that the v2 schema guards refuse, so they
+                     cannot score obsv2 checkpoints.
 
 Watchdog thresholds (the 4L lesson — see evaluate_watchdogs). All alarms fire
 strictly beyond their threshold (exactly-at-threshold is quiet):
@@ -45,11 +55,33 @@ import fcntl
 import json
 import math
 import os
+import re
 import sys
+import textwrap
 from pathlib import Path
 
 SCHEMA_VERSION = "pokezero.milestone_probe.v1"
 ALERT_SCHEMA_VERSION = "pokezero.ecology_alert.v1"
+
+POOL_SELF_ENV = "POKEZERO_POOL_SELF"
+POOL_FP_ENV = "POKEZERO_POOL_FP"
+# Default eval pools, repo-relative. Still the frozen v1 pools: switch these
+# to runs/pool-self-v2-20260705/ and runs/pool-fp-v2-20260705/ once those
+# pools exist and their READMEs say FROZEN (they are built from the 50k obsv2
+# checkpoint). Until then obsv2 runs must override via the env vars above —
+# the v2 schema guards refuse the v1-encoded observations stored here.
+DEFAULT_POOL_SELF = "runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl"
+DEFAULT_POOL_FP = "runs/pool-fp-v1-20260704/pool-fp-v1.jsonl"
+# Historical ledger/filename labels for the v1 defaults (the self pool's
+# filename stem, heldout-rollouts, never was its label).
+V1_POOL_LABELS = {
+    DEFAULT_POOL_SELF: "pool-self-v1",
+    DEFAULT_POOL_FP: "pool-fp-v1",
+}
+V2_POOL_HINTS = {
+    "self": "runs/pool-self-v2-20260705/",
+    "fp": "runs/pool-fp-v2-20260705/",
+}
 
 MILESTONE_STEP = 100_000
 MILESTONE_MAX_DISTANCE_GAMES = 30_000
@@ -418,6 +450,67 @@ def pending_milestones(
 
 
 # ---------------------------------------------------------------------------
+# eval-pool resolution (pure function over env — unit-tested)
+# ---------------------------------------------------------------------------
+
+
+def _pool_label(path: str) -> str:
+    """Ledger/filename label for a pool file: its sanitized filename stem."""
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(path).stem).strip("-._")
+    if not label:
+        raise SystemExit(f"cannot derive a pool label from {path!r}")
+    return label
+
+
+def resolve_pools(repo_root: Path | str, env) -> dict:
+    """Resolve the value-calibration eval pools from the environment.
+
+    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen v1 defaults
+    (empty values count as unset, matching shell ${VAR:-default} semantics);
+    relative and ~ paths resolve against the repo root / home. No filesystem
+    access — existence checks stay in the caller.
+
+    Returns {"self": {path, label, source}, "fp": {...}, "warnings": [...]}.
+    A pool resolving to a v1 default carries a deprecation warning whatever
+    its source: v1 pools store v1-encoded observations that the v2 schema
+    guards refuse, so every Pearson probe of an obsv2 checkpoint against
+    them fails.
+    """
+    repo_root = Path(repo_root)
+    pools: dict = {"warnings": []}
+    for role, env_var, default in (
+        ("self", POOL_SELF_ENV, DEFAULT_POOL_SELF),
+        ("fp", POOL_FP_ENV, DEFAULT_POOL_FP),
+    ):
+        raw = env.get(env_var) or default
+        source = "env" if raw is not default else "default"
+        path = Path(os.path.expanduser(raw))
+        if not path.is_absolute():
+            path = repo_root / path
+        # v1 pools keep their historical labels so existing ledgers/pearson
+        # files stay valid even when the path arrives via the env var.
+        v1_default = path == repo_root / default
+        label = V1_POOL_LABELS[default] if v1_default else _pool_label(raw)
+        pools[role] = {"path": str(path), "label": label, "source": source}
+        if v1_default:
+            pools["warnings"].append(
+                f"DEPRECATED {role} pool: {label} ({path}) is v1-encoded; the v2 "
+                f"schema guards refuse it, so it CANNOT score obsv2 checkpoints "
+                f"and every ~100k milestone Pearson probe on an obsv2 run will "
+                f"fail. Set {env_var} to the frozen v2 pool "
+                f"(expected under {V2_POOL_HINTS[role]}) for obsv2 runs; the "
+                f"defaults switch to v2 once those pools are frozen."
+            )
+    if pools["self"]["label"] == pools["fp"]["label"]:
+        raise SystemExit(
+            f"self and fp pools resolve to the same label "
+            f"{pools['self']['label']!r} — their ledger entries and pearson "
+            f"files would collide; rename one pool file"
+        )
+    return pools
+
+
+# ---------------------------------------------------------------------------
 # ledger recording
 # ---------------------------------------------------------------------------
 
@@ -561,6 +654,24 @@ def _cmd_lock(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pools(args: argparse.Namespace) -> int:
+    pools = resolve_pools(Path(args.repo), os.environ)
+    if args.format == "json":
+        print(json.dumps(pools, indent=2, sort_keys=True))
+        return 0
+    # tsv for the bash config block: "# WARNING:" comments, then one row per
+    # pool (role, path, label, source).
+    for warning in pools["warnings"]:
+        for line in textwrap.wrap(
+            warning, width=96, break_long_words=False, break_on_hyphens=False
+        ):
+            print(f"# WARNING: {line}")
+    for role in ("self", "fp"):
+        pool = pools[role]
+        print(f"{role}\t{pool['path']}\t{pool['label']}\t{pool['source']}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -605,6 +716,11 @@ def main() -> int:
     lock = sub.add_parser("lock")
     lock.add_argument("--fd", type=int, required=True, help="inherited fd to flock (LOCK_EX|LOCK_NB)")
     lock.set_defaults(func=_cmd_lock)
+
+    pools = sub.add_parser("pools")
+    pools.add_argument("--repo", required=True, help="repo root for the repo-relative default pools")
+    pools.add_argument("--format", choices=("tsv", "json"), default="tsv")
+    pools.set_defaults(func=_cmd_pools)
 
     args = parser.parse_args()
     return args.func(args)

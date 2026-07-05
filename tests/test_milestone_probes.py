@@ -1,5 +1,5 @@
-"""Unit tests for the ecology-watchdog and milestone-planning logic in
-scripts/milestone_probes.py (WS-3 items 2-3, docs/next_train_readiness_plan.md).
+"""Unit tests for the ecology-watchdog, milestone-planning, and eval-pool
+resolution logic in scripts/milestone_probes.py (WS-3 items 2-3, docs/next_train_readiness_plan.md).
 
 The module is stdlib-only and lives outside the package, so it is loaded
 straight from the scripts directory.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import os
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "milestone_probes.py"
@@ -453,3 +454,120 @@ class TestMilestoneDistanceGuard:
         plan = mp.pending_milestones(TestPendingMilestones._status(286), set(), step=100_000)
         assert all(p["action"] == "probe" for p in plan["pending"])
         assert all(p["skip_reason"] is None for p in plan["pending"])
+
+
+class TestResolvePools:
+    """Eval-pool resolution for the sweep's cross-pool Pearson read:
+    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen-v1 defaults,
+    labels key ledger entries and pearson filenames, and any v1 pool in use
+    carries a deprecation warning (v1 pools store v1-encoded observations
+    that the v2 schema guards refuse — they cannot score obsv2 checkpoints)."""
+
+    _REPO = Path("/repo")
+
+    def test_defaults_resolve_under_repo_root(self) -> None:
+        pools = mp.resolve_pools(self._REPO, {})
+        assert pools["self"]["path"] == str(self._REPO / mp.DEFAULT_POOL_SELF)
+        assert pools["self"]["source"] == "default"
+        assert pools["fp"]["path"] == str(self._REPO / mp.DEFAULT_POOL_FP)
+        assert pools["fp"]["source"] == "default"
+
+    def test_default_labels_preserve_ledger_compat(self) -> None:
+        # existing ledgers and pearson-<label>-<milestone>.json files were
+        # written under these keys; the defaults must keep producing them
+        # (the self pool's filename stem, heldout-rollouts, never was its label)
+        pools = mp.resolve_pools(self._REPO, {})
+        assert pools["self"]["label"] == "pool-self-v1"
+        assert pools["fp"]["label"] == "pool-fp-v1"
+
+    def test_v1_defaults_warn_that_obsv2_checkpoints_refuse_them(self) -> None:
+        pools = mp.resolve_pools(self._REPO, {})
+        assert len(pools["warnings"]) == 2
+        for warning, env_var in zip(
+            pools["warnings"], (mp.POOL_SELF_ENV, mp.POOL_FP_ENV)
+        ):
+            assert "obsv2" in warning
+            assert env_var in warning
+
+    def test_env_overrides_take_precedence_and_silence_the_warning(self) -> None:
+        env = {
+            mp.POOL_SELF_ENV: "/pools/pool-self-v2-20260705/pool-self-v2.jsonl",
+            mp.POOL_FP_ENV: "/pools/pool-fp-v2-20260705/pool-fp-v2.jsonl",
+        }
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"] == {
+            "path": "/pools/pool-self-v2-20260705/pool-self-v2.jsonl",
+            "label": "pool-self-v2",
+            "source": "env",
+        }
+        assert pools["fp"] == {
+            "path": "/pools/pool-fp-v2-20260705/pool-fp-v2.jsonl",
+            "label": "pool-fp-v2",
+            "source": "env",
+        }
+        assert pools["warnings"] == []
+
+    def test_partial_override_still_warns_about_the_defaulted_pool(self) -> None:
+        env = {mp.POOL_SELF_ENV: "/pools/pool-self-v2.jsonl"}
+        (warning,) = mp.resolve_pools(self._REPO, env)["warnings"]
+        assert mp.POOL_FP_ENV in warning
+        assert "pool-fp-v1" in warning
+
+    def test_relative_override_resolves_under_repo_root(self) -> None:
+        env = {mp.POOL_SELF_ENV: "runs/pool-self-v2-20260705/pool-self-v2.jsonl"}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"]["path"] == str(
+            self._REPO / "runs/pool-self-v2-20260705/pool-self-v2.jsonl"
+        )
+        assert pools["self"]["source"] == "env"
+
+    def test_tilde_override_expands_to_home(self) -> None:
+        env = {mp.POOL_FP_ENV: "~/pools/pool-fp-v2.jsonl"}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["fp"]["path"] == os.path.expanduser("~/pools/pool-fp-v2.jsonl")
+
+    def test_empty_env_value_means_unset(self) -> None:
+        # matches the shell's ${VAR:-default}: an exported empty string must
+        # fall back to the default, never yield an empty pool path
+        pools = mp.resolve_pools(self._REPO, {mp.POOL_SELF_ENV: "", mp.POOL_FP_ENV: ""})
+        assert pools["self"]["source"] == "default"
+        assert pools["fp"]["source"] == "default"
+        assert len(pools["warnings"]) == 2
+
+    def test_override_spelling_the_default_keeps_v1_label_and_warning(self) -> None:
+        # an env var pointing at the v1 default (any spelling) is still a v1
+        # pool: historical label and deprecation warning, but source stays env
+        env = {mp.POOL_SELF_ENV: str(self._REPO / mp.DEFAULT_POOL_SELF)}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"]["label"] == "pool-self-v1"
+        assert pools["self"]["source"] == "env"
+        assert len(pools["warnings"]) == 2
+
+    def test_label_is_sanitized_filename_stem(self) -> None:
+        env = {mp.POOL_SELF_ENV: "/pools/pool self (v2)!.jsonl"}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"]["label"] == "pool-self-v2"
+
+    @staticmethod
+    def _fatal_message(env: dict) -> str:
+        # stdlib-only stand-in for pytest.raises: the suite runs under
+        # `python -m unittest discover`, so this file must import cleanly
+        # without pytest installed
+        try:
+            mp.resolve_pools(TestResolvePools._REPO, env)
+        except SystemExit as exc:
+            return str(exc)
+        raise AssertionError("expected resolve_pools to raise SystemExit")
+
+    def test_colliding_labels_are_fatal(self) -> None:
+        # both entry["pools"] ledger keys and pearson-<label>-<milestone>.json
+        # filenames would collide — refuse instead of silently overwriting
+        env = {
+            mp.POOL_SELF_ENV: "/a/pool-v2.jsonl",
+            mp.POOL_FP_ENV: "/b/pool-v2.jsonl",
+        }
+        assert "same label" in self._fatal_message(env)
+
+    def test_underivable_label_is_fatal(self) -> None:
+        message = self._fatal_message({mp.POOL_SELF_ENV: "/pools/___.jsonl"})
+        assert "pool label" in message
