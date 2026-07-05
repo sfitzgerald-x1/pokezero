@@ -332,8 +332,10 @@ def ground_truth_components_by_step_index(record: "RolloutRecord") -> dict[int, 
     For a step by player p at turn t: own side = p's ``self_team`` view at that step
     (exact); foe side = the opponent's most recent ``self_team`` view at turn <= t (both
     players observe at the same request boundary on shared turns; on asymmetric
-    sub-requests, e.g. a lone forced switch, the opponent view is at most one request
-    stale). Records with missing metadata degrade to empty sides (components 0).
+    sub-requests, e.g. a lone forced switch, the opponent view is typically one request
+    stale, occasionally more across consecutive asymmetric sub-requests). Staleness only
+    delays when a change enters Phi, never correctness: PBRS policy invariance holds for
+    ANY potential. Records with missing metadata degrade to empty sides (components 0).
     """
     steps = record.trajectory.steps
     views_by_player: dict[str, list[tuple[int, SideSnapshot]]] = {}

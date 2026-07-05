@@ -190,16 +190,21 @@ collection time (`--shaping-weights` on
   whose only difference is the shaped value target, then measures ΔV
   hazard response (shared injection primitives with
   `scripts/hazard_probe.py`) and held-out terminal Pearson/calibration.
-  The Pearson gate uses the **PBRS-corrected** prediction
+  The Pearson read uses the **PBRS-corrected** prediction
   (`pred + Phi_candidate(s)`): under a zero terminal potential the
   shaped optimum is `V' = V − Phi`, so raw terminal Pearson penalizes
-  every shaped head by construction, while the corrected value — the
-  quantity search/eval would consume — is retained exactly when the
-  head actually learned its targets. Gates: ΔV must move in the right
-  directions AND corrected Pearson must stay within 10% (flag-tunable)
-  of the unshaped control. The unshaped control and a deliberately-bad
-  config ride along as the tool's own validity check (the bad config
-  must rank last).
+  every shaped head by construction. Corrected Pearson alone is
+  necessary but NOT sufficient — Pearson is scale-invariant, so a dead
+  head still inherits `corr(Phi, terminal)` for free — hence the gate
+  also requires the head's **marginal** signal: the partial correlation
+  of the raw prediction with terminal controlling for Phi, plus a
+  control-relative value-spread floor and a calibration (ECE) cap.
+  Gates: ΔV must move in the right directions AND corrected Pearson
+  must stay within 10% (flag-tunable) of the unshaped control AND the
+  marginal/spread/ECE checks must pass. Two built-in bad-config probes
+  (inverted signs; clip-saturating ×N weights) ride along on every run
+  and must rank below the unshaped control, or the tool withholds the
+  ranking entirely.
 - **Tier C — micro-RL arms (10–20k games) for survivors only.** The
   feedback-loop read the supervised tiers cannot give: exploration
   shift, reward hacking, entropy. Same flags, small shapes

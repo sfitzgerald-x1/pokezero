@@ -16,27 +16,59 @@ Per candidate (fixed seed, fixed epochs, identical model config):
      [i]  dV hazard response on injected state pairs, reusing scripts/hazard_probe.py's
           injection primitives (pokezero.checkpoint_factors.with_self_spikes/with_opp_spikes)
           over a fixed scripted-driver corpus — self-spikes 0->3 (expect V down), opp-spikes
-          0->3 (expect V up), judged against the head's value spread;
-     [ii] PBRS-corrected terminal Pearson on held-out games. Under potential-based
-          shaping with a zero terminal potential the OPTIMAL shaped value is
-          V'(s) = V(s) - Phi(s), so raw prediction-vs-terminal Pearson penalizes every
-          shaped head by construction. The eval-facing quantity is the corrected value
-          prediction + Phi_candidate(s): a head that actually learned its shaped targets
-          recovers V and retains terminal Pearson; a head trained on broken targets
-          (e.g. inverted signs, whose returns saturate the [-1,1] clip and whose
-          correction then actively anti-corrects) loses it. Raw Pearson is also
-          reported for reference;
-     [iii] simple calibration of the corrected prediction vs terminal (bias + 10-bin ECE).
+          0->3 (expect V up);
+     [ii] terminal-outcome prediction on held-out games, three statistics per candidate:
+            corrected Pearson  corr(pred + Phi_cand, terminal) — the eval-facing value
+                               (the shaped optimum is V' = V - Phi, so pred + Phi is what
+                               search/eval would consume);
+            Phi-alone Pearson  corr(Phi_cand, terminal) — the free ride. Pearson is
+                               scale-invariant, so a DEAD head (pred ~ tiny noise) still
+                               scores corrected ~ Phi-alone: corrected Pearson alone can
+                               be carried entirely by the potential (#510 review, HIGH-1);
+            head marginal      the PARTIAL correlation of the raw prediction with terminal
+                               controlling for Phi_cand:
+                                 r_{pt.f} = (r_pt - r_pf*r_tf)/sqrt((1-r_pf^2)(1-r_tf^2)).
+                               This is the gate that measures the HEAD. Why partial
+                               correlation and not the additive delta
+                               (corrected - Phi-alone): the delta inherits the pred/Phi
+                               VARIANCE ratio — a dead head sits at delta ~ 0 (admitted by
+                               any -eps margin), while a genuinely good head under a
+                               huge-|Phi| candidate is variance-diluted below Phi-alone
+                               and unfairly killed. The partial correlation is scale-free
+                               in both pred and Phi, reduces to the plain raw Pearson for
+                               the control (Phi = 0 has no variance to control for), and
+                               collapses to ~0 for a head that is dead or merely
+                               re-encodes Phi. It is the standard statistic for "marginal
+                               predictive contribution given a covariate".
+     [iii] calibration of the corrected prediction vs terminal (bias + 10-bin ECE).
 
 Ranking (documented composite):
-    delta_v_score = (max(0, -value_self_response) + max(0, value_opp_response)) / value_spread
-  - constraint: heldout CORRECTED terminal Pearson must stay within --pearson-retention
-    (default 10%) of the unshaped control's Pearson; candidates failing the constraint
-    sink below every passing candidate regardless of dV.
-  - passing candidates sort by delta_v_score descending (dV is the primary read);
-    failing candidates sort by corrected Pearson descending (least-broken first).
+    delta_v_score = (max(0, -value_self_response) + max(0, value_opp_response))
+                    / max(CONTROL head value spread, 1e-6)
+  (denominator is the CONTROL's spread: a saturated-target head that collapses its own
+  value spread must not amplify its noise dV into a winning score.)
+  "retained" requires ALL of:
+    - corrected Pearson >= floor, floor = max(control - retention*|control|,
+      --min-pearson-floor). The relative term uses |control| so a noisy NEGATIVE control
+      can never place the floor above the control itself; the absolute minimum keeps the
+      gate meaningful when the control is ~0;
+    - head marginal >= --min-head-marginal (the head must beat Phi's free ride);
+    - value spread >= --min-spread-frac x control spread (collapsed-head guard);
+    - corrected ECE <= --max-ece (calibration sanity: an ECE of 8 next to retained=yes
+      must be impossible to print).
+  Retained candidates sort by delta_v_score descending (dV is the primary read); failed
+  candidates sort by corrected Pearson descending (least-broken first).
+
+Validity self-checks (on by default): two synthetic probes ride along — wse-arm1 x -1
+(inverted signs: the correction anti-corrects) and wse-arm1 x
+--validity-saturation-factor (returns saturate the +-1 clip and the head learns nothing
+— the degenerate case from the #510 review). BOTH must rank strictly below the unshaped
+control or the tool refuses to emit a ranking (exit 2; diagnostics still printed and
+written with ranking_withheld=true). A non-positive control Pearson marks the whole run
+LOW-CONFIDENCE with a loud warning: the corpus cannot support the retention comparison.
+
 The candidate list MUST include the unshaped control ("shaping": null) — it defines the
-Pearson budget, and a deliberately-bad config ranking above sane ones marks the tool broken.
+Pearson budget and the dV spread denominator.
 
 Usage:
     python scripts/shaping_ranker.py --records records.jsonl \
@@ -48,6 +80,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 from pathlib import Path
 
@@ -63,6 +96,8 @@ from pokezero.neural_policy import (
 )
 from pokezero.randbat_vocab import gen3_category_vocabulary
 from pokezero.shaping import (
+    SHAPING_PRESETS,
+    ShapingConfig,
     ground_truth_components_by_step_index,
     potential_from_components,
     resolve_shaping_config,
@@ -70,6 +105,8 @@ from pokezero.shaping import (
 from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC, observation_from_player_state
 
 SPIKES_LAYERS_PROBE = 3
+VALIDITY_INVERTED_LABEL = "validity-inverted(builtin)"
+VALIDITY_SATURATING_LABEL = "validity-saturating(builtin)"
 
 
 def load_candidates(path: Path) -> list[dict]:
@@ -81,13 +118,35 @@ def load_candidates(path: Path) -> list[dict]:
         if not isinstance(entry, dict) or "label" not in entry or "shaping" not in entry:
             raise ValueError(f"candidate #{index} must be an object with 'label' and 'shaping' keys.")
         shaping = resolve_shaping_config(entry["shaping"]) if entry["shaping"] is not None else None
-        candidates.append({"label": str(entry["label"]), "shaping": shaping})
+        candidates.append({"label": str(entry["label"]), "shaping": shaping, "builtin": False})
     labels = [candidate["label"] for candidate in candidates]
     if len(set(labels)) != len(labels):
         raise ValueError("candidate labels must be unique.")
     if not any(candidate["shaping"] is None for candidate in candidates):
         raise ValueError("candidates must include the unshaped control ('shaping': null).")
     return candidates
+
+
+def scale_shaping_config(config: ShapingConfig, factor: float) -> ShapingConfig:
+    return ShapingConfig(
+        hp_weight=config.hp_weight * factor,
+        faint_weight=config.faint_weight * factor,
+        status_weights=tuple((status, weight * factor) for status, weight in config.status_weights),
+        hazard_weight=config.hazard_weight * factor,
+        terminal_mode=config.terminal_mode,
+    )
+
+
+def builtin_validity_candidates(saturation_factor: float) -> list[dict]:
+    base = SHAPING_PRESETS["wse-arm1"]
+    return [
+        {"label": VALIDITY_INVERTED_LABEL, "shaping": scale_shaping_config(base, -1.0), "builtin": True},
+        {
+            "label": VALIDITY_SATURATING_LABEL,
+            "shaping": scale_shaping_config(base, saturation_factor),
+            "builtin": True,
+        },
+    ]
 
 
 def split_records(records, heldout_fraction: float):
@@ -109,6 +168,27 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     if var_x <= 0 or var_y <= 0:
         return None
     return cov / math.sqrt(var_x * var_y)
+
+
+def _partial_pearson(predictions: list[float], outcomes: list[float], phis: list[float]) -> float | None:
+    """Partial correlation of prediction with outcome controlling for Phi (see module doc).
+
+    Degenerate cases: Phi (near-)constant -> plain raw Pearson (the control's case);
+    prediction (near-)constant, or perfectly collinear with Phi -> 0 (a head with no
+    signal of its own contributes no marginal information).
+    """
+    r_pt = _pearson(predictions, outcomes)
+    if r_pt is None:
+        return 0.0
+    r_pf = _pearson(predictions, phis)
+    r_tf = _pearson(outcomes, phis)
+    if r_pf is None or r_tf is None:
+        # Phi has no variance (unshaped control / degenerate metadata): nothing to control for.
+        return r_pt
+    denominator_sq = (1.0 - r_pf * r_pf) * (1.0 - r_tf * r_tf)
+    if denominator_sq <= 1e-12:
+        return 0.0
+    return (r_pt - r_pf * r_tf) / math.sqrt(denominator_sq)
 
 
 def _ece(predictions: list[float], outcomes: list[float], bins: int = 10) -> float | None:
@@ -157,11 +237,11 @@ def evaluate_candidate_model(model, result, *, shaping, heldout_records, corpus,
     value_self_response = sum(self_deltas) / len(self_deltas) if self_deltas else 0.0
     value_opp_response = sum(opp_deltas) / len(opp_deltas) if opp_deltas else 0.0
 
-    # [ii]+[iii] terminal-outcome prediction on held-out games. The gate metric is the
-    # PBRS-corrected prediction (pred + Phi_candidate(s)): the shaped optimum is
-    # V' = V - Phi, so the corrected value is what search/eval would consume.
+    # [ii]+[iii] terminal-outcome prediction on held-out games (see module docstring for
+    # why the gate statistic is the PARTIAL correlation controlling for Phi).
     raw_predictions: list[float] = []
     corrected_predictions: list[float] = []
+    phi_values: list[float] = []
     outcomes: list[float] = []
     for record in heldout_records:
         terminal = record.terminal or record.trajectory.terminal
@@ -172,13 +252,14 @@ def evaluate_candidate_model(model, result, *, shaping, heldout_records, corpus,
             prediction = evaluate_transformer_observation_value(
                 model=model, result=result, observations=[step.observation]
             )
-            correction = (
+            phi = (
                 potential_from_components(components_by_step[step_index], shaping)
                 if shaping is not None
                 else 0.0
             )
             raw_predictions.append(prediction)
-            corrected_predictions.append(prediction + correction)
+            corrected_predictions.append(prediction + phi)
+            phi_values.append(phi)
             outcomes.append(1.0 if terminal.winner == step.player_id else -1.0)
 
     return {
@@ -186,12 +267,11 @@ def evaluate_candidate_model(model, result, *, shaping, heldout_records, corpus,
         "value_spread": value_spread,
         "value_self_response": value_self_response,
         "value_opp_response": value_opp_response,
-        "delta_v_score": (
-            (max(0.0, -value_self_response) + max(0.0, value_opp_response)) / max(value_spread, 1e-6)
-        ),
         "heldout_examples": len(raw_predictions),
         "terminal_pearson": _pearson(corrected_predictions, outcomes),
         "terminal_pearson_uncorrected": _pearson(raw_predictions, outcomes),
+        "phi_pearson": _pearson(phi_values, outcomes),
+        "head_marginal": _partial_pearson(raw_predictions, outcomes, phi_values),
         "terminal_bias": (
             sum(p - o for p, o in zip(corrected_predictions, outcomes)) / len(corrected_predictions)
             if corrected_predictions
@@ -221,7 +301,53 @@ def main() -> int:
         "--pearson-retention",
         type=float,
         default=0.10,
-        help="Allowed fractional drop of heldout terminal Pearson vs the unshaped control.",
+        help="Allowed drop of corrected Pearson vs control, as a fraction of |control|.",
+    )
+    parser.add_argument(
+        "--min-pearson-floor",
+        type=float,
+        default=0.0,
+        help=(
+            "Absolute minimum retention floor; keeps the gate meaningful when the control's "
+            "Pearson is near or below zero (which also marks the run LOW-CONFIDENCE)."
+        ),
+    )
+    parser.add_argument(
+        "--min-head-marginal",
+        type=float,
+        default=0.05,
+        help=(
+            "Minimum partial correlation of the head's raw prediction with terminal outcome "
+            "controlling for Phi_candidate. Blocks candidates whose corrected Pearson is "
+            "carried entirely by the potential (dead or Phi-parroting heads)."
+        ),
+    )
+    parser.add_argument(
+        "--min-spread-frac",
+        type=float,
+        default=0.25,
+        help="Minimum candidate head value-spread as a fraction of the control head's spread.",
+    )
+    parser.add_argument(
+        "--max-ece",
+        type=float,
+        default=2.0,
+        help="Maximum corrected-prediction ECE; saturated-target heads blow far past this.",
+    )
+    parser.add_argument(
+        "--validity-checks",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run the built-in inverted-signs and saturating (wse-arm1 x factor) probes; both "
+            "must rank below the control or no ranking is emitted (exit 2)."
+        ),
+    )
+    parser.add_argument(
+        "--validity-saturation-factor",
+        type=float,
+        default=80.0,
+        help="Scale for the built-in saturating validity probe (the arm1 x N clip-saturation case).",
     )
     parser.add_argument("--corpus-games", type=int, default=8, help="Scripted-driver games for the dV state corpus.")
     parser.add_argument("--corpus-states", type=int, default=200, help="Max dV corpus states collected.")
@@ -232,6 +358,15 @@ def main() -> int:
 
     torch = require_torch()
     candidates = load_candidates(args.candidates)
+    # Control first: its head spread and Pearson define the dV denominator and the floor.
+    candidates.sort(key=lambda candidate: candidate["shaping"] is not None)
+    if args.validity_checks:
+        existing = {candidate["label"] for candidate in candidates}
+        candidates.extend(
+            candidate
+            for candidate in builtin_validity_candidates(args.validity_saturation_factor)
+            if candidate["label"] not in existing
+        )
     records = list(read_rollout_records(args.records))
     train_records, heldout_records = split_records(records, args.heldout_fraction)
     work_dir = args.work_dir or (args.out.parent if args.out is not None else Path("."))
@@ -294,6 +429,7 @@ def main() -> int:
         rows.append(
             {
                 "label": label,
+                "builtin_validity_probe": bool(candidate["builtin"]),
                 "shaping": shaping.to_dict() if shaping is not None else None,
                 "train_seconds": train_seconds,
                 "eval_seconds": eval_seconds,
@@ -303,18 +439,48 @@ def main() -> int:
         print(
             f"[ranker] {label}: dV_self={evaluation['value_self_response']:+.4f} "
             f"dV_opp={evaluation['value_opp_response']:+.4f} spread={evaluation['value_spread']:.4f} "
-            f"pearson={evaluation['terminal_pearson']:.4f} "
-            f"(raw {evaluation['terminal_pearson_uncorrected']:.4f}) "
+            f"pearson*={_fmt(evaluation['terminal_pearson'])} raw={_fmt(evaluation['terminal_pearson_uncorrected'])} "
+            f"phi={_fmt(evaluation['phi_pearson'])} marginal={_fmt(evaluation['head_marginal'])} "
             f"({train_seconds:.1f}s train + {eval_seconds:.1f}s eval)"
         )
 
     control = next(row for row in rows if row["shaping"] is None)
     control_pearson = control["terminal_pearson"] or 0.0
-    pearson_floor = control_pearson * (1.0 - args.pearson_retention)
+    control_spread = control["value_spread"]
+    low_confidence = control_pearson <= 0.0
+    if low_confidence:
+        print(
+            "\nWARNING: the unshaped control's terminal Pearson is non-positive "
+            f"({control_pearson:.4f}) — this corpus cannot support the retention "
+            "comparison and the entire ranking is LOW-CONFIDENCE. Grow the corpus.",
+            file=sys.stderr,
+        )
+    # The relative term uses |control| so a negative control can never place the floor
+    # ABOVE the control itself (#510 review MED-1); the absolute minimum keeps the gate
+    # meaningful when the control is ~0.
+    pearson_floor = max(
+        control_pearson - args.pearson_retention * abs(control_pearson),
+        args.min_pearson_floor,
+    )
     for row in rows:
         pearson = row["terminal_pearson"] or 0.0
+        marginal = row["head_marginal"] or 0.0
+        ece = row["terminal_ece"] if row["terminal_ece"] is not None else float("inf")
+        spread_frac = row["value_spread"] / control_spread if control_spread > 0 else 0.0
+        # Control-spread denominator: a collapsed head must not amplify its own noise dV.
+        row["delta_v_score"] = (
+            max(0.0, -row["value_self_response"]) + max(0.0, row["value_opp_response"])
+        ) / max(control_spread, 1e-6)
+        row["spread_frac"] = spread_frac
         row["pearson_floor"] = pearson_floor
-        row["pearson_retained"] = bool(pearson >= pearson_floor)
+        checks = {
+            "pearson": bool(pearson >= pearson_floor),
+            "marginal": bool(marginal >= args.min_head_marginal),
+            "spread": bool(spread_frac >= args.min_spread_frac),
+            "ece": bool(ece <= args.max_ece),
+        }
+        row["retention_checks"] = checks
+        row["pearson_retained"] = all(checks.values())
     ranked = sorted(
         rows,
         key=lambda row: (
@@ -330,29 +496,47 @@ def main() -> int:
         row["rank"] = rank
 
     header = (
-        f"{'rank':>4} {'label':24} {'dV_self':>9} {'dV_opp':>8} {'spread':>8} {'dV_score':>9} "
-        f"{'pearson*':>8} {'raw_p':>8} {'retained':>8} {'bias':>8} {'ece':>7} {'sec/cand':>9}"
+        f"{'rank':>4} {'label':28} {'dV_self':>8} {'dV_opp':>8} {'spread':>7} {'dV_score':>9} "
+        f"{'pearson*':>8} {'phi_p':>8} {'marginal':>8} {'raw_p':>8} {'ece':>7} {'sec':>6}  retained"
     )
     print()
     print(header)
     print("-" * len(header))
     for row in ranked:
+        failed = [name for name, passed in row["retention_checks"].items() if not passed]
+        retained_text = "yes" if row["pearson_retained"] else f"NO({','.join(failed)})"
         print(
-            f"{row['rank']:>4} {row['label'][:24]:24} {row['value_self_response']:9.4f} "
-            f"{row['value_opp_response']:8.4f} {row['value_spread']:8.4f} {row['delta_v_score']:9.4f} "
-            f"{(row['terminal_pearson'] if row['terminal_pearson'] is not None else float('nan')):8.4f} "
-            f"{(row['terminal_pearson_uncorrected'] if row['terminal_pearson_uncorrected'] is not None else float('nan')):8.4f} "
-            f"{('yes' if row['pearson_retained'] else 'NO'):>8} "
-            f"{(row['terminal_bias'] if row['terminal_bias'] is not None else float('nan')):8.4f} "
-            f"{(row['terminal_ece'] if row['terminal_ece'] is not None else float('nan')):7.4f} "
-            f"{row['train_seconds'] + row['eval_seconds']:9.1f}"
+            f"{row['rank']:>4} {row['label'][:28]:28} {row['value_self_response']:8.4f} "
+            f"{row['value_opp_response']:8.4f} {row['value_spread']:7.4f} {row['delta_v_score']:9.4f} "
+            f"{_fmt(row['terminal_pearson']):>8} {_fmt(row['phi_pearson']):>8} "
+            f"{_fmt(row['head_marginal']):>8} {_fmt(row['terminal_pearson_uncorrected']):>8} "
+            f"{(row['terminal_ece'] if row['terminal_ece'] is not None else float('nan')):7.3f} "
+            f"{row['train_seconds'] + row['eval_seconds']:6.0f}  {retained_text}"
         )
     print(
-        f"\npearson* = PBRS-corrected (prediction + Phi_candidate) vs terminal; raw_p = uncorrected."
-        f"\ncomposite: pass corrected Pearson >= {pearson_floor:.4f} "
-        f"(control {control_pearson:.4f} - {args.pearson_retention:.0%}); retained sort by "
-        "delta_v_score desc, failed sort by corrected Pearson desc."
+        "\npearson* = corrected (pred + Phi_cand) vs terminal; phi_p = Phi alone; marginal = "
+        "partial corr of raw pred vs terminal controlling for Phi (the head's own signal)."
+        f"\ncomposite: retained requires pearson* >= {pearson_floor:.4f} "
+        f"(control {control_pearson:.4f}, retention {args.pearson_retention:.0%}, abs floor "
+        f"{args.min_pearson_floor:g}) AND marginal >= {args.min_head_marginal:g} AND spread >= "
+        f"{args.min_spread_frac:g}x control AND ece <= {args.max_ece:g}; retained sort by "
+        "delta_v_score (control-spread normalized) desc, failed sort by pearson* desc."
     )
+
+    validity_failed: list[str] = []
+    if args.validity_checks:
+        control_rank = control["rank"]
+        for row in ranked:
+            if row["builtin_validity_probe"] and row["rank"] <= control_rank:
+                validity_failed.append(row["label"])
+        if validity_failed:
+            print(
+                "\nVALIDITY CHECK FAILED: built-in bad-config probe(s) "
+                f"{', '.join(validity_failed)} did not rank below the unshaped control — "
+                "the composite cannot be trusted on this corpus/model budget. "
+                "RANKING WITHHELD.",
+                file=sys.stderr,
+            )
 
     report = {
         "records": str(args.records),
@@ -368,11 +552,24 @@ def main() -> int:
             "feedforward_dim": args.feedforward_dim,
         },
         "pearson_retention": args.pearson_retention,
+        "min_pearson_floor": args.min_pearson_floor,
+        "min_head_marginal": args.min_head_marginal,
+        "min_spread_frac": args.min_spread_frac,
+        "max_ece": args.max_ece,
         "control_pearson": control_pearson,
+        "control_spread": control_spread,
+        "pearson_floor": pearson_floor,
+        "low_confidence": low_confidence,
+        "validity_checks_enabled": args.validity_checks,
+        "validity_failed_probes": validity_failed,
+        "ranking_withheld": bool(validity_failed),
         "composite": (
-            "constraint: PBRS-corrected terminal Pearson within retention of control; "
-            "retained sort by delta_v_score = (max(0,-dV_self)+max(0,dV_opp))/spread desc; "
-            "failed sort by corrected Pearson desc"
+            "constraints: corrected Pearson >= max(control - retention*|control|, abs floor); "
+            "head marginal (partial corr of raw pred vs terminal controlling for Phi) >= min; "
+            "spread >= frac*control; ece <= max. Retained sort by delta_v_score = "
+            "(max(0,-dV_self)+max(0,dV_opp))/control_spread desc; failed sort by corrected "
+            "Pearson desc. Built-in inverted + saturating probes must rank below control or "
+            "the ranking is withheld."
         ),
         "ranked": ranked,
     }
@@ -380,7 +577,11 @@ def main() -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote {args.out}")
-    return 0
+    return 2 if validity_failed else 0
+
+
+def _fmt(value) -> str:
+    return "-" if value is None else f"{value:.4f}"
 
 
 if __name__ == "__main__":
