@@ -24,6 +24,9 @@ from pokezero.showdown import (
     NUMERIC_OPP_MOVE_PP_OFFSET,
     NUMERIC_OPP_MOVE_PP_VALID_OFFSET,
     NUMERIC_SUB_HP_FRACTION,
+    NUMERIC_TIER2_CB_PINNED,
+    NUMERIC_TIER2_INVESTMENT_PINNED,
+    NUMERIC_TT_CB_BIT,
     NUMERIC_TT_INVESTMENT_BIT,
     OPPONENT_POKEMON_TOKEN_OFFSET,
     SELF_POKEMON_TOKEN_OFFSET,
@@ -81,7 +84,7 @@ class SpecTableTest(unittest.TestCase):
     def test_schema_keyed_censuses(self) -> None:
         self.assertEqual(V2_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 121)
         self.assertEqual(V2_REPLAY_OBSERVATION_SPEC.schema_version, OBSERVATION_SCHEMA_VERSION_V2)
-        self.assertEqual(V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 138)
+        self.assertEqual(V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count, 140)
         self.assertEqual(
             V2_1_REPLAY_OBSERVATION_SPEC.schema_version, OBSERVATION_SCHEMA_VERSION_V2_1
         )
@@ -106,6 +109,8 @@ class SpecTableTest(unittest.TestCase):
             NUMERIC_SUB_HP_FRACTION, NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_COUNT
         )
         self.assertEqual(NUMERIC_SUB_HP_FRACTION, 137)
+        self.assertEqual(NUMERIC_TIER2_CB_PINNED, 138)
+        self.assertEqual(NUMERIC_TIER2_INVESTMENT_PINNED, 139)
 
     def test_spec_for_schema_is_loud_on_unknown_versions(self) -> None:
         for version in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
@@ -138,7 +143,7 @@ class DualEncodeTest(unittest.TestCase):
             zip(v2.numeric_features, v2_1.numeric_features)
         ):
             self.assertEqual(len(v2_row), 121)
-            self.assertEqual(len(v21_row), 138)
+            self.assertEqual(len(v21_row), 140)
             self.assertEqual(tuple(v2_row), tuple(v21_row[:width]), f"numeric row {row_index}")
         # Categorical rows agree everywhere except the defender slot on move transition rows.
         for row_index, (v2_row, v21_row) in enumerate(
@@ -158,6 +163,32 @@ class DualEncodeTest(unittest.TestCase):
         bad_spec = replace(V2_1_REPLAY_OBSERVATION_SPEC, schema_version="pokezero.observation.v3")
         with self.assertRaisesRegex(ValueError, "unsupported spec schema"):
             _encode(state, bad_spec)
+
+    def test_encode_refuses_a_narrowed_v2_1_spec_census_floor(self) -> None:
+        # #512 review MED-LOW: a v2.1-stamped spec at v2 width would silently
+        # bounds-drop every v2.1 numeric column while still writing defender identity —
+        # an undeclared hybrid stamped v2.1. The encoder refuses below the schema floor.
+        from dataclasses import replace
+
+        state = _state([])
+        hybrid = replace(V2_1_REPLAY_OBSERVATION_SPEC, numeric_feature_count=121)
+        with self.assertRaisesRegex(ValueError, "undeclared hybrid"):
+            _encode(state, hybrid)
+        with self.assertRaisesRegex(ValueError, "at least 140"):
+            _encode(state, replace(V2_1_REPLAY_OBSERVATION_SPEC, numeric_feature_count=139))
+
+    def test_v2_relic_narrowing_still_encodes_but_has_its_own_floor(self) -> None:
+        from dataclasses import replace
+
+        state = _state([])
+        # The 119-column pre-CB/investment v2 relic family stays encodable...
+        relic = replace(V2_REPLAY_OBSERVATION_SPEC, numeric_feature_count=119)
+        observation = _encode(state, relic)
+        self.assertEqual(len(observation.numeric_features[0]), 119)
+        self.assertEqual(observation.schema_version, OBSERVATION_SCHEMA_VERSION_V2)
+        # ...but anything below the v2 floor refuses too.
+        with self.assertRaisesRegex(ValueError, "at least 119"):
+            _encode(state, replace(V2_REPLAY_OBSERVATION_SPEC, numeric_feature_count=118))
 
     def test_validate_refuses_cross_schema_pairing(self) -> None:
         state = _state([])
@@ -207,6 +238,22 @@ class DefenderIdentityTest(unittest.TestCase):
         # The slot occupant's switch-in details carry the base species; the nicknamed
         # target ident does not.
         self.assertEqual(move.defender_species, "Xatu")
+
+    def test_truncated_log_yields_no_defender_never_a_nickname(self) -> None:
+        # #512 review LOW: with no occupant record (a truncated log whose lead switch
+        # predates the fold), the ident tail is a NICKNAME — the extractor must record
+        # None (absent defender) rather than a species:<nickname> label bound for the
+        # OOV bucket.
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|move|p2a: Birdy|Psychic|p1a: Charlie",
+            "|turn|8",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-1")
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        move = next(token for token in tokens if token.kind == TOKEN_KIND_MOVE)
+        self.assertIsNone(move.defender_species)
 
     def test_self_targeted_move_records_the_actor_as_defender(self) -> None:
         lines = [
@@ -371,6 +418,97 @@ class SubstituteHPTest(unittest.TestCase):
         )
 
 
+class PinnedTier2ConclusionTest(unittest.TestCase):
+    """Per-mon pinned Tier-2 conclusions on the opp-mon token surface (v2.1): derived from
+    tier2-annotated tokens, tier2_residuals-gated, switch-persistent, and never a Tier-1
+    belief mutation (layer separation — the belief columns are untouched)."""
+
+    _LINES = [
+        "|move|p2a: Xatu|Psychic|p1a: Charizard",
+        "|-damage|p1a: Charizard|150/221",
+        "|turn|2",
+        "|switch|p2a: Snorlax|Snorlax, L80|100/100",
+        "|turn|3",
+    ]
+
+    @staticmethod
+    def _annotated_state(lines):
+        """State whose Xatu strike token carries the tier2 as-of-strike CB bit, as the
+        env's Tier2LiveTracker.annotate / batch apply_residuals would stamp it."""
+        from dataclasses import replace as dc_replace
+
+        state = _state(lines)
+        tokens = list(state.transition_tokens)
+        for index, token in enumerate(tokens):
+            if token.kind == TOKEN_KIND_MOVE and token.actor_slot == "p2":
+                tokens[index] = dc_replace(token, cb_bit=True)
+        return dc_replace(state, transition_tokens=tuple(tokens))
+
+    def test_pinned_bit_fires_on_the_concluded_mon_only(self) -> None:
+        state = self._annotated_state(self._LINES)
+        v2_1 = _encode(state, V2_1_REPLAY_OBSERVATION_SPEC)
+        xatu_index = next(
+            index for index, mon in enumerate(state.opponent_team) if mon.species == "Xatu"
+        )
+        snorlax_index = next(
+            index for index, mon in enumerate(state.opponent_team) if mon.species == "Snorlax"
+        )
+        xatu_row = v2_1.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + xatu_index]
+        snorlax_row = v2_1.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + snorlax_index]
+        # Xatu has SWITCHED OUT (Snorlax is active) — the pinned bit is a per-mon fact
+        # and persists on the benched mon's row.
+        self.assertEqual(xatu_row[NUMERIC_TIER2_CB_PINNED], 1.0)
+        self.assertEqual(snorlax_row[NUMERIC_TIER2_CB_PINNED], 0.0)
+        # Investment twin: a true reserve, zero everywhere.
+        self.assertEqual(xatu_row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
+        self.assertEqual(snorlax_row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
+
+    def test_tier2_mask_darkens_the_pinned_bit(self) -> None:
+        state = self._annotated_state(self._LINES)
+        masked = _encode(
+            state,
+            V2_1_REPLAY_OBSERVATION_SPEC,
+            feature_masks=ObservationFeatureMasks(tier2_residuals=False),
+        )
+        for index in range(len(state.opponent_team)):
+            row = masked.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + index]
+            self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 0.0)
+
+    def test_unannotated_tokens_leave_the_pinned_bit_dark(self) -> None:
+        # The belief-source double-gate travels with the tokens: a plain extraction
+        # (no tier2 tracker/inference ran) never sets the column, mask on or not.
+        state = _state(self._LINES)
+        v2_1 = _encode(state, V2_1_REPLAY_OBSERVATION_SPEC)
+        for index in range(len(state.opponent_team)):
+            row = v2_1.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + index]
+            self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 0.0)
+
+    def test_layer_separation_belief_columns_identical_with_and_without_conclusion(self) -> None:
+        # The Tier-2 conclusion must not leak into the Tier-1 belief channel: every
+        # categorical column (incl. all belief-fact buckets) and every numeric column
+        # outside the two DECLARED tier2 surfaces — the as-of-strike tt cb_bit and the
+        # per-mon pinned bit — is identical between the annotated and unannotated
+        # encodes of the same state.
+        plain = _encode(_state(self._LINES), V2_1_REPLAY_OBSERVATION_SPEC)
+        pinned = _encode(self._annotated_state(self._LINES), V2_1_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(plain.categorical_ids, pinned.categorical_ids)
+        for row_index, (plain_row, pinned_row) in enumerate(
+            zip(plain.numeric_features, pinned.numeric_features)
+        ):
+            for column, (a, b) in enumerate(zip(plain_row, pinned_row)):
+                if column in {NUMERIC_TIER2_CB_PINNED, NUMERIC_TT_CB_BIT}:
+                    continue
+                self.assertEqual(a, b, f"row {row_index} column {column}")
+
+    def test_v2_encode_ignores_annotated_tokens_beyond_the_tt_columns(self) -> None:
+        state = self._annotated_state(self._LINES)
+        v2 = _encode(state, V2_REPLAY_OBSERVATION_SPEC)
+        for index in range(len(state.opponent_team)):
+            self.assertEqual(
+                len(v2.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET + index]), 121
+            )
+
+
 class ConfigDualSchemaTest(unittest.TestCase):
     """Checkpoint-driven resolution on the model-config side (torch-free: pure dataclass)."""
 
@@ -385,7 +523,7 @@ class ConfigDualSchemaTest(unittest.TestCase):
     def test_fresh_config_stamps_v2_1_and_its_width(self) -> None:
         config = self._config()
         self.assertEqual(config.observation_schema_version, OBSERVATION_SCHEMA_VERSION_V2_1)
-        self.assertEqual(config.numeric_feature_count, 138)
+        self.assertEqual(config.numeric_feature_count, 140)
 
     def test_v2_stamped_config_still_constructs_no_refusal(self) -> None:
         config = self._config(
@@ -411,7 +549,7 @@ class ConfigDualSchemaTest(unittest.TestCase):
         self.assertEqual(restored.numeric_feature_count, 121)
         v21_payload = self._config().to_dict()
         v21_payload.pop("numeric_feature_count")
-        self.assertEqual(TransformerPolicyConfig.from_dict(v21_payload).numeric_feature_count, 138)
+        self.assertEqual(TransformerPolicyConfig.from_dict(v21_payload).numeric_feature_count, 140)
 
     def test_observation_spec_from_model_config_resolves_schema_and_width(self) -> None:
         from pokezero.neural_policy import observation_spec_from_model_config
@@ -442,7 +580,7 @@ class ConfigDualSchemaTest(unittest.TestCase):
         from pokezero.neural_policy import _validate_tensor_shapes
 
         config = SimpleNamespace(
-            window_size=1, token_count=4, categorical_feature_count=3, numeric_feature_count=138
+            window_size=1, token_count=4, categorical_feature_count=3, numeric_feature_count=140
         )
 
         def fake(shape):

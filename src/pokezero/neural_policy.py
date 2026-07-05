@@ -1920,10 +1920,11 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
 
     The numeric column census differs across the two supported schemas
     ({OBSERVATION_SCHEMA_VERSION_V2}: 121 columns, 119 before the reserved Tier-2
-    CB/investment slots materialized; {OBSERVATION_SCHEMA_VERSION_V2_1}: 138 columns —
-    PP-validity bits + substitute HP + the carried-forward investment reserve), so v2 data
-    meeting a v2.1 model (or any cross-census pairing) must name the exact disagreement,
-    both schema versions, and the likely cause.
+    CB/investment slots materialized; {OBSERVATION_SCHEMA_VERSION_V2_1}: 140 columns —
+    PP-validity bits + substitute HP + per-mon pinned Tier-2 conclusions + the
+    carried-forward investment reserves), so v2 data meeting a v2.1 model (or any
+    cross-census pairing) must name the exact disagreement, both schema versions, and the
+    likely cause.
     """
     observed_width = observed_shape[-1] if observed_shape else None
     message = (
@@ -1937,9 +1938,10 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
             f" Numeric column count {observed_width} != model's {config.numeric_feature_count}: "
             f"the numeric census is schema-keyed — {OBSERVATION_SCHEMA_VERSION_V2!r} is the "
             "121-column family (119 before the reserved Tier-2 CB/investment slots "
-            f"materialized) and {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 138-column family "
-            "(revealed-move PP-validity bits + substitute HP fraction + the investment "
-            "reserve). This artifact and this model were built against different censuses "
+            f"materialized) and {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
+            "(revealed-move PP-validity bits + substitute HP fraction + per-mon pinned "
+            "Tier-2 conclusions + the investment reserves). This artifact and this model "
+            "were built against different censuses "
             "and must not be mixed; the schema + width an env encodes resolve from the "
             "loaded checkpoint's model_config (observation_spec_from_model_config)."
         )

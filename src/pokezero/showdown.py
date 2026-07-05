@@ -277,10 +277,37 @@ NUMERIC_OPP_MOVE_PP_VALID_OFFSET = 121  # ..136 (BELIEF_MOVE_BUCKET_COUNT column
 # column carries presence + the KNOWN INITIAL fraction: floor(maxhp/4)/maxhp exact for the
 # self side (max HP from the request), the 0.25 baseline for the opponent (max HP hidden;
 # floor error < 1%). 0.0 while no sub is up. Exact chip tracking can upgrade the value
-# in-place later without a spec break (same column, tighter semantics).
+# in-place later without a spec break (same column, tighter semantics). KNOWN LIMIT
+# (#512 review note): a Baton-Passed substitute reads 0.0 after the pass — the parser's
+# volatile tracker conservatively resets on every switch-in (pre-existing behavior,
+# shared with the categorical volatile:substitute column), so the passed sub disappears
+# from BOTH surfaces together; fixing that is a volatile-tracker change, not a column one.
 NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_COUNT  # 137
+# Opponent tokens — per-mon PERSISTENT Tier-2 conclusions (design ruling: persistent
+# conclusions belong on the OPP-MON token surface, the current-state belief channel, not
+# only as as-of-strike history bits). Two surfaces now carry the CB conclusion:
+#   - NUMERIC_TT_CB_BIT on move transition tokens: the as-of-strike HISTORY record (kept
+#     as-is so the ordered stream stays self-describing under K-truncation);
+#   - NUMERIC_TIER2_CB_PINNED here: the AUTHORITATIVE current-state form — 1.0 while the
+#     tier2 two-strike + non-KO Choice Band conclusion stands for this mon, persistent
+#     across switches (a per-mon fact, not a per-strike one).
+# The value is derived at encode time from the tier2-annotated transition-token stream
+# (any assessed strike token of this mon carrying cb_bit — exactly equivalent to
+# Tier2LiveTracker.cb_bits / infer_tier2's per-mon cb_bits, since both sources express a
+# conclusion solely by stamping the monotone as-of-strike bit onto the concluding strike
+# and every later assessed strike), so the same ``masks.tier2_residuals`` gate + the
+# belief-source double-gate govern it: pipelines that never ran the Tier-2 inference
+# carry unannotated tokens and the column stays 0.0.
+# LAYER SEPARATION (architectural invariant): Tier-2 conclusions NEVER mutate the belief
+# engine's Tier-1 candidate sets — the exact/protocol layer stays inference-free; this is
+# a parallel tier2-layer feature carried on the same token, not a belief-fact write.
+NUMERIC_TIER2_CB_PINNED = NUMERIC_SUB_HP_FRACTION + 1  # 138
+# TRUE RESERVE — the per-mon twin of NUMERIC_TT_INVESTMENT_BIT: materialized but ALWAYS
+# ZERO in this revision; the v2.1 window's batch-2 gated inference populates it. Kept at
+# constant zero so flipping it on later is not a spec break.
+NUMERIC_TIER2_INVESTMENT_PINNED = NUMERIC_TIER2_CB_PINNED + 1  # 139
 # The v2.1 numeric census ends here.
-_V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_SUB_HP_FRACTION + 1
+_V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_TIER2_INVESTMENT_PINNED + 1
 
 _CATEGORICAL_FEATURE_COUNT = CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT
 # Schema-keyed replay observation specs: BOTH schemas stay first-class encode modes during
@@ -303,6 +330,20 @@ REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
     OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
 }
 DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
+# Encode-time census FLOOR per schema (#512 review, MED-LOW defense-in-depth): a spec
+# narrower than its schema's floor would make ``_set_numeric``'s bounds check silently
+# drop that schema's own columns — encoding an undeclared v2/v2.1 hybrid stamped with the
+# wider version (e.g. a v2.1@121 spec would emit v2 numerics + v2.1 defender identity
+# with no refusal anywhere, since 121 == the model's width). No shipped path builds such
+# a spec (from_dict width defaults are schema-keyed; fresh trains use the full census;
+# resume carries stamps), so the encoder refuses it outright. v2's floor is 119 — the
+# pre-CB/investment relic family whose narrowing is deliberate ("feed the model the
+# shape it was trained on") and whose dropped tail columns are all-zero under those
+# checkpoints' latched masks; v2.1 has NO narrowed family (born at the full census).
+_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
+    OBSERVATION_SCHEMA_VERSION_V2: 119,
+    OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
+}
 
 
 def observation_spec_for_schema(schema_version: str) -> ObservationSpec:
@@ -867,8 +908,9 @@ def observation_from_player_state(
     ``spec.schema_version`` selects the encode mode (dual-schema window): a v2 spec produces
     the v2 layout byte-identically to the pre-v2.1 encoder (no v2.1 column is even attempted);
     a v2.1 spec additionally writes defender identity on move transition tokens, the
-    revealed-move PP-validity bits, and the substitute HP fraction. Anything else refuses
-    loudly here rather than encoding an undeclared hybrid.
+    revealed-move PP-validity bits, the substitute HP fraction, and the per-mon pinned
+    Tier-2 conclusions. Anything else refuses loudly here rather than encoding an
+    undeclared hybrid.
     """
     if spec.schema_version not in REPLAY_OBSERVATION_SPECS_BY_SCHEMA:
         supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
@@ -876,7 +918,34 @@ def observation_from_player_state(
             f"observation encode: unsupported spec schema {spec.schema_version!r}; supported "
             f"schemas are {supported}."
         )
+    # Census floor (#512 review MED-LOW): refuse a spec narrower than its schema's own
+    # census rather than letting the bounds-checked writers silently drop the schema's
+    # columns and emit an undeclared hybrid stamped with the wider version.
+    census_floor = _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA[spec.schema_version]
+    if spec.numeric_feature_count < census_floor:
+        raise ValueError(
+            f"observation encode: spec schema {spec.schema_version!r} requires at least "
+            f"{census_floor} numeric columns, got {spec.numeric_feature_count}. A narrower "
+            "spec would silently bounds-drop this schema's own columns and encode an "
+            "undeclared hybrid stamped with the wider version; the 119-column relic family "
+            f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
+        )
     schema_v2_1 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
+    # Per-mon pinned Tier-2 CB conclusions (v2.1, NUMERIC_TIER2_CB_PINNED): derived from the
+    # tier2-annotated token stream under the same tier2_residuals gate as the tt columns —
+    # the monotone as-of-strike bit makes "any assessed strike of this mon carries it"
+    # exactly the tracker's per-mon conclusion, and reading the FULL (untruncated) token
+    # list here is what makes the pinned form robust to the K-budget truncation the
+    # history surface is subject to. Tier-2 conclusions never touch the Tier-1 belief
+    # candidate sets (layer separation; see the column comment).
+    tier2_cb_pinned_species: frozenset[str] = frozenset()
+    if schema_v2_1 and feature_masks.tier2_residuals:
+        opponent_slot = state.perspective.opponent_showdown_slot
+        tier2_cb_pinned_species = frozenset(
+            _normalize_identifier(token.actor_species)
+            for token in state.transition_tokens
+            if token.cb_bit and token.kind == _TT_KIND_MOVE and token.actor_slot == opponent_slot
+        )
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
     _encode_field_token(categorical_ids, numeric_features, state, masks=feature_masks)
@@ -930,6 +999,7 @@ def observation_from_player_state(
         },
         masks=feature_masks,
         schema_v2_1=schema_v2_1,
+        tier2_cb_pinned_species=tier2_cb_pinned_species,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
@@ -1742,6 +1812,7 @@ def _encode_pokemon_tokens(
     transform_targets_by_species: Mapping[str, ShowdownPokemon] | None = None,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
     schema_v2_1: bool = False,
+    tier2_cb_pinned_species: frozenset[str] = frozenset(),
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
@@ -1857,6 +1928,19 @@ def _encode_pokemon_tokens(
             tendency = tendency_by_species.get(_normalize_identifier(candidate.species))
             if tendency is not None:
                 _encode_mon_tendency(numeric_features[token_index], tendency)
+        # v2.1 pinned Tier-2 conclusions (current-state surface; the tt cb_bit stays the
+        # as-of-strike history record). Gated upstream: the set is empty unless the spec
+        # is v2.1, masks.tier2_residuals is on, AND the tokens were tier2-annotated (the
+        # belief-source double-gate). Keyed on BASE species (Transform identity rule) and
+        # persistent across switches — a per-mon fact, not a per-strike one. The
+        # investment twin (NUMERIC_TIER2_INVESTMENT_PINNED) stays 0.0 unconditionally: a
+        # true reserve until the v2.1 window's batch-2 gated inference lands.
+        if (
+            role == "opponent"
+            and tier2_cb_pinned_species
+            and _normalize_identifier(candidate.species) in tier2_cb_pinned_species
+        ):
+            _set_numeric(numeric_features[token_index], NUMERIC_TIER2_CB_PINNED, 1.0)
 
 
 def _encode_mon_exact_state(

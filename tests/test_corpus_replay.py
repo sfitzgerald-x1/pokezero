@@ -48,6 +48,8 @@ class CorpusReplayGateTest(unittest.TestCase):
             NUMERIC_OPP_MOVE_PP_OFFSET,
             NUMERIC_OPP_MOVE_PP_VALID_OFFSET,
             NUMERIC_REVEALED_MOVE_COUNT,
+            NUMERIC_TIER2_CB_PINNED,
+            NUMERIC_TIER2_INVESTMENT_PINNED,
             OPPONENT_POKEMON_TOKEN_OFFSET,
             OPPONENT_POKEMON_TOKEN_COUNT,
             STATS_TOKEN_OFFSET,
@@ -195,6 +197,11 @@ class CorpusReplayGateTest(unittest.TestCase):
                                 for column in range(16):
                                     if row[NUMERIC_OPP_MOVE_PP_OFFSET + column] > 0.0:
                                         self.assertIn(column, bits)
+                                # Tier-1 replay (no tier2 tracker/inference ran): both
+                                # per-mon pinned Tier-2 surfaces stay dark, mirroring the
+                                # tt-row 117..120 invariant above.
+                                self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 0.0)
+                                self.assertEqual(row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0)
 
             # The committed Hitmonlee fixture gate, at the game's FINAL boundary (the
             # captures end at their last |turn|; Hitmonlee fainted long before, so its
