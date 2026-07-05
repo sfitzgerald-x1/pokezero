@@ -1,0 +1,4314 @@
+{
+ "context": {
+  "fixture": "tests/fixtures/showdown/explosion-seed148.log.gz",
+  "manifest": {
+   "seed": 148,
+   "source_commit": "3830480",
+   "generator": "LocalShowdownEnv + RolloutDriver, RandomLegalPolicy vs RandomLegalPolicy, gen3randombattle, max_decision_rounds=250, POKEZERO_BELIEF_SET_SOURCE=1",
+   "player_rng": "sha256(f\"{seed}:{player_id}\") per src/pokezero/rollout.py",
+   "determinism": "battle seed + per-player RNG only; |t:| timestamp lines stripped for byte stability",
+   "sha256_clean_log": "eed8ec4422a0ce2bc5f7d2ba2bd4d21c8f65805690b5f3bab2c3153406abc01e",
+   "key_events": {
+    "turn_7": "Weezing Explosion -> double faint (double cold replacement phase)",
+    "turn_12": "Toxic lands on Pidgeot",
+    "turn_13": "Cloyster Spikes (|-sidestart| p1)",
+    "turn_15": "Pidgeot eats Liechi Berry (|-enditem| [eat]) then faints",
+    "game_length_turns": 48
+   },
+   "purpose": "Reusable rich-history fixture: early Explosion double-faint + hazards + status + item reveal inside turn 16; chosen for the v2.1 token-format documentation and turn-merged-token tests."
+  },
+  "battle_id": "explosion-seed148",
+  "players": {
+   "p1": "PokeZero p1",
+   "p2": "PokeZero p2"
+  },
+  "perspective": {
+   "player": "p1 (PokeZero p1)",
+   "opponent": "p2 (PokeZero p2)"
+  },
+  "boundary": "the p1 |request| immediately after the |turn|16 line \u2014 the real committed server request (this fixture carries requests at every decision; nothing synthesized)",
+  "protocol_lines_start_to_boundary": [
+   "|start",
+   "|switch|p1a: Pidgeot|Pidgeot, L87, F|284/284",
+   "|switch|p2a: Piloswine|Piloswine, L87, M|316/316",
+   "|turn|1",
+   "|",
+   "|move|p1a: Pidgeot|Substitute|p1a: Pidgeot",
+   "|-start|p1a: Pidgeot|Substitute",
+   "|-damage|p1a: Pidgeot|213/284",
+   "|move|p2a: Piloswine|Double-Edge|p1a: Pidgeot",
+   "|-end|p1a: Pidgeot|Substitute",
+   "|-damage|p2a: Piloswine|293/316|[from] Recoil|[of] p1a: Pidgeot",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|",
+   "|switch|p1a: Gligar|Gligar, L83, F|243/243",
+   "|move|p2a: Piloswine|Double-Edge|p1a: Gligar",
+   "|-damage|p1a: Gligar|125/243",
+   "|-damage|p2a: Piloswine|254/316|[from] Recoil|[of] p1a: Gligar",
+   "|",
+   "|upkeep",
+   "|turn|3",
+   "|",
+   "|switch|p2a: Jumpluff|Jumpluff, L87, F|271/271",
+   "|move|p1a: Gligar|Earthquake|p2a: Jumpluff",
+   "|-immune|p2a: Jumpluff",
+   "|",
+   "|upkeep",
+   "|turn|4",
+   "|",
+   "|switch|p2a: Piloswine|Piloswine, L87, M|254/316",
+   "|switch|p1a: Exploud|Exploud, L86, F|319/319",
+   "|",
+   "|upkeep",
+   "|turn|5",
+   "|",
+   "|switch|p1a: Tangela|Tangela, L95, M|277/277",
+   "|move|p2a: Piloswine|Earthquake|p1a: Tangela",
+   "|-resisted|p1a: Tangela",
+   "|-damage|p1a: Tangela|221/277",
+   "|",
+   "|-heal|p1a: Tangela|238/277|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|6",
+   "|",
+   "|switch|p1a: Regirock|Regirock, L80|259/259",
+   "|switch|p2a: Weezing|Weezing, L81, M|238/238",
+   "|",
+   "|upkeep",
+   "|turn|7",
+   "|",
+   "|switch|p1a: Gligar|Gligar, L83, F|125/243",
+   "|move|p2a: Weezing|Explosion|p1a: Gligar",
+   "|-crit|p1a: Gligar",
+   "|-damage|p1a: Gligar|0 fnt",
+   "|faint|p2a: Weezing",
+   "|faint|p1a: Gligar",
+   "|",
+   "|switch|p1a: Tangela|Tangela, L95, M|238/277",
+   "|switch|p2a: Mew|Mew, L72|263/263",
+   "|",
+   "|-heal|p1a: Tangela|255/277|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|8",
+   "|",
+   "|switch|p1a: Mew|Mew, L72|263/263",
+   "|move|p2a: Mew|Soft-Boiled||[still]",
+   "|-fail|p2a: Mew|heal",
+   "|",
+   "|upkeep",
+   "|turn|9",
+   "|",
+   "|switch|p1a: Exploud|Exploud, L86, F|319/319",
+   "|move|p2a: Mew|Rock Slide|p1a: Exploud",
+   "|-damage|p1a: Exploud|266/319",
+   "|",
+   "|-heal|p1a: Exploud|285/319|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|10",
+   "|",
+   "|switch|p2a: Illumise|Illumise, L92, F|269/269",
+   "|switch|p1a: Regirock|Regirock, L80|259/259",
+   "|",
+   "|upkeep",
+   "|turn|11",
+   "|",
+   "|switch|p2a: Cloyster|Cloyster, L82, M|216/216",
+   "|switch|p1a: Tangela|Tangela, L95, M|255/277",
+   "|",
+   "|-heal|p1a: Tangela|272/277|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|12",
+   "|",
+   "|switch|p1a: Pidgeot|Pidgeot, L87, F|213/284",
+   "|move|p2a: Cloyster|Toxic|p1a: Pidgeot",
+   "|-status|p1a: Pidgeot|tox",
+   "|",
+   "|-damage|p1a: Pidgeot|196/284 tox|[from] psn",
+   "|upkeep",
+   "|turn|13",
+   "|",
+   "|move|p1a: Pidgeot|Hidden Power|p2a: Cloyster",
+   "|-damage|p2a: Cloyster|190/216",
+   "|move|p2a: Cloyster|Spikes|p1a: Pidgeot",
+   "|-sidestart|p1: PokeZero p1|Spikes",
+   "|",
+   "|-damage|p1a: Pidgeot|162/284 tox|[from] psn",
+   "|-heal|p2a: Cloyster|203/216|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|14",
+   "|",
+   "|switch|p2a: Illumise|Illumise, L92, F|269/269",
+   "|move|p1a: Pidgeot|Substitute|p1a: Pidgeot",
+   "|-start|p1a: Pidgeot|Substitute",
+   "|-damage|p1a: Pidgeot|91/284 tox",
+   "|",
+   "|-damage|p1a: Pidgeot|40/284 tox|[from] psn",
+   "|upkeep",
+   "|turn|15",
+   "|",
+   "|switch|p2a: Piloswine|Piloswine, L87, M|254/316",
+   "|move|p1a: Pidgeot|Return|p2a: Piloswine",
+   "|-damage|p2a: Piloswine|156/316",
+   "|",
+   "|-enditem|p1a: Pidgeot|Liechi Berry|[eat]",
+   "|-boost|p1a: Pidgeot|atk|1|[from] item: Liechi Berry",
+   "|-damage|p1a: Pidgeot|0 fnt|[from] psn",
+   "|faint|p1a: Pidgeot",
+   "|upkeep",
+   "|",
+   "|switch|p1a: Regirock|Regirock, L80|259/259",
+   "|-damage|p1a: Regirock|227/259|[from] Spikes",
+   "|turn|16"
+  ],
+  "elided_request_lines": 34,
+  "battle_state_summary": {
+   "turn": 16,
+   "weather": null,
+   "self_active": {
+    "species": "Regirock",
+    "condition": "227/259",
+    "hp_fraction": 0.876448,
+    "status": "none",
+    "fainted": false,
+    "active": true,
+    "details": "Regirock, L80",
+    "moves": [
+     "rockslide",
+     "sleeptalk",
+     "rest",
+     "earthquake"
+    ],
+    "ability": "clearbody",
+    "item": "leftovers",
+    "actual_stats": {
+     "atk": 206,
+     "def": 366,
+     "spa": 126,
+     "spd": 206,
+     "spe": 126,
+     "hp": 259
+    }
+   },
+   "self_bench": [
+    {
+     "species": "Mew",
+     "condition": "263/263",
+     "hp_fraction": 1.0,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Mew, L72",
+     "moves": [
+      "explosion",
+      "rockslide",
+      "swordsdance",
+      "earthquake"
+     ],
+     "ability": "synchronize",
+     "item": "salacberry",
+     "actual_stats": {
+      "atk": 186,
+      "def": 186,
+      "spa": 186,
+      "spd": 186,
+      "spe": 186,
+      "hp": 263
+     }
+    },
+    {
+     "species": "Tangela",
+     "condition": "272/277",
+     "hp_fraction": 0.981949,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Tangela, L95, M",
+     "moves": [
+      "hiddenpowergrass",
+      "sleeppowder",
+      "stunspore",
+      "morningsun"
+     ],
+     "ability": "chlorophyll",
+     "item": "leftovers",
+     "actual_stats": {
+      "atk": 111,
+      "def": 272,
+      "spa": 243,
+      "spd": 130,
+      "spe": 168,
+      "hp": 277
+     }
+    },
+    {
+     "species": "Exploud",
+     "condition": "285/319",
+     "hp_fraction": 0.893417,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Exploud, L86, F",
+     "moves": [
+      "flamethrower",
+      "shadowball",
+      "return102",
+      "earthquake"
+     ],
+     "ability": "soundproof",
+     "item": "leftovers",
+     "actual_stats": {
+      "atk": 206,
+      "def": 158,
+      "spa": 206,
+      "spd": 158,
+      "spe": 166,
+      "hp": 319
+     }
+    },
+    {
+     "species": "Pidgeot",
+     "condition": "0 fnt",
+     "hp_fraction": 0.0,
+     "status": "none",
+     "fainted": true,
+     "active": false,
+     "details": "Pidgeot, L87, F",
+     "moves": [
+      "aerialace",
+      "return102",
+      "substitute",
+      "hiddenpowerground"
+     ],
+     "ability": "keeneye",
+     "actual_stats": {
+      "atk": 189,
+      "def": 180,
+      "spa": 171,
+      "spd": 171,
+      "spe": 208
+     }
+    },
+    {
+     "species": "Gligar",
+     "condition": "0 fnt",
+     "hp_fraction": 0.0,
+     "status": "none",
+     "fainted": true,
+     "active": false,
+     "details": "Gligar, L83, F",
+     "moves": [
+      "hiddenpowerflying",
+      "swordsdance",
+      "rockslide",
+      "earthquake"
+     ],
+     "ability": "hypercutter",
+     "item": "salacberry",
+     "actual_stats": {
+      "atk": 171,
+      "def": 221,
+      "spa": 105,
+      "spd": 155,
+      "spe": 189
+     }
+    }
+   ],
+   "opponent_active": {
+    "species": "Piloswine",
+    "condition": "156/316",
+    "hp_fraction": 0.493671,
+    "status": "none",
+    "fainted": false,
+    "active": true,
+    "details": "Piloswine, L87, M",
+    "revealed_moves": [
+     "doubleedge",
+     "earthquake"
+    ],
+    "belief": {
+     "candidate_set_count": 1,
+     "uncertainty": 0.333333,
+     "possible_abilities": [
+      "Oblivious"
+     ],
+     "possible_items": [
+      "Choice Band"
+     ],
+     "possible_moves": [
+      "doubleedge",
+      "earthquake",
+      "icebeam",
+      "rockslide"
+     ]
+    }
+   },
+   "opponent_revealed_bench": [
+    {
+     "species": "Jumpluff",
+     "condition": "271/271",
+     "hp_fraction": 1.0,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Jumpluff, L87, F",
+     "belief": {
+      "candidate_set_count": 5,
+      "uncertainty": 1.0,
+      "possible_abilities": [
+       "Chlorophyll"
+      ],
+      "possible_items": [
+       "Leftovers"
+      ],
+      "possible_moves": [
+       "encore",
+       "hiddenpowerflying",
+       "leechseed",
+       "protect",
+       "sleeppowder",
+       "substitute",
+       "synthesis",
+       "toxic"
+      ]
+     }
+    },
+    {
+     "species": "Weezing",
+     "condition": "0 fnt",
+     "hp_fraction": 0.0,
+     "status": "none",
+     "fainted": true,
+     "active": false,
+     "details": "Weezing, L81, M",
+     "revealed_moves": [
+      "explosion"
+     ],
+     "belief": {
+      "candidate_set_count": 6,
+      "uncertainty": 0.428571,
+      "possible_abilities": [
+       "Levitate"
+      ],
+      "possible_items": [
+       "Leftovers"
+      ],
+      "possible_moves": [
+       "explosion",
+       "fireblast",
+       "haze",
+       "sludgebomb",
+       "toxic",
+       "willowisp"
+      ]
+     }
+    },
+    {
+     "species": "Mew",
+     "condition": "263/263",
+     "hp_fraction": 1.0,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Mew, L72",
+     "revealed_moves": [
+      "rockslide",
+      "softboiled"
+     ],
+     "belief": {
+      "candidate_set_count": 3,
+      "uncertainty": 0.15,
+      "possible_abilities": [
+       "Synchronize"
+      ],
+      "possible_items": [
+       "Leftovers"
+      ],
+      "possible_moves": [
+       "earthquake",
+       "explosion",
+       "rockslide",
+       "softboiled",
+       "swordsdance"
+      ]
+     }
+    },
+    {
+     "species": "Illumise",
+     "condition": "269/269",
+     "hp_fraction": 1.0,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Illumise, L92, F",
+     "belief": {
+      "candidate_set_count": 2,
+      "uncertainty": 1.0,
+      "possible_abilities": [
+       "Oblivious"
+      ],
+      "possible_items": [
+       "Leftovers"
+      ],
+      "possible_moves": [
+       "encore",
+       "moonlight",
+       "seismictoss",
+       "thunderwave",
+       "toxic"
+      ]
+     }
+    },
+    {
+     "species": "Cloyster",
+     "condition": "203/216",
+     "hp_fraction": 0.939815,
+     "status": "none",
+     "fainted": false,
+     "active": false,
+     "details": "Cloyster, L82, M",
+     "revealed_moves": [
+      "spikes",
+      "toxic"
+     ],
+     "revealed_item": "leftovers",
+     "belief": {
+      "candidate_set_count": 3,
+      "uncertainty": 0.3,
+      "possible_abilities": [
+       "Shell Armor"
+      ],
+      "possible_items": [
+       "Leftovers"
+      ],
+      "possible_moves": [
+       "explosion",
+       "icebeam",
+       "rapidspin",
+       "spikes",
+       "surf",
+       "toxic"
+      ]
+     }
+    }
+   ],
+   "opponent_unrevealed_count": 0,
+   "self_side_conditions": [
+    "spikes"
+   ],
+   "opponent_side_conditions": [],
+   "boosts": {
+    "self_active": {},
+    "opponent_active": {}
+   },
+   "volatiles": {
+    "self_active": [],
+    "opponent_active": []
+   },
+   "legal_actions": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "request_kind": "move"
+  }
+ },
+ "layout": {
+  "schema_version": "pokezero.observation.v2.2",
+  "token_count": 151,
+  "numeric_feature_count": 153,
+  "categorical_feature_count": 51,
+  "sections": {
+   "field": {
+    "offset": 0,
+    "count": 1,
+    "token_type_id": 0
+   },
+   "self_pokemon": {
+    "offset": 1,
+    "count": 6,
+    "token_type_id": 1
+   },
+   "opponent_pokemon": {
+    "offset": 7,
+    "count": 6,
+    "token_type_id": 2
+   },
+   "action_candidate": {
+    "offset": 13,
+    "count": 9,
+    "token_type_id": 3
+   },
+   "stats": {
+    "offset": 22,
+    "count": 1,
+    "token_type_id": 5
+   },
+   "transition": {
+    "offset": 23,
+    "count": 128,
+    "token_type_id": 6
+   }
+  },
+  "token_type_id_note": "type id 4 (v1 recent-event section) is retired, not reused",
+  "numeric_column_names": [
+   "NUMERIC_HP_FRACTION",
+   "NUMERIC_ACTIVE",
+   "NUMERIC_LEGAL",
+   "NUMERIC_PRESENT",
+   "NUMERIC_REVEALED_MOVE_COUNT",
+   "NUMERIC_CANDIDATE_SET_COUNT",
+   "NUMERIC_UNCERTAINTY",
+   "NUMERIC_POSSIBLE_ABILITY_COUNT",
+   "NUMERIC_POSSIBLE_ITEM_COUNT",
+   "NUMERIC_POSSIBLE_MOVE_COUNT",
+   "NUMERIC_REVEALED_ABILITY",
+   "NUMERIC_REVEALED_ITEM",
+   "NUMERIC_BASE_POWER",
+   "NUMERIC_PRIORITY",
+   "NUMERIC_ACCURACY",
+   "NUMERIC_LEVEL",
+   "NUMERIC_BASE_HP",
+   "NUMERIC_BASE_ATK",
+   "NUMERIC_BASE_DEF",
+   "NUMERIC_BASE_SPA",
+   "NUMERIC_BASE_SPD",
+   "NUMERIC_BASE_SPE",
+   "NUMERIC_SELF_HAZARDS",
+   "NUMERIC_OPP_HAZARDS",
+   "NUMERIC_SELF_SCREENS",
+   "NUMERIC_OPP_SCREENS",
+   "NUMERIC_BOOST_ATK",
+   "NUMERIC_BOOST_DEF",
+   "NUMERIC_BOOST_SPA",
+   "NUMERIC_BOOST_SPD",
+   "NUMERIC_BOOST_SPE",
+   "NUMERIC_MOVE_PP_FRACTION",
+   "NUMERIC_EFFECT_CHANCE",
+   "NUMERIC_TURN_COUNT",
+   "NUMERIC_SELF_HP_COST",
+   "NUMERIC_SELF_FUTURE_SIGHT",
+   "NUMERIC_OPP_FUTURE_SIGHT",
+   "NUMERIC_TOXIC_STAGE",
+   "NUMERIC_ACTUAL_HP",
+   "NUMERIC_ACTUAL_ATK",
+   "NUMERIC_ACTUAL_DEF",
+   "NUMERIC_ACTUAL_SPA",
+   "NUMERIC_ACTUAL_SPD",
+   "NUMERIC_ACTUAL_SPE",
+   "NUMERIC_SELF_SLEEP_CLAUSE",
+   "NUMERIC_OPP_SLEEP_CLAUSE",
+   "NUMERIC_WEATHER_TURNS",
+   "NUMERIC_WEATHER_PERMANENT",
+   "NUMERIC_SELF_REFLECT_TURNS",
+   "NUMERIC_SELF_LIGHT_SCREEN_TURNS",
+   "NUMERIC_SELF_SAFEGUARD_TURNS",
+   "NUMERIC_SELF_MIST_TURNS",
+   "NUMERIC_OPP_REFLECT_TURNS",
+   "NUMERIC_OPP_LIGHT_SCREEN_TURNS",
+   "NUMERIC_OPP_SAFEGUARD_TURNS",
+   "NUMERIC_OPP_MIST_TURNS",
+   "NUMERIC_SELF_WISH_PENDING",
+   "NUMERIC_OPP_WISH_PENDING",
+   "NUMERIC_SLEEP_TURNS",
+   "NUMERIC_REST_SLEEP",
+   "NUMERIC_WAKE_KNOWN",
+   "NUMERIC_TURNS_ACTIVE",
+   "NUMERIC_TRAPPER_ALIVE",
+   "NUMERIC_MON_SWITCHED_BEFORE_ATTACK",
+   "NUMERIC_MON_STAYED_AND_ATTACKED",
+   "NUMERIC_MON_TURNS_ACTIVE_TOTAL",
+   "NUMERIC_EXPECTED_HP",
+   "NUMERIC_EXPECTED_HP_LOW",
+   "NUMERIC_EXPECTED_HP_HIGH",
+   "NUMERIC_EXPECTED_ATK",
+   "NUMERIC_EXPECTED_ATK_LOW",
+   "NUMERIC_EXPECTED_ATK_HIGH",
+   "NUMERIC_EXPECTED_DEF",
+   "NUMERIC_EXPECTED_SPA",
+   "NUMERIC_EXPECTED_SPD",
+   "NUMERIC_EXPECTED_SPE",
+   "NUMERIC_OPP_MOVE_PP_OFFSET",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+1",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+2",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+3",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+4",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+5",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+6",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+7",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+8",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+9",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+10",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+11",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+12",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+13",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+14",
+   "NUMERIC_OPP_MOVE_PP_OFFSET+15",
+   "NUMERIC_STAT_OPP_SWITCH_COUNT",
+   "NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES",
+   "NUMERIC_STAT_BLOCKED_ON_OUR_ATTACK",
+   "NUMERIC_STAT_PURSUIT_INTERCEPT_PREDICT",
+   "NUMERIC_STAT_MY_SWITCH_TURNS",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+1",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+2",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+3",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+4",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+5",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+6",
+   "NUMERIC_STAT_WEATHER_REVEAL_OFFSET+7",
+   "NUMERIC_TT_DAMAGE_FRACTION",
+   "NUMERIC_TT_N_HITS",
+   "NUMERIC_TT_CALLED",
+   "NUMERIC_TT_TRANSFORMED",
+   "NUMERIC_TT_CRIT",
+   "NUMERIC_TT_MISS",
+   "NUMERIC_TT_KO",
+   "NUMERIC_TT_PURSUIT_INTERCEPT",
+   "NUMERIC_TT_OWN_SPIKES",
+   "NUMERIC_TT_OPP_SPIKES",
+   "NUMERIC_TT_ABS_TURN",
+   "NUMERIC_TT_TURNS_AGO",
+   "NUMERIC_TT_RESIDUAL",
+   "NUMERIC_TT_RESIDUAL_VALID",
+   "NUMERIC_TT_CB_BIT",
+   "NUMERIC_TT_INVESTMENT_BIT",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+1",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+2",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+3",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+4",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+5",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+6",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+7",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+8",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+9",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+10",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+11",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+12",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+13",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+14",
+   "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+15",
+   "NUMERIC_SUB_HP_FRACTION",
+   "NUMERIC_TIER2_CB_PINNED",
+   "NUMERIC_TIER2_INVESTMENT_PINNED",
+   "NUMERIC_TM2_DAMAGE_FRACTION",
+   "NUMERIC_TM2_N_HITS",
+   "NUMERIC_TM2_CALLED",
+   "NUMERIC_TM2_TRANSFORMED",
+   "NUMERIC_TM2_CRIT",
+   "NUMERIC_TM2_MISS",
+   "NUMERIC_TM2_KO",
+   "NUMERIC_TM2_PURSUIT_INTERCEPT",
+   "NUMERIC_TM2_RESIDUAL",
+   "NUMERIC_TM2_RESIDUAL_VALID",
+   "NUMERIC_TM2_CB_BIT",
+   "NUMERIC_TM2_PRESENT",
+   "NUMERIC_TM2_INVESTMENT"
+  ],
+  "numeric_census_boundaries": {
+   "v2": 121,
+   "v2.1": 140,
+   "v2.2": 153
+  },
+  "categorical_slot_layout": {
+   "fixed_count": 9,
+   "belief_ability_buckets": 2,
+   "belief_item_buckets": 6,
+   "belief_move_buckets": 16,
+   "volatile_buckets": 6,
+   "turn_merged_extra": 12,
+   "column_names": [
+    "CATEGORY_PRIMARY",
+    "CATEGORY_SECONDARY",
+    "CATEGORY_ROLE",
+    "CATEGORY_SLOT",
+    "CATEGORY_TYPE_1",
+    "CATEGORY_TYPE_2",
+    "CATEGORY_MOVE_CATEGORY",
+    "CATEGORY_MOVE_EFFECT",
+    "CATEGORY_MOVE_PRIORITY",
+    "CATEGORY_BELIEF_ABILITY_OFFSET",
+    "CATEGORY_BELIEF_ABILITY_OFFSET+1",
+    "CATEGORY_BELIEF_ITEM_OFFSET",
+    "CATEGORY_BELIEF_ITEM_OFFSET+1",
+    "CATEGORY_BELIEF_ITEM_OFFSET+2",
+    "CATEGORY_BELIEF_ITEM_OFFSET+3",
+    "CATEGORY_BELIEF_ITEM_OFFSET+4",
+    "CATEGORY_BELIEF_ITEM_OFFSET+5",
+    "CATEGORY_BELIEF_MOVE_OFFSET",
+    "CATEGORY_BELIEF_MOVE_OFFSET+1",
+    "CATEGORY_BELIEF_MOVE_OFFSET+2",
+    "CATEGORY_BELIEF_MOVE_OFFSET+3",
+    "CATEGORY_BELIEF_MOVE_OFFSET+4",
+    "CATEGORY_BELIEF_MOVE_OFFSET+5",
+    "CATEGORY_BELIEF_MOVE_OFFSET+6",
+    "CATEGORY_BELIEF_MOVE_OFFSET+7",
+    "CATEGORY_BELIEF_MOVE_OFFSET+8",
+    "CATEGORY_BELIEF_MOVE_OFFSET+9",
+    "CATEGORY_BELIEF_MOVE_OFFSET+10",
+    "CATEGORY_BELIEF_MOVE_OFFSET+11",
+    "CATEGORY_BELIEF_MOVE_OFFSET+12",
+    "CATEGORY_BELIEF_MOVE_OFFSET+13",
+    "CATEGORY_BELIEF_MOVE_OFFSET+14",
+    "CATEGORY_BELIEF_MOVE_OFFSET+15",
+    "CATEGORY_VOLATILE_OFFSET",
+    "CATEGORY_VOLATILE_OFFSET+1",
+    "CATEGORY_VOLATILE_OFFSET+2",
+    "CATEGORY_VOLATILE_OFFSET+3",
+    "CATEGORY_VOLATILE_OFFSET+4",
+    "CATEGORY_VOLATILE_OFFSET+5",
+    "CATEGORY_TM_FIRST_KIND",
+    "CATEGORY_TM_FIRST_CANT",
+    "CATEGORY_TM_FIRST_BP",
+    "CATEGORY_TM_SECOND_KIND",
+    "CATEGORY_TM_SECOND_SPECIES",
+    "CATEGORY_TM_SECOND_ACTION",
+    "CATEGORY_TM_SECOND_DEFENDER",
+    "CATEGORY_TM_SECOND_OUTCOME",
+    "CATEGORY_TM_SECOND_EFFECTIVENESS",
+    "CATEGORY_TM_SECOND_SIDE_EFFECT",
+    "CATEGORY_TM_SECOND_CANT",
+    "CATEGORY_TM_SECOND_BP"
+   ],
+   "census_boundaries": {
+    "v2/v2.1": 39,
+    "v2.2": 51
+   }
+  },
+  "category_vocab": {
+   "built_with_include_turn_merged": true,
+   "tokens": 1216,
+   "oov_buckets": 16,
+   "total_rows": 1233,
+   "padding_row": 0
+  },
+  "attention_mask_at_boundary": {
+   "attended_total": 41,
+   "field": true,
+   "self_pokemon_attended": 6,
+   "opponent_pokemon_attended": 6,
+   "action_candidates_attended": 9,
+   "stats_attended": 1,
+   "transition_attended": 18,
+   "transition_padded": 110,
+   "transition_token_budget_K": 128
+  },
+  "k_budget_unit_note": "masks.transition_token_budget counts TOKENS in every schema, but a v2.2 token covers a WHOLE turn/lead/replacement phase \u2014 the v2/v2.1 K=64 horizon (~32 turns) is budget=32 under v2.2; an unchanged K roughly doubles the temporal horizon. Here: 15 completed turns => 18 merged tokens vs 35 per-action tokens.",
+  "turn_merged_phase_census": {
+   "lead": 1,
+   "turn": 15,
+   "replacement": 2
+  },
+  "per_action_token_count_same_boundary": 35,
+  "legal_action_mask": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   false
+  ],
+  "populated_transition_token_indices": "23..40"
+ },
+ "masks": {
+  "feature_masks": {
+   "stats_block": true,
+   "exact_state": true,
+   "transition_token_budget": 128,
+   "tier2_residuals": true,
+   "tier2_investment": true
+  },
+  "live_feature_blocks": {
+   "stats_block": true,
+   "exact_state_layer": true,
+   "tier2_residual_gate": true,
+   "tier2_investment_gate": true,
+   "tier2_carrying_sub_blocks_at_this_boundary": 0,
+   "tier2_note": "both tier2 gates are ON but this is the Tier-1 replay-extraction path (normalize_for_player without a tier2/investment annotation pass), so no sub-block carries Tier-2 fields and every residual/validity/CB/investment column \u2014 first sub-block (117-120), second sub-block (TM2 148-150, 152) and the per-mon pinned pair (138-139) \u2014 reads 0.0. Live envs populate them via Tier2LiveTracker.annotate + the #513 investment tracker feeding annotate_turn_merged_tokens.",
+   "belief_candidate_sets": true
+  },
+  "belief_set_source": {
+   "env": {
+    "POKEZERO_BELIEF_SET_SOURCE": "1"
+   },
+   "format_id": "gen3randombattle",
+   "source_hash": "e648ed6a6fbf7c78",
+   "note": "set source attached to PublicBattleBeliefEngine exactly as in tests/test_corpus_replay.py; POKEZERO_BELIEF_SET_SOURCE is the env-level flip the harness paths use for the same switch"
+  },
+  "dual_schema_story": {
+   "current_default": "pokezero.observation.v2.1 (v2.2 is the batch-3 ablation arm, deliberately not the default)",
+   "v2": "151 tokens x 121 numeric x 39 categorical; per-action transition tokens; accepts pre-#509 checkpoints and stays byte-identical to the pre-v2.1 encoder (119-column relic family floors lower by design)",
+   "v2.1": "151 tokens x 140 numeric x 39 categorical; adds defender identity on move transition rows, per-bucket revealed-move PP-validity bits, substitute HP fraction, per-mon pinned Tier-2 CB/investment surface",
+   "v2.2": "151 tokens x 153 numeric x 51 categorical; every v2.1 block carried forward; transition surface swapped to turn-merged tokens (this dump)",
+   "resolution": "which schema an env/harness encodes resolves from the loaded checkpoint's stamped model_config (feature_masks_from_model_config / env_config_with_checkpoint_masks latch family); DEFAULT_REPLAY_OBSERVATION_SPEC only covers checkpoint-free encodes. All three schemas pass require_current_observation_schema; v1/unversioned artifacts refuse with replay-from-pinned-tag guidance."
+  }
+ },
+ "tokens": [
+  {
+   "index": 0,
+   "section": "field",
+   "token_type_id": 0,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 496,
+     "token": "request_kind:move"
+    },
+    "CATEGORY_ROLE": {
+     "id": 230,
+     "token": "field"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_SELF_HAZARDS": 0.333333,
+    "NUMERIC_TURN_COUNT": 0.016
+   }
+  },
+  {
+   "index": 1,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 658,
+     "token": "species:regirock"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1172,
+     "token": "type:rock"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.876448,
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.8,
+    "NUMERIC_BASE_HP": 0.4,
+    "NUMERIC_BASE_ATK": 0.5,
+    "NUMERIC_BASE_DEF": 1.0,
+    "NUMERIC_BASE_SPA": 0.25,
+    "NUMERIC_BASE_SPD": 0.5,
+    "NUMERIC_BASE_SPE": 0.25,
+    "NUMERIC_ACTUAL_HP": 0.362745,
+    "NUMERIC_ACTUAL_ATK": 0.288515,
+    "NUMERIC_ACTUAL_DEF": 0.512605,
+    "NUMERIC_ACTUAL_SPA": 0.176471,
+    "NUMERIC_ACTUAL_SPD": 0.288515,
+    "NUMERIC_ACTUAL_SPE": 0.176471,
+    "NUMERIC_TURNS_ACTIVE": 0.015625
+   }
+  },
+  {
+   "index": 2,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 619,
+     "token": "species:mew"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1171,
+     "token": "type:psychic"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.72,
+    "NUMERIC_BASE_HP": 0.5,
+    "NUMERIC_BASE_ATK": 0.5,
+    "NUMERIC_BASE_DEF": 0.5,
+    "NUMERIC_BASE_SPA": 0.5,
+    "NUMERIC_BASE_SPD": 0.5,
+    "NUMERIC_BASE_SPE": 0.5,
+    "NUMERIC_ACTUAL_HP": 0.368347,
+    "NUMERIC_ACTUAL_ATK": 0.260504,
+    "NUMERIC_ACTUAL_DEF": 0.260504,
+    "NUMERIC_ACTUAL_SPA": 0.260504,
+    "NUMERIC_ACTUAL_SPD": 0.260504,
+    "NUMERIC_ACTUAL_SPE": 0.260504
+   }
+  },
+  {
+   "index": 3,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1166,
+     "token": "type:grass"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.981949,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.95,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.275,
+    "NUMERIC_BASE_DEF": 0.575,
+    "NUMERIC_BASE_SPA": 0.5,
+    "NUMERIC_BASE_SPD": 0.2,
+    "NUMERIC_BASE_SPE": 0.3,
+    "NUMERIC_ACTUAL_HP": 0.387955,
+    "NUMERIC_ACTUAL_ATK": 0.155462,
+    "NUMERIC_ACTUAL_DEF": 0.380952,
+    "NUMERIC_ACTUAL_SPA": 0.340336,
+    "NUMERIC_ACTUAL_SPD": 0.182073,
+    "NUMERIC_ACTUAL_SPE": 0.235294
+   }
+  },
+  {
+   "index": 4,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 556,
+     "token": "species:exploud"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1169,
+     "token": "type:normal"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.893417,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.86,
+    "NUMERIC_BASE_HP": 0.52,
+    "NUMERIC_BASE_ATK": 0.455,
+    "NUMERIC_BASE_DEF": 0.315,
+    "NUMERIC_BASE_SPA": 0.455,
+    "NUMERIC_BASE_SPD": 0.315,
+    "NUMERIC_BASE_SPE": 0.34,
+    "NUMERIC_ACTUAL_HP": 0.446779,
+    "NUMERIC_ACTUAL_ATK": 0.288515,
+    "NUMERIC_ACTUAL_DEF": 0.221289,
+    "NUMERIC_ACTUAL_SPA": 0.288515,
+    "NUMERIC_ACTUAL_SPD": 0.221289,
+    "NUMERIC_ACTUAL_SPE": 0.232493
+   }
+  },
+  {
+   "index": 5,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1169,
+     "token": "type:normal"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1164,
+     "token": "type:flying"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.87,
+    "NUMERIC_BASE_HP": 0.415,
+    "NUMERIC_BASE_ATK": 0.4,
+    "NUMERIC_BASE_DEF": 0.375,
+    "NUMERIC_BASE_SPA": 0.35,
+    "NUMERIC_BASE_SPD": 0.35,
+    "NUMERIC_BASE_SPE": 0.455,
+    "NUMERIC_ACTUAL_ATK": 0.264706,
+    "NUMERIC_ACTUAL_DEF": 0.252101,
+    "NUMERIC_ACTUAL_SPA": 0.239496,
+    "NUMERIC_ACTUAL_SPD": 0.239496,
+    "NUMERIC_ACTUAL_SPE": 0.291317
+   }
+  },
+  {
+   "index": 6,
+   "section": "self_pokemon",
+   "token_type_id": 1,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 494,
+     "token": "pokemon:self"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1167,
+     "token": "type:ground"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1164,
+     "token": "type:flying"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.83,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.375,
+    "NUMERIC_BASE_DEF": 0.525,
+    "NUMERIC_BASE_SPA": 0.175,
+    "NUMERIC_BASE_SPD": 0.325,
+    "NUMERIC_BASE_SPE": 0.425,
+    "NUMERIC_ACTUAL_ATK": 0.239496,
+    "NUMERIC_ACTUAL_DEF": 0.309524,
+    "NUMERIC_ACTUAL_SPA": 0.147059,
+    "NUMERIC_ACTUAL_SPD": 0.217087,
+    "NUMERIC_ACTUAL_SPE": 0.264706
+   }
+  },
+  {
+   "index": 7,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 643,
+     "token": "species:piloswine"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1168,
+     "token": "type:ice"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1167,
+     "token": "type:ground"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 38,
+     "token": "belief:possible_ability:oblivious"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 75,
+     "token": "belief:possible_item:choiceband"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 104,
+     "token": "belief:possible_move:doubleedge"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 108,
+     "token": "belief:possible_move:earthquake"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 140,
+     "token": "belief:possible_move:icebeam"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 176,
+     "token": "belief:possible_move:rockslide"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.493671,
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_REVEALED_MOVE_COUNT": 2.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 1.0,
+    "NUMERIC_UNCERTAINTY": 0.333333,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 4.0,
+    "NUMERIC_LEVEL": 0.87,
+    "NUMERIC_BASE_HP": 0.5,
+    "NUMERIC_BASE_ATK": 0.5,
+    "NUMERIC_BASE_DEF": 0.4,
+    "NUMERIC_BASE_SPA": 0.3,
+    "NUMERIC_BASE_SPD": 0.3,
+    "NUMERIC_BASE_SPE": 0.25,
+    "NUMERIC_TURNS_ACTIVE": 0.015625,
+    "NUMERIC_MON_STAYED_AND_ATTACKED": 0.03125,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.09375,
+    "NUMERIC_EXPECTED_HP": 0.442577,
+    "NUMERIC_EXPECTED_HP_LOW": 0.442577,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.442577,
+    "NUMERIC_EXPECTED_ATK": 0.313725,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.313725,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.313725,
+    "NUMERIC_EXPECTED_DEF": 0.264706,
+    "NUMERIC_EXPECTED_SPA": 0.215686,
+    "NUMERIC_EXPECTED_SPD": 0.215686,
+    "NUMERIC_EXPECTED_SPE": 0.191877,
+    "NUMERIC_OPP_MOVE_PP_OFFSET": 0.916667,
+    "NUMERIC_OPP_MOVE_PP_OFFSET+1": 0.9375,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET": 1.0,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+1": 1.0
+   }
+  },
+  {
+   "index": 8,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 588,
+     "token": "species:jumpluff"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1166,
+     "token": "type:grass"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1164,
+     "token": "type:flying"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 8,
+     "token": "belief:possible_ability:chlorophyll"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 109,
+     "token": "belief:possible_move:encore"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 129,
+     "token": "belief:possible_move:hiddenpowerflying"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 145,
+     "token": "belief:possible_move:leechseed"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 161,
+     "token": "belief:possible_move:protect"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+4": {
+     "id": 185,
+     "token": "belief:possible_move:sleeppowder"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+5": {
+     "id": 196,
+     "token": "belief:possible_move:substitute"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+6": {
+     "id": 201,
+     "token": "belief:possible_move:synthesis"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+7": {
+     "id": 207,
+     "token": "belief:possible_move:toxic"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 5.0,
+    "NUMERIC_UNCERTAINTY": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 8.0,
+    "NUMERIC_LEVEL": 0.87,
+    "NUMERIC_BASE_HP": 0.375,
+    "NUMERIC_BASE_ATK": 0.275,
+    "NUMERIC_BASE_DEF": 0.35,
+    "NUMERIC_BASE_SPA": 0.275,
+    "NUMERIC_BASE_SPD": 0.425,
+    "NUMERIC_BASE_SPE": 0.55,
+    "NUMERIC_MON_SWITCHED_BEFORE_ATTACK": 0.015625,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.015625,
+    "NUMERIC_EXPECTED_HP": 0.380952,
+    "NUMERIC_EXPECTED_HP_LOW": 0.380952,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.380952,
+    "NUMERIC_EXPECTED_ATK": 0.203081,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.203081,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.203081,
+    "NUMERIC_EXPECTED_DEF": 0.240896,
+    "NUMERIC_EXPECTED_SPA": 0.203081,
+    "NUMERIC_EXPECTED_SPD": 0.277311,
+    "NUMERIC_EXPECTED_SPE": 0.337535
+   }
+  },
+  {
+   "index": 9,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 718,
+     "token": "species:weezing"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1170,
+     "token": "type:poison"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 30,
+     "token": "belief:possible_ability:levitate"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 111,
+     "token": "belief:possible_move:explosion"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 114,
+     "token": "belief:possible_move:fireblast"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 120,
+     "token": "belief:possible_move:haze"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 187,
+     "token": "belief:possible_move:sludgebomb"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+4": {
+     "id": 207,
+     "token": "belief:possible_move:toxic"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+5": {
+     "id": 212,
+     "token": "belief:possible_move:willowisp"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_REVEALED_MOVE_COUNT": 1.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 6.0,
+    "NUMERIC_UNCERTAINTY": 0.428571,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 6.0,
+    "NUMERIC_LEVEL": 0.81,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.45,
+    "NUMERIC_BASE_DEF": 0.6,
+    "NUMERIC_BASE_SPA": 0.425,
+    "NUMERIC_BASE_SPD": 0.35,
+    "NUMERIC_BASE_SPE": 0.3,
+    "NUMERIC_MON_STAYED_AND_ATTACKED": 0.015625,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.015625,
+    "NUMERIC_EXPECTED_HP": 0.333333,
+    "NUMERIC_EXPECTED_HP_LOW": 0.333333,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.333333,
+    "NUMERIC_EXPECTED_ATK": 0.268908,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.268908,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.268908,
+    "NUMERIC_EXPECTED_DEF": 0.337535,
+    "NUMERIC_EXPECTED_SPA": 0.257703,
+    "NUMERIC_EXPECTED_SPD": 0.22409,
+    "NUMERIC_EXPECTED_SPE": 0.201681,
+    "NUMERIC_OPP_MOVE_PP_OFFSET": 0.875,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET": 1.0
+   }
+  },
+  {
+   "index": 10,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 619,
+     "token": "species:mew"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1171,
+     "token": "type:psychic"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 64,
+     "token": "belief:possible_ability:synchronize"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 108,
+     "token": "belief:possible_move:earthquake"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 111,
+     "token": "belief:possible_move:explosion"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 176,
+     "token": "belief:possible_move:rockslide"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 188,
+     "token": "belief:possible_move:softboiled"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+4": {
+     "id": 200,
+     "token": "belief:possible_move:swordsdance"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_REVEALED_MOVE_COUNT": 2.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 3.0,
+    "NUMERIC_UNCERTAINTY": 0.15,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 5.0,
+    "NUMERIC_LEVEL": 0.72,
+    "NUMERIC_BASE_HP": 0.5,
+    "NUMERIC_BASE_ATK": 0.5,
+    "NUMERIC_BASE_DEF": 0.5,
+    "NUMERIC_BASE_SPA": 0.5,
+    "NUMERIC_BASE_SPD": 0.5,
+    "NUMERIC_BASE_SPE": 0.5,
+    "NUMERIC_MON_STAYED_AND_ATTACKED": 0.015625,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.046875,
+    "NUMERIC_EXPECTED_HP": 0.368347,
+    "NUMERIC_EXPECTED_HP_LOW": 0.368347,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.368347,
+    "NUMERIC_EXPECTED_ATK": 0.260504,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.260504,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.260504,
+    "NUMERIC_EXPECTED_DEF": 0.260504,
+    "NUMERIC_EXPECTED_SPA": 0.260504,
+    "NUMERIC_EXPECTED_SPD": 0.260504,
+    "NUMERIC_EXPECTED_SPE": 0.260504,
+    "NUMERIC_OPP_MOVE_PP_OFFSET+2": 0.9375,
+    "NUMERIC_OPP_MOVE_PP_OFFSET+3": 0.9375,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+2": 1.0,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+3": 1.0
+   }
+  },
+  {
+   "index": 11,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 585,
+     "token": "species:illumise"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1158,
+     "token": "type:bug"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 38,
+     "token": "belief:possible_ability:oblivious"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 109,
+     "token": "belief:possible_move:encore"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 154,
+     "token": "belief:possible_move:moonlight"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 178,
+     "token": "belief:possible_move:seismictoss"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 206,
+     "token": "belief:possible_move:thunderwave"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+4": {
+     "id": 207,
+     "token": "belief:possible_move:toxic"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 2.0,
+    "NUMERIC_UNCERTAINTY": 1.0,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 5.0,
+    "NUMERIC_LEVEL": 0.92,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.235,
+    "NUMERIC_BASE_DEF": 0.275,
+    "NUMERIC_BASE_SPA": 0.365,
+    "NUMERIC_BASE_SPD": 0.375,
+    "NUMERIC_BASE_SPE": 0.425,
+    "NUMERIC_MON_SWITCHED_BEFORE_ATTACK": 0.03125,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.03125,
+    "NUMERIC_EXPECTED_HP": 0.376751,
+    "NUMERIC_EXPECTED_HP_LOW": 0.376751,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.376751,
+    "NUMERIC_EXPECTED_ATK": 0.194678,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.127451,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.127451,
+    "NUMERIC_EXPECTED_DEF": 0.215686,
+    "NUMERIC_EXPECTED_SPA": 0.261905,
+    "NUMERIC_EXPECTED_SPD": 0.266106,
+    "NUMERIC_EXPECTED_SPE": 0.292717
+   }
+  },
+  {
+   "index": 12,
+   "section": "opponent_pokemon",
+   "token_type_id": 2,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 531,
+     "token": "species:cloyster"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 730,
+     "token": "status:none"
+    },
+    "CATEGORY_ROLE": {
+     "id": 493,
+     "token": "pokemon:opponent"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1174,
+     "token": "type:water"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1168,
+     "token": "type:ice"
+    },
+    "CATEGORY_BELIEF_ABILITY_OFFSET": {
+     "id": 54,
+     "token": "belief:possible_ability:shellarmor"
+    },
+    "CATEGORY_BELIEF_ITEM_OFFSET": {
+     "id": 76,
+     "token": "belief:possible_item:leftovers"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET": {
+     "id": 111,
+     "token": "belief:possible_move:explosion"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+1": {
+     "id": 140,
+     "token": "belief:possible_move:icebeam"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+2": {
+     "id": 167,
+     "token": "belief:possible_move:rapidspin"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+3": {
+     "id": 191,
+     "token": "belief:possible_move:spikes"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+4": {
+     "id": 199,
+     "token": "belief:possible_move:surf"
+    },
+    "CATEGORY_BELIEF_MOVE_OFFSET+5": {
+     "id": 207,
+     "token": "belief:possible_move:toxic"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.939815,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_REVEALED_MOVE_COUNT": 2.0,
+    "NUMERIC_CANDIDATE_SET_COUNT": 3.0,
+    "NUMERIC_UNCERTAINTY": 0.3,
+    "NUMERIC_POSSIBLE_ABILITY_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_ITEM_COUNT": 1.0,
+    "NUMERIC_POSSIBLE_MOVE_COUNT": 6.0,
+    "NUMERIC_REVEALED_ITEM": 1.0,
+    "NUMERIC_LEVEL": 0.82,
+    "NUMERIC_BASE_HP": 0.25,
+    "NUMERIC_BASE_ATK": 0.475,
+    "NUMERIC_BASE_DEF": 0.9,
+    "NUMERIC_BASE_SPA": 0.425,
+    "NUMERIC_BASE_SPD": 0.225,
+    "NUMERIC_BASE_SPE": 0.35,
+    "NUMERIC_MON_STAYED_AND_ATTACKED": 0.015625,
+    "NUMERIC_MON_TURNS_ACTIVE_TOTAL": 0.046875,
+    "NUMERIC_EXPECTED_HP": 0.302521,
+    "NUMERIC_EXPECTED_HP_LOW": 0.302521,
+    "NUMERIC_EXPECTED_HP_HIGH": 0.302521,
+    "NUMERIC_EXPECTED_ATK": 0.284314,
+    "NUMERIC_EXPECTED_ATK_LOW": 0.22409,
+    "NUMERIC_EXPECTED_ATK_HIGH": 0.284314,
+    "NUMERIC_EXPECTED_DEF": 0.478992,
+    "NUMERIC_EXPECTED_SPA": 0.261905,
+    "NUMERIC_EXPECTED_SPD": 0.169468,
+    "NUMERIC_EXPECTED_SPE": 0.226891,
+    "NUMERIC_OPP_MOVE_PP_OFFSET+3": 0.96875,
+    "NUMERIC_OPP_MOVE_PP_OFFSET+5": 0.9375,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+3": 1.0,
+    "NUMERIC_OPP_MOVE_PP_VALID_OFFSET+5": 1.0
+   }
+  },
+  {
+   "index": 13,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 378,
+     "token": "move:rockslide"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 2,
+     "token": "action:move"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 489,
+     "token": "move_slot:1"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1172,
+     "token": "type:rock"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 445,
+     "token": "move_category:physical"
+    },
+    "CATEGORY_MOVE_EFFECT": {
+     "id": 455,
+     "token": "move_effect:flinch"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 485,
+     "token": "move_priority:0"
+    }
+   },
+   "numerics": {
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_BASE_POWER": 0.375,
+    "NUMERIC_ACCURACY": 0.9,
+    "NUMERIC_MOVE_PP_FRACTION": 1.0,
+    "NUMERIC_EFFECT_CHANCE": 0.3
+   },
+   "slot": "move_slot:1"
+  },
+  {
+   "index": 14,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 398,
+     "token": "move:sleeptalk"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 2,
+     "token": "action:move"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 490,
+     "token": "move_slot:2"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1169,
+     "token": "type:normal"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 447,
+     "token": "move_category:status"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 485,
+     "token": "move_priority:0"
+    }
+   },
+   "numerics": {
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_ACCURACY": 1.0,
+    "NUMERIC_MOVE_PP_FRACTION": 1.0
+   },
+   "slot": "move_slot:2"
+  },
+  {
+   "index": 15,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 373,
+     "token": "move:rest"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 2,
+     "token": "action:move"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 491,
+     "token": "move_slot:3"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1171,
+     "token": "type:psychic"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 447,
+     "token": "move_category:status"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 485,
+     "token": "move_priority:0"
+    }
+   },
+   "numerics": {
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_ACCURACY": 1.0,
+    "NUMERIC_MOVE_PP_FRACTION": 1.0
+   },
+   "slot": "move_slot:3"
+  },
+  {
+   "index": 16,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 264,
+     "token": "move:earthquake"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 2,
+     "token": "action:move"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 492,
+     "token": "move_slot:4"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1167,
+     "token": "type:ground"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 445,
+     "token": "move_category:physical"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 485,
+     "token": "move_priority:0"
+    }
+   },
+   "numerics": {
+    "NUMERIC_ACTIVE": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_BASE_POWER": 0.5,
+    "NUMERIC_ACCURACY": 1.0,
+    "NUMERIC_MOVE_PP_FRACTION": 1.0
+   },
+   "slot": "move_slot:4"
+  },
+  {
+   "index": 17,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 619,
+     "token": "species:mew"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 3,
+     "token": "action:switch"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 735,
+     "token": "switch_slot:1"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1171,
+     "token": "type:psychic"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 1.0,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.72,
+    "NUMERIC_BASE_HP": 0.5,
+    "NUMERIC_BASE_ATK": 0.5,
+    "NUMERIC_BASE_DEF": 0.5,
+    "NUMERIC_BASE_SPA": 0.5,
+    "NUMERIC_BASE_SPD": 0.5,
+    "NUMERIC_BASE_SPE": 0.5,
+    "NUMERIC_ACTUAL_HP": 0.368347,
+    "NUMERIC_ACTUAL_ATK": 0.260504,
+    "NUMERIC_ACTUAL_DEF": 0.260504,
+    "NUMERIC_ACTUAL_SPA": 0.260504,
+    "NUMERIC_ACTUAL_SPD": 0.260504,
+    "NUMERIC_ACTUAL_SPE": 0.260504
+   },
+   "slot": "switch_slot:1"
+  },
+  {
+   "index": 18,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 3,
+     "token": "action:switch"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 736,
+     "token": "switch_slot:2"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1166,
+     "token": "type:grass"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.981949,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.95,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.275,
+    "NUMERIC_BASE_DEF": 0.575,
+    "NUMERIC_BASE_SPA": 0.5,
+    "NUMERIC_BASE_SPD": 0.2,
+    "NUMERIC_BASE_SPE": 0.3,
+    "NUMERIC_ACTUAL_HP": 0.387955,
+    "NUMERIC_ACTUAL_ATK": 0.155462,
+    "NUMERIC_ACTUAL_DEF": 0.380952,
+    "NUMERIC_ACTUAL_SPA": 0.340336,
+    "NUMERIC_ACTUAL_SPD": 0.182073,
+    "NUMERIC_ACTUAL_SPE": 0.235294
+   },
+   "slot": "switch_slot:2"
+  },
+  {
+   "index": 19,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 556,
+     "token": "species:exploud"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 3,
+     "token": "action:switch"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 737,
+     "token": "switch_slot:3"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1169,
+     "token": "type:normal"
+    }
+   },
+   "numerics": {
+    "NUMERIC_HP_FRACTION": 0.893417,
+    "NUMERIC_LEGAL": 1.0,
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.86,
+    "NUMERIC_BASE_HP": 0.52,
+    "NUMERIC_BASE_ATK": 0.455,
+    "NUMERIC_BASE_DEF": 0.315,
+    "NUMERIC_BASE_SPA": 0.455,
+    "NUMERIC_BASE_SPD": 0.315,
+    "NUMERIC_BASE_SPE": 0.34,
+    "NUMERIC_ACTUAL_HP": 0.446779,
+    "NUMERIC_ACTUAL_ATK": 0.288515,
+    "NUMERIC_ACTUAL_DEF": 0.221289,
+    "NUMERIC_ACTUAL_SPA": 0.288515,
+    "NUMERIC_ACTUAL_SPD": 0.221289,
+    "NUMERIC_ACTUAL_SPE": 0.232493
+   },
+   "slot": "switch_slot:3"
+  },
+  {
+   "index": 20,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 3,
+     "token": "action:switch"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 738,
+     "token": "switch_slot:4"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1169,
+     "token": "type:normal"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1164,
+     "token": "type:flying"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.87,
+    "NUMERIC_BASE_HP": 0.415,
+    "NUMERIC_BASE_ATK": 0.4,
+    "NUMERIC_BASE_DEF": 0.375,
+    "NUMERIC_BASE_SPA": 0.35,
+    "NUMERIC_BASE_SPD": 0.35,
+    "NUMERIC_BASE_SPE": 0.455,
+    "NUMERIC_ACTUAL_ATK": 0.264706,
+    "NUMERIC_ACTUAL_DEF": 0.252101,
+    "NUMERIC_ACTUAL_SPA": 0.239496,
+    "NUMERIC_ACTUAL_SPD": 0.239496,
+    "NUMERIC_ACTUAL_SPE": 0.291317
+   },
+   "slot": "switch_slot:4"
+  },
+  {
+   "index": 21,
+   "section": "action_candidate",
+   "token_type_id": 3,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 3,
+     "token": "action:switch"
+    },
+    "CATEGORY_ROLE": {
+     "id": 1,
+     "token": "action"
+    },
+    "CATEGORY_SLOT": {
+     "id": 739,
+     "token": "switch_slot:5"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1167,
+     "token": "type:ground"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1164,
+     "token": "type:flying"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_LEVEL": 0.83,
+    "NUMERIC_BASE_HP": 0.325,
+    "NUMERIC_BASE_ATK": 0.375,
+    "NUMERIC_BASE_DEF": 0.525,
+    "NUMERIC_BASE_SPA": 0.175,
+    "NUMERIC_BASE_SPD": 0.325,
+    "NUMERIC_BASE_SPE": 0.425,
+    "NUMERIC_ACTUAL_ATK": 0.239496,
+    "NUMERIC_ACTUAL_DEF": 0.309524,
+    "NUMERIC_ACTUAL_SPA": 0.147059,
+    "NUMERIC_ACTUAL_SPD": 0.217087,
+    "NUMERIC_ACTUAL_SPE": 0.264706
+   },
+   "slot": "switch_slot:5"
+  },
+  {
+   "index": 22,
+   "section": "stats",
+   "token_type_id": 5,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_ROLE": {
+     "id": 726,
+     "token": "stats"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_STAT_OPP_SWITCH_COUNT": 0.109375,
+    "NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES": 0.234375,
+    "NUMERIC_STAT_MY_SWITCH_TURNS": 0.15625
+   }
+  },
+  {
+   "index": 23,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1145,
+     "token": "tt_phase:lead"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_TURNS_AGO": 0.25,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:lead",
+   "decoded_turn_merged_token": {
+    "turn": 0,
+    "phase": "lead",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "switch",
+     "action": "Pidgeot",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "switch",
+     "action": "Piloswine",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 24,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 418,
+     "token": "move:substitute"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1143,
+     "token": "tt_outcome:normal"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1131,
+     "token": "tt_effectiveness:neutral"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 1154,
+     "token": "tt_side_effect:none"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1135,
+     "token": "tt_kind:move"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 779,
+     "token": "tt2_move:doubleedge"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 893,
+     "token": "tt2_outcome:broke-sub"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_DAMAGE_FRACTION": 0.25,
+    "NUMERIC_TT_N_HITS": 0.2,
+    "NUMERIC_TT_ABS_TURN": 0.001,
+    "NUMERIC_TT_TURNS_AGO": 0.234375,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 1,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "substitute",
+     "damage_fraction": 0.25,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Pidgeot"
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "move",
+     "action": "doubleedge",
+     "damage_fraction": 0.0,
+     "damage_outcome": "broke-sub",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Pidgeot"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 25,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 779,
+     "token": "tt2_move:doubleedge"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 974,
+     "token": "tt2_species:gligar"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.002,
+    "NUMERIC_TT_TURNS_AGO": 0.21875,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.485597,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 2,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Gligar",
+     "kind": "switch",
+     "action": "Gligar",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "move",
+     "action": "doubleedge",
+     "damage_fraction": 0.485597,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Gligar"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 26,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 588,
+     "token": "species:jumpluff"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 588,
+     "token": "species:jumpluff"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 974,
+     "token": "tt2_species:gligar"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 783,
+     "token": "tt2_move:earthquake"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 994,
+     "token": "tt2_species:jumpluff"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 896,
+     "token": "tt2_outcome:immune"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 756,
+     "token": "tt2_effectiveness:immune"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.003,
+    "NUMERIC_TT_TURNS_AGO": 0.203125,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 3,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Jumpluff",
+     "kind": "switch",
+     "action": "Jumpluff",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Gligar",
+     "kind": "move",
+     "action": "earthquake",
+     "damage_fraction": 0.0,
+     "damage_outcome": "immune",
+     "effectiveness": "immune",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Jumpluff"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 27,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 643,
+     "token": "species:piloswine"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 643,
+     "token": "species:piloswine"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 962,
+     "token": "tt2_species:exploud"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 962,
+     "token": "tt2_species:exploud"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.004,
+    "NUMERIC_TT_TURNS_AGO": 0.1875,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 4,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "switch",
+     "action": "Piloswine",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Exploud",
+     "kind": "switch",
+     "action": "Exploud",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 28,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 783,
+     "token": "tt2_move:earthquake"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1099,
+     "token": "tt2_species:tangela"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 758,
+     "token": "tt2_effectiveness:resisted"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.005,
+    "NUMERIC_TT_TURNS_AGO": 0.171875,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.202166,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 5,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Tangela",
+     "kind": "switch",
+     "action": "Tangela",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "move",
+     "action": "earthquake",
+     "damage_fraction": 0.202166,
+     "damage_outcome": "normal",
+     "effectiveness": "resisted",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Tangela"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 29,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 658,
+     "token": "species:regirock"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 658,
+     "token": "species:regirock"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1119,
+     "token": "tt2_species:weezing"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 1119,
+     "token": "tt2_species:weezing"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.006,
+    "NUMERIC_TT_TURNS_AGO": 0.15625,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 6,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Regirock",
+     "kind": "switch",
+     "action": "Regirock",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Weezing",
+     "kind": "switch",
+     "action": "Weezing",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 30,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 568,
+     "token": "species:gligar"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1119,
+     "token": "tt2_species:weezing"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 786,
+     "token": "tt2_move:explosion"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 974,
+     "token": "tt2_species:gligar"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.007,
+    "NUMERIC_TT_TURNS_AGO": 0.140625,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.514403,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_CRIT": 1.0,
+    "NUMERIC_TM2_KO": 1.0,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 7,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Gligar",
+     "kind": "switch",
+     "action": "Gligar",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Weezing",
+     "kind": "move",
+     "action": "explosion",
+     "damage_fraction": 0.514403,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "crit": true,
+     "ko": true,
+     "defender_species": "Gligar"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 31,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 698,
+     "token": "species:tangela"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1146,
+     "token": "tt_phase:replacement"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1025,
+     "token": "tt2_species:mew"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 1025,
+     "token": "tt2_species:mew"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.007,
+    "NUMERIC_TT_TURNS_AGO": 0.140625,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:replacement",
+   "decoded_turn_merged_token": {
+    "turn": 7,
+    "phase": "replacement",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Tangela",
+     "kind": "switch",
+     "action": "Tangela",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Mew",
+     "kind": "switch",
+     "action": "Mew",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 32,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 619,
+     "token": "species:mew"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 619,
+     "token": "species:mew"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1025,
+     "token": "tt2_species:mew"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 863,
+     "token": "tt2_move:softboiled"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1025,
+     "token": "tt2_species:mew"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.008,
+    "NUMERIC_TT_TURNS_AGO": 0.125,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 8,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Mew",
+     "kind": "switch",
+     "action": "Mew",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Mew",
+     "kind": "move",
+     "action": "softboiled",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Mew"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 33,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 556,
+     "token": "species:exploud"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 556,
+     "token": "species:exploud"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1025,
+     "token": "tt2_species:mew"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 851,
+     "token": "tt2_move:rockslide"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 962,
+     "token": "tt2_species:exploud"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.009,
+    "NUMERIC_TT_TURNS_AGO": 0.109375,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.166144,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 9,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Exploud",
+     "kind": "switch",
+     "action": "Exploud",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Mew",
+     "kind": "move",
+     "action": "rockslide",
+     "damage_fraction": 0.166144,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Exploud"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 34,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 585,
+     "token": "species:illumise"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 585,
+     "token": "species:illumise"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1064,
+     "token": "tt2_species:regirock"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 1064,
+     "token": "tt2_species:regirock"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.01,
+    "NUMERIC_TT_TURNS_AGO": 0.09375,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 10,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Illumise",
+     "kind": "switch",
+     "action": "Illumise",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Regirock",
+     "kind": "switch",
+     "action": "Regirock",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 35,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 531,
+     "token": "species:cloyster"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 531,
+     "token": "species:cloyster"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 762,
+     "token": "tt2_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1099,
+     "token": "tt2_species:tangela"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 1099,
+     "token": "tt2_species:tangela"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.011,
+    "NUMERIC_TT_TURNS_AGO": 0.078125,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 11,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Cloyster",
+     "kind": "switch",
+     "action": "Cloyster",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Tangela",
+     "kind": "switch",
+     "action": "Tangela",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 36,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 937,
+     "token": "tt2_species:cloyster"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 882,
+     "token": "tt2_move:toxic"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 905,
+     "token": "tt2_side_effect:status-inflicted"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_ABS_TURN": 0.012,
+    "NUMERIC_TT_TURNS_AGO": 0.0625,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 12,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "switch",
+     "action": "Pidgeot",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Cloyster",
+     "kind": "move",
+     "action": "toxic",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "status-inflicted",
+     "n_hits": 1,
+     "defender_species": "Pidgeot"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 37,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 641,
+     "token": "species:pidgeot"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 299,
+     "token": "move:hiddenpower"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TYPE_1": {
+     "id": 1143,
+     "token": "tt_outcome:normal"
+    },
+    "CATEGORY_TYPE_2": {
+     "id": 1131,
+     "token": "tt_effectiveness:neutral"
+    },
+    "CATEGORY_MOVE_CATEGORY": {
+     "id": 1154,
+     "token": "tt_side_effect:none"
+    },
+    "CATEGORY_MOVE_PRIORITY": {
+     "id": 531,
+     "token": "species:cloyster"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1135,
+     "token": "tt_kind:move"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 937,
+     "token": "tt2_species:cloyster"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 866,
+     "token": "tt2_move:spikes"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 902,
+     "token": "tt2_side_effect:hazard-set"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_DAMAGE_FRACTION": 0.12037,
+    "NUMERIC_TT_N_HITS": 0.2,
+    "NUMERIC_TT_ABS_TURN": 0.013,
+    "NUMERIC_TT_TURNS_AGO": 0.046875,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 13,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "hiddenpower",
+     "damage_fraction": 0.12037,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Cloyster"
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Cloyster",
+     "kind": "move",
+     "action": "spikes",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "hazard-set",
+     "n_hits": 1,
+     "defender_species": "Pidgeot"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 38,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 585,
+     "token": "species:illumise"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 585,
+     "token": "species:illumise"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 871,
+     "token": "tt2_move:substitute"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_OWN_SPIKES": 0.333333,
+    "NUMERIC_TT_ABS_TURN": 0.014,
+    "NUMERIC_TT_TURNS_AGO": 0.03125,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.25,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 14,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Illumise",
+     "kind": "switch",
+     "action": "Illumise",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "substitute",
+     "damage_fraction": 0.25,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Pidgeot"
+    },
+    "context_trio": {
+     "own_spikes_layers": 1,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 39,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 643,
+     "token": "species:piloswine"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 643,
+     "token": "species:piloswine"
+    },
+    "CATEGORY_ROLE": {
+     "id": 740,
+     "token": "transition:opponent"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1147,
+     "token": "tt_phase:turn"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 761,
+     "token": "tt2_kind:move"
+    },
+    "CATEGORY_TM_SECOND_SPECIES": {
+     "id": 1047,
+     "token": "tt2_species:pidgeot"
+    },
+    "CATEGORY_TM_SECOND_ACTION": {
+     "id": 848,
+     "token": "tt2_move:return"
+    },
+    "CATEGORY_TM_SECOND_DEFENDER": {
+     "id": 1049,
+     "token": "tt2_species:piloswine"
+    },
+    "CATEGORY_TM_SECOND_OUTCOME": {
+     "id": 897,
+     "token": "tt2_outcome:normal"
+    },
+    "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+     "id": 757,
+     "token": "tt2_effectiveness:neutral"
+    },
+    "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+     "id": 904,
+     "token": "tt2_side_effect:none"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_OWN_SPIKES": 0.333333,
+    "NUMERIC_TT_ABS_TURN": 0.015,
+    "NUMERIC_TT_TURNS_AGO": 0.015625,
+    "NUMERIC_TM2_DAMAGE_FRACTION": 0.310127,
+    "NUMERIC_TM2_N_HITS": 0.2,
+    "NUMERIC_TM2_PRESENT": 1.0
+   },
+   "slot": "tt_phase:turn",
+   "decoded_turn_merged_token": {
+    "turn": 15,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "switch",
+     "action": "Piloswine",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "return",
+     "damage_fraction": 0.310127,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Piloswine"
+    },
+    "context_trio": {
+     "own_spikes_layers": 1,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  },
+  {
+   "index": 40,
+   "section": "transition",
+   "token_type_id": 6,
+   "attended": true,
+   "categoricals": {
+    "CATEGORY_PRIMARY": {
+     "id": 658,
+     "token": "species:regirock"
+    },
+    "CATEGORY_SECONDARY": {
+     "id": 658,
+     "token": "species:regirock"
+    },
+    "CATEGORY_ROLE": {
+     "id": 741,
+     "token": "transition:self"
+    },
+    "CATEGORY_SLOT": {
+     "id": 1146,
+     "token": "tt_phase:replacement"
+    },
+    "CATEGORY_TM_FIRST_KIND": {
+     "id": 1136,
+     "token": "tt_kind:switch"
+    },
+    "CATEGORY_TM_SECOND_KIND": {
+     "id": 1127,
+     "token": "tt2_status:absent"
+    }
+   },
+   "numerics": {
+    "NUMERIC_PRESENT": 1.0,
+    "NUMERIC_TT_OWN_SPIKES": 0.333333,
+    "NUMERIC_TT_ABS_TURN": 0.015,
+    "NUMERIC_TT_TURNS_AGO": 0.015625
+   },
+   "slot": "tt_phase:replacement",
+   "decoded_turn_merged_token": {
+    "turn": 15,
+    "phase": "replacement",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Regirock",
+     "kind": "switch",
+     "action": "Regirock",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "absent",
+     "actor_slot": "p2"
+    },
+    "context_trio": {
+     "own_spikes_layers": 1,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   }
+  }
+ ],
+ "line_to_token_examples": [
+  {
+   "note": "THE EXPLOSION TURN, as two tokens. Token one (this one, phase=turn): our declared Gligar switch executes first (sub-block A), then Weezing's Explosion crits the fresh Gligar for its full 125/243 and the ko bit lights (sub-block B, tt2_damage 0.514, tt2_crit, tt2_ko); Explosion's self-faint is move mechanics, not a KO outcome, so ONE ko bit for TWO faints. Both actives are now empty \u2014 the engine runs ONE forceSwitch cycle for both sides, which is the companion token below.",
+   "protocol_lines": [
+    "|turn|7",
+    "|switch|p1a: Gligar|Gligar, L83, F|125/243",
+    "|move|p2a: Weezing|Explosion|p1a: Gligar",
+    "|-crit|p1a: Gligar",
+    "|-damage|p1a: Gligar|0 fnt",
+    "|faint|p2a: Weezing",
+    "|faint|p1a: Gligar",
+    "|switch|p1a: Tangela|Tangela, L95, M|238/277",
+    "|switch|p2a: Mew|Mew, L72|263/263",
+    "|-heal|p1a: Tangela|255/277|[from] item: Leftovers"
+   ],
+   "transition_slot": 7,
+   "token_index": 30,
+   "decoded_fields": {
+    "turn": 7,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Gligar",
+     "kind": "switch",
+     "action": "Gligar",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Weezing",
+     "kind": "move",
+     "action": "explosion",
+     "damage_fraction": 0.514403,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "crit": true,
+     "ko": true,
+     "defender_species": "Gligar"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   },
+   "encoded_token": {
+    "index": 30,
+    "section": "transition",
+    "token_type_id": 6,
+    "attended": true,
+    "categoricals": {
+     "CATEGORY_PRIMARY": {
+      "id": 568,
+      "token": "species:gligar"
+     },
+     "CATEGORY_SECONDARY": {
+      "id": 568,
+      "token": "species:gligar"
+     },
+     "CATEGORY_ROLE": {
+      "id": 741,
+      "token": "transition:self"
+     },
+     "CATEGORY_SLOT": {
+      "id": 1147,
+      "token": "tt_phase:turn"
+     },
+     "CATEGORY_TM_FIRST_KIND": {
+      "id": 1136,
+      "token": "tt_kind:switch"
+     },
+     "CATEGORY_TM_SECOND_KIND": {
+      "id": 761,
+      "token": "tt2_kind:move"
+     },
+     "CATEGORY_TM_SECOND_SPECIES": {
+      "id": 1119,
+      "token": "tt2_species:weezing"
+     },
+     "CATEGORY_TM_SECOND_ACTION": {
+      "id": 786,
+      "token": "tt2_move:explosion"
+     },
+     "CATEGORY_TM_SECOND_DEFENDER": {
+      "id": 974,
+      "token": "tt2_species:gligar"
+     },
+     "CATEGORY_TM_SECOND_OUTCOME": {
+      "id": 897,
+      "token": "tt2_outcome:normal"
+     },
+     "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+      "id": 757,
+      "token": "tt2_effectiveness:neutral"
+     },
+     "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+      "id": 904,
+      "token": "tt2_side_effect:none"
+     }
+    },
+    "numerics": {
+     "NUMERIC_PRESENT": 1.0,
+     "NUMERIC_TT_ABS_TURN": 0.007,
+     "NUMERIC_TT_TURNS_AGO": 0.140625,
+     "NUMERIC_TM2_DAMAGE_FRACTION": 0.514403,
+     "NUMERIC_TM2_N_HITS": 0.2,
+     "NUMERIC_TM2_CRIT": 1.0,
+     "NUMERIC_TM2_KO": 1.0,
+     "NUMERIC_TM2_PRESENT": 1.0
+    },
+    "slot": "tt_phase:turn",
+    "decoded_turn_merged_token": {
+     "turn": 7,
+     "phase": "turn",
+     "first": {
+      "status": "action",
+      "actor_slot": "p1",
+      "actor_species": "Gligar",
+      "kind": "switch",
+      "action": "Gligar",
+      "damage_fraction": 0.0,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1
+     },
+     "second": {
+      "status": "action",
+      "actor_slot": "p2",
+      "actor_species": "Weezing",
+      "kind": "move",
+      "action": "explosion",
+      "damage_fraction": 0.514403,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1,
+      "crit": true,
+      "ko": true,
+      "defender_species": "Gligar"
+     },
+     "context_trio": {
+      "own_spikes_layers": 0,
+      "opp_spikes_layers": 0,
+      "weather": null
+     }
+    }
+   },
+   "companion_tokens": [
+    {
+     "transition_slot": 8,
+     "token_index": 31,
+     "decoded_fields": {
+      "turn": 7,
+      "phase": "replacement",
+      "first": {
+       "status": "action",
+       "actor_slot": "p1",
+       "actor_species": "Tangela",
+       "kind": "switch",
+       "action": "Tangela",
+       "damage_fraction": 0.0,
+       "damage_outcome": "normal",
+       "effectiveness": "neutral",
+       "side_effect": "none",
+       "n_hits": 1
+      },
+      "second": {
+       "status": "action",
+       "actor_slot": "p2",
+       "actor_species": "Mew",
+       "kind": "switch",
+       "action": "Mew",
+       "damage_fraction": 0.0,
+       "damage_outcome": "normal",
+       "effectiveness": "neutral",
+       "side_effect": "none",
+       "n_hits": 1
+      },
+      "context_trio": {
+       "own_spikes_layers": 0,
+       "opp_spikes_layers": 0,
+       "weather": null
+      }
+     },
+     "encoded_token": {
+      "index": 31,
+      "section": "transition",
+      "token_type_id": 6,
+      "attended": true,
+      "categoricals": {
+       "CATEGORY_PRIMARY": {
+        "id": 698,
+        "token": "species:tangela"
+       },
+       "CATEGORY_SECONDARY": {
+        "id": 698,
+        "token": "species:tangela"
+       },
+       "CATEGORY_ROLE": {
+        "id": 741,
+        "token": "transition:self"
+       },
+       "CATEGORY_SLOT": {
+        "id": 1146,
+        "token": "tt_phase:replacement"
+       },
+       "CATEGORY_TM_FIRST_KIND": {
+        "id": 1136,
+        "token": "tt_kind:switch"
+       },
+       "CATEGORY_TM_SECOND_KIND": {
+        "id": 762,
+        "token": "tt2_kind:switch"
+       },
+       "CATEGORY_TM_SECOND_SPECIES": {
+        "id": 1025,
+        "token": "tt2_species:mew"
+       },
+       "CATEGORY_TM_SECOND_ACTION": {
+        "id": 1025,
+        "token": "tt2_species:mew"
+       }
+      },
+      "numerics": {
+       "NUMERIC_PRESENT": 1.0,
+       "NUMERIC_TT_ABS_TURN": 0.007,
+       "NUMERIC_TT_TURNS_AGO": 0.140625,
+       "NUMERIC_TM2_PRESENT": 1.0
+      },
+      "slot": "tt_phase:replacement",
+      "decoded_turn_merged_token": {
+       "turn": 7,
+       "phase": "replacement",
+       "first": {
+        "status": "action",
+        "actor_slot": "p1",
+        "actor_species": "Tangela",
+        "kind": "switch",
+        "action": "Tangela",
+        "damage_fraction": 0.0,
+        "damage_outcome": "normal",
+        "effectiveness": "neutral",
+        "side_effect": "none",
+        "n_hits": 1
+       },
+       "second": {
+        "status": "action",
+        "actor_slot": "p2",
+        "actor_species": "Mew",
+        "kind": "switch",
+        "action": "Mew",
+        "damage_fraction": 0.0,
+        "damage_outcome": "normal",
+        "effectiveness": "neutral",
+        "side_effect": "none",
+        "n_hits": 1
+       },
+       "context_trio": {
+        "own_spikes_layers": 0,
+        "opp_spikes_layers": 0,
+        "weather": null
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "note": "Hazard context lit + a single replacement + an ABSENT half. Regirock replaces the poison-fainted Pidgeot: phase=replacement, first sub-block is the switch-in, and the second is ABSENT (tt2_status:absent \u2014 no second declaration EXPECTED; only one side was replacing, unlike the turn-7 cold pair). Cloyster's turn-13 Spikes shows as the context trio: NUMERIC_TT_OWN_SPIKES = 1/3 = 0.333333, captured as of this phase \u2014 the entry damage itself (227/259) belongs to the current-state Regirock token, not the history stream.",
+   "protocol_lines": [
+    "|faint|p1a: Pidgeot",
+    "|switch|p1a: Regirock|Regirock, L80|259/259",
+    "|-damage|p1a: Regirock|227/259|[from] Spikes"
+   ],
+   "transition_slot": 17,
+   "token_index": 40,
+   "decoded_fields": {
+    "turn": 15,
+    "phase": "replacement",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Regirock",
+     "kind": "switch",
+     "action": "Regirock",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "absent",
+     "actor_slot": "p2"
+    },
+    "context_trio": {
+     "own_spikes_layers": 1,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   },
+   "encoded_token": {
+    "index": 40,
+    "section": "transition",
+    "token_type_id": 6,
+    "attended": true,
+    "categoricals": {
+     "CATEGORY_PRIMARY": {
+      "id": 658,
+      "token": "species:regirock"
+     },
+     "CATEGORY_SECONDARY": {
+      "id": 658,
+      "token": "species:regirock"
+     },
+     "CATEGORY_ROLE": {
+      "id": 741,
+      "token": "transition:self"
+     },
+     "CATEGORY_SLOT": {
+      "id": 1146,
+      "token": "tt_phase:replacement"
+     },
+     "CATEGORY_TM_FIRST_KIND": {
+      "id": 1136,
+      "token": "tt_kind:switch"
+     },
+     "CATEGORY_TM_SECOND_KIND": {
+      "id": 1127,
+      "token": "tt2_status:absent"
+     }
+    },
+    "numerics": {
+     "NUMERIC_PRESENT": 1.0,
+     "NUMERIC_TT_OWN_SPIKES": 0.333333,
+     "NUMERIC_TT_ABS_TURN": 0.015,
+     "NUMERIC_TT_TURNS_AGO": 0.015625
+    },
+    "slot": "tt_phase:replacement",
+    "decoded_turn_merged_token": {
+     "turn": 15,
+     "phase": "replacement",
+     "first": {
+      "status": "action",
+      "actor_slot": "p1",
+      "actor_species": "Regirock",
+      "kind": "switch",
+      "action": "Regirock",
+      "damage_fraction": 0.0,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1
+     },
+     "second": {
+      "status": "absent",
+      "actor_slot": "p2"
+     },
+     "context_trio": {
+      "own_spikes_layers": 1,
+      "opp_spikes_layers": 0,
+      "weather": null
+     }
+    }
+   }
+  },
+  {
+   "note": "The Liechi-eat turn (no NEGATED/PENDING sub-block exists in this game before the boundary \u2014 every declared action executed \u2014 so this is the negative-space example). Piloswine's switch-in is sub-block A; our Return for 31% is sub-block B with tt2_species:Piloswine as defender. Pidgeot's Liechi eat, +1 Atk boost and poison faint all happen in the RESIDUAL phase: residuals are not actions, never form sub-blocks, and surface instead in current-state tokens (the belief item ledger; here on our own side, the request). The residual FAINT is what spawns the separate replacement token above; had Pidgeot instead fainted mid-turn BEFORE acting, Return would have been consumed traceless and encoded as tt2_status:negated \u2014 the consumption-proof rule.",
+   "protocol_lines": [
+    "|turn|15",
+    "|switch|p2a: Piloswine|Piloswine, L87, M|254/316",
+    "|move|p1a: Pidgeot|Return|p2a: Piloswine",
+    "|-damage|p2a: Piloswine|156/316",
+    "|-enditem|p1a: Pidgeot|Liechi Berry|[eat]",
+    "|-boost|p1a: Pidgeot|atk|1|[from] item: Liechi Berry",
+    "|-damage|p1a: Pidgeot|0 fnt|[from] psn",
+    "|faint|p1a: Pidgeot",
+    "|switch|p1a: Regirock|Regirock, L80|259/259",
+    "|-damage|p1a: Regirock|227/259|[from] Spikes"
+   ],
+   "transition_slot": 16,
+   "token_index": 39,
+   "decoded_fields": {
+    "turn": 15,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "switch",
+     "action": "Piloswine",
+     "damage_fraction": 0.0,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "return",
+     "damage_fraction": 0.310127,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "defender_species": "Piloswine"
+    },
+    "context_trio": {
+     "own_spikes_layers": 1,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   },
+   "encoded_token": {
+    "index": 39,
+    "section": "transition",
+    "token_type_id": 6,
+    "attended": true,
+    "categoricals": {
+     "CATEGORY_PRIMARY": {
+      "id": 643,
+      "token": "species:piloswine"
+     },
+     "CATEGORY_SECONDARY": {
+      "id": 643,
+      "token": "species:piloswine"
+     },
+     "CATEGORY_ROLE": {
+      "id": 740,
+      "token": "transition:opponent"
+     },
+     "CATEGORY_SLOT": {
+      "id": 1147,
+      "token": "tt_phase:turn"
+     },
+     "CATEGORY_TM_FIRST_KIND": {
+      "id": 1136,
+      "token": "tt_kind:switch"
+     },
+     "CATEGORY_TM_SECOND_KIND": {
+      "id": 761,
+      "token": "tt2_kind:move"
+     },
+     "CATEGORY_TM_SECOND_SPECIES": {
+      "id": 1047,
+      "token": "tt2_species:pidgeot"
+     },
+     "CATEGORY_TM_SECOND_ACTION": {
+      "id": 848,
+      "token": "tt2_move:return"
+     },
+     "CATEGORY_TM_SECOND_DEFENDER": {
+      "id": 1049,
+      "token": "tt2_species:piloswine"
+     },
+     "CATEGORY_TM_SECOND_OUTCOME": {
+      "id": 897,
+      "token": "tt2_outcome:normal"
+     },
+     "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+      "id": 757,
+      "token": "tt2_effectiveness:neutral"
+     },
+     "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+      "id": 904,
+      "token": "tt2_side_effect:none"
+     }
+    },
+    "numerics": {
+     "NUMERIC_PRESENT": 1.0,
+     "NUMERIC_TT_OWN_SPIKES": 0.333333,
+     "NUMERIC_TT_ABS_TURN": 0.015,
+     "NUMERIC_TT_TURNS_AGO": 0.015625,
+     "NUMERIC_TM2_DAMAGE_FRACTION": 0.310127,
+     "NUMERIC_TM2_N_HITS": 0.2,
+     "NUMERIC_TM2_PRESENT": 1.0
+    },
+    "slot": "tt_phase:turn",
+    "decoded_turn_merged_token": {
+     "turn": 15,
+     "phase": "turn",
+     "first": {
+      "status": "action",
+      "actor_slot": "p2",
+      "actor_species": "Piloswine",
+      "kind": "switch",
+      "action": "Piloswine",
+      "damage_fraction": 0.0,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1
+     },
+     "second": {
+      "status": "action",
+      "actor_slot": "p1",
+      "actor_species": "Pidgeot",
+      "kind": "move",
+      "action": "return",
+      "damage_fraction": 0.310127,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1,
+      "defender_species": "Piloswine"
+     },
+     "context_trio": {
+      "own_spikes_layers": 1,
+      "opp_spikes_layers": 0,
+      "weather": null
+     }
+    }
+   }
+  }
+ ],
+ "negated_or_pending_sub_blocks_in_game": [],
+ "extraction": {
+  "spec": "V2_2_REPLAY_OBSERVATION_SPEC (pokezero.observation.v2.2)",
+  "fixture_sha256_clean_log": "eed8ec4422a0ce2bc5f7d2ba2bd4d21c8f65805690b5f3bab2c3153406abc01e",
+  "replay_loop": "line-by-line parser.feed + incremental belief-engine ingest, identical to tests/test_corpus_replay.py; boundary snapshot right after feeding the p1 |request| that follows the |turn|16 line; normalize_for_player(include_turn_merged=True)",
+  "boundary_request_provenance": "the committed fixture log carries the REAL |request| line at every decision (unlike the capture-corpus games the v2 doc used), so the boundary request is the exact server payload \u2014 no reconstruction",
+  "populated_turn_merged_tokens": 18,
+  "per_action_tokens_same_fold": 35,
+  "zero_oov": true,
+  "determinism": "belief candidate lists sorted, floats rounded to 6 places, no commit/clock stamps \u2014 tests/test_token_format_doc.py regenerates this dump and asserts byte-identity with the committed file"
+ }
+}
