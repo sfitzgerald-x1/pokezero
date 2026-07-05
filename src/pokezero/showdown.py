@@ -277,7 +277,11 @@ NUMERIC_OPP_MOVE_PP_VALID_OFFSET = 121  # ..136 (BELIEF_MOVE_BUCKET_COUNT column
 # column carries presence + the KNOWN INITIAL fraction: floor(maxhp/4)/maxhp exact for the
 # self side (max HP from the request), the 0.25 baseline for the opponent (max HP hidden;
 # floor error < 1%). 0.0 while no sub is up. Exact chip tracking can upgrade the value
-# in-place later without a spec break (same column, tighter semantics).
+# in-place later without a spec break (same column, tighter semantics). KNOWN LIMIT
+# (#512 review note): a Baton-Passed substitute reads 0.0 after the pass — the parser's
+# volatile tracker conservatively resets on every switch-in (pre-existing behavior,
+# shared with the categorical volatile:substitute column), so the passed sub disappears
+# from BOTH surfaces together; fixing that is a volatile-tracker change, not a column one.
 NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_COUNT  # 137
 # Opponent tokens — per-mon PERSISTENT Tier-2 conclusions (design ruling: persistent
 # conclusions belong on the OPP-MON token surface, the current-state belief channel, not
@@ -326,6 +330,20 @@ REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
     OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
 }
 DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
+# Encode-time census FLOOR per schema (#512 review, MED-LOW defense-in-depth): a spec
+# narrower than its schema's floor would make ``_set_numeric``'s bounds check silently
+# drop that schema's own columns — encoding an undeclared v2/v2.1 hybrid stamped with the
+# wider version (e.g. a v2.1@121 spec would emit v2 numerics + v2.1 defender identity
+# with no refusal anywhere, since 121 == the model's width). No shipped path builds such
+# a spec (from_dict width defaults are schema-keyed; fresh trains use the full census;
+# resume carries stamps), so the encoder refuses it outright. v2's floor is 119 — the
+# pre-CB/investment relic family whose narrowing is deliberate ("feed the model the
+# shape it was trained on") and whose dropped tail columns are all-zero under those
+# checkpoints' latched masks; v2.1 has NO narrowed family (born at the full census).
+_MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
+    OBSERVATION_SCHEMA_VERSION_V2: 119,
+    OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
+}
 
 
 def observation_spec_for_schema(schema_version: str) -> ObservationSpec:
@@ -899,6 +917,18 @@ def observation_from_player_state(
         raise ValueError(
             f"observation encode: unsupported spec schema {spec.schema_version!r}; supported "
             f"schemas are {supported}."
+        )
+    # Census floor (#512 review MED-LOW): refuse a spec narrower than its schema's own
+    # census rather than letting the bounds-checked writers silently drop the schema's
+    # columns and emit an undeclared hybrid stamped with the wider version.
+    census_floor = _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA[spec.schema_version]
+    if spec.numeric_feature_count < census_floor:
+        raise ValueError(
+            f"observation encode: spec schema {spec.schema_version!r} requires at least "
+            f"{census_floor} numeric columns, got {spec.numeric_feature_count}. A narrower "
+            "spec would silently bounds-drop this schema's own columns and encode an "
+            "undeclared hybrid stamped with the wider version; the 119-column relic family "
+            f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
         )
     schema_v2_1 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
     # Per-mon pinned Tier-2 CB conclusions (v2.1, NUMERIC_TIER2_CB_PINNED): derived from the

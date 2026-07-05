@@ -520,14 +520,14 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             defender = (_slot_from_ident(parts[4]) if len(parts) > 4 else None) or _other_side(side)
             # Defender identity (v2.1 token field): the extractor knows both actives at
             # declaration time. The occupant record carries the BASE species from the
-            # switch-in details (Transform identity rule, robust to nicknamed idents);
-            # the target ident is the fallback for logs whose lead switch predates the fold.
+            # switch-in details (Transform identity rule, robust to nicknamed idents).
+            # NO ident-derived fallback (#512 review): on a truncated log whose lead
+            # switch predates the fold, the target ident's tail is the NICKNAME, and a
+            # ``species:<nickname>`` label would land in the OOV bucket — an absent
+            # defender beats a nickname-shaped species. Unreachable on well-formed logs
+            # (leads always fold first; the corpus gate asserts full coverage there).
             defender_stay = occupant.get(defender)
-            defender_species = (
-                defender_stay.species
-                if defender_stay is not None
-                else (_species_from_ident(parts[4]) if len(parts) > 4 else None)
-            )
+            defender_species = defender_stay.species if defender_stay is not None else None
             own, opp, current_weather = context_trio()
             window = _Window(
                 event_index=index,
