@@ -104,9 +104,9 @@ ALLOW_NUMERIC: set[int] = {
     117, 118,    # TT_RESIDUAL / TT_RESIDUAL_VALID — structural BY DESIGN in Tier-1 corpora:
                  # populated only by pokezero.tier2 behind the #505 gate + tier2_residuals mask
     119,         # TT_CB_BIT — structural BY DESIGN in Tier-1 corpora (same channel as 117/118)
-    120,         # TT_INVESTMENT_BIT — structural BY DESIGN everywhere: a true always-zero
-                 # reserve held for the H3 defender-side/investment inference (carried
-                 # forward into the v2.1 census, still constant zero; batch 2 populates it)
+    120,         # TT_INVESTMENT_BIT — structural BY DESIGN in Tier-1 corpora: populated
+                 # only by pokezero.investment behind its gate + the tier2_investment
+                 # mask (default off until v2.1 training adopts the column)
     # ---- spec v2.1 allowances (12-seed sweep: validity bits 0..10 and SUB_HP_FRACTION
     # all cover; the deep buckets mirror the OPP_MOVE_PP allowances exactly). ----
     132, 133, 134,  # OPP_MOVE_PP_VALID[11..13] — situational (mirrors 87..89: needs a

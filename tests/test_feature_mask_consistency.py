@@ -850,6 +850,50 @@ class Tier2ProvenanceLatchTest(unittest.TestCase):
             )
 
 
+class InvestmentProvenanceLatchTest(unittest.TestCase):
+    """v2.1 batch 2: tier2_investment latches like tier2_residuals but with a FALSE
+    dataclass default too — no current training run consumes the column, so both a
+    missing payload field and a fresh config resolve to mask-OFF until v2.1 training
+    flips the default."""
+
+    def test_defaults_and_missing_field_resolve_off(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
+
+        config = TransformerPolicyConfig.compact_category(
+            category_vocab=("species:a",), category_oov_buckets=2
+        )
+        self.assertFalse(config.tier2_investment)  # default off even for new configs
+        payload = config.to_dict()
+        payload.pop("tier2_investment")  # a pre-investment checkpoint payload
+        legacy = TransformerPolicyConfig.from_dict(payload)
+        self.assertFalse(legacy.tier2_investment)
+        self.assertFalse(feature_masks_from_model_config(legacy).tier2_investment)
+
+    def test_explicit_value_round_trips_and_derives(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import TransformerPolicyConfig, feature_masks_from_model_config
+
+        for value in (True, False):
+            config = TransformerPolicyConfig.compact_category(
+                category_vocab=("species:a",), category_oov_buckets=2, tier2_investment=value
+            )
+            round_tripped = TransformerPolicyConfig.from_dict(config.to_dict())
+            self.assertEqual(round_tripped.tier2_investment, value)
+            self.assertEqual(
+                feature_masks_from_model_config(round_tripped).tier2_investment, value
+            )
+
+    def test_residuals_only_checkpoint_masks_investment_off(self) -> None:
+        # The separate-switch justification: a post-#505/pre-investment checkpoint
+        # latches residuals ON with investment OFF — inexpressible with one switch.
+        masks = ObservationFeatureMasks(tier2_residuals=True)
+        self.assertTrue(masks.tier2_residuals)
+        self.assertFalse(masks.tier2_investment)
+
+
 class TrainMaskFlagsTest(unittest.TestCase):
     """Controller-path parity (#502 gap): the mask flags exist on `neural_cli train`
     and `rollout_cli collect-selfplay-training-cache`, set fresh configs, and hard-fail
@@ -912,7 +956,10 @@ class TrainMaskFlagsTest(unittest.TestCase):
             exact_state_enabled=True,
             transition_token_budget=32,
             tier2_residuals=True,
+            tier2_investment=False,
         )
+        # No tier2_investment key on purpose: a pre-investment cache payload must
+        # resolve to investment-off and still match an investment-off model.
         matching = {
             "stats_block": True,
             "exact_state": True,
@@ -964,6 +1011,7 @@ class TrainMaskFlagsTest(unittest.TestCase):
                 "exact_state": True,
                 "transition_token_budget": 32,
                 "tier2_residuals": True,
+                "tier2_investment": False,
             },
         )
 

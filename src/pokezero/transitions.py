@@ -204,6 +204,12 @@ class TransitionToken:
     residual: Optional[float] = None
     residual_valid: bool = False
     cb_bit: bool = False
+    # Defender-side investment conclusion code for the STRUCK opponent mon as of this
+    # strike (populated only by pokezero.investment behind its own precision gate;
+    # always 0.0 from this module's Tier-1 extraction). Set on assessed OWN move
+    # tokens only — the mirror of ``cb_bit``'s placement. Codes: +/-1 HP investment
+    # full/trimmed, +/-0.5 defensive stat full/reduced.
+    investment: float = 0.0
 
 
 @dataclass(frozen=True)

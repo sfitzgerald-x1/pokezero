@@ -92,12 +92,20 @@ class ObservationFeatureMasks:
       by ``pokezero.tier2`` behind PR D's precision gate) write the reserved
       residual/validity slots. Tokens from the plain extraction path carry none, so the
       slots stay 0.0 either way for pipelines that never run the Tier-2 inference.
+    - ``tier2_investment``: whether tokens carrying defender-side investment conclusions
+      (populated by ``pokezero.investment`` behind ITS precision gate) write the reserved
+      investment slot. A SEPARATE switch from ``tier2_residuals`` because the provenance
+      differs: checkpoints trained after #505 but before the investment channel latched
+      residuals live while the investment column was constant zero — one switch could not
+      mask investment off for them without also darkening residuals. Default False until
+      v2.1 training adopts the column; pre-v2.1 pipelines encode byte-identically.
     """
 
     stats_block: bool = True
     exact_state: bool = True
     transition_token_budget: int = TRANSITION_TOKEN_COUNT
     tier2_residuals: bool = True
+    tier2_investment: bool = False
 
     def __post_init__(self) -> None:
         if not 0 < self.transition_token_budget <= TRANSITION_TOKEN_COUNT:
