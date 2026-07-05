@@ -5304,6 +5304,91 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(restored.value_calibration_transform.scale, 1.5)
         self.assertEqual(restored.value_calibration_transform.bias, -0.2)
 
+    def _build_atomic_checkpoint_fixture(self, policy_id: str) -> tuple[Any, TransformerTrainingResult]:
+        model_config = TransformerPolicyConfig.compact_category(
+            category_vocab=tuple(range(1, 17)),
+            category_oov_buckets=4,
+            policy_id=policy_id,
+            window_size=2,
+            token_type_vocab_size=8,
+            categorical_feature_count=1,
+            numeric_feature_count=1,
+            embedding_dim=16,
+            transformer_layers=1,
+            attention_heads=4,
+            feedforward_dim=32,
+            dropout=0.0,
+        )
+        model = EntityTokenTransformerPolicy(model_config)
+        result = TransformerTrainingResult(
+            model_config=model_config,
+            training_config=TransformerTrainingConfig(window_size=2),
+            epochs=(
+                TransformerEpochMetrics(
+                    epoch=1,
+                    examples=4,
+                    loss=0.5,
+                    policy_loss=0.3,
+                    policy_accuracy=0.6,
+                ),
+            ),
+        )
+        return model, result
+
+    def test_save_transformer_checkpoint_leaves_no_file_when_interrupted(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+        model, result = self._build_atomic_checkpoint_fixture("atomic-save-absent")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+
+            def _interrupted_save(_payload: Any, handle: Any, *args: Any, **kwargs: Any) -> None:
+                # Emulate a crash after some bytes have already reached the temp file.
+                handle.write(b"partial-checkpoint-bytes")
+                handle.flush()
+                raise RuntimeError("simulated interruption during torch.save")
+
+            with patch.object(torch, "save", side_effect=_interrupted_save):
+                with self.assertRaises(RuntimeError):
+                    save_transformer_checkpoint(checkpoint_path, model, result=result)
+
+            # The destination was never created, and the partial temp file was cleaned up:
+            # an interrupted write must never leave a corrupt file at the final path.
+            self.assertFalse(checkpoint_path.exists())
+            self.assertEqual(sorted(entry.name for entry in Path(temp_dir).iterdir()), [])
+
+    def test_save_transformer_checkpoint_preserves_previous_when_interrupted(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+        model, result = self._build_atomic_checkpoint_fixture("atomic-save-previous")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+
+            # A valid checkpoint already exists on disk from a prior successful save.
+            save_transformer_checkpoint(checkpoint_path, model, result=result)
+            original_bytes = checkpoint_path.read_bytes()
+
+            def _interrupted_save(_payload: Any, handle: Any, *args: Any, **kwargs: Any) -> None:
+                handle.write(b"partial-checkpoint-bytes")
+                handle.flush()
+                raise RuntimeError("simulated interruption during torch.save")
+
+            with patch.object(torch, "save", side_effect=_interrupted_save):
+                with self.assertRaises(RuntimeError):
+                    save_transformer_checkpoint(checkpoint_path, model, result=result)
+
+            # The prior checkpoint is byte-for-byte intact, still loads cleanly, and no
+            # partial temp file leaked into the directory.
+            self.assertEqual(checkpoint_path.read_bytes(), original_bytes)
+            _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+            self.assertEqual(restored.model_config.policy_id, "atomic-save-previous")
+            leftover = sorted(
+                entry.name for entry in Path(temp_dir).iterdir() if entry != checkpoint_path
+            )
+            self.assertEqual(leftover, [])
+
     def test_value_only_freeze_updates_value_head_only(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")

@@ -1355,21 +1355,35 @@ def save_transformer_checkpoint(
     torch_module = require_torch()
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    torch_module.save(
-        {
-            "schema_version": NEURAL_POLICY_SCHEMA_VERSION,
-            "training_schema_version": NEURAL_TRAINING_SCHEMA_VERSION,
-            "model_config": result.model_config.to_dict(),
-            "training_config": result.training_config.to_dict(),
-            "epochs": [metrics.to_dict() for metrics in result.epochs],
-            "value_calibration_transform": (
-                result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
-            ),
-            "belief_set_source_hash": result.belief_set_source_hash,
-            "state_dict": model.state_dict(),
-        },
-        checkpoint_path,
-    )
+    payload = {
+        "schema_version": NEURAL_POLICY_SCHEMA_VERSION,
+        "training_schema_version": NEURAL_TRAINING_SCHEMA_VERSION,
+        "model_config": result.model_config.to_dict(),
+        "training_config": result.training_config.to_dict(),
+        "epochs": [metrics.to_dict() for metrics in result.epochs],
+        "value_calibration_transform": (
+            result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
+        ),
+        "belief_set_source_hash": result.belief_set_source_hash,
+        "state_dict": model.state_dict(),
+    }
+    # Persist atomically: serialize into a temp file on the same filesystem, flush it
+    # all the way to disk, then os.replace onto the final path. os.replace is atomic on
+    # POSIX, so an interrupted write (crash, OOM, disk-full) can only leave a stray temp
+    # file behind -- the destination is always either its previous contents or the fully
+    # written new checkpoint, never a truncated/corrupt partial. Mirrors the temp-then-
+    # replace pattern of _write_json in neural_cli.py, with an added fsync because
+    # checkpoints are large and expensive to regenerate.
+    temporary_path = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+    try:
+        with open(temporary_path, "wb") as handle:
+            torch_module.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, checkpoint_path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def feature_masks_from_model_config(config: TransformerPolicyConfig) -> ObservationFeatureMasks:
