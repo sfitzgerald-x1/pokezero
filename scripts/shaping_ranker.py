@@ -57,7 +57,8 @@ Ranking (documented composite):
     - corrected ECE <= --max-ece (calibration sanity: an ECE of 8 next to retained=yes
       must be impossible to print).
   Retained candidates sort by delta_v_score descending (dV is the primary read); failed
-  candidates sort by corrected Pearson descending (least-broken first).
+  candidates sort by HEAD MARGINAL descending (least-broken first — corrected Pearson is
+  the Phi free ride for failed heads, so it is only the final tiebreak).
 
 Validity self-checks (on by default): two synthetic probes ride along — wse-arm1 x -1
 (inverted signs: the correction anti-corrects) and wse-arm1 x
@@ -485,10 +486,12 @@ def main() -> int:
         rows,
         key=lambda row: (
             not row["pearson_retained"],
-            # Retained: primary read is the dV response. Failed: order by how much
-            # corrected-Pearson survives (least-broken first) — dV is noise once the
-            # head no longer predicts outcomes.
+            # Retained: primary read is the dV response. Failed: order by the HEAD'S OWN
+            # signal (the marginal), not corrected Pearson — for failed heads corrected
+            # Pearson is exactly the Phi free ride this gate exists to discount, so a
+            # dead saturated head would otherwise float to the top of the failed group.
             -row["delta_v_score"] if row["pearson_retained"] else 0.0,
+            0.0 if row["pearson_retained"] else -(row["head_marginal"] or -1.0),
             -(row["terminal_pearson"] or -1.0),
         ),
     )
@@ -520,7 +523,7 @@ def main() -> int:
         f"(control {control_pearson:.4f}, retention {args.pearson_retention:.0%}, abs floor "
         f"{args.min_pearson_floor:g}) AND marginal >= {args.min_head_marginal:g} AND spread >= "
         f"{args.min_spread_frac:g}x control AND ece <= {args.max_ece:g}; retained sort by "
-        "delta_v_score (control-spread normalized) desc, failed sort by pearson* desc."
+        "delta_v_score (control-spread normalized) desc, failed sort by head marginal desc."
     )
 
     validity_failed: list[str] = []
@@ -568,7 +571,8 @@ def main() -> int:
             "head marginal (partial corr of raw pred vs terminal controlling for Phi) >= min; "
             "spread >= frac*control; ece <= max. Retained sort by delta_v_score = "
             "(max(0,-dV_self)+max(0,dV_opp))/control_spread desc; failed sort by corrected "
-            "Pearson desc. Built-in inverted + saturating probes must rank below control or "
+            "head marginal desc (corrected Pearson is the Phi free ride for failed heads). "
+            "Built-in inverted + saturating probes must rank below control or "
             "the ranking is withheld."
         ),
         "ranked": ranked,
