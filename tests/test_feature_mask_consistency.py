@@ -1015,6 +1015,125 @@ class TrainMaskFlagsTest(unittest.TestCase):
             },
         )
 
+    def test_tier2_investment_flag_tri_state_and_defaults_off(self) -> None:
+        # The switch this PR adds: --tier2-investment sets the field; its ABSENCE resolves
+        # OFF (asymmetric vs --tier2-residuals, which defaults on). All three subcommands
+        # expose it as a BooleanOptionalAction defaulting None (the latch tri-state).
+        from pokezero.neural_cli import build_arg_parser as neural_parser
+        from pokezero.rollout_cli import build_arg_parser as rollout_parser
+
+        subs = (
+            (neural_parser, ["train", "--data", "d", "--out", "o"]),
+            (
+                neural_parser,
+                [
+                    "iterate", "--run-dir", "r", "--iterations", "1",
+                    "--games-per-iteration", "1", "--initial-policy", "random-legal",
+                ],
+            ),
+            (
+                rollout_parser,
+                ["collect-selfplay-training-cache", "--games", "1", "--out", "o"],
+            ),
+        )
+        for parser, sub in subs:
+            self.assertIsNone(parser().parse_args(sub).tier2_investment)  # absent -> None -> OFF
+            self.assertIs(parser().parse_args([*sub, "--tier2-investment"]).tier2_investment, True)
+            self.assertIs(
+                parser().parse_args([*sub, "--no-tier2-investment"]).tier2_investment, False
+            )
+
+    def test_tier2_investment_fresh_train_config_defaults_off_and_enable_stamps_on(self) -> None:
+        # A fresh train builds a config whose tier2_investment is OFF when the flag is absent
+        # (byte-identity property) and ON when --tier2-investment is passed. Exercised through
+        # the same _explicit_mask_requests the resume-agreement check consumes.
+        from pokezero.neural_cli import _explicit_mask_requests
+
+        omitted = self._train_args()
+        self.assertIsNone(omitted.tier2_investment)
+        self.assertNotIn("tier2_investment", _explicit_mask_requests(omitted))
+        enabled = self._train_args(["--tier2-investment"])
+        self.assertIs(_explicit_mask_requests(enabled)["tier2_investment"], True)
+        disabled = self._train_args(["--no-tier2-investment"])
+        self.assertIs(_explicit_mask_requests(disabled)["tier2_investment"], False)
+
+    def test_tier2_investment_resume_agreement_hard_fails_both_directions(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _require_mask_flags_agree_with_checkpoint
+
+        # A checkpoint trained WITH the investment channel: an explicit --no-tier2-investment
+        # (disable) must hard-fail, and adoption (omitted flag) must pass.
+        on_checkpoint = SimpleNamespace(
+            stats_block_enabled=True, exact_state_enabled=True,
+            transition_token_budget=32, tier2_residuals=True, tier2_investment=True,
+        )
+        omitted = SimpleNamespace(
+            transition_token_budget=None, no_stats_block=False, no_exact_state=False,
+            tier2_residuals=None, tier2_investment=None,
+        )
+        _require_mask_flags_agree_with_checkpoint(omitted, on_checkpoint)  # adoption, no raise
+        agreeing = SimpleNamespace(**{**vars(omitted), "tier2_investment": True})
+        _require_mask_flags_agree_with_checkpoint(agreeing, on_checkpoint)  # no raise
+        disable = SimpleNamespace(**{**vars(omitted), "tier2_investment": False})
+        with self.assertRaisesRegex(ValueError, "tier2_investment"):
+            _require_mask_flags_agree_with_checkpoint(disable, on_checkpoint)
+        # A checkpoint trained WITHOUT it: an explicit --tier2-investment (enable) hard-fails.
+        off_checkpoint = SimpleNamespace(**{**vars(on_checkpoint), "tier2_investment": False})
+        enable = SimpleNamespace(**{**vars(omitted), "tier2_investment": True})
+        with self.assertRaisesRegex(ValueError, "tier2_investment"):
+            _require_mask_flags_agree_with_checkpoint(enable, off_checkpoint)
+
+    def test_tier2_investment_cache_cross_check_and_legacy_asymmetry(self) -> None:
+        import json
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _require_cache_masks_match_model_config
+
+        investment_model = SimpleNamespace(
+            stats_block_enabled=True, exact_state_enabled=True,
+            transition_token_budget=32, tier2_residuals=True, tier2_investment=True,
+        )
+        off_model = SimpleNamespace(**{**vars(investment_model), "tier2_investment": False})
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            cache.mkdir()
+            invest_cache = {
+                "stats_block": True, "exact_state": True,
+                "transition_token_budget": 32, "tier2_residuals": True,
+                "tier2_investment": True,
+            }
+            (cache / "metadata.json").write_text(json.dumps({"feature_masks": invest_cache}))
+            _require_cache_masks_match_model_config([cache], investment_model)  # match, no raise
+            # Direction 1: cache investment-on, model investment-off -> fail.
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], off_model)
+            # Direction 2 (legacy asymmetry): a cache lacking the field is pre-flag, encoded
+            # on the constant-zero column -> passes an investment-OFF train but REFUSES an
+            # investment-ON train.
+            legacy = {k: v for k, v in invest_cache.items() if k != "tier2_investment"}
+            (cache / "metadata.json").write_text(json.dumps({"feature_masks": legacy}))
+            _require_cache_masks_match_model_config([cache], off_model)  # pre-flag, passes off
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], investment_model)
+
+    def test_tier2_investment_collect_flag_resolves_explicit_masks(self) -> None:
+        from pokezero.rollout_cli import _explicit_feature_masks_from_args, build_arg_parser
+
+        # --tier2-investment alone triggers the explicit-masks path (was previously None).
+        args = build_arg_parser().parse_args(
+            ["collect-selfplay-training-cache", "--games", "1", "--out", "o", "--tier2-investment"]
+        )
+        masks = _explicit_feature_masks_from_args(args)
+        self.assertIsNotNone(masks)
+        self.assertTrue(masks.tier2_investment)
+        self.assertTrue(masks.tier2_residuals)  # untouched sibling keeps its default-on
+        # No flags at all -> None (adopt defaults / checkpoint), unchanged by this PR.
+        no_flags = build_arg_parser().parse_args(
+            ["collect-selfplay-training-cache", "--games", "1", "--out", "o"]
+        )
+        self.assertIsNone(_explicit_feature_masks_from_args(no_flags))
+
     def test_window_size_defaults_are_spec_v2_consistent(self) -> None:
         from pokezero.neural_cli import build_arg_parser as neural_parser
         from pokezero.rollout_cli import build_arg_parser as rollout_parser

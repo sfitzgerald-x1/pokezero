@@ -419,6 +419,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Tier-2 residual channel (#505). Default for a fresh train: on.",
     )
+    train.add_argument(
+        "--tier2-investment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Defender-side investment channel (#513): populate + encode the reserved "
+            "investment columns (NUMERIC_TT_INVESTMENT_BIT 120, "
+            "NUMERIC_TIER2_INVESTMENT_PINNED 139) behind the investment precision gate. "
+            "A SEPARATE switch from --tier2-residuals (different provenance). Default for a "
+            "fresh train: OFF (byte-identical to the pre-investment encoder). Only meaningful "
+            "under --observation-schema v2.1/v2.2; a no-op under v2. With --initial-checkpoint "
+            "the checkpoint's value wins and an explicitly disagreeing flag hard-fails."
+        ),
+    )
     train.add_argument("--epochs", type=int, default=1, help="Number of training epochs.")
     train.add_argument("--batch-size", type=int, default=64, help="Training batch size.")
     train.add_argument("--learning-rate", type=float, default=3e-4, help="AdamW learning rate.")
@@ -1374,6 +1388,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Populate + encode the Tier-2 residual channel (#505). Default: on.",
     )
+    iterate.add_argument(
+        "--tier2-investment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Populate + encode the defender-side investment channel (#513): the reserved "
+            "investment columns (120/139) behind the investment precision gate. A SEPARATE "
+            "switch from --tier2-residuals. Default: OFF (byte-identical to pre-investment). "
+            "Only meaningful under v2.1/v2.2 (no-op under v2). On --resume the run's stored "
+            "model config wins; a disagreeing explicit flag fails the model-config equality "
+            "validation."
+        ),
+    )
     iterate.add_argument("--policy-id", default="entity-transformer-selfplay", help="Base policy id for generated checkpoints.")
     iterate.add_argument(
         "--category-oov-buckets",
@@ -1875,6 +1902,7 @@ _MASK_FLAG_FIELDS = (
     ("--no-stats-block", "stats_block_enabled"),
     ("--no-exact-state", "exact_state_enabled"),
     ("--tier2-residuals/--no-tier2-residuals", "tier2_residuals"),
+    ("--tier2-investment/--no-tier2-investment", "tier2_investment"),
 )
 
 
@@ -1889,6 +1917,8 @@ def _explicit_mask_requests(args: argparse.Namespace) -> dict[str, object]:
         requested["exact_state_enabled"] = False
     if args.tier2_residuals is not None:
         requested["tier2_residuals"] = bool(args.tier2_residuals)
+    if getattr(args, "tier2_investment", None) is not None:
+        requested["tier2_investment"] = bool(args.tier2_investment)
     return requested
 
 
@@ -2127,6 +2157,11 @@ def _train(args: argparse.Namespace) -> int:
                 else args.transition_token_budget
             ),
             tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
+            # Asymmetric default vs tier2_residuals: absent flag resolves OFF (no current
+            # training run consumes the investment column; a fresh train encodes it
+            # byte-identically to the pre-investment encoder). Only meaningful under
+            # v2.1/v2.2 — the encoder schema-gates the columns, so under v2 this is a no-op.
+            tier2_investment=False if args.tier2_investment is None else bool(args.tier2_investment),
             reward_shaping=shaping_weights_json,
         )
         # Fresh train: --observation-schema SETS the stamped schema + widths (default
@@ -3650,6 +3685,11 @@ def _iterate(args: argparse.Namespace) -> int:
         exact_state_enabled=not args.no_exact_state,
         transition_token_budget=args.transition_token_budget,
         tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
+        # Asymmetric default vs tier2_residuals: absent flag resolves OFF (see the train
+        # builder). On --resume this config is equality-checked against the loaded model
+        # config, so a disagreeing tier2_investment hard-fails there. Encoder schema-gates
+        # the investment columns, so enabling under v2 is a clean no-op.
+        tier2_investment=False if args.tier2_investment is None else bool(args.tier2_investment),
         reward_shaping=iterate_shaping_json,
         observation_schema_version=iterate_schema_version,
         categorical_feature_count=iterate_schema_spec.categorical_feature_count,

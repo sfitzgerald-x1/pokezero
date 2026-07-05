@@ -158,6 +158,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Populate + encode the Tier-2 residual channel (#505). Default: on for checkpoint-less collection; adopted from the checkpoint otherwise.",
     )
     collect_selfplay_cache.add_argument(
+        "--tier2-investment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Populate + encode the defender-side investment channel (#513): the reserved "
+            "investment columns (120/139) behind the investment precision gate. A SEPARATE "
+            "switch from --tier2-residuals. Default: OFF for checkpoint-less collection "
+            "(byte-identical to pre-investment); adopted from the checkpoint otherwise. Only "
+            "meaningful under --observation-schema v2.1/v2.2 (no-op under v2). Recorded in "
+            "cache metadata for the train-side cross-check."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -327,9 +340,16 @@ def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationF
     which checkpoint adoption may still override (same wrinkle as neural iterate)."""
     budget = getattr(args, "transition_token_budget", None)
     tier2 = getattr(args, "tier2_residuals", None)
+    investment = getattr(args, "tier2_investment", None)
     no_stats = bool(getattr(args, "no_stats_block", False))
     no_exact = bool(getattr(args, "no_exact_state", False))
-    if budget is None and tier2 is None and not no_stats and not no_exact:
+    if (
+        budget is None
+        and tier2 is None
+        and investment is None
+        and not no_stats
+        and not no_exact
+    ):
         return None
     from .observation import TRANSITION_TOKEN_COUNT, ObservationFeatureMasks
 
@@ -338,6 +358,9 @@ def _explicit_feature_masks_from_args(args: argparse.Namespace) -> "ObservationF
         exact_state=not no_exact,
         transition_token_budget=TRANSITION_TOKEN_COUNT if budget is None else budget,
         tier2_residuals=True if tier2 is None else bool(tier2),
+        # Asymmetric default vs tier2_residuals: absent flag resolves OFF (matches the
+        # ObservationFeatureMasks dataclass default and the model-config builders).
+        tier2_investment=False if investment is None else bool(investment),
     )
 
 
