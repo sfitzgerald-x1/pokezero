@@ -61,7 +61,7 @@ NUMERIC_LABELS = {
     117: "TT_RESIDUAL", 118: "TT_RESIDUAL_VALID", 119: "TT_CB_BIT", 120: "TT_INVESTMENT_BIT",
     # ---- spec v2.1 (defender identity rides categorical MOVE_PRIORITY; numerics below). ----
     **{121 + i: f"OPP_MOVE_PP_VALID[{i}]" for i in range(16)},
-    137: "SUB_HP_FRACTION",
+    137: "SUB_HP_FRACTION", 138: "TIER2_CB_PINNED", 139: "TIER2_INVESTMENT_PINNED",
 }
 
 def categorical_label(col: int) -> str:
@@ -113,6 +113,11 @@ ALLOW_NUMERIC: set[int] = {
                     # REVEALED move that deep in the sorted bucket order)
     135, 136,       # OPP_MOVE_PP_VALID[14..15] — structural (mirrors 90..91: 16 buckets,
                     # Gen 3 cap is 14 moves/species)
+    138,            # TIER2_CB_PINNED — situational (the two-strike CB conclusion is rare
+                    # in a 12-seed sweep; same channel class as 117..119, exercised by the
+                    # tier2 fixtures incl. the CB-Pidgeot game)
+    139,            # TIER2_INVESTMENT_PINNED — structural BY DESIGN everywhere: the
+                    # per-mon twin of 120, a true always-zero reserve until batch 2
 }
 ALLOW_CATEGORICAL: set[int] = {
     16,               # BELIEF_ITEM[5]  — structural (6 buckets, Gen 3 cap is 5 items/species)

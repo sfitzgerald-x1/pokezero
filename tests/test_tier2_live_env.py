@@ -310,6 +310,106 @@ class CbBitFixtureGameTest(unittest.TestCase):
         concluding_turn = flags[first_true][0]
         self.assertEqual(concluding_turn, inference.cb_strike_turns["p2:pidgeot"][1])
 
+    def test_cb_pinned_bit_fires_at_the_concluding_turn_and_persists(self) -> None:
+        """The v2.1 per-mon PINNED surface on the CB-Pidgeot fixture: dark on a replay
+        prefix ending before the concluding strike, 1.0 on Pidgeot's opp-mon row from the
+        conclusion onward — including at game end, after later switches (per-mon fact,
+        truncation-independent) — and only on Pidgeot's row."""
+        from dataclasses import replace as dc_replace
+
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.showdown import (
+            NUMERIC_TIER2_CB_PINNED,
+            NUMERIC_TIER2_INVESTMENT_PINNED,
+            OPPONENT_POKEMON_TOKEN_OFFSET,
+            V2_1_REPLAY_OBSERVATION_SPEC,
+            _normalize_identifier,
+            normalize_for_player,
+            observation_from_player_state,
+        )
+        from pokezero.tier2 import (
+            apply_residuals,
+            cb_whitelist_for_source,
+            infer_tier2,
+            own_team_from_request,
+        )
+
+        root = _integration_root()
+        fixture = Path(__file__).parent / "fixtures" / "showdown" / "tier2-cb-pidgeot-game.log"
+        lines = [
+            line
+            for line in fixture.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")
+        ]
+        first_request = next(
+            json.loads(line[len("|request|"):])
+            for line in lines
+            if line.startswith("|request|") and '"id":"p1"' in line.replace(" ", "")
+        )
+        dex = load_showdown_dex_cached(root)
+        source = load_gen3_randbat_source_cached(root)
+        vocab = gen3_category_vocabulary(root)
+        whitelist = cb_whitelist_for_source(source, dex)
+        own_team = own_team_from_request(first_request)
+
+        def pinned_rows(prefix_lines):
+            replay = parse_showdown_replay(prefix_lines)
+            inference = infer_tier2(
+                replay,
+                perspective_slot="p1",
+                own_team=own_team,
+                dex=dex,
+                set_source=source,
+                whitelist=whitelist,
+            )
+            state = normalize_for_player(
+                replay,
+                player_id="p1",
+                configured_showdown_slot="p1",
+                format_id="gen3randombattle",
+                set_source=source,
+            )
+            wired = dc_replace(
+                state, transition_tokens=apply_residuals(state.transition_tokens, inference)
+            )
+            observation = observation_from_player_state(
+                wired, category_vocab=vocab, spec=V2_1_REPLAY_OBSERVATION_SPEC, dex=dex
+            )
+            return inference, state, {
+                _normalize_identifier(mon.species): observation.numeric_features[
+                    OPPONENT_POKEMON_TOKEN_OFFSET + index
+                ]
+                for index, mon in enumerate(state.opponent_team)
+            }
+
+        full_inference, _, _ = pinned_rows(lines)
+        concluding_turn = full_inference.cb_strike_turns["p2:pidgeot"][1]
+
+        # Prefix ending as the concluding turn OPENS: the second exceedance has not
+        # landed yet, so the conclusion must not stand anywhere.
+        prefix = lines[: lines.index(f"|turn|{concluding_turn}") + 1]
+        _, _, before = pinned_rows(prefix)
+        for species, row in before.items():
+            self.assertEqual(row[NUMERIC_TIER2_CB_PINNED], 0.0, species)
+
+        # Full game: Pidgeot is long since off the field (and the game moved on), yet
+        # its row carries the pinned conclusion; every other row stays dark, and the
+        # investment twin stays a reserve everywhere.
+        _, final_state, after = pinned_rows(lines)
+        self.assertIn("pidgeot", after)
+        pidgeot_active = next(
+            mon.active for mon in final_state.opponent_team
+            if _normalize_identifier(mon.species) == "pidgeot"
+        )
+        self.assertFalse(pidgeot_active, "fixture drift: Pidgeot should be benched/fainted at end")
+        for species, row in after.items():
+            self.assertEqual(
+                row[NUMERIC_TIER2_CB_PINNED], 1.0 if species == "pidgeot" else 0.0, species
+            )
+            self.assertEqual(row[NUMERIC_TIER2_INVESTMENT_PINNED], 0.0, species)
+
 
 @unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
 class CollectCacheMaskMetadataTest(unittest.TestCase):
