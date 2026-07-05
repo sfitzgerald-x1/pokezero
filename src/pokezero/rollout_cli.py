@@ -10,6 +10,8 @@ import sys
 
 from .collection import (
     BenchmarkReport,
+    LINEAR_POLICY_SPEC_PREFIX,
+    NEURAL_POLICY_SPEC_PREFIX,
     benchmark_rollouts,
     collect_training_cache,
     collect_rollouts,
@@ -22,7 +24,7 @@ from .dataset import MAX_ACTIVE_TRAINING_CACHE_GB, TrajectoryDatasetConfig, trai
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
-from .selfplay import collect_selfplay_rollouts
+from .selfplay import OpponentPoolEntry, collect_selfplay_rollouts
 from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
 from .shaping import parse_shaping_spec
 
@@ -115,6 +117,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Opponent policy spec. May be repeated. When omitted, mirrors --current-policy "
             "for teacher-cut/current-policy self-play."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
+        "--opponent-pool",
+        type=Path,
+        default=None,
+        help=(
+            "JSON opponent-pool manifest for diversity-tier collection. Accepts a top-level list "
+            "or {\"opponents\": [...]} entries with policy_spec/spec or checkpoint_path, optional "
+            "weight, and optional member_id/id/name. Cannot be combined with --opponent-policy."
         ),
     )
     # Ablation-arm feature masks for the checkpoint-less iteration-0 case (the cluster
@@ -371,9 +383,20 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     )
     policy_showdown_root = env_config.resolved_showdown_root()
     current_policy = policy_spec_with_showdown_root(args.current_policy, policy_showdown_root)
-    opponent_policies = tuple(
-        policy_spec_with_showdown_root(spec, policy_showdown_root)
-        for spec in (args.opponent_policy or (args.current_policy,))
+    if args.opponent_pool is not None and args.opponent_policy:
+        raise ValueError("--opponent-pool cannot be combined with --opponent-policy.")
+    opponent_pool_entries = (
+        _load_opponent_pool_manifest(args.opponent_pool, showdown_root=policy_showdown_root)
+        if args.opponent_pool is not None
+        else None
+    )
+    opponent_policies = (
+        tuple(entry.policy_spec for entry in opponent_pool_entries)
+        if opponent_pool_entries is not None
+        else tuple(
+            policy_spec_with_showdown_root(spec, policy_showdown_root)
+            for spec in (args.opponent_policy or (args.current_policy,))
+        )
     )
     explicit_masks = _explicit_feature_masks_from_args(args)
     if explicit_masks is not None:
@@ -417,17 +440,69 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         seed_start=args.seed_start,
         current_policy_spec=current_policy,
         opponent_policy_specs=opponent_policies,
+        opponent_pool_entries=opponent_pool_entries,
         worker_count=args.workers,
         training_cache_feature_masks=env_config.feature_masks,
         training_cache_observation_schema=env_config.observation_spec.schema_version,
     )
     _print_metrics(metrics.to_dict())
+    if opponent_pool_entries is not None:
+        print(f"opponent_pool: {args.opponent_pool}")
+        print(f"opponent_pool_members: {len(opponent_pool_entries)}")
     for cache_path in cache_paths:
         print(f"training_cache: {cache_path}")
     print(f"training_cache_count: {len(cache_paths)}")
     if cache_paths:
         print(f"training_cache_bytes: {training_cache_paths_byte_size(cache_paths)}")
     return 0
+
+
+def _load_opponent_pool_manifest(path: Path, *, showdown_root: Path) -> tuple[OpponentPoolEntry, ...]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw_entries = payload.get("opponents") if isinstance(payload, dict) else payload
+    if raw_entries is None and isinstance(payload, dict):
+        raw_entries = payload.get("members")
+    if not isinstance(raw_entries, list):
+        raise ValueError("opponent pool manifest must be a list or contain an 'opponents' list.")
+    entries: list[OpponentPoolEntry] = []
+    for index, raw_entry in enumerate(raw_entries):
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"opponent pool entry {index} must be an object.")
+        policy_spec = _opponent_pool_entry_policy_spec(raw_entry, manifest_path=path)
+        policy_spec = policy_spec_with_showdown_root(policy_spec, showdown_root)
+        weight = float(raw_entry.get("weight", 1.0))
+        member_id = raw_entry.get("member_id", raw_entry.get("id", raw_entry.get("name")))
+        entries.append(
+            OpponentPoolEntry(
+                policy_spec=policy_spec,
+                weight=weight,
+                member_id=str(member_id) if member_id is not None else None,
+            )
+        )
+    if not entries:
+        raise ValueError("opponent pool manifest must include at least one member.")
+    return tuple(entries)
+
+
+def _opponent_pool_entry_policy_spec(raw_entry: dict, *, manifest_path: Path) -> str:
+    raw_spec = raw_entry.get("policy_spec", raw_entry.get("spec"))
+    if raw_spec is not None:
+        spec = str(raw_spec).strip()
+        if not spec:
+            raise ValueError("opponent pool policy_spec must be non-empty.")
+        return spec
+    checkpoint = raw_entry.get("checkpoint_path", raw_entry.get("checkpoint"))
+    if checkpoint is None:
+        raise ValueError("opponent pool entry must include policy_spec/spec or checkpoint_path/checkpoint.")
+    checkpoint_path = Path(str(checkpoint).strip())
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = manifest_path.parent / checkpoint_path
+    policy_type = str(raw_entry.get("policy_type", raw_entry.get("type", "neural"))).strip().lower()
+    if policy_type == "linear":
+        return f"{LINEAR_POLICY_SPEC_PREFIX}{checkpoint_path}"
+    if policy_type == "neural":
+        return f"{NEURAL_POLICY_SPEC_PREFIX}{checkpoint_path}"
+    raise ValueError("opponent pool checkpoint entry policy_type must be 'neural' or 'linear'.")
 
 
 def _benchmark(args: argparse.Namespace) -> int:

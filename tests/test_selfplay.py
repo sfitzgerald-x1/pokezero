@@ -22,11 +22,13 @@ from pokezero.linear_policy import (
     save_linear_model,
 )
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION, ObservationPerspective, ObservationSpec, PokeZeroObservationV0
+from pokezero.policy import RandomLegalPolicy
 from pokezero.promotion import PROMOTION_REGISTRY_SCHEMA_VERSION
 from pokezero.evaluation import PromotionGateConfig
 from pokezero.run_audit import RunAuditConfig, RunAuditFailure, run_audit_config_payload
 from pokezero.rollout import RolloutConfig
 from pokezero.selfplay import (
+    OpponentPoolEntry,
     SELFPLAY_RUN_SCHEMA_VERSION,
     SelfPlayPromotionConfig,
     _bounded_ordered_map,
@@ -255,6 +257,45 @@ class SelfPlayTest(unittest.TestCase):
 
         self.assertEqual(training_records[0].policy_ids, {"p1": "random-legal"})
         self.assertEqual(training_records[1].policy_ids, {"p2": "random-legal"})
+
+    def test_collect_selfplay_rollouts_samples_weighted_opponent_pool_with_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rollouts.jsonl"
+            training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=output_path,
+                training_output_path=training_output_path,
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=14,
+                current_policy_spec="current",
+                opponent_policy_specs=("opp-a", "opp-b"),
+                opponent_pool_entries=(
+                    OpponentPoolEntry(policy_spec="opp-a", weight=1.0, member_id="pool-a"),
+                    OpponentPoolEntry(policy_spec="opp-b", weight=3.0, member_id="pool-b"),
+                ),
+                policy_factory_overrides={
+                    "current": lambda: RandomLegalPolicy(policy_id="current"),
+                    "opp-a": lambda: RandomLegalPolicy(policy_id="opp-a"),
+                    "opp-b": lambda: RandomLegalPolicy(policy_id="opp-b"),
+                },
+            )
+
+            records = read_rollout_records(output_path)
+            training_records = read_rollout_records(training_output_path)
+
+        self.assertEqual(records[0].policy_ids, {"p1": "current", "p2": "opp-a"})
+        self.assertEqual(records[1].policy_ids, {"p1": "opp-b", "p2": "current"})
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_member_id"], "pool-a")
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_policy_spec"], "opp-a")
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_weight"], 1.0)
+        self.assertEqual(training_records[0].trajectory.steps[0].metadata["opponent_pool_member_id"], "pool-a")
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_member_id"], "pool-b")
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_policy_spec"], "opp-b")
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_weight"], 3.0)
+        self.assertEqual(training_records[1].trajectory.steps[0].metadata["opponent_pool_member_id"], "pool-b")
 
     def test_run_selfplay_iterations_reuses_loaded_current_model_during_collection(self) -> None:
         model = LinearPolicyModel.initialized(

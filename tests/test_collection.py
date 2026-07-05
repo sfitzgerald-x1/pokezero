@@ -1,4 +1,5 @@
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -44,7 +45,12 @@ from pokezero.replay_benchmark import (
     replay_prefix_counts,
 )
 from pokezero.rollout import RolloutConfig
-from pokezero.rollout_cli import main as rollout_cli_main, print_benchmark_report
+from pokezero.rollout_cli import (
+    _load_opponent_pool_manifest,
+    main as rollout_cli_main,
+    print_benchmark_report,
+)
+from pokezero.selfplay import OpponentPoolEntry
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep, trajectory_from_dict, trajectory_to_dict
 
 
@@ -285,7 +291,6 @@ class CollectionTest(unittest.TestCase):
             )
 
     def test_training_cache_metadata_records_belief_provenance(self) -> None:
-        import json
         from dataclasses import replace as dc_replace
 
         from pokezero.collection import distinct_belief_set_source_hashes
@@ -1202,6 +1207,118 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(collect.call_args.kwargs["current_policy_spec"], "simple-legal")
         self.assertEqual(collect.call_args.kwargs["opponent_policy_specs"], ("simple-legal",))
+
+    def test_rollout_cli_collect_selfplay_training_cache_loads_opponent_pool_manifest(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "opponents.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "opponents": [
+                            {"policy_spec": "random-legal", "weight": 1.0, "member_id": "anchor-random"},
+                            {"spec": "simple-legal", "weight": 3.0, "name": "anchor-simple"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch("pokezero.rollout_cli.collect_selfplay_rollouts", return_value=fake_metrics) as collect,
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                exit_code = rollout_cli_main(
+                    [
+                        "collect-selfplay-training-cache",
+                        "--games",
+                        "2",
+                        "--out",
+                        str(Path(temp_dir) / "cache"),
+                        "--current-policy",
+                        "simple-legal",
+                        "--opponent-pool",
+                        str(manifest_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = collect.call_args.kwargs
+        self.assertEqual(kwargs["opponent_policy_specs"], ("random-legal", "simple-legal"))
+        self.assertEqual(
+            kwargs["opponent_pool_entries"],
+            (
+                OpponentPoolEntry(policy_spec="random-legal", weight=1.0, member_id="anchor-random"),
+                OpponentPoolEntry(policy_spec="simple-legal", weight=3.0, member_id="anchor-simple"),
+            ),
+        )
+        self.assertIn(f"opponent_pool: {manifest_path}", stdout.getvalue())
+        self.assertIn("opponent_pool_members: 2", stdout.getvalue())
+
+    def test_rollout_cli_collect_selfplay_training_cache_rejects_pool_with_opponent_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "opponents.json"
+            manifest_path.write_text(
+                json.dumps([{"policy_spec": "random-legal"}]),
+                encoding="utf-8",
+            )
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                exit_code = rollout_cli_main(
+                    [
+                        "collect-selfplay-training-cache",
+                        "--games",
+                        "1",
+                        "--out",
+                        str(Path(temp_dir) / "cache"),
+                        "--current-policy",
+                        "simple-legal",
+                        "--opponent-pool",
+                        str(manifest_path),
+                        "--opponent-policy",
+                        "random-legal",
+                    ]
+                )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--opponent-pool cannot be combined", stderr.getvalue())
+
+    def test_load_opponent_pool_manifest_resolves_checkpoint_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "opponents.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "members": [
+                            {
+                                "checkpoint_path": "checkpoints/policy.pt",
+                                "weight": 2.0,
+                                "id": "checkpoint-a",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            entries = _load_opponent_pool_manifest(manifest_path, showdown_root=Path("/showdown"))
+
+        self.assertEqual(
+            entries,
+            (
+                OpponentPoolEntry(
+                    policy_spec=f"neural:{manifest_path.parent / 'checkpoints' / 'policy.pt'}",
+                    weight=2.0,
+                    member_id="checkpoint-a",
+                ),
+            ),
+        )
 
     def test_rollout_cli_collect_loads_linear_policy_spec(self) -> None:
         fake_metrics = CollectionMetrics(
