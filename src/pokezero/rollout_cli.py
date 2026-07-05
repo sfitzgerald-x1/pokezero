@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -468,15 +469,19 @@ def _load_opponent_pool_manifest(path: Path, *, showdown_root: Path) -> tuple[Op
     for index, raw_entry in enumerate(raw_entries):
         if not isinstance(raw_entry, dict):
             raise ValueError(f"opponent pool entry {index} must be an object.")
-        policy_spec = _opponent_pool_entry_policy_spec(raw_entry, manifest_path=path)
+        policy_spec, checkpoint_path = _opponent_pool_entry_policy_spec(raw_entry, manifest_path=path)
         policy_spec = policy_spec_with_showdown_root(policy_spec, showdown_root)
         weight = float(raw_entry.get("weight", 1.0))
         member_id = raw_entry.get("member_id", raw_entry.get("id", raw_entry.get("name")))
+        checkpoint_hash = raw_entry.get("checkpoint_hash", raw_entry.get("hash"))
+        if checkpoint_hash is None and checkpoint_path is not None and checkpoint_path.is_file():
+            checkpoint_hash = _file_sha256(checkpoint_path)
         entries.append(
             OpponentPoolEntry(
                 policy_spec=policy_spec,
                 weight=weight,
                 member_id=str(member_id) if member_id is not None else None,
+                checkpoint_hash=str(checkpoint_hash) if checkpoint_hash is not None else None,
             )
         )
     if not entries:
@@ -484,25 +489,36 @@ def _load_opponent_pool_manifest(path: Path, *, showdown_root: Path) -> tuple[Op
     return tuple(entries)
 
 
-def _opponent_pool_entry_policy_spec(raw_entry: dict, *, manifest_path: Path) -> str:
+def _opponent_pool_entry_policy_spec(raw_entry: dict, *, manifest_path: Path) -> tuple[str, Path | None]:
     raw_spec = raw_entry.get("policy_spec", raw_entry.get("spec"))
     if raw_spec is not None:
         spec = str(raw_spec).strip()
         if not spec:
             raise ValueError("opponent pool policy_spec must be non-empty.")
-        return spec
+        return spec, None
     checkpoint = raw_entry.get("checkpoint_path", raw_entry.get("checkpoint"))
     if checkpoint is None:
         raise ValueError("opponent pool entry must include policy_spec/spec or checkpoint_path/checkpoint.")
-    checkpoint_path = Path(str(checkpoint).strip())
+    checkpoint_value = str(checkpoint).strip()
+    if not checkpoint_value:
+        raise ValueError("opponent pool checkpoint_path must be non-empty.")
+    checkpoint_path = Path(checkpoint_value)
     if not checkpoint_path.is_absolute():
         checkpoint_path = manifest_path.parent / checkpoint_path
     policy_type = str(raw_entry.get("policy_type", raw_entry.get("type", "neural"))).strip().lower()
     if policy_type == "linear":
-        return f"{LINEAR_POLICY_SPEC_PREFIX}{checkpoint_path}"
+        return f"{LINEAR_POLICY_SPEC_PREFIX}{checkpoint_path}", checkpoint_path
     if policy_type == "neural":
-        return f"{NEURAL_POLICY_SPEC_PREFIX}{checkpoint_path}"
+        return f"{NEURAL_POLICY_SPEC_PREFIX}{checkpoint_path}", checkpoint_path
     raise ValueError("opponent pool checkpoint entry policy_type must be 'neural' or 'linear'.")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _benchmark(args: argparse.Namespace) -> int:

@@ -81,6 +81,7 @@ class OpponentPoolEntry:
     policy_spec: str
     weight: float = 1.0
     member_id: str | None = None
+    checkpoint_hash: str | None = None
 
     def __post_init__(self) -> None:
         policy_spec = str(self.policy_spec).strip()
@@ -94,6 +95,9 @@ class OpponentPoolEntry:
         if self.member_id is not None:
             member_id = str(self.member_id).strip()
             object.__setattr__(self, "member_id", member_id or None)
+        if self.checkpoint_hash is not None:
+            checkpoint_hash = str(self.checkpoint_hash).strip()
+            object.__setattr__(self, "checkpoint_hash", checkpoint_hash or None)
 
     @property
     def resolved_member_id(self) -> str:
@@ -965,6 +969,8 @@ def _record_for_player(
     if opponent_pool_entry is not None:
         metadata["opponent_pool_member_id"] = opponent_pool_entry.resolved_member_id
         metadata["opponent_pool_weight"] = opponent_pool_entry.weight
+        if opponent_pool_entry.checkpoint_hash is not None:
+            metadata["opponent_pool_checkpoint_hash"] = opponent_pool_entry.checkpoint_hash
     trajectory = BattleTrajectory(
         battle_id=record.trajectory.battle_id,
         format_id=record.trajectory.format_id,
@@ -995,6 +1001,7 @@ def _step_with_opponent_pool_metadata(
 ) -> TrajectoryStep:
     opponent_keys = {
         "opponent_policy_spec",
+        "opponent_pool_checkpoint_hash",
         "opponent_pool_member_id",
         "opponent_pool_weight",
     }

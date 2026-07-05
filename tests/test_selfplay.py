@@ -262,10 +262,13 @@ class SelfPlayTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "rollouts.jsonl"
             training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
+            training_cache_path = Path(temp_dir) / "training-cache"
 
             collect_selfplay_rollouts(
                 output_path=output_path,
                 training_output_path=training_output_path,
+                training_cache_output_path=training_cache_path,
+                training_cache_dataset_config=TrajectoryDatasetConfig(window_size=1),
                 games=2,
                 env_factory=OneTurnEnv,
                 rollout_config=RolloutConfig(max_decision_rounds=5),
@@ -273,8 +276,18 @@ class SelfPlayTest(unittest.TestCase):
                 current_policy_spec="current",
                 opponent_policy_specs=("opp-a", "opp-b"),
                 opponent_pool_entries=(
-                    OpponentPoolEntry(policy_spec="opp-a", weight=1.0, member_id="pool-a"),
-                    OpponentPoolEntry(policy_spec="opp-b", weight=3.0, member_id="pool-b"),
+                    OpponentPoolEntry(
+                        policy_spec="opp-a",
+                        weight=1.0,
+                        member_id="pool-a",
+                        checkpoint_hash="hash-a",
+                    ),
+                    OpponentPoolEntry(
+                        policy_spec="opp-b",
+                        weight=3.0,
+                        member_id="pool-b",
+                        checkpoint_hash="hash-b",
+                    ),
                 ),
                 policy_factory_overrides={
                     "current": lambda: RandomLegalPolicy(policy_id="current"),
@@ -285,17 +298,47 @@ class SelfPlayTest(unittest.TestCase):
 
             records = read_rollout_records(output_path)
             training_records = read_rollout_records(training_output_path)
+            cache_metadata = json.loads((training_cache_path / "metadata.json").read_text(encoding="utf-8"))
 
         self.assertEqual(records[0].policy_ids, {"p1": "current", "p2": "opp-a"})
         self.assertEqual(records[1].policy_ids, {"p1": "opp-b", "p2": "current"})
         self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_member_id"], "pool-a")
         self.assertEqual(training_records[0].trajectory.metadata["opponent_policy_spec"], "opp-a")
         self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_weight"], 1.0)
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_checkpoint_hash"], "hash-a")
         self.assertEqual(training_records[0].trajectory.steps[0].metadata["opponent_pool_member_id"], "pool-a")
         self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_member_id"], "pool-b")
         self.assertEqual(training_records[1].trajectory.metadata["opponent_policy_spec"], "opp-b")
         self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_weight"], 3.0)
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_checkpoint_hash"], "hash-b")
         self.assertEqual(training_records[1].trajectory.steps[0].metadata["opponent_pool_member_id"], "pool-b")
+        self.assertEqual(cache_metadata["opponent_pool_provenance_count"], 2)
+        self.assertFalse(cache_metadata["opponent_pool_provenance_mixed"])
+        self.assertEqual(
+            cache_metadata["opponent_pool_provenance"],
+            [
+                {
+                    "battle_id": "selfplay-14",
+                    "format_id": "gen3randombattle",
+                    "opponent_policy_spec": "opp-a",
+                    "opponent_pool_checkpoint_hash": "hash-a",
+                    "opponent_pool_member_id": "pool-a",
+                    "opponent_pool_weight": 1.0,
+                    "player_id": "p1",
+                    "seed": 14,
+                },
+                {
+                    "battle_id": "selfplay-15",
+                    "format_id": "gen3randombattle",
+                    "opponent_policy_spec": "opp-b",
+                    "opponent_pool_checkpoint_hash": "hash-b",
+                    "opponent_pool_member_id": "pool-b",
+                    "opponent_pool_weight": 3.0,
+                    "player_id": "p2",
+                    "seed": 15,
+                },
+            ],
+        )
 
     def test_run_selfplay_iterations_reuses_loaded_current_model_during_collection(self) -> None:
         model = LinearPolicyModel.initialized(

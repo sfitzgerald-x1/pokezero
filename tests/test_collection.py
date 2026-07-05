@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -1292,6 +1293,10 @@ class CollectionTest(unittest.TestCase):
     def test_load_opponent_pool_manifest_resolves_checkpoint_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "opponents.json"
+            checkpoint_path = Path(temp_dir) / "checkpoints" / "policy.pt"
+            checkpoint_path.parent.mkdir()
+            checkpoint_payload = b"checkpoint bytes"
+            checkpoint_path.write_bytes(checkpoint_payload)
             manifest_path.write_text(
                 json.dumps(
                     {
@@ -1313,9 +1318,10 @@ class CollectionTest(unittest.TestCase):
             entries,
             (
                 OpponentPoolEntry(
-                    policy_spec=f"neural:{manifest_path.parent / 'checkpoints' / 'policy.pt'}",
+                    policy_spec=f"neural:{checkpoint_path}",
                     weight=2.0,
                     member_id="checkpoint-a",
+                    checkpoint_hash=hashlib.sha256(checkpoint_payload).hexdigest(),
                 ),
             ),
         )

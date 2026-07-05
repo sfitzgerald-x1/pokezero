@@ -26,6 +26,13 @@ MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024
 
 PathInput = str | PathLike[str] | Path
 
+_OPPONENT_POOL_METADATA_KEYS = (
+    "opponent_policy_spec",
+    "opponent_pool_checkpoint_hash",
+    "opponent_pool_member_id",
+    "opponent_pool_weight",
+)
+
 
 @dataclass(frozen=True)
 class TrajectoryDatasetConfig:
@@ -273,6 +280,23 @@ def _feature_masks_payload(feature_masks) -> dict | None:
     return dict(feature_masks)
 
 
+def _opponent_pool_provenance_from_record(record: RolloutRecord) -> dict[str, Any] | None:
+    metadata = record.trajectory.metadata
+    if not any(key in metadata for key in _OPPONENT_POOL_METADATA_KEYS):
+        return None
+    provenance: dict[str, Any] = {
+        "battle_id": record.trajectory.battle_id,
+        "seed": record.trajectory.seed,
+        "format_id": record.trajectory.format_id,
+    }
+    if record.trajectory.steps:
+        provenance["player_id"] = record.trajectory.steps[0].player_id
+    for key in _OPPONENT_POOL_METADATA_KEYS:
+        if key in metadata:
+            provenance[key] = metadata[key]
+    return provenance
+
+
 class TrainingCacheBuilder:
     """Build a compact, array-backed training cache from rollout records.
 
@@ -319,6 +343,7 @@ class TrainingCacheBuilder:
         # Belief provenance of ingested records; written to cache metadata as a single hash when
         # unanimous, else null (mixed/legacy) with a mixed flag for diagnostics.
         self._belief_set_source_hashes: set[str | None] = set()
+        self._opponent_pool_provenance: list[dict[str, Any]] = []
         self._feature_masks_payload = _feature_masks_payload(feature_masks)
         # Observation schema the collecting env encoded under (None for legacy caches);
         # the trainer hard-fails on a cache-vs-model schema mismatch — the schema-axis
@@ -366,6 +391,9 @@ class TrainingCacheBuilder:
             self._terminal_capped.append(example.terminal_capped)
             if self.config.potential_shaping is not None:
                 self._shaping_rewards.append(_optional_float(example.shaping_reward))
+        opponent_pool_provenance = _opponent_pool_provenance_from_record(record)
+        if opponent_pool_provenance is not None:
+            self._opponent_pool_provenance.append(opponent_pool_provenance)
         self._belief_set_source_hashes.add(record.belief_set_source_hash)
         self._record_count += 1
 
@@ -420,6 +448,9 @@ class TrainingCacheBuilder:
                     else None
                 ),
                 "belief_set_source_mixed": len(self._belief_set_source_hashes) > 1,
+                "opponent_pool_provenance": self._opponent_pool_provenance,
+                "opponent_pool_provenance_count": len(self._opponent_pool_provenance),
+                "opponent_pool_provenance_mixed": 0 < len(self._opponent_pool_provenance) < self.record_count,
                 # Encode-time feature masks the collecting env observed under (None for
                 # legacy caches); the trainer hard-fails on a cache-vs-model mask
                 # mismatch — the mask-axis twin of the belief-provenance hash above.
