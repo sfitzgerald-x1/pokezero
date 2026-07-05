@@ -439,6 +439,28 @@ _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
 }
 
 
+# CLI short names for the schema-selection flag (--observation-schema). v2 is
+# deliberately NOT offered for fresh selection: it exists only as a checkpoint-driven
+# legacy mode.
+OBSERVATION_SCHEMA_CLI_CHOICES: Mapping[str, str] = {
+    "v2.1": OBSERVATION_SCHEMA_VERSION_V2_1,
+    "v2.2": OBSERVATION_SCHEMA_VERSION_V2_2,
+}
+
+
+def observation_schema_version_from_choice(choice: str | None) -> str | None:
+    """Full schema version string for a CLI --observation-schema choice (None passes through)."""
+    if choice is None:
+        return None
+    version = OBSERVATION_SCHEMA_CLI_CHOICES.get(str(choice))
+    if version is None:
+        raise ValueError(
+            f"unknown observation schema choice {choice!r}; expected one of "
+            f"{', '.join(sorted(OBSERVATION_SCHEMA_CLI_CHOICES))}."
+        )
+    return version
+
+
 def observation_spec_for_schema(schema_version: str) -> ObservationSpec:
     """The canonical replay observation spec for a supported schema version.
 

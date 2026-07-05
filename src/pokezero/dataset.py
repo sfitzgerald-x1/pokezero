@@ -281,7 +281,13 @@ class TrainingCacheBuilder:
     references. This keeps shard storage bounded while letting training batch with memmapped arrays.
     """
 
-    def __init__(self, *, config: TrajectoryDatasetConfig | None = None, feature_masks=None) -> None:
+    def __init__(
+        self,
+        *,
+        config: TrajectoryDatasetConfig | None = None,
+        feature_masks=None,
+        observation_schema: str | None = None,
+    ) -> None:
         self.config = config or TrajectoryDatasetConfig()
         self._record_count = 0
         self._categorical_rows: list[Any] = []
@@ -314,6 +320,10 @@ class TrainingCacheBuilder:
         # unanimous, else null (mixed/legacy) with a mixed flag for diagnostics.
         self._belief_set_source_hashes: set[str | None] = set()
         self._feature_masks_payload = _feature_masks_payload(feature_masks)
+        # Observation schema the collecting env encoded under (None for legacy caches);
+        # the trainer hard-fails on a cache-vs-model schema mismatch — the schema-axis
+        # twin of the feature-mask cross-check (v2.2 fresh-selection latch).
+        self._observation_schema = observation_schema
 
     @property
     def record_count(self) -> int:
@@ -414,6 +424,9 @@ class TrainingCacheBuilder:
                 # legacy caches); the trainer hard-fails on a cache-vs-model mask
                 # mismatch — the mask-axis twin of the belief-provenance hash above.
                 "feature_masks": self._feature_masks_payload,
+                # Observation schema the collecting env encoded under (absent/None on
+                # legacy caches, which by definition predate v2.2 recording).
+                "observation_schema": self._observation_schema,
                 "format": "directory-of-npy-arrays",
                 "padding_row": 0,
                 "categorical_storage": {
