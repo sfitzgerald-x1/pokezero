@@ -7,7 +7,9 @@ from contextlib import closing, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 import json
+import math
 from pathlib import Path
+import random
 import sys
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
@@ -51,7 +53,7 @@ from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .source_metadata import collect_source_metadata
-from .trajectory import BattleTrajectory
+from .trajectory import BattleTrajectory, TrajectoryStep
 
 if TYPE_CHECKING:
     from .evaluation import PromotionGateConfig
@@ -70,6 +72,36 @@ class SelfPlayPromotionConfig:
     label_prefix: str | None = "selfplay"
     notes: str | None = None
     allow_duplicate: bool = False
+
+
+@dataclass(frozen=True)
+class OpponentPoolEntry:
+    """Weighted opponent-pool member for diversity-tier collection."""
+
+    policy_spec: str
+    weight: float = 1.0
+    member_id: str | None = None
+    checkpoint_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        policy_spec = str(self.policy_spec).strip()
+        if not policy_spec:
+            raise ValueError("opponent pool policy_spec must be non-empty.")
+        weight = float(self.weight)
+        if not math.isfinite(weight) or weight <= 0.0:
+            raise ValueError("opponent pool weight must be finite and positive.")
+        object.__setattr__(self, "policy_spec", policy_spec)
+        object.__setattr__(self, "weight", weight)
+        if self.member_id is not None:
+            member_id = str(self.member_id).strip()
+            object.__setattr__(self, "member_id", member_id or None)
+        if self.checkpoint_hash is not None:
+            checkpoint_hash = str(self.checkpoint_hash).strip()
+            object.__setattr__(self, "checkpoint_hash", checkpoint_hash or None)
+
+    @property
+    def resolved_member_id(self) -> str:
+        return self.member_id or self.policy_spec
 
 
 @dataclass(frozen=True)
@@ -550,6 +582,7 @@ def collect_selfplay_rollouts(
     seed_start: int,
     current_policy_spec: str,
     opponent_policy_specs: Iterable[str],
+    opponent_pool_entries: Iterable[OpponentPoolEntry] | None = None,
     worker_count: int = 1,
     policy_factory_overrides: Mapping[str, Callable[[], Any]] | None = None,
 ) -> CollectionMetrics:
@@ -560,6 +593,13 @@ def collect_selfplay_rollouts(
     opponent_specs = tuple(opponent_policy_specs)
     if not opponent_specs:
         raise ValueError("at least one opponent policy spec is required.")
+    weighted_opponent_pool = (
+        tuple(opponent_pool_entries)
+        if opponent_pool_entries is not None
+        else None
+    )
+    if weighted_opponent_pool is not None:
+        _validate_weighted_opponent_pool(weighted_opponent_pool, opponent_specs=opponent_specs)
     if training_cache_chunk_games is not None and training_cache_chunk_games <= 0:
         raise ValueError("training_cache_chunk_games must be positive when set.")
     collection_peak_rss_mb_by_phase: dict[str, float | None] = {}
@@ -607,6 +647,7 @@ def collect_selfplay_rollouts(
                     seed_start=seed_start,
                     current_policy_spec=current_policy_spec,
                     opponent_specs=opponent_specs,
+                    opponent_pool_entries=weighted_opponent_pool,
                     policy_factories=policy_factories,
                     worker_count=worker_count,
                     rss_recorder=lambda phase: _record_process_peak_rss(collection_peak_rss_mb_by_phase, phase),
@@ -650,6 +691,7 @@ def _collect_selfplay_records(
     seed_start: int,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
+    opponent_pool_entries: tuple[OpponentPoolEntry, ...] | None,
     policy_factories: Mapping[str, Callable[[], Any]],
     worker_count: int,
     rss_recorder: Callable[[str], None] | None = None,
@@ -667,6 +709,7 @@ def _collect_selfplay_records(
                     rollout_config=rollout_config,
                     current_policy_spec=current_policy_spec,
                     opponent_specs=opponent_specs,
+                    opponent_pool_entries=opponent_pool_entries,
                     policy_factories=policy_factories,
                 )
                 for game_index in range(games)
@@ -697,6 +740,7 @@ def _collect_selfplay_records(
                         rollout_config=rollout_config,
                         current_policy_spec=current_policy_spec,
                         opponent_specs=opponent_specs,
+                        opponent_pool_entries=opponent_pool_entries,
                         policy_factories=policy_factories,
                     ),
                     range(games),
@@ -827,10 +871,20 @@ def _run_selfplay_game_record(
     rollout_config: RolloutConfig,
     current_policy_spec: str,
     opponent_specs: tuple[str, ...],
+    opponent_pool_entries: tuple[OpponentPoolEntry, ...] | None,
     policy_factories: Mapping[str, Callable[[], Any]],
 ) -> tuple[RolloutRecord, RolloutRecord]:
     seed = seed_start + game_index
-    opponent_spec = opponent_specs[game_index % len(opponent_specs)]
+    opponent_entry = (
+        _weighted_opponent_entry_for_seed(opponent_pool_entries, seed=seed)
+        if opponent_pool_entries is not None
+        else None
+    )
+    opponent_spec = (
+        opponent_entry.policy_spec
+        if opponent_entry is not None
+        else opponent_specs[game_index % len(opponent_specs)]
+    )
     p1_spec, p2_spec = _seat_policy_specs(
         current_policy_spec=current_policy_spec,
         opponent_policy_spec=opponent_spec,
@@ -849,7 +903,12 @@ def _run_selfplay_game_record(
         seed=seed,
         battle_id=f"selfplay-{seed}",
     )
-    return record, _record_for_player(record, current_player)
+    return record, _record_for_player(
+        record,
+        current_player,
+        opponent_pool_entry=opponent_entry,
+        opponent_policy_spec=opponent_spec if opponent_entry is not None else None,
+    )
 
 
 def _policy_factories_for_specs(
@@ -864,16 +923,63 @@ def _policy_factories_for_specs(
     }
 
 
-def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
+def _validate_weighted_opponent_pool(
+    entries: tuple[OpponentPoolEntry, ...],
+    *,
+    opponent_specs: tuple[str, ...],
+) -> None:
+    if not entries:
+        raise ValueError("opponent pool manifest must include at least one member.")
+    entry_specs = tuple(entry.policy_spec for entry in entries)
+    missing_specs = set(entry_specs) - set(opponent_specs)
+    if missing_specs:
+        raise ValueError(
+            "opponent pool contains specs absent from opponent_policy_specs: "
+            f"{sorted(missing_specs)}"
+        )
+
+
+def _weighted_opponent_entry_for_seed(
+    entries: tuple[OpponentPoolEntry, ...],
+    *,
+    seed: int,
+) -> OpponentPoolEntry:
+    total_weight = sum(entry.weight for entry in entries)
+    if total_weight <= 0.0 or not math.isfinite(total_weight):
+        raise ValueError("opponent pool total weight must be finite and positive.")
+    threshold = random.Random(seed).random() * total_weight
+    cumulative = 0.0
+    for entry in entries:
+        cumulative += entry.weight
+        if threshold <= cumulative:
+            return entry
+    return entries[-1]
+
+
+def _record_for_player(
+    record: RolloutRecord,
+    player_id: str,
+    *,
+    opponent_pool_entry: OpponentPoolEntry | None = None,
+    opponent_policy_spec: str | None = None,
+) -> RolloutRecord:
+    metadata = dict(record.trajectory.metadata)
+    if opponent_policy_spec is not None:
+        metadata["opponent_policy_spec"] = opponent_policy_spec
+    if opponent_pool_entry is not None:
+        metadata["opponent_pool_member_id"] = opponent_pool_entry.resolved_member_id
+        metadata["opponent_pool_weight"] = opponent_pool_entry.weight
+        if opponent_pool_entry.checkpoint_hash is not None:
+            metadata["opponent_pool_checkpoint_hash"] = opponent_pool_entry.checkpoint_hash
     trajectory = BattleTrajectory(
         battle_id=record.trajectory.battle_id,
         format_id=record.trajectory.format_id,
         seed=record.trajectory.seed,
-        metadata=dict(record.trajectory.metadata),
+        metadata=metadata,
     )
     for step in record.trajectory.steps:
         if step.player_id == player_id:
-            trajectory.append(step)
+            trajectory.append(_step_with_opponent_pool_metadata(step, metadata))
     if record.trajectory.terminal is not None:
         trajectory.record_terminal(record.trajectory.terminal)
     return RolloutRecord(
@@ -887,6 +993,25 @@ def _record_for_player(record: RolloutRecord, player_id: str) -> RolloutRecord:
         trajectory=trajectory,
         belief_set_source_hash=record.belief_set_source_hash,
     )
+
+
+def _step_with_opponent_pool_metadata(
+    step: TrajectoryStep,
+    trajectory_metadata: Mapping[str, Any],
+) -> TrajectoryStep:
+    opponent_keys = {
+        "opponent_policy_spec",
+        "opponent_pool_checkpoint_hash",
+        "opponent_pool_member_id",
+        "opponent_pool_weight",
+    }
+    if not any(key in trajectory_metadata for key in opponent_keys):
+        return step
+    metadata = dict(step.metadata)
+    for key in opponent_keys:
+        if key in trajectory_metadata:
+            metadata[key] = trajectory_metadata[key]
+    return replace(step, metadata=metadata)
 
 
 def _opponent_pool(
