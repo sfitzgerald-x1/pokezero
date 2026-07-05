@@ -23,6 +23,7 @@ from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .replay_benchmark import ReplayPrefixBenchmarkReport, benchmark_replay_prefixes
 from .rollout import RolloutConfig
 from .selfplay import collect_selfplay_rollouts
+from .shaping import parse_shaping_spec
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -500,6 +501,16 @@ def _add_dataset_config_arguments(parser: argparse.ArgumentParser) -> None:
         help="PPO advantage/value-target source baked into the cache.",
     )
     parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+    parser.add_argument(
+        "--shaping-weights",
+        default=None,
+        help=(
+            "Optional dense potential-based reward shaping baked into cache returns/targets: "
+            "a preset (wse-arm1), inline JSON weights, or @/path/to.json. Default off — absent "
+            "means exactly the unshaped collection behavior (byte-identical caches). The shaping "
+            "gamma is --discount; raw rewards and per-step shaping components are stored separately."
+        ),
+    )
 
 
 def _dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConfig:
@@ -513,6 +524,9 @@ def _dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConf
         turn_penalty=args.turn_penalty,
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
+        potential_shaping=(
+            parse_shaping_spec(args.shaping_weights) if args.shaping_weights is not None else None
+        ),
     )
 
 

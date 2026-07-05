@@ -98,6 +98,19 @@ class TorchUnavailableError(RuntimeError):
     """Raised when optional neural functionality is used without PyTorch."""
 
 
+def _require_shaping_json(value: str, *, field: str) -> str:
+    """Validate a shaping spec string and normalize it to canonical ShapingConfig JSON."""
+    from .shaping import resolve_shaping_config
+
+    try:
+        config = resolve_shaping_config(value)
+    except (ValueError, TypeError, OSError) as exc:
+        raise ValueError(f"{field} is not a valid shaping config: {exc}") from exc
+    if config is None:
+        raise ValueError(f"{field} must be a shaping config, not an explicit-off spelling; use None.")
+    return config.canonical_json()
+
+
 @dataclass(frozen=True)
 class TransformerPolicyConfig:
     """Entity-token transformer architecture for `PokeZeroObservationV0` batches."""
@@ -135,6 +148,12 @@ class TransformerPolicyConfig:
     # constant-zero residual slots must never resolve to mask-on (the #492 mismatch class;
     # same asymmetric-default pattern as value_activation).
     tier2_residuals: bool = True
+    # Dense potential-based reward-shaping provenance (canonical JSON of the
+    # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
+    # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
+    # LACKING the field to None (unshaped) — every pre-shaping checkpoint trained on
+    # terminal-only targets must never self-describe as shaped.
+    reward_shaping: str | None = None
 
     @classmethod
     def compact_category(
@@ -229,6 +248,12 @@ class TransformerPolicyConfig:
             raise ValueError(
                 "categorical_vocab_size must equal 1 + len(category_vocab) + category_oov_buckets."
             )
+        if self.reward_shaping is not None:
+            # Normalize to canonical JSON so config equality (resume validation) and the
+            # cache-vs-checkpoint cross-check compare content, not formatting.
+            object.__setattr__(
+                self, "reward_shaping", _require_shaping_json(self.reward_shaping, field="reward_shaping")
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -275,6 +300,9 @@ class TransformerPolicyConfig:
             # field and were trained on constant-zero slots -> resolve to mask-off, never the
             # dataclass default.
             tier2_residuals=bool(payload.get("tier2_residuals", False)),
+            # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
+            # on terminal-only value targets -> always resolve to unshaped.
+            reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
         )
 
 
@@ -320,6 +348,11 @@ class TransformerTrainingConfig:
     # optimizer step. None disables clipping (legacy behavior). The MIT thesis recipe uses 0.5430.
     max_grad_norm: float | None = None
     freeze_non_value_parameters: bool = False
+    # Dense potential-based reward shaping applied to returns/GAE targets (canonical JSON of a
+    # pokezero.shaping ShapingConfig, or None for unshaped). Stored as a JSON string so
+    # checkpoint payload round-trips through TransformerTrainingConfig(**payload) unchanged.
+    # The shaping gamma is `discount`.
+    shaping_weights: str | None = None
 
     def __post_init__(self) -> None:
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
@@ -396,6 +429,18 @@ class TransformerTrainingConfig:
             raise ValueError("switch_target_loss_weight must be non-negative.")
         if self.max_batches is not None and self.max_batches <= 0:
             raise ValueError("max_batches must be positive when set.")
+        if self.shaping_weights is not None:
+            object.__setattr__(
+                self, "shaping_weights", _require_shaping_json(self.shaping_weights, field="shaping_weights")
+            )
+
+    def resolved_shaping_config(self):
+        """The parsed ShapingConfig these targets are shaped under (None = unshaped)."""
+        if self.shaping_weights is None:
+            return None
+        from .shaping import ShapingConfig
+
+        return ShapingConfig.from_json(self.shaping_weights)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1191,6 +1236,7 @@ def train_transformer_policy(
         turn_penalty=resolved_training_config.turn_penalty,
         ppo_target_mode=resolved_training_config.ppo_target_mode,
         gae_lambda=resolved_training_config.gae_lambda,
+        potential_shaping=resolved_training_config.resolved_shaping_config(),
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
@@ -1249,7 +1295,13 @@ def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig
     initial_config = getattr(model, "config", None)
     if initial_config is None:
         return
-    comparable_expected = replace(expected, policy_id=getattr(initial_config, "policy_id", expected.policy_id))
+    # policy_id is a label; reward_shaping is TARGET provenance, not architecture — a warm
+    # start may legitimately re-target under different shaping (the new run's stamp wins).
+    comparable_expected = replace(
+        expected,
+        policy_id=getattr(initial_config, "policy_id", expected.policy_id),
+        reward_shaping=getattr(initial_config, "reward_shaping", expected.reward_shaping),
+    )
     if initial_config != comparable_expected:
         raise ValueError("initial_model config must match model_config except for policy_id.")
 

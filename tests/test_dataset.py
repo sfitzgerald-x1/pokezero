@@ -24,6 +24,7 @@ from pokezero.dataset import (
 )
 from pokezero.env import TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
+from pokezero.shaping import SHAPING_PRESETS, potential_shaping_rewards_by_step_index
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -1048,6 +1049,198 @@ def _batch_payload(batches) -> list[dict]:
         }
         for batch in batches
     ]
+
+
+class PotentialShapingDatasetTest(unittest.TestCase):
+    """Dense potential-based shaping through returns/GAE and the training cache."""
+
+    WSE = SHAPING_PRESETS["wse-arm1"]
+
+    def shaped_record(self) -> RolloutRecord:
+        def metadata(*mons):
+            return {"self_team": [dict(mon) for mon in mons]}
+
+        trajectory = BattleTrajectory(battle_id="potential-shaping", format_id="gen3randombattle", seed=9)
+        trajectory.append(
+            step(
+                player_id="p1",
+                turn_index=0,
+                value=1,
+                reward=0.0,
+                value_estimate=0.1,
+                observation_metadata=metadata({"hp_fraction": 1.0}, {"hp_fraction": 1.0}),
+            )
+        )
+        trajectory.append(
+            step(
+                player_id="p2",
+                turn_index=0,
+                value=2,
+                reward=0.0,
+                value_estimate=-0.1,
+                observation_metadata=metadata({"hp_fraction": 1.0}, {"hp_fraction": 1.0}),
+            )
+        )
+        trajectory.append(
+            step(
+                player_id="p1",
+                turn_index=1,
+                value=3,
+                reward=0.0,
+                value_estimate=0.2,
+                observation_metadata=metadata({"hp_fraction": 1.0}, {"hp_fraction": 1.0}),
+            )
+        )
+        trajectory.append(
+            step(
+                player_id="p2",
+                turn_index=1,
+                value=4,
+                reward=0.0,
+                value_estimate=-0.2,
+                observation_metadata=metadata(
+                    {"hp_fraction": 0.0, "fainted": True}, {"hp_fraction": 0.4, "status": "par"}
+                ),
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner="p1", turn_count=2))
+        return RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "test", "p2": "test"},
+            decision_round_count=2,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+
+    def test_potential_shaping_folds_into_returns_and_example_field(self) -> None:
+        record = self.shaped_record()
+        config = TrajectoryDatasetConfig(window_size=1, potential_shaping=self.WSE)
+        expected_terms = potential_shaping_rewards_by_step_index(record, config=self.WSE, gamma=config.discount)
+        examples = list(examples_from_record(record, config=config))
+
+        for example, step_index in zip(examples, range(4), strict=True):
+            self.assertAlmostEqual(example.shaping_reward, expected_terms[step_index])
+        # p1's last decision return = clip(terminal(+1) + own final shaping term).
+        p1_examples = [example for example in examples if example.player_id == "p1"]
+        self.assertAlmostEqual(p1_examples[-1].return_value, min(1.0, 1.0 + expected_terms[2]))
+        # Unshaped config: no example field, terminal-only returns.
+        unshaped = list(examples_from_record(record, config=TrajectoryDatasetConfig(window_size=1)))
+        self.assertTrue(all(example.shaping_reward is None for example in unshaped))
+        self.assertAlmostEqual(unshaped[0].return_value, 1.0)
+
+    def test_potential_shaping_enters_gae_targets(self) -> None:
+        record = self.shaped_record()
+        base = TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=1.0)
+        shaped = TrajectoryDatasetConfig(
+            window_size=1, ppo_target_mode="gae", gae_lambda=1.0, potential_shaping=self.WSE
+        )
+        base_examples = list(examples_from_record(record, config=base))
+        shaped_examples = list(examples_from_record(record, config=shaped))
+        terms = potential_shaping_rewards_by_step_index(record, config=self.WSE, gamma=1.0)
+        # p1's first-step advantage gains the discounted sum of p1's shaping terms.
+        self.assertAlmostEqual(
+            shaped_examples[0].ppo_advantage - base_examples[0].ppo_advantage,
+            terms[0] + terms[2],
+            places=9,
+        )
+
+    def test_shaped_cache_round_trips_and_stores_separate_shaping_array(self) -> None:
+        self._require_numpy()
+        import numpy
+
+        record = self.shaped_record()
+        config = TrajectoryDatasetConfig(window_size=1, potential_shaping=self.WSE)
+        expected_terms = potential_shaping_rewards_by_step_index(record, config=self.WSE, gamma=config.discount)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+            write_training_cache_from_rollouts(path, cache_path, config=config)
+
+            self.assertTrue((cache_path / "shaping_rewards.npy").is_file())
+            stored = numpy.load(cache_path / "shaping_rewards.npy")
+            for index in range(4):
+                self.assertAlmostEqual(float(stored[index]), expected_terms[index], places=6)
+            # Raw rewards stay raw (zeros here), separate from the shaping component.
+            rewards = numpy.load(cache_path / "rewards.npy")
+            self.assertEqual(rewards.tolist(), [0.0, 0.0, 0.0, 0.0])
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                metadata["dataset_config"]["potential_shaping"], self.WSE.to_dict()
+            )
+
+            raw_batches = list(iter_training_batches(path, batch_size=4, config=config))
+            cached_batches = list(iter_training_batches(cache_path, batch_size=4, config=config))
+            # Shaped targets are not float32-exact (unlike the +-1/0 terminal targets the
+            # exact-equality round-trip tests use), so compare within float32 resolution.
+            self._assert_payload_close(_batch_payload(cached_batches), _batch_payload(raw_batches))
+
+    def _assert_payload_close(self, left, right, path="") -> None:
+        if isinstance(left, dict) and isinstance(right, dict):
+            self.assertEqual(sorted(left), sorted(right), path)
+            for key in left:
+                self._assert_payload_close(left[key], right[key], f"{path}.{key}")
+        elif isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+            self.assertEqual(len(left), len(right), path)
+            for index, (l_item, r_item) in enumerate(zip(left, right)):
+                self._assert_payload_close(l_item, r_item, f"{path}[{index}]")
+        elif isinstance(left, float) or isinstance(right, float):
+            self.assertAlmostEqual(float(left), float(right), places=5, msg=path)
+        else:
+            self.assertEqual(left, right, path)
+
+    def test_unshaped_cache_has_no_shaping_artifacts(self) -> None:
+        self._require_numpy()
+        record = self.shaped_record()
+        config = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            cache_path = Path(temp_dir) / "cache"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+            write_training_cache_from_rollouts(path, cache_path, config=config)
+
+            self.assertFalse((cache_path / "shaping_rewards.npy").exists())
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+            self.assertNotIn("potential_shaping", metadata["dataset_config"])
+
+    def test_shaped_cache_refuses_unshaped_training_config_and_vice_versa(self) -> None:
+        self._require_numpy()
+        record = self.shaped_record()
+        shaped = TrajectoryDatasetConfig(window_size=1, potential_shaping=self.WSE)
+        unshaped = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rollouts.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, record)
+            shaped_cache = Path(temp_dir) / "shaped-cache"
+            unshaped_cache = Path(temp_dir) / "unshaped-cache"
+            write_training_cache_from_rollouts(path, shaped_cache, config=shaped)
+            write_training_cache_from_rollouts(path, unshaped_cache, config=unshaped)
+
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                list(iter_training_cache_batches(shaped_cache, batch_size=4, config=unshaped))
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                list(iter_training_cache_batches(unshaped_cache, batch_size=4, config=shaped))
+
+    def test_dataset_config_coerces_shaping_payload_and_round_trips(self) -> None:
+        config = TrajectoryDatasetConfig(window_size=1, potential_shaping=self.WSE.to_dict())
+        self.assertEqual(config.potential_shaping, self.WSE)
+        self.assertEqual(TrajectoryDatasetConfig.from_dict(config.to_dict()), config)
+        # Legacy payloads (no field) resolve to unshaped.
+        legacy = dict(TrajectoryDatasetConfig(window_size=1).to_dict())
+        self.assertNotIn("potential_shaping", legacy)
+        self.assertIsNone(TrajectoryDatasetConfig.from_dict(legacy).potential_shaping)
+
+    def _require_numpy(self) -> None:
+        try:
+            import numpy  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("NumPy is not installed in this environment.")
 
 
 def _tolist(value):
