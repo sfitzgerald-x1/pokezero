@@ -166,7 +166,13 @@ run_with_timeout() {
   fi
   "$@" &
   local cmd_pid=$!
-  ( sleep "$secs"; kill "$cmd_pid" 2>/dev/null ) &
+  # The killer subshell must shed the sweep's inherited fds before forking
+  # sleep: the kill below reaps the subshell but NOT its already-forked
+  # sleep, and that orphan lives for up to $secs AFTER the sweep exits.
+  # Holding a dup of fd 9 it keeps the sweep flock held (no-op'ing every
+  # cron sweep in that window); holding stdout/stderr it keeps a cron/pipe
+  # reader blocked just as long.
+  ( exec 9>&- >/dev/null 2>&1; sleep "$secs"; kill "$cmd_pid" 2>/dev/null ) &
   local killer_pid=$!
   local rc
   wait "$cmd_pid"; rc=$?

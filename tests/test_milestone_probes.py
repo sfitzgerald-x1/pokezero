@@ -7,11 +7,13 @@ straight from the scripts directory.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
 import math
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1116,3 +1118,112 @@ class TestPearsonPoolPin:
         else:
             raise AssertionError("expected record to raise SystemExit")
         assert not ledger.exists()
+
+
+_SWEEP_SH = _SCRIPT.with_name("milestone_probes.sh")
+
+# Distinctive, non-round sleep duration: the liveness test necessarily leaves
+# one orphaned `sleep` behind (that is the mechanism under test); teardown
+# pkills exactly this command line, and a missed pkill self-cleans in ~1 min.
+_ORPHAN_SECS = "63.79"
+
+# Reproduces the sweep's lock lifecycle around one run_with_timeout call:
+# fd 9 opened on the lockfile and flocked by the python helper (exactly the
+# sweep preamble), then the SHIPPED run_with_timeout — extracted from
+# milestone_probes.sh, not a copy — runs one command with a PATH that hides
+# coreutils `timeout`, forcing the background-killer fallback used on stock
+# macOS. When this shell exits, fd 9 closes; only a process that leaked the
+# fd can still hold the flock.
+_LOCK_DRIVER = """\
+set -euo pipefail
+repo="$1"; lock="$2"; stubbin="$3"; secs="$4"; shift 4
+exec 9>"$lock"
+python3 "$repo/scripts/milestone_probes.py" lock --fd 9
+fn="$(sed -n '/^run_with_timeout()/,/^}/p' "$repo/scripts/milestone_probes.sh")"
+[ -n "$fn" ] || { echo "could not extract run_with_timeout" >&2; exit 90; }
+eval "$fn"
+ln -s "$(command -v sleep)" "$stubbin/sleep"
+if PATH="$stubbin" command -v timeout >/dev/null 2>&1; then
+  echo "timeout unexpectedly on the stub PATH" >&2; exit 91
+fi
+rc=0
+PATH="$stubbin" run_with_timeout "$secs" "$@" || rc=$?
+echo "run_with_timeout_rc=$rc"
+"""
+
+
+class TestSweepLockLiveness:
+    """The no-coreutils-timeout fallback in run_with_timeout (stock macOS)
+    must not leak the sweep flock: `kill "$killer_pid"` reaps the killer
+    subshell but not its already-forked sleep, and an orphaned sleep that
+    inherited fd 9 held runs/milestone-probes/.sweep.lock for up to
+    POKEZERO_CP_TIMEOUT after the sweep exited — every cron sweep in that
+    window bailed with "another sweep holds the lock"."""
+
+    def _drive(self, tmp_path: Path, secs: str, *cmd: str) -> tuple:
+        driver = tmp_path / "driver.sh"
+        driver.write_text(_LOCK_DRIVER, encoding="utf-8")
+        lock = tmp_path / ".sweep.lock"
+        stubbin = tmp_path / "stubbin"
+        stubbin.mkdir()
+        # Output goes to FILES, not pipes: an fd-leaking killer subshell
+        # orphans a sleep that would hold pipe write-ends open long after
+        # bash exits, and capture_output would block on EOF until the orphan
+        # died — masking the crisp flock assertion below with a timeout.
+        out_path = tmp_path / "driver.out"
+        err_path = tmp_path / "driver.err"
+        with out_path.open("w") as out, err_path.open("w") as err:
+            proc = subprocess.run(
+                ["bash", str(driver), str(_SWEEP_SH.parents[1]), str(lock), str(stubbin), secs, *cmd],
+                stdout=out, stderr=err, timeout=30,
+            )
+        stdout = out_path.read_text(encoding="utf-8")
+        stderr = err_path.read_text(encoding="utf-8")
+        return proc.returncode, stdout, stderr, lock
+
+    def _assert_lock_free(self, lock: Path) -> None:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise AssertionError(
+                    "sweep lock still held after the sweep shell exited — "
+                    "run_with_timeout leaked fd 9 to an orphaned sleep"
+                )
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def _reap_orphan(self) -> None:
+        subprocess.run(
+            ["pkill", "-x", "-f", f"sleep {_ORPHAN_SECS}"],
+            capture_output=True, check=False,
+        )
+
+    def test_lock_free_after_command_finishes_before_timeout(self, tmp_path) -> None:
+        # The common sweep case: kubectl cp finishes well inside its timeout.
+        # The 1s command guarantees the killer subshell has forked its sleep
+        # by the time run_with_timeout kills the subshell — the exact moment
+        # the buggy version orphaned a lock-holding sleep.
+        try:
+            rc, stdout, stderr, lock = self._drive(tmp_path, _ORPHAN_SECS, "sleep", "1")
+            assert rc == 0, stderr
+            assert "run_with_timeout_rc=0" in stdout
+            self._assert_lock_free(lock)
+        finally:
+            self._reap_orphan()
+
+    def test_fallback_still_kills_a_hung_command(self, tmp_path) -> None:
+        # Guard the other direction: the fd hygiene must not break the
+        # killer itself. A hung command dies at the timeout (rc > 128) and
+        # the lock is free immediately afterwards.
+        try:
+            rc, stdout, stderr, lock = self._drive(tmp_path, "1", "sleep", _ORPHAN_SECS)
+            assert rc == 0, stderr
+            rc_lines = [l for l in stdout.splitlines() if l.startswith("run_with_timeout_rc=")]
+            assert len(rc_lines) == 1, stdout
+            assert int(rc_lines[0].partition("=")[2]) > 128
+            self._assert_lock_free(lock)
+        finally:
+            self._reap_orphan()
