@@ -110,6 +110,11 @@ def main() -> int:
     tp_sample: list[dict[str, Any]] = []
     hp_blocked_mons = 0
     defense_blocked_mons = 0
+    # Review LOW-1: a conclusion whose canonical key misses the truth mapping must be
+    # COUNTED and asserted zero, never silently dropped — a canonicalization divergence
+    # would otherwise hide exactly the false pins this gate exists to catch.
+    unmatched_conclusions = 0
+    unmatched_detail: list[dict[str, Any]] = []
 
     # Coverage / recall denominators.
     opponent_mons_seen = 0
@@ -258,6 +263,14 @@ def main() -> int:
                     if conclusion.defense_blocked:
                         defense_blocked_mons += 1
                     if row is None:
+                        unmatched_conclusions += 1
+                        unmatched_detail.append({
+                            "game": game_index,
+                            "perspective": perspective,
+                            "kind": "truth-row-missing",
+                            "conclusion_key": key,
+                            "canonical_species": species_key,
+                        })
                         continue
                     info = dex.species_info(species_key)
                     true_spread = (
@@ -308,6 +321,17 @@ def main() -> int:
                     for stat_key, value in conclusion.defense_values.items():
                         true_value = row["stats"].get(stat_key)
                         if true_value is None:
+                            # Same LOW-1 shape as the row miss: a defense conclusion for
+                            # a stat the truth row lacks must be scored, not dropped.
+                            unmatched_conclusions += 1
+                            unmatched_detail.append({
+                                "game": game_index,
+                                "perspective": perspective,
+                                "kind": "truth-stat-missing",
+                                "conclusion_key": key,
+                                "canonical_species": species_key,
+                                "stat": stat_key,
+                            })
                             continue
                         if value == true_value:
                             defense_tp += 1
@@ -359,7 +383,7 @@ def main() -> int:
         (control_clean - control_off_model) / control_clean if control_clean else None
     )
 
-    precision_pass = hp_value_predictions >= 3 and total_fp == 0
+    precision_pass = hp_value_predictions >= 3 and total_fp == 0 and unmatched_conclusions == 0
     calibration_pass = (
         control_clean >= 200
         and consistency is not None
@@ -411,6 +435,8 @@ def main() -> int:
                 "precision": defense_tp / defense_predictions if defense_predictions else None,
             },
             "blocked_mons": {"hp": hp_blocked_mons, "defense": defense_blocked_mons},
+            "unmatched_conclusions": unmatched_conclusions,
+            "unmatched_detail": unmatched_detail,
             "false_positive_detail": fp_detail,
             "true_positive_sample": tp_sample,
         },
@@ -440,7 +466,9 @@ def main() -> int:
             "calibration_pass": calibration_pass,
             "verdict": verdict,
             "criteria": {
-                "precision": "zero false pins across all conclusion types and >= 3 hp-value conclusions",
+                "precision": "zero false pins across all conclusion types, zero unmatched "
+                             "conclusions (every conclusion scored against truth), and "
+                             ">= 3 hp-value conclusions",
                 "calibration": ">= 200 clean control strikes, true-variant consistency >= 0.98, "
                                "zero spread mismatches, zero HP-denominator mismatches",
             },

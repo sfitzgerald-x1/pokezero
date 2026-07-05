@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-04",
+  "generated": "2026-07-05",
   "harness": "scripts/investment_gate.py",
   "policy": "move-biased random-legal (move_bias=0.75), both seats",
   "games_requested": 120,
@@ -57,6 +57,8 @@
       "hp": 0,
       "defense": 0
     },
+    "unmatched_conclusions": 0,
+    "unmatched_detail": [],
     "false_positive_detail": [],
     "true_positive_sample": [
       {
@@ -273,7 +275,7 @@
     "calibration_pass": true,
     "verdict": "PASS",
     "criteria": {
-      "precision": "zero false pins across all conclusion types and >= 3 hp-value conclusions",
+      "precision": "zero false pins across all conclusion types, zero unmatched conclusions (every conclusion scored against truth), and >= 3 hp-value conclusions",
       "calibration": ">= 200 clean control strikes, true-variant consistency >= 0.98, zero spread mismatches, zero HP-denominator mismatches"
     },
     "mask_recommendation": "populate NUMERIC_TT_INVESTMENT_BIT behind tier2_investment"
