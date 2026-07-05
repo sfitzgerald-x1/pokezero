@@ -12,7 +12,22 @@ from .actions import ACTION_COUNT
 # a stats token plus a 128-slot transition-token block (K in tokens, corrections item 11).
 # Checkpoints trained under v1 must load-and-refuse; replay them from their pinned tag
 # (docs/model_versioning.md).
-OBSERVATION_SCHEMA_VERSION = "pokezero.observation.v2"
+OBSERVATION_SCHEMA_VERSION_V2 = "pokezero.observation.v2"
+# v2.1 (checkpoint-driven, NOT a one-way door): defender identity on move transition tokens,
+# per-bucket revealed-move PP-validity bits, active-mon substitute HP fraction; the investment
+# reserve carries forward. Unlike the v1->v2 break, v2 stays a fully supported encode mode for
+# as long as live v2 training runs produce checkpoints: the schema version + numeric width
+# resolve from each loaded checkpoint's model_config (feature_masks_from_model_config /
+# env_config_with_checkpoint_masks latch family), so v2 checkpoints keep scoring through every
+# harness while fresh trains stamp v2.1.
+OBSERVATION_SCHEMA_VERSION_V2_1 = "pokezero.observation.v2.1"
+# The CURRENT schema: what fresh artifacts (new trains, checkpoint-free encodes) are stamped
+# with. Loading a checkpoint always overrides this default with the checkpoint's own schema.
+OBSERVATION_SCHEMA_VERSION = OBSERVATION_SCHEMA_VERSION_V2_1
+SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = (
+    OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+)
 LEGACY_OBSERVATION_SCHEMA_VERSIONS = ("pokezero.observation.v1",)
 # Sentinel for artifacts whose payload carries NO observation schema version. For a one-way
 # door, absent means unknown/legacy and must refuse — never "assume current spec".
@@ -36,12 +51,18 @@ class ObservationSpec:
 
     Different token sections use different feature subsets; unused categorical
     or numeric columns should be padded by the encoder.
+
+    ``schema_version`` keys the encoder's schema-conditional blocks (the v2.1 columns are
+    written only under a v2.1 spec) and is stamped onto every encoded observation, so the
+    numeric census and the version travel together — never a global constant the shapes
+    silently drift away from.
     """
 
     categorical_feature_count: int
     numeric_feature_count: int
     stats_token_count: int = STATS_TOKEN_COUNT
     transition_token_count: int = TRANSITION_TOKEN_COUNT
+    schema_version: str = OBSERVATION_SCHEMA_VERSION
 
     @property
     def token_count(self) -> int:
@@ -130,6 +151,13 @@ class PokeZeroObservationV0:
 
     def validate(self, spec: ObservationSpec) -> None:
         require_current_observation_schema(self.schema_version, context="observation")
+        if self.schema_version != spec.schema_version:
+            raise ValueError(
+                f"observation: schema {self.schema_version!r} does not match the validating "
+                f"spec's {spec.schema_version!r} — {OBSERVATION_SCHEMA_VERSION_V2!r} and "
+                f"{OBSERVATION_SCHEMA_VERSION_V2_1!r} are both supported but must never be "
+                "mixed within one pipeline (checkpoint-driven resolution, no silent coercion)."
+            )
         _require_outer_length("categorical_ids", self.categorical_ids, spec.token_count)
         _require_outer_length("numeric_features", self.numeric_features, spec.token_count)
         _require_outer_length("token_type_ids", self.token_type_ids, spec.token_count)
@@ -140,13 +168,16 @@ class PokeZeroObservationV0:
 
 
 def require_current_observation_schema(schema_version: str | None, *, context: str) -> None:
-    """Refuse any observation schema that is not the current spec, with a clean message.
+    """Refuse any observation schema outside the supported set, with a clean message.
 
-    This is the data-side latch of the one-way door: production ingest paths call it so a
-    stale v1 (or unversioned) artifact dies here — with the replay-from-pinned-tag guidance —
-    instead of surfacing later as a bare tensor-shape error mid-training.
+    This is the data-side latch of the one-way door for LEGACY artifacts: production ingest
+    paths call it so a stale v1 (or unversioned) artifact dies here — with the
+    replay-from-pinned-tag guidance — instead of surfacing later as a bare tensor-shape error
+    mid-training. During the v2/v2.1 dual-schema window BOTH current versions pass this gate;
+    pairing an artifact with the RIGHT model is enforced downstream by the checkpoint-driven
+    spec resolution plus the numeric-census guard, which names both schemas on a mismatch.
     """
-    if schema_version == OBSERVATION_SCHEMA_VERSION:
+    if schema_version in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
         return
     if (
         schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS
@@ -155,10 +186,10 @@ def require_current_observation_schema(schema_version: str | None, *, context: s
     ):
         described = schema_version or UNVERSIONED_OBSERVATION_SCHEMA
         raise ValueError(
-            f"{context}: observation schema {described!r} predates the current spec "
-            f"{OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition tokens + exact-state "
-            "layer). Legacy data and checkpoints must be replayed from their pinned tag "
-            "(docs/model_versioning.md)."
+            f"{context}: observation schema {described!r} predates the supported specs "
+            f"({OBSERVATION_SCHEMA_VERSION_V2!r}, {OBSERVATION_SCHEMA_VERSION_V2_1!r}) "
+            "(window=1 + transition tokens + exact-state layer). Legacy data and checkpoints "
+            "must be replayed from their pinned tag (docs/model_versioning.md)."
         )
     raise ValueError(f"{context}: unsupported observation schema version: {schema_version!r}.")
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import os
 import random
-from dataclasses import replace
 from pathlib import Path
 
 # Allow running as `python scripts/play_against_checkpoint.py` without PYTHONPATH=src.
@@ -28,8 +27,11 @@ from pokezero.local_showdown import (  # noqa: E402
     LocalShowdownEnv,
     env_config_with_checkpoint_masks,
 )
-from pokezero.neural_policy import feature_masks_from_model_config, load_transformer_policy  # noqa: E402
-from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC  # noqa: E402
+from pokezero.neural_policy import (  # noqa: E402
+    feature_masks_from_model_config,
+    load_transformer_policy,
+    observation_spec_from_model_config,
+)
 
 _DEFAULT_CHECKPOINT = "runs/promoted/strongest-vs-max-damage.pt"
 
@@ -101,19 +103,16 @@ def play(
 ) -> None:
     policy = load_transformer_policy(checkpoint, deterministic=deterministic)
     config = policy.result.model_config
-    # Feed the model the observation shape it was trained on (it may predate later feature slots).
-    spec = replace(
-        DEFAULT_REPLAY_OBSERVATION_SPEC,
-        categorical_feature_count=config.categorical_feature_count,
-        numeric_feature_count=config.numeric_feature_count,
-    )
+    # Feed the model the observation schema + shape it was trained on (dual-schema resolution).
+    spec = observation_spec_from_model_config(config)
     bot_player = "p1" if human_player == "p2" else "p2"
     # The bot reads env.observe() tensors, so the env must encode with the checkpoint's
-    # stamped feature masks (the same latch the shared harnesses apply).
+    # stamped feature masks + observation spec (the same latch the shared harnesses apply).
     env_config = env_config_with_checkpoint_masks(
-        LocalShowdownConfig(showdown_root=showdown_root, observation_spec=spec),
+        LocalShowdownConfig(showdown_root=showdown_root),
         feature_masks_from_model_config(config),
         context="play_against_checkpoint",
+        required_specs=spec,
     )
     env = LocalShowdownEnv(env_config)
     rng = random.Random(seed)

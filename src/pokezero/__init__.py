@@ -164,6 +164,9 @@ from .neural_selfplay import (
 )
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+    SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     ObservationFeatureMasks,
     ObservationSpec,
     PokeZeroObservationV0,
@@ -361,6 +364,9 @@ __all__ = [
     "OpponentActionPlanner",
     "OpponentBeliefDeterminization",
     "OBSERVATION_SCHEMA_VERSION",
+    "OBSERVATION_SCHEMA_VERSION_V2",
+    "OBSERVATION_SCHEMA_VERSION_V2_1",
+    "SUPPORTED_OBSERVATION_SCHEMA_VERSIONS",
     "PokeZeroEnv",
     "PokeZeroObservationV0",
     "PUCTBranchSearchCandidate",

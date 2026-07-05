@@ -60,6 +60,7 @@ from .neural_policy import (
     load_transformer_checkpoint,
     load_transformer_model_config,
     load_transformer_policy,
+    observation_spec_from_model_config,
     transformer_model_configs_from_policies,
     require_torch,
     resolve_torch_device,
@@ -6395,23 +6396,32 @@ def print_root_puct_counterfactual_report(report: RootPUCTCounterfactualBenchmar
 
 
 def _env_config_with_matchup_masks(env_config, matchups, *, context: str):
-    """Adopt the encode-time masks the matchup checkpoints trained under (HIGH-1 latch)."""
+    """Adopt the encode-time masks + observation spec the matchup checkpoints trained under
+    (HIGH-1 latch + the dual-schema resolution: v2 checkpoints keep the v2 encode)."""
     policies = [policy for matchup in matchups for policy in (matchup.p1_policy, matchup.p2_policy)]
-    required = [
-        feature_masks_from_model_config(config)
-        for config in transformer_model_configs_from_policies(policies)
-    ]
-    return env_config_with_checkpoint_masks(env_config, required, context=context)
+    configs = transformer_model_configs_from_policies(policies)
+    return env_config_with_checkpoint_masks(
+        env_config,
+        [feature_masks_from_model_config(config) for config in configs],
+        context=context,
+        required_specs=[observation_spec_from_model_config(config) for config in configs],
+    )
 
 
 def _env_config_with_spec_masks(env_config, specs, *, extra_model_configs=(), context: str):
-    """Adopt masks from ``neural:`` policy specs plus any directly-loaded model configs."""
-    required = [
-        feature_masks_from_model_config(load_transformer_model_config(path))
+    """Adopt masks + observation spec from ``neural:`` policy specs plus any directly-loaded
+    model configs (dual-schema resolution)."""
+    configs = [
+        load_transformer_model_config(path)
         for path in neural_checkpoint_paths_from_policy_specs(specs)
     ]
-    required.extend(feature_masks_from_model_config(config) for config in extra_model_configs)
-    return env_config_with_checkpoint_masks(env_config, required, context=context)
+    configs.extend(extra_model_configs)
+    return env_config_with_checkpoint_masks(
+        env_config,
+        [feature_masks_from_model_config(config) for config in configs],
+        context=context,
+        required_specs=[observation_spec_from_model_config(config) for config in configs],
+    )
 
 
 def _policy_from_checkpoint(

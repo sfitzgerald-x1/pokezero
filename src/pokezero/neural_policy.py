@@ -22,9 +22,13 @@ from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batch
 from .observation import (
     LEGACY_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
+    SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TRANSITION_TOKEN_COUNT,
     UNVERSIONED_OBSERVATION_SCHEMA,
     ObservationFeatureMasks,
+    ObservationSpec,
     PokeZeroObservationV0,
 )
 from .padding import zeros_like as _zeros_like
@@ -32,6 +36,8 @@ from .policy import PolicyDecision, legal_action_indices
 from .showdown import (
     ACTION_CANDIDATE_TOKEN_OFFSET,
     DEFAULT_REPLAY_OBSERVATION_SPEC,
+    REPLAY_OBSERVATION_SPECS_BY_SCHEMA,
+    observation_spec_for_schema,
 )
 
 try:  # pragma: no cover - exercised only when the optional dependency exists.
@@ -186,7 +192,11 @@ class TransformerPolicyConfig:
         object.__setattr__(self, "category_vocab", tuple(str(value) for value in self.category_vocab))
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
-        if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
+        # Dual-schema window: v2 AND v2.1 checkpoints are both loadable — which encode an env
+        # uses resolves FROM this stamped version (observation_spec_from_model_config through
+        # the env_config_with_checkpoint_masks latch). Loading a v2 checkpoint is NOT a
+        # refusal case; v1/unversioned artifacts still die here with the pinned-tag message.
+        if self.observation_schema_version not in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
             if (
                 self.observation_schema_version in LEGACY_OBSERVATION_SCHEMA_VERSIONS
                 or self.observation_schema_version == UNVERSIONED_OBSERVATION_SCHEMA
@@ -195,8 +205,9 @@ class TransformerPolicyConfig:
                 raise ValueError(
                     f"This checkpoint was trained under observation spec "
                     f"{self.observation_schema_version or UNVERSIONED_OBSERVATION_SCHEMA!r}; "
-                    f"this build encodes {OBSERVATION_SCHEMA_VERSION!r} (window=1 + transition "
-                    "tokens + exact-state layer). Old checkpoints cannot run under the new spec "
+                    f"this build encodes {OBSERVATION_SCHEMA_VERSION_V2!r} and "
+                    f"{OBSERVATION_SCHEMA_VERSION_V2_1!r} (window=1 + transition tokens + "
+                    "exact-state layer). Old checkpoints cannot run under the new specs "
                     "— replay them from their pinned tag per docs/model_versioning.md."
                 )
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
@@ -260,6 +271,16 @@ class TransformerPolicyConfig:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
+        # Feature-width defaults are keyed on the PAYLOAD's stamped observation schema, never
+        # the build's current default: a v2 payload that omitted its widths must resolve to
+        # the v2 census (121), not silently inherit the v2.1 one (138). Real checkpoints
+        # serialize widths explicitly (asdict), so this only guards hand-written payloads.
+        payload_schema = _str_field(
+            payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA
+        )
+        default_spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA.get(
+            payload_schema, DEFAULT_REPLAY_OBSERVATION_SPEC
+        )
         return cls(
             policy_id=_str_field(payload, "policy_id", "entity-transformer"),
             window_size=_int_field(payload, "window_size", 1),
@@ -268,14 +289,14 @@ class TransformerPolicyConfig:
             categorical_feature_count=_int_field(
                 payload,
                 "categorical_feature_count",
-                DEFAULT_REPLAY_OBSERVATION_SPEC.categorical_feature_count,
+                default_spec.categorical_feature_count,
             ),
             numeric_feature_count=_int_field(
                 payload,
                 "numeric_feature_count",
-                DEFAULT_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                default_spec.numeric_feature_count,
             ),
-            token_count=_int_field(payload, "token_count", DEFAULT_REPLAY_OBSERVATION_SPEC.token_count),
+            token_count=_int_field(payload, "token_count", default_spec.token_count),
             embedding_dim=_int_field(payload, "embedding_dim", 128),
             transformer_layers=_int_field(payload, "transformer_layers", 2),
             attention_heads=_int_field(payload, "attention_heads", 4),
@@ -284,9 +305,7 @@ class TransformerPolicyConfig:
             action_schema_version=_str_field(payload, "action_schema_version", ACTION_SCHEMA_VERSION),
             # One-way-door posture: a checkpoint payload MISSING the observation schema version
             # is an unknown/legacy artifact and must refuse — never "assume current spec".
-            observation_schema_version=_str_field(
-                payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA
-            ),
+            observation_schema_version=payload_schema,
             category_vocab=tuple(str(value) for value in (payload.get("category_vocab") or ())),
             category_oov_buckets=_int_field(payload, "category_oov_buckets", 0),
             # Historical checkpoints were trained with an unbounded linear value head. Keep that
@@ -1362,6 +1381,26 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
     )
 
 
+def observation_spec_from_model_config(config: TransformerPolicyConfig) -> ObservationSpec:
+    """Encode-time observation spec a checkpoint's observations were trained under.
+
+    The spec twin of :func:`feature_masks_from_model_config` and the other half of the
+    checkpoint-driven dual-schema resolution: the SCHEMA comes from the checkpoint's stamped
+    ``observation_schema_version`` (selecting the v2 or v2.1 encode branches), and the widths
+    come from the checkpoint's own feature counts — preserving the long-standing "feed the
+    model the observation shape it was trained on" narrowing for artifacts that predate later
+    reserved slots within their schema (e.g. the 119-column pre-CB/investment v2 family,
+    whose extra columns are all-zero under their latched masks). A checkpoint whose stamped
+    schema is unsupported fails loudly in ``observation_spec_for_schema``.
+    """
+    base = observation_spec_for_schema(config.observation_schema_version)
+    return replace(
+        base,
+        categorical_feature_count=config.categorical_feature_count,
+        numeric_feature_count=config.numeric_feature_count,
+    )
+
+
 def transformer_model_configs_from_policies(policies: Iterable[Any]) -> tuple[TransformerPolicyConfig, ...]:
     """Model configs of every transformer-backed policy in ``policies`` (duck-typed sweep).
 
@@ -1879,10 +1918,12 @@ def _action_family_loss_weights(tensors: Mapping[str, Any], config: TransformerT
 def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConfig", *, batched: bool) -> str:
     """A LOUD, specific message for numeric-width mismatches (never a silent matmul).
 
-    The numeric column census widens within the v2 spec version when reserved Tier-2
-    slots materialize (119 -> 121 when the CB/investment slots landed), so a
-    pre-widening checkpoint or cache meeting post-widening code (or vice versa) must
-    name the exact disagreement and its likely cause.
+    The numeric column census differs across the two supported schemas
+    ({OBSERVATION_SCHEMA_VERSION_V2}: 121 columns, 119 before the reserved Tier-2
+    CB/investment slots materialized; {OBSERVATION_SCHEMA_VERSION_V2_1}: 138 columns —
+    PP-validity bits + substitute HP + the carried-forward investment reserve), so v2 data
+    meeting a v2.1 model (or any cross-census pairing) must name the exact disagreement,
+    both schema versions, and the likely cause.
     """
     observed_width = observed_shape[-1] if observed_shape else None
     message = (
@@ -1894,9 +1935,13 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
     if observed_width is not None and observed_width != config.numeric_feature_count:
         message += (
             f" Numeric column count {observed_width} != model's {config.numeric_feature_count}: "
-            "the observation numeric census widens when reserved Tier-2 slots materialize "
-            "(119 pre-CB/investment slots vs 121 after) — this artifact and this code were "
-            "built against different censuses and must not be mixed."
+            f"the numeric census is schema-keyed — {OBSERVATION_SCHEMA_VERSION_V2!r} is the "
+            "121-column family (119 before the reserved Tier-2 CB/investment slots "
+            f"materialized) and {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 138-column family "
+            "(revealed-move PP-validity bits + substitute HP fraction + the investment "
+            "reserve). This artifact and this model were built against different censuses "
+            "and must not be mixed; the schema + width an env encodes resolve from the "
+            "loaded checkpoint's model_config (observation_spec_from_model_config)."
         )
     return message
 

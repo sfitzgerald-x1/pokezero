@@ -23,7 +23,7 @@ import logging
 import random
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -145,16 +145,13 @@ def build_agent(
     from .neural_policy import load_transformer_policy
     from .randbat_vocab import gen3_category_vocabulary
 
-    from .neural_policy import feature_masks_from_model_config
+    from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
 
     policy = load_transformer_policy(checkpoint, deterministic=deterministic)
     config = policy.result.model_config
-    # Feed the model the observation shape it was trained on (it may predate later feature slots).
-    spec = replace(
-        DEFAULT_REPLAY_OBSERVATION_SPEC,
-        categorical_feature_count=config.categorical_feature_count,
-        numeric_feature_count=config.numeric_feature_count,
-    )
+    # Feed the model the observation schema + shape it was trained on (dual-schema resolution;
+    # widths may predate later feature slots within the checkpoint's own schema).
+    spec = observation_spec_from_model_config(config)
     return OnlineBattleAgent(
         policy=policy,
         vocab=gen3_category_vocabulary(showdown_root),

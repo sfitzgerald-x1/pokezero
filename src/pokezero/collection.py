@@ -830,23 +830,32 @@ def policy_from_name(name: str) -> Policy:
 
 
 def env_config_with_policy_spec_masks(env_config, specs: Iterable[str | None], *, context: str):
-    """Adopt encode-time feature masks from any ``neural:`` checkpoint specs in ``specs``.
+    """Adopt encode-time feature masks + observation spec from ``neural:`` checkpoint specs.
 
     The HIGH-1 train/eval latch for spec-driven CLI harnesses: every checkpoint that will
-    observe through the env contributes its stamped masks; conflicts (between checkpoints, or
-    with an explicit env override) hard-fail in ``env_config_with_checkpoint_masks``.
-    Torch-free when no neural specs are present.
+    observe through the env contributes its stamped masks AND its stamped observation
+    schema/width (the dual-schema resolution: a v2 checkpoint keeps the v2 encode, a v2.1
+    checkpoint the v2.1 encode); conflicts (between checkpoints, or with an explicit env
+    override) hard-fail in ``env_config_with_checkpoint_masks``. Torch-free when no neural
+    specs are present.
     """
     paths = neural_checkpoint_paths_from_policy_specs(specs)
     if not paths:
         return env_config
     from .local_showdown import env_config_with_checkpoint_masks
-    from .neural_policy import feature_masks_from_model_config, load_transformer_model_config
+    from .neural_policy import (
+        feature_masks_from_model_config,
+        load_transformer_model_config,
+        observation_spec_from_model_config,
+    )
 
-    required = [
-        feature_masks_from_model_config(load_transformer_model_config(path)) for path in paths
-    ]
-    return env_config_with_checkpoint_masks(env_config, required, context=context)
+    configs = [load_transformer_model_config(path) for path in paths]
+    return env_config_with_checkpoint_masks(
+        env_config,
+        [feature_masks_from_model_config(config) for config in configs],
+        context=context,
+        required_specs=[observation_spec_from_model_config(config) for config in configs],
+    )
 
 
 def neural_checkpoint_paths_from_policy_specs(specs: Iterable[str | None]) -> tuple[Path, ...]:

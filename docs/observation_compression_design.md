@@ -43,6 +43,23 @@
 >    materialized — residual 117 / validity 118 / CB bit 119 populated
 >    behind the tier2 gate + mask; investment 120 held at constant zero
 >    as the H3 reserve.)*
+>    *(Implementation note, spec v2.1 — `pokezero.observation.v2.1`,
+>    checkpoint-driven dual schema, NOT a one-way break: the schema +
+>    numeric width an env encodes resolve from the loaded checkpoint's
+>    model_config, so live v2 runs keep scoring on main while fresh
+>    trains stamp v2.1. Batch 1 adds (a) defender identity on move
+>    transition tokens in the CATEGORY_MOVE_PRIORITY slot, unused on
+>    transition rows — the defender is inferable from interleaved switch
+>    tokens EXCEPT when K-truncation drops the anchoring switch, and
+>    damage_fraction is defender-relative; (b) per-bucket revealed-move
+>    PP-validity bits (columns 121–136, mirroring the PP-fraction
+>    buckets), closing the revealed-at-0-PP collision; (c) the active
+>    mon's substitute HP fraction (column 137) as presence + the
+>    engine-verified initial floor(maxhp/4) — sub chip is not
+>    protocol-derivable (the surviving-hit `-activate` carries no
+>    magnitude; the drain heal leak is Tier-2 residual territory). The
+>    investment reserve (120) carries forward, still constant zero;
+>    populating it is batch 2 behind its own gate.)*
 > 10. Residual encoding: signed fraction of defender max HP (observed
 >    minus expected-median under the candidate-conservative baseline),
 >    with a separate validity bit (masked ⇒ invalid, value 0); populated

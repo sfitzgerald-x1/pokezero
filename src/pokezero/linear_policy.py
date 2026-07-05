@@ -16,7 +16,11 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION
 from .dataset import TrajectoryDatasetConfig, TrajectoryExample, iter_training_examples
-from .observation import OBSERVATION_SCHEMA_VERSION, PokeZeroObservationV0
+from .observation import (
+    OBSERVATION_SCHEMA_VERSION,
+    SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
+    PokeZeroObservationV0,
+)
 from . import padding as _padding
 from .padding import zeros_like as _zeros_like
 from .policy import PolicyDecision, legal_action_indices
@@ -28,6 +32,11 @@ LEGACY_LINEAR_FEATURE_FINGERPRINTS = (
     # Recursive zero-padding helper used before cached observation padding. The feature
     # values are identical, so old linear artifacts remain load-compatible.
     "7da4fbdd70569026ded205142d3eda2be61f5fc62b7f81a7a76f7f3fbfb7e395",
+    # Observation-schema-v2-era fingerprint (identical extractor sources; only the
+    # OBSERVATION_SCHEMA_VERSION constant embedded in the payload rotated to v2.1). Linear
+    # features hash observation metadata and masks, not the numeric census, so v2-era
+    # artifacts stay load-compatible through the dual-schema window.
+    "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",
 )
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 ALL_ACTIONS_LEGAL_MASK = tuple(True for _ in range(ACTION_COUNT))
@@ -101,7 +110,9 @@ class LinearPolicyModel:
     def __post_init__(self) -> None:
         if self.action_schema_version != ACTION_SCHEMA_VERSION:
             raise ValueError(f"Unsupported action schema version: {self.action_schema_version!r}.")
-        if self.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
+        # Dual-schema window: linear features are metadata-derived, so v2- and v2.1-stamped
+        # artifacts are both loadable (fresh saves stamp the current version).
+        if self.observation_schema_version not in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS:
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
         if self.feature_schema_version != LINEAR_FEATURE_SCHEMA_VERSION:
             raise ValueError(f"Unsupported linear feature schema version: {self.feature_schema_version!r}.")

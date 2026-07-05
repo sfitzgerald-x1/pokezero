@@ -43,6 +43,7 @@ from .neural_policy import (
     evaluate_transformer_observation_value,
     evaluate_transformer_opponent_action_priors,
     load_transformer_checkpoint,
+    observation_spec_from_model_config,
 )
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
@@ -59,7 +60,6 @@ from .search_policy import (
     prior_top_k_opponent_action_scenario_planner,
 )
 from .showdown import (
-    DEFAULT_REPLAY_OBSERVATION_SPEC,
     PlayerRelativeBattleState,
     normalize_for_player,
     observation_from_player_state,
@@ -1105,11 +1105,9 @@ async def run_controlled_foulplay_benchmark(
     model, result = load_transformer_checkpoint(config.checkpoint, map_location=config.device)
     _warn_on_belief_provenance_mismatch(config, result)
     policy_id = str(result.model_config.policy_id)
-    observation_spec = replace(
-        DEFAULT_REPLAY_OBSERVATION_SPEC,
-        categorical_feature_count=result.model_config.categorical_feature_count,
-        numeric_feature_count=result.model_config.numeric_feature_count,
-    )
+    # Schema + widths from the checkpoint's stamped provenance (dual-schema resolution): a v2
+    # checkpoint is probed under the v2 encode, a v2.1 checkpoint under v2.1.
+    observation_spec = observation_spec_from_model_config(result.model_config)
     vocab = gen3_category_vocabulary(config.showdown_root)
     dex = load_showdown_dex_cached(config.showdown_root)
     # Encode-time feature masks come FROM the checkpoint's stamped provenance (never the

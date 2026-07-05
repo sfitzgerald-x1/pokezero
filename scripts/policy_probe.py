@@ -112,11 +112,15 @@ def capture_base_state(
     target_set = {_norm(t) for t in targets}
 
     # The driver checkpoint reads env.observe() tensors, so the env must encode with the
-    # masks it trained under (the same latch the shared harnesses apply).
+    # masks AND the observation schema/width it trained under (the same latch the shared
+    # harnesses apply; build_agent already resolved agent.spec from the checkpoint).
     env_config = LocalShowdownConfig(showdown_root=showdown_root)
     if agent.feature_masks is not None:
         env_config = env_config_with_checkpoint_masks(
-            env_config, agent.feature_masks, context="policy_probe capture driver"
+            env_config,
+            agent.feature_masks,
+            context="policy_probe capture driver",
+            required_specs=agent.spec,
         )
 
     for game_seed in range(seed, seed + max_seeds):

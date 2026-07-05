@@ -1536,6 +1536,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
     def test_run_controlled_foulplay_benchmark_emits_incremental_progress(self) -> None:
         class FakeModelConfig:
             policy_id = "checkpoint"
+            observation_schema_version = "pokezero.observation.v2.1"
             categorical_feature_count = 1
             numeric_feature_count = 1
             stats_block_enabled = True
@@ -1644,6 +1645,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
     def test_async_main_summary_out_preserves_partial_progress_on_failure(self) -> None:
         class FakeModelConfig:
             policy_id = "checkpoint"
+            observation_schema_version = "pokezero.observation.v2.1"
             categorical_feature_count = 1
             numeric_feature_count = 1
             stats_block_enabled = True
