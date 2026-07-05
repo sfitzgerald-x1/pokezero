@@ -233,6 +233,8 @@ dual = M["dual_schema_story"]
 dual_rows = "".join(f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>" for k, v in dual.items())
 
 FM = M["feature_masks"]
+NCB = L["numeric_census_boundaries"]
+TM2_NUMERIC_COUNT = sum(1 for c in L["numeric_column_names"] if c.startswith("NUMERIC_TM2_"))
 
 page = f"""<meta charset="utf-8">
 <title>PokeZero observation v2.2 — turn-merged token format</title>
@@ -339,7 +341,7 @@ zero-padded and attention-masked ({esc(L["attention_mask_at_boundary"]["attended
 populated after 15 completed turns: {phase_census}).</p>
 <div class="facts">
   <div class="fact"><b>{esc(L["token_count"])}</b><span>tokens per observation</span></div>
-  <div class="fact"><b>{esc(L["numeric_feature_count"])}</b><span>numeric columns per token (121 v2 &rarr; 140 v2.1 &rarr; 153 v2.2)</span></div>
+  <div class="fact"><b>{esc(L["numeric_feature_count"])}</b><span>numeric columns per token ({esc(NCB["v2"])} v2 &rarr; {esc(NCB["v2.1"])} v2.1 &rarr; {esc(NCB["v2.2"])} v2.2)</span></div>
   <div class="fact"><b>{esc(L["categorical_feature_count"])}</b><span>categorical columns (39 + 12 turn-merged)</span></div>
   <div class="fact"><b>1/turn</b><span>transition tokens (phases; was 2/turn declared actions)</span></div>
   <div class="fact"><b>K in TURN units</b><span>budget counts whole-turn rows: 18 vs 35 per-action here</span></div>
@@ -372,7 +374,7 @@ per-action semantics), numerics on <code>NUMERIC_TT_*</code>. The per-action <co
 <code>CATEGORY_TM_FIRST_KIND</code> because SLOT now holds the phase; RestTalk/Baton-Pass collapses ride
 <code>CATEGORY_TM_FIRST_CANT</code>/<code>_BP</code>.<br><br>
 <b>Sub-block B (second mover)</b> lives entirely on the appended columns: 9 categorical
-(<code>CATEGORY_TM_SECOND_*</code>) + 13 numeric (<code>NUMERIC_TM2_*</code>). Its labels use <code>tt2_</code>-prefixed vocabulary
+(<code>CATEGORY_TM_SECOND_*</code>) + {TM2_NUMERIC_COUNT} numeric (<code>NUMERIC_TM2_*</code>). Its labels use <code>tt2_</code>-prefixed vocabulary
 families so the unordered categorical bag stays sub-block-bound. <code>NUMERIC_TM2_PRESENT</code> is the
 second-half-is-an-executed-action bit.</div>
 <h3>PENDING / NEGATED / ABSENT — the consumption-proof rule</h3>
@@ -414,6 +416,10 @@ both halves ACTION), the same cold-pair shape as the lead token. Sequential fain
 residual faint later the same turn) are separate engine request cycles and stay two single tokens —
 the cold-pair signal is &ldquo;was the OTHER side also waiting on a replacement when this switch-in was
 emitted&rdquo;, not log adjacency.</p>
+<p>This is also the terminal case of the <b>per-sub-block self-cost column</b>: Explosion spends the
+user's whole HP, so Weezing's sub-block carries <code>NUMERIC_TM2_SELF_HP_COST = 1.0</code> — which is why one
+<code>tt2_ko</code> bit accounts for two faints. The graded end of the same scale (Substitute's exact 0.25,
+Double-Edge recoil at 0.073 and 0.123) is worked through in section 6's self-cost anatomy example.</p>
 {explosion_html}
 
 <h2 id="walk">5 &middot; Token walkthrough — every attended token</h2>

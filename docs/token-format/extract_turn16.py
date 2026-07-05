@@ -221,6 +221,8 @@ def sub_block_dict(sub) -> dict:
         side_effect=sub.side_effect,
         n_hits=sub.n_hits,
     )
+    if sub.self_hp_cost:  # #519: upfront move price / recoil, fraction of own max HP
+        out["self_hp_cost"] = round(sub.self_hp_cost, 6)
     for flag in ("called", "transformed", "crit", "miss", "ko", "pursuit_intercept"):
         if getattr(sub, flag):
             out[flag] = True
@@ -332,6 +334,7 @@ def tm_example(turn: int, phase: str, source_lines: list[str], note: str, extra_
     return example
 
 
+t1 = turn_block(1)
 t7 = turn_block(7)
 t15 = turn_block(15)
 
@@ -354,10 +357,31 @@ examples = [
         "Gligar switch executes first (sub-block A), then Weezing's Explosion crits the "
         "fresh Gligar for its full 125/243 and the ko bit lights (sub-block B, "
         "tt2_damage 0.514, tt2_crit, tt2_ko); Explosion's self-faint is move mechanics, "
-        "not a KO outcome, so ONE ko bit for TWO faints. Both actives are now empty — "
-        "the engine runs ONE forceSwitch cycle for both sides, which is the companion "
-        "token below.",
+        "not a KO outcome — it surfaces instead as the TERMINAL self-cost, "
+        "NUMERIC_TM2_SELF_HP_COST = 1.0 (the user spends its whole HP), so ONE ko bit "
+        "for TWO faints. Both actives are now empty — the engine runs ONE forceSwitch "
+        "cycle for both sides, which is the companion token below.",
         extra_slots=((7, PHASE_REPLACEMENT),),
+    ),
+    tm_example(
+        1,
+        PHASE_TURN,
+        [line for line in t1 if line not in ("|", "|upkeep")],
+        "SELF-COST ANATOMY: one turn token with nonzero self-cost on BOTH sub-blocks, "
+        "covering both classes short of Explosion's terminal 1.0. Sub-block A: our "
+        "Pidgeot's Substitute pays the exact quarter — NUMERIC_TT_SELF_HP_COST = "
+        "71/284 = 0.25 (an upfront move price, no target damage). Sub-block B: "
+        "Piloswine's Double-Edge breaks the fresh sub (no |-damage| on Pidgeot, so "
+        "tt2_damage stays 0) and takes RECOIL — NUMERIC_TM2_SELF_HP_COST = 23/316 = "
+        "0.072785, read from the |[from] Recoil| line. The 0.25-vs-0.073 contrast is "
+        "the whole column in one card; turn 2 repeats the recoil class at 39/316 = "
+        "0.123418 against Gligar. Aside: that Double-Edge is a Choice Band lock — p2's "
+        "own requests show its other three moves disabled from turn 2 (ground truth in "
+        "the log, invisible to our encode), and by this boundary the Tier-1 belief "
+        "layer has independently pinned the item by set elimination: Piloswine's "
+        "candidate set is down to 1, so token 7 carries belief:possible_item:choiceband "
+        "with NUMERIC_POSSIBLE_ITEM_COUNT = 1.0 — while the Tier-2 damage-evidence CB "
+        "channel (NUMERIC_TIER2_CB_PINNED / tt CB bits) stays 0.0 on this replay path.",
     ),
     tm_example(
         15,
@@ -387,6 +411,22 @@ examples = [
         "tt2_status:negated — the consumption-proof rule.",
     ),
 ]
+
+# Self-cost latch (#519): the self-cost anatomy and Explosion notes above quote exact
+# encoder values for the per-sub-block SELF_HP_COST columns. Refuse to write a dump
+# whose encode contradicts them — if this fires, the #519 encoder normalizes the
+# column differently than the notes claim (e.g. dex-static price vs observed recoil
+# line) and the notes must be corrected, not the assert.
+_sc = {
+    "substitute_A": examples[1]["encoded_token"]["numerics"].get("NUMERIC_TT_SELF_HP_COST"),
+    "recoil_B": examples[1]["encoded_token"]["numerics"].get("NUMERIC_TM2_SELF_HP_COST"),
+    "explosion_B": examples[0]["encoded_token"]["numerics"].get("NUMERIC_TM2_SELF_HP_COST"),
+}
+_sc_expected = {"substitute_A": 0.25, "recoil_B": 0.072785, "explosion_B": 1.0}
+assert _sc == _sc_expected, (
+    f"self-cost worked-example values diverge from the encoder: {_sc} != {_sc_expected}; "
+    "fix the example notes in this script to match the real encode, then regenerate."
+)
 
 # ------------------------------------------------------------------------ context section
 context_start = all_lines.index("|start")

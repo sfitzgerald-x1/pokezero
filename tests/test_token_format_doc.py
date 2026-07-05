@@ -87,7 +87,8 @@ class TokenFormatDocSelfValidationTest(unittest.TestCase):
         layout = self.committed["layout"]
         self.assertEqual(layout["schema_version"], "pokezero.observation.v2.2")
         self.assertEqual(layout["token_count"], 151)
-        self.assertEqual(layout["numeric_feature_count"], 153)
+        # 155 = the post-#519 census (153 + the per-sub-block SELF_HP_COST pair).
+        self.assertEqual(layout["numeric_feature_count"], 155)
         self.assertEqual(layout["categorical_feature_count"], 51)
         self.assertEqual(layout["attention_mask_at_boundary"]["transition_attended"], 18)
         self.assertEqual(layout["per_action_token_count_same_boundary"], 35)
@@ -103,6 +104,20 @@ class TokenFormatDocSelfValidationTest(unittest.TestCase):
         self.assertEqual(pair["phase"], "replacement")
         self.assertEqual(pair["first"]["status"], "action")
         self.assertEqual(pair["second"]["status"], "action")
+        # The #519 self-cost surface, on real lines: Explosion's terminal 1.0 plus the
+        # turn-1 self-cost anatomy example with BOTH sub-blocks nonzero (Substitute's
+        # exact quarter on A vs Double-Edge recoil on B).
+        self.assertEqual(
+            explosion["encoded_token"]["numerics"]["NUMERIC_TM2_SELF_HP_COST"], 1.0
+        )
+        self_cost = self.committed["line_to_token_examples"][1]
+        self.assertEqual(self_cost["decoded_fields"]["turn"], 1)
+        self.assertEqual(
+            self_cost["encoded_token"]["numerics"]["NUMERIC_TT_SELF_HP_COST"], 0.25
+        )
+        self.assertEqual(
+            self_cost["encoded_token"]["numerics"]["NUMERIC_TM2_SELF_HP_COST"], 0.072785
+        )
 
     def test_committed_html_carries_dump_sentinels(self) -> None:
         explosion = self.committed["line_to_token_examples"][0]
@@ -116,6 +131,7 @@ class TokenFormatDocSelfValidationTest(unittest.TestCase):
             "tt2_move:explosion",
             "tt_phase:replacement",
             "tt2_status:absent",
+            "NUMERIC_TM2_SELF_HP_COST",  # the #519 self-cost surface must be featured
             self.committed["masks"]["belief_set_source"]["source_hash"],
         ):
             self.assertIn(

@@ -521,7 +521,7 @@
  "layout": {
   "schema_version": "pokezero.observation.v2.2",
   "token_count": 151,
-  "numeric_feature_count": 153,
+  "numeric_feature_count": 155,
   "categorical_feature_count": 51,
   "sections": {
    "field": {
@@ -709,12 +709,14 @@
    "NUMERIC_TM2_RESIDUAL_VALID",
    "NUMERIC_TM2_CB_BIT",
    "NUMERIC_TM2_PRESENT",
-   "NUMERIC_TM2_INVESTMENT"
+   "NUMERIC_TM2_INVESTMENT",
+   "NUMERIC_TT_SELF_HP_COST",
+   "NUMERIC_TM2_SELF_HP_COST"
   ],
   "numeric_census_boundaries": {
    "v2": 121,
    "v2.1": 140,
-   "v2.2": 153
+   "v2.2": 155
   },
   "categorical_slot_layout": {
    "fixed_count": 9,
@@ -2258,7 +2260,9 @@
     "NUMERIC_TT_ABS_TURN": 0.001,
     "NUMERIC_TT_TURNS_AGO": 0.234375,
     "NUMERIC_TM2_N_HITS": 0.2,
-    "NUMERIC_TM2_PRESENT": 1.0
+    "NUMERIC_TM2_PRESENT": 1.0,
+    "NUMERIC_TT_SELF_HP_COST": 0.25,
+    "NUMERIC_TM2_SELF_HP_COST": 0.072785
    },
    "slot": "tt_phase:turn",
    "decoded_turn_merged_token": {
@@ -2275,6 +2279,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 0.25,
      "defender_species": "Pidgeot"
     },
     "second": {
@@ -2288,6 +2293,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 0.072785,
      "defender_species": "Pidgeot"
     },
     "context_trio": {
@@ -2358,7 +2364,8 @@
     "NUMERIC_TT_TURNS_AGO": 0.21875,
     "NUMERIC_TM2_DAMAGE_FRACTION": 0.485597,
     "NUMERIC_TM2_N_HITS": 0.2,
-    "NUMERIC_TM2_PRESENT": 1.0
+    "NUMERIC_TM2_PRESENT": 1.0,
+    "NUMERIC_TM2_SELF_HP_COST": 0.123418
    },
    "slot": "tt_phase:turn",
    "decoded_turn_merged_token": {
@@ -2387,6 +2394,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 0.123418,
      "defender_species": "Gligar"
     },
     "context_trio": {
@@ -2816,7 +2824,8 @@
     "NUMERIC_TM2_N_HITS": 0.2,
     "NUMERIC_TM2_CRIT": 1.0,
     "NUMERIC_TM2_KO": 1.0,
-    "NUMERIC_TM2_PRESENT": 1.0
+    "NUMERIC_TM2_PRESENT": 1.0,
+    "NUMERIC_TM2_SELF_HP_COST": 1.0
    },
    "slot": "tt_phase:turn",
    "decoded_turn_merged_token": {
@@ -2845,6 +2854,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 1.0,
      "crit": true,
      "ko": true,
      "defender_species": "Gligar"
@@ -3570,7 +3580,8 @@
     "NUMERIC_TT_TURNS_AGO": 0.03125,
     "NUMERIC_TM2_DAMAGE_FRACTION": 0.25,
     "NUMERIC_TM2_N_HITS": 0.2,
-    "NUMERIC_TM2_PRESENT": 1.0
+    "NUMERIC_TM2_PRESENT": 1.0,
+    "NUMERIC_TM2_SELF_HP_COST": 0.25
    },
    "slot": "tt_phase:turn",
    "decoded_turn_merged_token": {
@@ -3599,6 +3610,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 0.25,
      "defender_species": "Pidgeot"
     },
     "context_trio": {
@@ -3775,7 +3787,7 @@
  ],
  "line_to_token_examples": [
   {
-   "note": "THE EXPLOSION TURN, as two tokens. Token one (this one, phase=turn): our declared Gligar switch executes first (sub-block A), then Weezing's Explosion crits the fresh Gligar for its full 125/243 and the ko bit lights (sub-block B, tt2_damage 0.514, tt2_crit, tt2_ko); Explosion's self-faint is move mechanics, not a KO outcome, so ONE ko bit for TWO faints. Both actives are now empty \u2014 the engine runs ONE forceSwitch cycle for both sides, which is the companion token below.",
+   "note": "THE EXPLOSION TURN, as two tokens. Token one (this one, phase=turn): our declared Gligar switch executes first (sub-block A), then Weezing's Explosion crits the fresh Gligar for its full 125/243 and the ko bit lights (sub-block B, tt2_damage 0.514, tt2_crit, tt2_ko); Explosion's self-faint is move mechanics, not a KO outcome \u2014 it surfaces instead as the TERMINAL self-cost, NUMERIC_TM2_SELF_HP_COST = 1.0 (the user spends its whole HP), so ONE ko bit for TWO faints. Both actives are now empty \u2014 the engine runs ONE forceSwitch cycle for both sides, which is the companion token below.",
    "protocol_lines": [
     "|turn|7",
     "|switch|p1a: Gligar|Gligar, L83, F|125/243",
@@ -3816,6 +3828,7 @@
      "effectiveness": "neutral",
      "side_effect": "none",
      "n_hits": 1,
+     "self_hp_cost": 1.0,
      "crit": true,
      "ko": true,
      "defender_species": "Gligar"
@@ -3889,7 +3902,8 @@
      "NUMERIC_TM2_N_HITS": 0.2,
      "NUMERIC_TM2_CRIT": 1.0,
      "NUMERIC_TM2_KO": 1.0,
-     "NUMERIC_TM2_PRESENT": 1.0
+     "NUMERIC_TM2_PRESENT": 1.0,
+     "NUMERIC_TM2_SELF_HP_COST": 1.0
     },
     "slot": "tt_phase:turn",
     "decoded_turn_merged_token": {
@@ -3918,6 +3932,7 @@
       "effectiveness": "neutral",
       "side_effect": "none",
       "n_hits": 1,
+      "self_hp_cost": 1.0,
       "crit": true,
       "ko": true,
       "defender_species": "Gligar"
@@ -4048,6 +4063,178 @@
      }
     }
    ]
+  },
+  {
+   "note": "SELF-COST ANATOMY: one turn token with nonzero self-cost on BOTH sub-blocks, covering both classes short of Explosion's terminal 1.0. Sub-block A: our Pidgeot's Substitute pays the exact quarter \u2014 NUMERIC_TT_SELF_HP_COST = 71/284 = 0.25 (an upfront move price, no target damage). Sub-block B: Piloswine's Double-Edge breaks the fresh sub (no |-damage| on Pidgeot, so tt2_damage stays 0) and takes RECOIL \u2014 NUMERIC_TM2_SELF_HP_COST = 23/316 = 0.072785, read from the |[from] Recoil| line. The 0.25-vs-0.073 contrast is the whole column in one card; turn 2 repeats the recoil class at 39/316 = 0.123418 against Gligar. Aside: that Double-Edge is a Choice Band lock \u2014 p2's own requests show its other three moves disabled from turn 2 (ground truth in the log, invisible to our encode), and by this boundary the Tier-1 belief layer has independently pinned the item by set elimination: Piloswine's candidate set is down to 1, so token 7 carries belief:possible_item:choiceband with NUMERIC_POSSIBLE_ITEM_COUNT = 1.0 \u2014 while the Tier-2 damage-evidence CB channel (NUMERIC_TIER2_CB_PINNED / tt CB bits) stays 0.0 on this replay path.",
+   "protocol_lines": [
+    "|turn|1",
+    "|move|p1a: Pidgeot|Substitute|p1a: Pidgeot",
+    "|-start|p1a: Pidgeot|Substitute",
+    "|-damage|p1a: Pidgeot|213/284",
+    "|move|p2a: Piloswine|Double-Edge|p1a: Pidgeot",
+    "|-end|p1a: Pidgeot|Substitute",
+    "|-damage|p2a: Piloswine|293/316|[from] Recoil|[of] p1a: Pidgeot"
+   ],
+   "transition_slot": 1,
+   "token_index": 24,
+   "decoded_fields": {
+    "turn": 1,
+    "phase": "turn",
+    "first": {
+     "status": "action",
+     "actor_slot": "p1",
+     "actor_species": "Pidgeot",
+     "kind": "move",
+     "action": "substitute",
+     "damage_fraction": 0.25,
+     "damage_outcome": "normal",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "self_hp_cost": 0.25,
+     "defender_species": "Pidgeot"
+    },
+    "second": {
+     "status": "action",
+     "actor_slot": "p2",
+     "actor_species": "Piloswine",
+     "kind": "move",
+     "action": "doubleedge",
+     "damage_fraction": 0.0,
+     "damage_outcome": "broke-sub",
+     "effectiveness": "neutral",
+     "side_effect": "none",
+     "n_hits": 1,
+     "self_hp_cost": 0.072785,
+     "defender_species": "Pidgeot"
+    },
+    "context_trio": {
+     "own_spikes_layers": 0,
+     "opp_spikes_layers": 0,
+     "weather": null
+    }
+   },
+   "encoded_token": {
+    "index": 24,
+    "section": "transition",
+    "token_type_id": 6,
+    "attended": true,
+    "categoricals": {
+     "CATEGORY_PRIMARY": {
+      "id": 641,
+      "token": "species:pidgeot"
+     },
+     "CATEGORY_SECONDARY": {
+      "id": 418,
+      "token": "move:substitute"
+     },
+     "CATEGORY_ROLE": {
+      "id": 741,
+      "token": "transition:self"
+     },
+     "CATEGORY_SLOT": {
+      "id": 1147,
+      "token": "tt_phase:turn"
+     },
+     "CATEGORY_TYPE_1": {
+      "id": 1143,
+      "token": "tt_outcome:normal"
+     },
+     "CATEGORY_TYPE_2": {
+      "id": 1131,
+      "token": "tt_effectiveness:neutral"
+     },
+     "CATEGORY_MOVE_CATEGORY": {
+      "id": 1154,
+      "token": "tt_side_effect:none"
+     },
+     "CATEGORY_MOVE_PRIORITY": {
+      "id": 641,
+      "token": "species:pidgeot"
+     },
+     "CATEGORY_TM_FIRST_KIND": {
+      "id": 1135,
+      "token": "tt_kind:move"
+     },
+     "CATEGORY_TM_SECOND_KIND": {
+      "id": 761,
+      "token": "tt2_kind:move"
+     },
+     "CATEGORY_TM_SECOND_SPECIES": {
+      "id": 1049,
+      "token": "tt2_species:piloswine"
+     },
+     "CATEGORY_TM_SECOND_ACTION": {
+      "id": 779,
+      "token": "tt2_move:doubleedge"
+     },
+     "CATEGORY_TM_SECOND_DEFENDER": {
+      "id": 1047,
+      "token": "tt2_species:pidgeot"
+     },
+     "CATEGORY_TM_SECOND_OUTCOME": {
+      "id": 893,
+      "token": "tt2_outcome:broke-sub"
+     },
+     "CATEGORY_TM_SECOND_EFFECTIVENESS": {
+      "id": 757,
+      "token": "tt2_effectiveness:neutral"
+     },
+     "CATEGORY_TM_SECOND_SIDE_EFFECT": {
+      "id": 904,
+      "token": "tt2_side_effect:none"
+     }
+    },
+    "numerics": {
+     "NUMERIC_PRESENT": 1.0,
+     "NUMERIC_TT_DAMAGE_FRACTION": 0.25,
+     "NUMERIC_TT_N_HITS": 0.2,
+     "NUMERIC_TT_ABS_TURN": 0.001,
+     "NUMERIC_TT_TURNS_AGO": 0.234375,
+     "NUMERIC_TM2_N_HITS": 0.2,
+     "NUMERIC_TM2_PRESENT": 1.0,
+     "NUMERIC_TT_SELF_HP_COST": 0.25,
+     "NUMERIC_TM2_SELF_HP_COST": 0.072785
+    },
+    "slot": "tt_phase:turn",
+    "decoded_turn_merged_token": {
+     "turn": 1,
+     "phase": "turn",
+     "first": {
+      "status": "action",
+      "actor_slot": "p1",
+      "actor_species": "Pidgeot",
+      "kind": "move",
+      "action": "substitute",
+      "damage_fraction": 0.25,
+      "damage_outcome": "normal",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1,
+      "self_hp_cost": 0.25,
+      "defender_species": "Pidgeot"
+     },
+     "second": {
+      "status": "action",
+      "actor_slot": "p2",
+      "actor_species": "Piloswine",
+      "kind": "move",
+      "action": "doubleedge",
+      "damage_fraction": 0.0,
+      "damage_outcome": "broke-sub",
+      "effectiveness": "neutral",
+      "side_effect": "none",
+      "n_hits": 1,
+      "self_hp_cost": 0.072785,
+      "defender_species": "Pidgeot"
+     },
+     "context_trio": {
+      "own_spikes_layers": 0,
+      "opp_spikes_layers": 0,
+      "weather": null
+     }
+    }
+   }
   },
   {
    "note": "Hazard context lit + a single replacement + an ABSENT half. Regirock replaces the poison-fainted Pidgeot: phase=replacement, first sub-block is the switch-in, and the second is ABSENT (tt2_status:absent \u2014 no second declaration EXPECTED; only one side was replacing, unlike the turn-7 cold pair). Cloyster's turn-13 Spikes shows as the context trio: NUMERIC_TT_OWN_SPIKES = 1/3 = 0.333333, captured as of this phase \u2014 the entry damage itself (227/259) belongs to the current-state Regirock token, not the history stream.",
