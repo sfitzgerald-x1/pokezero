@@ -44,7 +44,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from pokezero.actions import MOVE_ACTION_COUNT
