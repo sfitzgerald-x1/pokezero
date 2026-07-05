@@ -210,9 +210,9 @@ class TransformerPolicyConfig:
                 raise ValueError(
                     f"This checkpoint was trained under observation spec "
                     f"{self.observation_schema_version or UNVERSIONED_OBSERVATION_SCHEMA!r}; "
-                    f"this build encodes {OBSERVATION_SCHEMA_VERSION_V2!r} and "
-                    f"{OBSERVATION_SCHEMA_VERSION_V2_1!r} (window=1 + transition tokens + "
-                    "exact-state layer). Old checkpoints cannot run under the new specs "
+                    f"this build encodes {', '.join(repr(v) for v in SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)} "
+                    "(window=1 + transition tokens + exact-state layer). "
+                    "Old checkpoints cannot run under the new specs "
                     "— replay them from their pinned tag per docs/model_versioning.md."
                 )
             raise ValueError(f"Unsupported observation schema version: {self.observation_schema_version!r}.")
@@ -278,7 +278,7 @@ class TransformerPolicyConfig:
     def from_dict(cls, payload: Mapping[str, Any]) -> "TransformerPolicyConfig":
         # Feature-width defaults are keyed on the PAYLOAD's stamped observation schema, never
         # the build's current default: a v2 payload that omitted its widths must resolve to
-        # the v2 census (121), not silently inherit the v2.1 one (138). Real checkpoints
+        # the v2 census (121), not silently inherit the v2.1 one (140). Real checkpoints
         # serialize widths explicitly (asdict), so this only guards hand-written payloads.
         payload_schema = _str_field(
             payload, "observation_schema_version", UNVERSIONED_OBSERVATION_SCHEMA

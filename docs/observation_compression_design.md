@@ -107,7 +107,11 @@
 
 > **TURN-MERGED ADDENDUM (2026-07-05, v2.1 batch 3 — supersedes item 11's
 > one-token-per-action emission for the turn-merged mode; the per-action
-> extraction remains available and unchanged):**
+> extraction remains available and unchanged. Landed as observation schema
+> **v2.2**, the third entry in the #512 checkpoint-driven dual-schema table:
+> v2/v2.1 artifacts stay first-class, the stamped checkpoint schema selects
+> the encode, and v2.1 remains the checkpoint-free default until the
+> turn-merged ablation earns the slot):**
 >
 > **Schema.** One token per TURN carries the two DECLARED actions as
 > ordered sub-blocks: first mover / second mover — resolution (speed)

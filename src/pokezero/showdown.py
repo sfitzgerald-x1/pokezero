@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
     from .dex import ShowdownDex
     from .transitions import OpponentMonTendency, TendencyStats, TransitionToken
+    from .turn_merged import TurnMergedToken
 
 from .actions import (
     ACTION_COUNT,
@@ -33,6 +34,7 @@ from .observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     OPPONENT_POKEMON_TOKEN_COUNT,
     STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
@@ -336,9 +338,64 @@ V2_1_REPLAY_OBSERVATION_SPEC = ObservationSpec(
     numeric_feature_count=_V2_1_NUMERIC_FEATURE_COUNT,
     schema_version=OBSERVATION_SCHEMA_VERSION_V2_1,
 )
+# ---- observation spec v2.2 (checkpoint-driven; TURN-MERGED transition tokens). --------
+# The transition block carries pokezero.turn_merged.TurnMergedToken rows: one per
+# turn/lead/replacement phase, two ordered sub-blocks (first mover / second mover). The
+# FIRST sub-block rides the existing per-action columns (PRIMARY=actor species,
+# SECONDARY=action label, ROLE=transition:<role>, TYPE_1/TYPE_2/MOVE_CATEGORY=outcome/
+# effectiveness/side-effect on move kinds, MOVE_PRIORITY=defender identity exactly as
+# v2.1 uses it on per-action rows) and the existing NUMERIC_TT_* slots. Merged-mode
+# re-purposing on transition rows: the SLOT column carries tt_phase:<phase>; the
+# per-action tt_kind moves to an appended column. The whole SECOND sub-block + the
+# chain-collapse fields live on appended columns. Categorical columns embed as an
+# unordered bag per row, so second-mover labels use tt2_-prefixed vocabulary families
+# (randbat_vocab.gen3_category_vocabulary(include_turn_merged=True)) to stay bound to
+# their sub-block — the same precedent as v2.1's actor/defender sharing the species:
+# family on per-action rows.
+TURN_MERGED_CATEGORICAL_BASE = _CATEGORICAL_FEATURE_COUNT
+CATEGORY_TM_FIRST_KIND = TURN_MERGED_CATEGORICAL_BASE + 0  # tt_kind:* (SLOT now holds the phase)
+CATEGORY_TM_FIRST_CANT = TURN_MERGED_CATEGORICAL_BASE + 1  # cant:<reason> (RestTalk collapse)
+CATEGORY_TM_FIRST_BP = TURN_MERGED_CATEGORICAL_BASE + 2  # species:<name> (Baton Pass follow-up)
+CATEGORY_TM_SECOND_KIND = TURN_MERGED_CATEGORICAL_BASE + 3  # tt2_kind:* | tt2_status:negated/absent
+CATEGORY_TM_SECOND_SPECIES = TURN_MERGED_CATEGORICAL_BASE + 4  # tt2_species:<actor>
+CATEGORY_TM_SECOND_ACTION = TURN_MERGED_CATEGORICAL_BASE + 5  # tt2_move:/tt2_species:/tt2_cant:
+CATEGORY_TM_SECOND_DEFENDER = TURN_MERGED_CATEGORICAL_BASE + 6  # tt2_species:<defender>
+CATEGORY_TM_SECOND_OUTCOME = TURN_MERGED_CATEGORICAL_BASE + 7
+CATEGORY_TM_SECOND_EFFECTIVENESS = TURN_MERGED_CATEGORICAL_BASE + 8
+CATEGORY_TM_SECOND_SIDE_EFFECT = TURN_MERGED_CATEGORICAL_BASE + 9
+CATEGORY_TM_SECOND_CANT = TURN_MERGED_CATEGORICAL_BASE + 10  # tt2_cant:<reason> (collapse)
+CATEGORY_TM_SECOND_BP = TURN_MERGED_CATEGORICAL_BASE + 11  # tt2_species:<name> (collapse)
+TURN_MERGED_CATEGORICAL_EXTRA = 12
+_V2_2_CATEGORICAL_FEATURE_COUNT = TURN_MERGED_CATEGORICAL_BASE + TURN_MERGED_CATEGORICAL_EXTRA
+
+# Second sub-block numerics, appended after the v2.1 census. NUMERIC_TM2_PRESENT is the
+# second-half-is-an-executed-action bit (negated/absent rows keep 0.0 and are
+# distinguished categorically via tt2_status). The first sub-block reuses NUMERIC_TT_*.
+TURN_MERGED_NUMERIC_BASE = _V2_1_NUMERIC_FEATURE_COUNT
+NUMERIC_TM2_DAMAGE_FRACTION = TURN_MERGED_NUMERIC_BASE + 0
+NUMERIC_TM2_N_HITS = TURN_MERGED_NUMERIC_BASE + 1
+NUMERIC_TM2_CALLED = TURN_MERGED_NUMERIC_BASE + 2
+NUMERIC_TM2_TRANSFORMED = TURN_MERGED_NUMERIC_BASE + 3
+NUMERIC_TM2_CRIT = TURN_MERGED_NUMERIC_BASE + 4
+NUMERIC_TM2_MISS = TURN_MERGED_NUMERIC_BASE + 5
+NUMERIC_TM2_KO = TURN_MERGED_NUMERIC_BASE + 6
+NUMERIC_TM2_PURSUIT_INTERCEPT = TURN_MERGED_NUMERIC_BASE + 7
+NUMERIC_TM2_RESIDUAL = TURN_MERGED_NUMERIC_BASE + 8
+NUMERIC_TM2_RESIDUAL_VALID = TURN_MERGED_NUMERIC_BASE + 9
+NUMERIC_TM2_CB_BIT = TURN_MERGED_NUMERIC_BASE + 10
+NUMERIC_TM2_PRESENT = TURN_MERGED_NUMERIC_BASE + 11
+TURN_MERGED_NUMERIC_EXTRA = 12
+_V2_2_NUMERIC_FEATURE_COUNT = TURN_MERGED_NUMERIC_BASE + TURN_MERGED_NUMERIC_EXTRA
+
+V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
+    categorical_feature_count=_V2_2_CATEGORICAL_FEATURE_COUNT,
+    numeric_feature_count=_V2_2_NUMERIC_FEATURE_COUNT,
+    schema_version=OBSERVATION_SCHEMA_VERSION_V2_2,
+)
 REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
     OBSERVATION_SCHEMA_VERSION_V2: V2_REPLAY_OBSERVATION_SPEC,
     OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
+    OBSERVATION_SCHEMA_VERSION_V2_2: V2_2_REPLAY_OBSERVATION_SPEC,
 }
 DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
 # Encode-time census FLOOR per schema (#512 review, MED-LOW defense-in-depth): a spec
@@ -354,6 +411,7 @@ DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION
 _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2: 119,
     OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_NUMERIC_FEATURE_COUNT,
 }
 
 
@@ -388,6 +446,9 @@ TRANSITION_TOKEN_OFFSET = STATS_TOKEN_OFFSET + STATS_TOKEN_COUNT
 _TT_KIND_MOVE = "move"
 _TT_KIND_SWITCH = "switch"
 _TT_KIND_CANT = "cant"
+# Turn-merged sub-block status id: literal copy of turn_merged.SUB_BLOCK_ACTION under the
+# same no-module-level-import constraint; lockstep-asserted in tests.
+_TM_SUB_BLOCK_ACTION = "action"
 
 # Evidence-mass normalization scale for tendency counts (turn-scale, matches the 64-turn
 # transition budget); counts saturate at 64 rather than being encoded as rates.
@@ -510,6 +571,10 @@ class PlayerRelativeBattleState:
     # (oldest-truncation to the encode budget happens at encode time, not here).
     transition_tokens: tuple["TransitionToken", ...] = ()
     tendency_stats: "TendencyStats | None" = None
+    # Turn-merged transition stream (spec v2.2): populated only when the caller asks
+    # (normalize_for_player(include_turn_merged=True)); empty tuple otherwise so the
+    # per-action hot path pays nothing.
+    turn_merged_tokens: tuple["TurnMergedToken", ...] = ()
     weather_turns_remaining: int = 0
     weather_permanent: bool = False
     # Turns remaining per active timed side condition (reflect/lightscreen/safeguard/mist).
@@ -776,12 +841,16 @@ def normalize_for_player(
     set_source: PokemonSetSource | None = None,
     recent_event_limit: int = 24,
     belief_engine: "PublicBattleBeliefEngine | None" = None,
+    include_turn_merged: bool = False,
 ) -> PlayerRelativeBattleState:
     """Build a player-relative state view from raw Showdown transport state.
 
     ``belief_engine`` lets a caller pass a persistent engine fed incrementally (the local sim
     env), avoiding a from-scratch rebuild from ``replay.public_events`` on every call. When
     omitted, the engine is built batch-style from the replay (unchanged behavior).
+    ``include_turn_merged`` additionally populates ``turn_merged_tokens`` from the same
+    shared fold — required for the v2.2 (turn-merged) encode, off by default so the
+    v2/v2.1 observe hot path is unchanged.
     """
     showdown_slot = detect_showdown_slot(
         replay,
@@ -818,11 +887,19 @@ def normalize_for_player(
     # single shared fold of the replay (folding twice doubled the per-observe history cost).
     # Local import: transitions.py imports this module's parse helpers, so a module-level
     # import would cycle.
-    from .transitions import extract_transitions_and_tendencies
+    turn_merged_tokens: tuple["TurnMergedToken", ...] = ()
+    if include_turn_merged:
+        from .turn_merged import extract_transition_products
 
-    transition_tokens, tendency_stats = extract_transitions_and_tendencies(
-        replay, perspective_slot=showdown_slot
-    )
+        transition_tokens, turn_merged_tokens, tendency_stats = extract_transition_products(
+            replay, perspective_slot=showdown_slot
+        )
+    else:
+        from .transitions import extract_transitions_and_tendencies
+
+        transition_tokens, tendency_stats = extract_transitions_and_tendencies(
+            replay, perspective_slot=showdown_slot
+        )
     weather_turns_remaining, weather_permanent = _weather_duration_features(replay)
     sleep_clause_holders = belief_engine.sleep_clause_holders
     return PlayerRelativeBattleState(
@@ -853,6 +930,7 @@ def normalize_for_player(
         opponent_future_sight_turns=_future_sight_turns_remaining(replay, opponent_slot),
         winner=replay.winner,
         transition_tokens=transition_tokens,
+        turn_merged_tokens=turn_merged_tokens,
         tendency_stats=tendency_stats,
         weather_turns_remaining=weather_turns_remaining,
         weather_permanent=weather_permanent,
@@ -920,8 +998,10 @@ def observation_from_player_state(
     the v2 layout byte-identically to the pre-v2.1 encoder (no v2.1 column is even attempted);
     a v2.1 spec additionally writes defender identity on move transition tokens, the
     revealed-move PP-validity bits, the substitute HP fraction, and the per-mon pinned
-    Tier-2 conclusions. Anything else refuses loudly here rather than encoding an
-    undeclared hybrid.
+    Tier-2 conclusions. A v2.2 spec keeps every v2.1 block and swaps the transition
+    surface to TURN-MERGED tokens (state.turn_merged_tokens; one row per phase, two
+    ordered sub-blocks — budget counts THESE rows, i.e. whole turns). Anything else
+    refuses loudly here rather than encoding an undeclared hybrid.
     """
     if spec.schema_version not in REPLAY_OBSERVATION_SPECS_BY_SCHEMA:
         supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
@@ -941,7 +1021,14 @@ def observation_from_player_state(
             "undeclared hybrid stamped with the wider version; the 119-column relic family "
             f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
         )
-    schema_v2_1 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
+    schema_v2_2 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+    # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
+    schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
+    if schema_v2_2 and state.transition_tokens and not state.turn_merged_tokens:
+        raise ValueError(
+            "observation encode: a v2.2 (turn-merged) spec requires the state's "
+            "turn_merged_tokens — normalize with include_turn_merged=True."
+        )
     # Per-mon pinned Tier-2 CB conclusions (v2.1, NUMERIC_TIER2_CB_PINNED): derived from the
     # tier2-annotated token stream under the same tier2_residuals gate as the tt columns —
     # the monotone as-of-strike bit makes "any assessed strike of this mon carries it"
@@ -1037,9 +1124,14 @@ def observation_from_player_state(
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
-    _encode_transition_tokens(
-        categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v2_1=schema_v2_1
-    )
+    if schema_v2_2:
+        _encode_turn_merged_transition_tokens(
+            categorical_ids, numeric_features, state, spec, masks=feature_masks
+        )
+    else:
+        _encode_transition_tokens(
+            categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v2_1=schema_v2_1
+        )
     # Convert the raw category strings to compact embedding rows in one pass.
     categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
     token_type_ids = _token_type_ids(spec)
@@ -2430,6 +2522,144 @@ def _encode_transition_tokens(
             _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, token.investment)))
 
 
+def _encode_turn_merged_transition_tokens(
+    categorical_ids: list[list[int]],
+    numeric_features: list[list[float]],
+    state: PlayerRelativeBattleState,
+    spec: ObservationSpec,
+    *,
+    masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+) -> None:
+    """Encode the TURN-MERGED transition block (spec v2.2).
+
+    One row per turn/lead/replacement phase from ``state.turn_merged_tokens``: the first
+    sub-block on the per-action columns (SLOT re-purposed to tt_phase:<phase>, tt_kind
+    moved to CATEGORY_TM_FIRST_KIND, defender identity in CATEGORY_MOVE_PRIORITY exactly
+    as the v2.1 per-action rows carry it), collapse fields + the whole second sub-block
+    on the appended TURN_MERGED_* columns (tt2_ vocab families for bag binding). Fill and
+    truncation semantics match the per-action encoder: most recent ``budget`` rows,
+    oldest-first, rest zeroed + attention-masked.
+
+    K BUDGET UNIT CHANGE (loud): ``masks.transition_token_budget`` counts THESE rows — a
+    whole turn each. The v2/v2.1 K=64 horizon (~32 turns) is budget=32 here; an unchanged
+    K=64 config roughly doubles its temporal horizon. The per-mon pinned Tier-2 bits are
+    derived from the FULL per-action stream and survive this truncation regardless.
+    """
+    budget = min(masks.transition_token_budget, spec.transition_token_count)
+    tokens = state.turn_merged_tokens[-budget:] if budget else ()
+    self_slot = state.perspective.showdown_slot
+    for index, token in enumerate(tokens):
+        cat_row = categorical_ids[TRANSITION_TOKEN_OFFSET + index]
+        num_row = numeric_features[TRANSITION_TOKEN_OFFSET + index]
+        first = token.first
+        actor_role = "self" if first.actor_slot == self_slot else "opponent"
+        _set_category(cat_row, CATEGORY_PRIMARY, f"species:{first.actor_species}")
+        _set_category(cat_row, CATEGORY_SECONDARY, _tm_first_action_label(first.kind, first.action))
+        _set_category(cat_row, CATEGORY_ROLE, f"transition:{actor_role}")
+        _set_category(cat_row, CATEGORY_SLOT, f"tt_phase:{token.phase}")
+        _set_category(cat_row, CATEGORY_TM_FIRST_KIND, f"tt_kind:{first.kind}")
+        if first.kind == _TT_KIND_MOVE:
+            _set_category(cat_row, CATEGORY_TYPE_1, f"tt_outcome:{first.damage_outcome}")
+            _set_category(cat_row, CATEGORY_TYPE_2, f"tt_effectiveness:{first.effectiveness}")
+            _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"tt_side_effect:{first.side_effect}")
+            if first.defender_species:
+                _set_category(cat_row, CATEGORY_MOVE_PRIORITY, f"species:{first.defender_species}")
+        if token.weather:
+            _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
+        if first.cant_reason:
+            _set_category(cat_row, CATEGORY_TM_FIRST_CANT, f"cant:{first.cant_reason}")
+        if first.baton_pass_species:
+            _set_category(cat_row, CATEGORY_TM_FIRST_BP, f"species:{first.baton_pass_species}")
+        _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
+        if first.damage_fraction:
+            _set_numeric(num_row, NUMERIC_TT_DAMAGE_FRACTION, min(1.0, first.damage_fraction))
+        if first.kind == _TT_KIND_MOVE:
+            _set_numeric(num_row, NUMERIC_TT_N_HITS, min(1.0, first.n_hits / 5.0))
+        for slot, flag in (
+            (NUMERIC_TT_CALLED, first.called),
+            (NUMERIC_TT_TRANSFORMED, first.transformed),
+            (NUMERIC_TT_CRIT, first.crit),
+            (NUMERIC_TT_MISS, first.miss),
+            (NUMERIC_TT_KO, first.ko),
+            (NUMERIC_TT_PURSUIT_INTERCEPT, first.pursuit_intercept),
+        ):
+            if flag:
+                _set_numeric(num_row, slot, 1.0)
+        if token.own_spikes_layers:
+            _set_numeric(num_row, NUMERIC_TT_OWN_SPIKES, min(1.0, token.own_spikes_layers / 3.0))
+        if token.opp_spikes_layers:
+            _set_numeric(num_row, NUMERIC_TT_OPP_SPIKES, min(1.0, token.opp_spikes_layers / 3.0))
+        _set_numeric(num_row, NUMERIC_TT_ABS_TURN, min(1.0, token.turn / 1000.0))
+        turns_ago = max(0, state.turn_number - token.turn)
+        _set_numeric(num_row, NUMERIC_TT_TURNS_AGO, min(1.0, turns_ago / _STAT_COUNT_DIVISOR))
+        if masks.tier2_residuals and first.residual_valid and first.residual is not None:
+            _set_numeric(num_row, NUMERIC_TT_RESIDUAL, max(-1.0, min(1.0, first.residual)))
+            _set_numeric(num_row, NUMERIC_TT_RESIDUAL_VALID, 1.0)
+        if masks.tier2_residuals and first.cb_bit:
+            _set_numeric(num_row, NUMERIC_TT_CB_BIT, 1.0)
+
+        second = token.second
+        if second.status != _TM_SUB_BLOCK_ACTION:
+            # NEGATED (declared, consumed with no protocol trace — the hazard-sack free
+            # pivot) vs ABSENT (no declaration expected): categorical status, plus the
+            # consumed mon's identity when the fold knows it. All TM2 numerics stay 0.0.
+            _set_category(cat_row, CATEGORY_TM_SECOND_KIND, f"tt2_status:{second.status}")
+            if second.actor_species:
+                _set_category(cat_row, CATEGORY_TM_SECOND_SPECIES, f"tt2_species:{second.actor_species}")
+            continue
+        _set_category(cat_row, CATEGORY_TM_SECOND_KIND, f"tt2_kind:{second.kind}")
+        _set_category(cat_row, CATEGORY_TM_SECOND_SPECIES, f"tt2_species:{second.actor_species}")
+        _set_category(cat_row, CATEGORY_TM_SECOND_ACTION, _tm_second_action_label(second.kind, second.action))
+        if second.kind == _TT_KIND_MOVE:
+            _set_category(cat_row, CATEGORY_TM_SECOND_OUTCOME, f"tt2_outcome:{second.damage_outcome}")
+            _set_category(
+                cat_row, CATEGORY_TM_SECOND_EFFECTIVENESS, f"tt2_effectiveness:{second.effectiveness}"
+            )
+            _set_category(cat_row, CATEGORY_TM_SECOND_SIDE_EFFECT, f"tt2_side_effect:{second.side_effect}")
+            if second.defender_species:
+                _set_category(cat_row, CATEGORY_TM_SECOND_DEFENDER, f"tt2_species:{second.defender_species}")
+        if second.cant_reason:
+            _set_category(cat_row, CATEGORY_TM_SECOND_CANT, f"tt2_cant:{second.cant_reason}")
+        if second.baton_pass_species:
+            _set_category(cat_row, CATEGORY_TM_SECOND_BP, f"tt2_species:{second.baton_pass_species}")
+        _set_numeric(num_row, NUMERIC_TM2_PRESENT, 1.0)
+        if second.damage_fraction:
+            _set_numeric(num_row, NUMERIC_TM2_DAMAGE_FRACTION, min(1.0, second.damage_fraction))
+        if second.kind == _TT_KIND_MOVE:
+            _set_numeric(num_row, NUMERIC_TM2_N_HITS, min(1.0, second.n_hits / 5.0))
+        for slot, flag in (
+            (NUMERIC_TM2_CALLED, second.called),
+            (NUMERIC_TM2_TRANSFORMED, second.transformed),
+            (NUMERIC_TM2_CRIT, second.crit),
+            (NUMERIC_TM2_MISS, second.miss),
+            (NUMERIC_TM2_KO, second.ko),
+            (NUMERIC_TM2_PURSUIT_INTERCEPT, second.pursuit_intercept),
+        ):
+            if flag:
+                _set_numeric(num_row, slot, 1.0)
+        if masks.tier2_residuals and second.residual_valid and second.residual is not None:
+            _set_numeric(num_row, NUMERIC_TM2_RESIDUAL, max(-1.0, min(1.0, second.residual)))
+            _set_numeric(num_row, NUMERIC_TM2_RESIDUAL_VALID, 1.0)
+        if masks.tier2_residuals and second.cb_bit:
+            _set_numeric(num_row, NUMERIC_TM2_CB_BIT, 1.0)
+
+
+def _tm_first_action_label(kind: str, action: str) -> str:
+    if kind == _TT_KIND_MOVE:
+        return f"move:{action}"
+    if kind == _TT_KIND_SWITCH:
+        return f"species:{action}"
+    return f"cant:{action}"
+
+
+def _tm_second_action_label(kind: str, action: str) -> str:
+    if kind == _TT_KIND_MOVE:
+        return f"tt2_move:{action}"
+    if kind == _TT_KIND_SWITCH:
+        return f"tt2_species:{action}"
+    return f"tt2_cant:{action}"
+
+
 def _self_active_types(state: PlayerRelativeBattleState, dex: "ShowdownDex | None") -> tuple[str, ...]:
     """Types of the acting (self active) mon, for resolving type-dependent move effects."""
     if dex is None or state.self_active is None:
@@ -2940,8 +3170,13 @@ def _attention_mask(
     mask.extend([True] * ACTION_COUNT)
     stats_visible = masks.stats_block and state.tendency_stats is not None
     mask.extend([stats_visible] * spec.stats_token_count)
+    transition_stream = (
+        state.turn_merged_tokens
+        if spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        else state.transition_tokens
+    )
     filled = min(
-        len(state.transition_tokens), masks.transition_token_budget, spec.transition_token_count
+        len(transition_stream), masks.transition_token_budget, spec.transition_token_count
     )
     mask.extend(index < filled for index in range(spec.transition_token_count))
     return tuple(mask)

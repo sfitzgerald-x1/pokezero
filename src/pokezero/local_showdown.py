@@ -22,6 +22,7 @@ from .dex import load_showdown_dex_cached
 from .env import BattleFormat, BattleStartOverride, PlayerId, StepResult, TerminalState
 from .observation import (
     DEFAULT_OBSERVATION_FEATURE_MASKS,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     ObservationFeatureMasks,
     ObservationSpec,
     PokeZeroObservationV0,
@@ -669,12 +670,18 @@ class LocalShowdownEnv:
             raise ValueError(f"player must be one of {', '.join(PLAYER_IDS)}; got {player!r}.")
         self._sync_incremental_state()
         replay = self._parser.snapshot()
+        # v2.2 (turn-merged) specs need the merged stream populated alongside the
+        # per-action one (which stays the Tier-2 annotation substrate + pinned-bit source).
+        turn_merged = (
+            self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+        )
         state = normalize_for_player(
             replay,
             player_id=player,
             configured_showdown_slot=player,
             format_id=self._observation_format_id,
             belief_engine=self._belief_engine,
+            include_turn_merged=turn_merged,
         )
         tracker = self._tier2_tracker_for(player)
         if tracker is not None:
@@ -697,6 +704,18 @@ class LocalShowdownEnv:
                         for index, token in enumerate(state.transition_tokens)
                     ),
                 )
+        # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
+        # investment codes) onto the merged sub-blocks; the per-action stream stays
+        # the annotation substrate and the per-mon pinned-surface derivation source.
+        if turn_merged and (tracker is not None or investment_tracker is not None):
+            from .turn_merged import annotate_turn_merged_tokens
+
+            state = replace(
+                state,
+                turn_merged_tokens=annotate_turn_merged_tokens(
+                    state.turn_merged_tokens, state.transition_tokens
+                ),
+            )
         return state
 
     def tier2_residuals_active(self) -> bool:
