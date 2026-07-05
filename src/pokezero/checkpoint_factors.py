@@ -60,6 +60,38 @@ TOXIC_DEEP_STAGE = 15
 HEALTHY_HP = 0.6
 
 
+def with_self_spikes(state, layers: int):
+    """Counterfactual copy of `state` with exactly `layers` Spikes on the player's own side; all
+    other side conditions preserved. Feeds NUMERIC_SELF_HAZARDS = layers/3 to the encoder.
+
+    Shared injection primitive for scripts/hazard_probe.py and the shaping-candidate ranker
+    (scripts/shaping_ranker.py) — the dV counterfactual must be identical across both."""
+    counts = dict(state.self_side_condition_counts or {})
+    conds = set(state.self_side_conditions or ())
+    if layers <= 0:
+        counts.pop("spikes", None)
+        conds.discard("spikes")
+    else:
+        counts["spikes"] = layers
+        conds.add("spikes")
+    return replace(state, self_side_condition_counts=counts, self_side_conditions=tuple(sorted(conds)))
+
+
+def with_opp_spikes(state, layers: int):
+    """Counterfactual copy of `state` with exactly `layers` Spikes on the OPPONENT side."""
+    counts = dict(state.opponent_side_condition_counts or {})
+    conds = set(state.opponent_side_conditions or ())
+    if layers <= 0:
+        counts.pop("spikes", None)
+        conds.discard("spikes")
+    else:
+        counts["spikes"] = layers
+        conds.add("spikes")
+    return replace(
+        state, opponent_side_condition_counts=counts, opponent_side_conditions=tuple(sorted(conds))
+    )
+
+
 def norm(name: str) -> str:
     return "".join(ch for ch in str(name).lower() if ch.isalnum())
 

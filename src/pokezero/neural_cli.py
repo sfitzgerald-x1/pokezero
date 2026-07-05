@@ -22,6 +22,7 @@ from .cli_audit import (
 )
 from .collection import (
     cache_feature_masks_by_path,
+    cache_shaping_configs_by_path,
     BenchmarkMatchup,
     benchmark_rollouts,
     distinct_belief_set_source_hashes,
@@ -30,6 +31,7 @@ from .collection import (
     policy_spec_with_showdown_root,
     reject_eval_only_specs,
 )
+from .shaping import ShapingConfig, parse_shaping_spec
 from .dataset import (
     MAX_ACTIVE_TRAINING_CACHE_GB,
     TrajectoryDatasetConfig,
@@ -452,6 +454,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
+    )
+    train.add_argument(
+        "--shaping-weights",
+        default=None,
+        help=(
+            "Dense potential-based reward shaping for returns/GAE targets: preset (wse-arm1), "
+            "inline JSON, @/path/to.json, or 'none' for explicit-off. Absent: unshaped, or the "
+            "initial checkpoint's stamped shaping on resume. Cross-checked against training-cache "
+            "provenance (both directions) and stamped into the saved model config."
+        ),
     )
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     train.add_argument(
@@ -1170,6 +1182,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Optional positive per-decision return penalty applied at or after --turn-penalty-after.",
     )
+    iterate.add_argument(
+        "--shaping-weights",
+        default=None,
+        help=(
+            "Dense potential-based reward shaping (WS-E arm 1) baked into collected caches and "
+            "train targets: preset (wse-arm1), inline JSON, @/path/to.json, or 'none'. Default "
+            "off — absent means exactly the unshaped iterate behavior. Stamped into checkpoint "
+            "model configs; the shaping gamma is --discount."
+        ),
+    )
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
     iterate.add_argument(
         "--value-clip-range",
@@ -1883,6 +1905,60 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
             )
 
 
+def _resolved_training_shaping_json(args: argparse.Namespace, initial_training_result) -> str | None:
+    """Canonical shaping JSON for this train run (None = unshaped).
+
+    Explicit --shaping-weights wins ('none' spells explicit-off); with an initial
+    checkpoint and no flag, the checkpoint's stamped shaping carries forward (same
+    adopt-from-checkpoint posture as the mask flags). Unlike masks, retargeting a
+    checkpoint under different shaping is a legitimate training operation (targets
+    change, observations do not), so an explicit disagreement re-stamps rather than
+    hard-fails — with a loud notice.
+    """
+    checkpoint_json = (
+        initial_training_result.model_config.reward_shaping
+        if initial_training_result is not None
+        else None
+    )
+    if args.shaping_weights is None:
+        return checkpoint_json
+    explicit = parse_shaping_spec(args.shaping_weights)
+    explicit_json = explicit.canonical_json() if explicit is not None else None
+    if initial_training_result is not None and explicit_json != checkpoint_json:
+        print(
+            "notice: --shaping-weights re-targets the initial checkpoint "
+            f"(checkpoint shaping: {checkpoint_json or 'unshaped'} -> {explicit_json or 'unshaped'}); "
+            "the saved checkpoint will be stamped with the new shaping config.",
+            file=sys.stderr,
+        )
+    return explicit_json
+
+
+def _require_cache_shaping_matches_training_config(paths, shaping_json: str | None) -> None:
+    """Hard-fail (both directions) when cache shaping provenance disagrees with this run.
+
+    The shaping-axis twin of the mask cross-check (#507): collection bakes shaped
+    returns/targets into the cache and stamps the config into metadata. Training a
+    shaped cache with the flag off silently keeps dense targets the run never declared;
+    training an unshaped/legacy cache with the flag on silently trains WITHOUT the
+    requested shaping. Caches whose metadata lacks the field are definitively unshaped
+    (their returns predate shaping); only unreadable metadata and JSONL inputs skip
+    (JSONL returns are recomputed under this run's config, so they cannot mismatch).
+    """
+    expected = ShapingConfig.from_json(shaping_json).to_dict() if shaping_json is not None else None
+    for cache_path, shaping, checkable in cache_shaping_configs_by_path(paths):
+        if not checkable:
+            continue
+        recorded = ShapingConfig.from_dict(shaping).to_dict() if shaping is not None else None
+        if recorded != expected:
+            raise ValueError(
+                f"training cache {cache_path} was collected with shaping "
+                f"{recorded if recorded is not None else 'off'} but this train run requests "
+                f"{expected if expected is not None else 'off'}; shaped and unshaped "
+                "returns/targets must not be mixed. Re-collect the cache or match --shaping-weights."
+            )
+
+
 def _train(args: argparse.Namespace) -> int:
     command_started_at = datetime.now(timezone.utc)
     command_started = time.perf_counter()
@@ -1901,6 +1977,7 @@ def _train(args: argparse.Namespace) -> int:
             args.initial_checkpoint,
             map_location=resolve_torch_device(args.device),
         )
+    shaping_weights_json = _resolved_training_shaping_json(args, initial_training_result)
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -1935,11 +2012,15 @@ def _train(args: argparse.Namespace) -> int:
         gae_lambda=args.gae_lambda,
         max_grad_norm=args.max_grad_norm,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
+        shaping_weights=shaping_weights_json,
     )
     if initial_training_result is not None:
         model_config = replace(
             initial_training_result.model_config,
             policy_id=args.policy_id or initial_training_result.model_config.policy_id,
+            # Stamp the RESOLVED shaping (inherited, or explicitly re-targeted): the saved
+            # checkpoint self-describes the targets this run actually trained under.
+            reward_shaping=shaping_weights_json,
         )
         _require_mask_flags_agree_with_checkpoint(args, model_config)
         print(
@@ -1965,6 +2046,7 @@ def _train(args: argparse.Namespace) -> int:
                 else args.transition_token_budget
             ),
             tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
+            reward_shaping=shaping_weights_json,
         )
         # The category vocabulary is the closed Gen 3 randbat universe (string->row), the same one
         # the env builds at encode time, so rows align deterministically. (The legacy training-data
@@ -1987,6 +2069,7 @@ def _train(args: argparse.Namespace) -> int:
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
     _require_cache_masks_match_model_config(args.data, model_config)
+    _require_cache_shaping_matches_training_config(args.data, shaping_weights_json)
     if args.value_selection_data and training_config.objective != "value-only":
         print(
             "warning: --value-selection-data selects by held-out value calibration, not policy quality; "
@@ -2319,6 +2402,15 @@ def _add_training_dataset_arguments(parser: argparse.ArgumentParser) -> None:
         help="PPO advantage/value-target source baked into the cache.",
     )
     parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda when --ppo-target-mode=gae.")
+    parser.add_argument(
+        "--shaping-weights",
+        default=None,
+        help=(
+            "Optional dense potential-based reward shaping baked into cache returns/targets: "
+            "preset (wse-arm1), inline JSON, or @/path/to.json. Default off (byte-identical "
+            "unshaped caches). The shaping gamma is --discount."
+        ),
+    )
 
 
 def _training_dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDatasetConfig:
@@ -2332,6 +2424,9 @@ def _training_dataset_config_from_args(args: argparse.Namespace) -> TrajectoryDa
         turn_penalty=args.turn_penalty,
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
+        potential_shaping=(
+            parse_shaping_spec(args.shaping_weights) if args.shaping_weights is not None else None
+        ),
     )
 
 
@@ -3395,6 +3490,10 @@ def _iterate(args: argparse.Namespace) -> int:
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
     )
+    iterate_shaping = (
+        parse_shaping_spec(args.shaping_weights) if args.shaping_weights is not None else None
+    )
+    iterate_shaping_json = iterate_shaping.canonical_json() if iterate_shaping is not None else None
     training_config = TransformerTrainingConfig(
         batch_size=args.batch_size,
         epochs=args.epochs,
@@ -3409,6 +3508,7 @@ def _iterate(args: argparse.Namespace) -> int:
         faint_delta_return_weight=args.faint_delta_return_weight,
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
+        shaping_weights=iterate_shaping_json,
         value_loss_weight=args.value_loss_weight,
         value_clip_range=args.value_clip_range,
         value_ranking_loss_weight=args.value_ranking_loss_weight,
@@ -3440,6 +3540,7 @@ def _iterate(args: argparse.Namespace) -> int:
         exact_state_enabled=not args.no_exact_state,
         transition_token_budget=args.transition_token_budget,
         tier2_residuals=True if args.tier2_residuals is None else bool(args.tier2_residuals),
+        reward_shaping=iterate_shaping_json,
     )
     # Reuse the single vocabulary built above (shared with the env), so the embedding rows the
     # model learns are exactly the rows the env encodes.

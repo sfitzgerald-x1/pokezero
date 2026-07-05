@@ -1067,6 +1067,7 @@ def _dataset_config_from_training_config(config: TransformerTrainingConfig) -> T
         turn_penalty=config.turn_penalty,
         ppo_target_mode=config.ppo_target_mode,
         gae_lambda=config.gae_lambda,
+        potential_shaping=config.resolved_shaping_config(),
     )
 
 

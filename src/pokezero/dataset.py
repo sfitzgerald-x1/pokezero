@@ -14,6 +14,7 @@ from .actions import ACTION_COUNT
 from .collection import RolloutRecord, iter_rollout_records
 from .observation import require_current_observation_schema
 from .padding import zeros_like as _zeros_like
+from .shaping import ShapingConfig, potential_shaping_rewards_by_step_index
 from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
@@ -47,8 +48,15 @@ class TrajectoryDatasetConfig:
     turn_penalty: float = 0.0
     ppo_target_mode: str = "returns"
     gae_lambda: float = 0.95
+    # Dense potential-based shaping (pokezero.shaping; WS-E arm 1). None = unshaped and the
+    # key is OMITTED from to_dict()/cache metadata so shaping-off caches stay byte-identical
+    # to pre-shaping collection; from_dict defaults payloads lacking the field to unshaped.
+    # The shaping gamma is this config's `discount`.
+    potential_shaping: ShapingConfig | None = None
 
     def __post_init__(self) -> None:
+        if self.potential_shaping is not None and not isinstance(self.potential_shaping, ShapingConfig):
+            object.__setattr__(self, "potential_shaping", ShapingConfig.from_dict(self.potential_shaping))
         if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
         if not 0.0 <= self.discount <= 1.0:
@@ -81,6 +89,13 @@ class TrajectoryDatasetConfig:
             "turn_penalty": self.turn_penalty,
             "ppo_target_mode": self.ppo_target_mode,
             "gae_lambda": self.gae_lambda,
+            # Omitted entirely when unshaped: keeps shaping-off cache metadata (and the
+            # cache-vs-train config equality check against legacy caches) byte-identical.
+            **(
+                {"potential_shaping": self.potential_shaping.to_dict()}
+                if self.potential_shaping is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -97,6 +112,12 @@ class TrajectoryDatasetConfig:
             turn_penalty=float(payload.get("turn_penalty", 0.0)),
             ppo_target_mode=str(payload.get("ppo_target_mode", "returns")),
             gae_lambda=float(payload.get("gae_lambda", 0.95)),
+            # Payloads lacking the field (all pre-shaping caches) are definitively unshaped.
+            potential_shaping=(
+                ShapingConfig.from_dict(payload["potential_shaping"])
+                if payload.get("potential_shaping") is not None
+                else None
+            ),
         )
 
 
@@ -123,6 +144,10 @@ class TrajectoryExample:
     action_probability: float | None = None
     step_metadata: Mapping[str, Any] | None = None
     terminal_capped: bool = False
+    # Dense potential-based shaping component for this decision (None when shaping is
+    # off). Stored separately from `reward` (raw env reward, unchanged) and already
+    # folded into return_value / PPO targets when the dataset config enables shaping.
+    shaping_reward: float | None = None
 
     @property
     def window_size(self) -> int:
@@ -281,6 +306,10 @@ class TrainingCacheBuilder:
         self._seeds: list[int] = []
         self._turn_indices: list[int] = []
         self._terminal_capped: list[bool] = []
+        # Dense shaping components, populated only when the config enables potential
+        # shaping (written as an OPTIONAL shaping_rewards.npy array; readers must
+        # tolerate its absence — legacy caches never carry it).
+        self._shaping_rewards: list[float] = []
         # Belief provenance of ingested records; written to cache metadata as a single hash when
         # unanimous, else null (mixed/legacy) with a mixed flag for diagnostics.
         self._belief_set_source_hashes: set[str | None] = set()
@@ -325,6 +354,8 @@ class TrainingCacheBuilder:
             self._seeds.append(example.seed)
             self._turn_indices.append(example.turn_index)
             self._terminal_capped.append(example.terminal_capped)
+            if self.config.potential_shaping is not None:
+                self._shaping_rewards.append(_optional_float(example.shaping_reward))
         self._belief_set_source_hashes.add(record.belief_set_source_hash)
         self._record_count += 1
 
@@ -445,6 +476,13 @@ class TrainingCacheBuilder:
             "seeds": numpy.asarray(self._seeds, dtype=numpy.int64),
             "turn_indices": numpy.asarray(self._turn_indices, dtype=numpy.int32),
             "terminal_capped": numpy.asarray(self._terminal_capped, dtype=numpy.bool_),
+            # Optional array: present only for shaping-enabled caches. `rewards` above
+            # stays the raw env reward; the shaping component is stored separately.
+            **(
+                {"shaping_rewards": numpy.asarray(self._shaping_rewards, dtype=numpy.float32)}
+                if self.config.potential_shaping is not None
+                else {}
+            ),
         }
 
 
@@ -473,6 +511,7 @@ def examples_from_record(
         record,
         config=dataset_config,
     )
+    potential_terms_by_step_index = _potential_shaping_terms(record, config=dataset_config)
     history_by_player: dict[str, list[TrajectoryStep]] = {}
 
     # Data-side one-way door: refuse legacy/unversioned observations HERE, with the clean
@@ -495,6 +534,11 @@ def examples_from_record(
             return_value=returns_by_step_index[step_index],
             ppo_target=ppo_targets_by_step_index.get(step_index),
             window_size=dataset_config.window_size,
+            shaping_reward=(
+                potential_terms_by_step_index.get(step_index, 0.0)
+                if dataset_config.potential_shaping is not None
+                else None
+            ),
         )
 
 
@@ -985,6 +1029,7 @@ def _example_from_window(
     return_value: float,
     ppo_target: "_PPOTarget | None",
     window_size: int,
+    shaping_reward: float | None = None,
 ) -> TrajectoryExample:
     if len(window_steps) > window_size:
         raise ValueError("window_steps cannot exceed window_size.")
@@ -1022,6 +1067,7 @@ def _example_from_window(
         action_probability=step.action_probability,
         step_metadata=dict(step.metadata),
         terminal_capped=bool((record.terminal or record.trajectory.terminal) and (record.terminal or record.trajectory.terminal).capped),
+        shaping_reward=shaping_reward,
     )
 
 
@@ -1109,12 +1155,13 @@ def _shaping_rewards_by_step_index(
     step_indices: Sequence[int],
     config: TrajectoryDatasetConfig,
 ) -> dict[int, float]:
+    potential_terms = _potential_shaping_terms(record, config=config)
     if (
         config.hp_delta_return_weight == 0.0
         and config.faint_delta_return_weight == 0.0
         and (config.turn_penalty_after is None or config.turn_penalty == 0.0)
     ):
-        return {}
+        return {step_index: potential_terms[step_index] for step_index in step_indices} if potential_terms else {}
 
     rewards: dict[int, float] = {}
     previous_snapshot: _VisibleTeamSnapshot | None = None
@@ -1132,9 +1179,31 @@ def _shaping_rewards_by_step_index(
             and step.turn_index >= config.turn_penalty_after
         ):
             reward -= config.turn_penalty
+        if potential_terms:
+            reward += potential_terms.get(step_index, 0.0)
         rewards[step_index] = reward
         previous_snapshot = snapshot
     return rewards
+
+
+def _potential_shaping_terms(
+    record: RolloutRecord,
+    *,
+    config: TrajectoryDatasetConfig,
+) -> dict[int, float]:
+    """Per-step dense potential-based shaping terms (empty when shaping is off).
+
+    Always recomputed from the record's ground-truth metadata via the pure functions in
+    ``pokezero.shaping`` (the single source of truth); step-level ``shaping_reward``
+    annotations, when present, are provenance only. Gamma is the training discount.
+    """
+    if config.potential_shaping is None or config.potential_shaping.is_zero():
+        return {}
+    return potential_shaping_rewards_by_step_index(
+        record,
+        config=config.potential_shaping,
+        gamma=config.discount,
+    )
 
 
 @dataclass(frozen=True)

@@ -156,3 +156,61 @@ argmax + regression. (The four live arms hold the 3–9% foul-play band at
 3. E0-oracle (search go/no-go with the belief-1.5m head) proceeds in
    parallel — search reads do not gate these training arms, and a search win
    with a hazard-blind head still inherits ceiling from this work.
+
+## Reward-candidate selection protocol
+
+How a shaping-weights config earns its way from an idea to a 500k arm.
+Rationale for the whole ladder: **a config that can't make a supervised
+value head price hazards will never do it in RL** — RL only adds
+feedback-loop effects (exploration shift, reward hacking, entropy
+collapse) on top of the supervised credit assignment, so the cheap
+supervised reads are valid kill filters and only survivors pay for GPU.
+
+Implementation: the potential function and per-step terms live in
+`pokezero.shaping` (arm 1's dense potential-based formulation:
+`f = gamma * Phi(s') - Phi(s)` over ground-truth hp/faint/status
+[/hazard, tools only] differentials); every tier below consumes the same
+pure functions, so a config means the same thing at every tier and at
+collection time (`--shaping-weights` on
+`rollout_cli collect-selfplay-training-cache` / `neural_cli iterate`).
+
+- **Tier A — oracle-fit + rescore sanity (no training, seconds).**
+  `scripts/shaping_oracle_fit.py` fits a logistic regression of terminal
+  outcome on the potential's component vector over a frozen records pool
+  — the fitted weights are the data-derived candidate and the magnitude
+  scale that hand candidates are sanity-checked against (sign table must
+  agree with the conventions: own faints negative, foe status positive).
+  `scripts/shaping_rescore.py` then scores any candidate on the same
+  records: per-turn |shaping| distribution, shaped-total vs terminal
+  ratio, per-category shares, telescoping check. Kill here: wrong signs,
+  shaped totals rivaling the terminal ±1, or one category swamping the
+  rest.
+- **Tier B — supervised ranker (minutes per candidate, CPU).**
+  `scripts/shaping_ranker.py` trains identical tiny models per candidate
+  whose only difference is the shaped value target, then measures ΔV
+  hazard response (shared injection primitives with
+  `scripts/hazard_probe.py`) and held-out terminal Pearson/calibration.
+  The Pearson read uses the **PBRS-corrected** prediction
+  (`pred + Phi_candidate(s)`): under a zero terminal potential the
+  shaped optimum is `V' = V − Phi`, so raw terminal Pearson penalizes
+  every shaped head by construction. Corrected Pearson alone is
+  necessary but NOT sufficient — Pearson is scale-invariant, so a dead
+  head still inherits `corr(Phi, terminal)` for free — hence the gate
+  also requires the head's **marginal** signal: the partial correlation
+  of the raw prediction with terminal controlling for Phi, plus a
+  control-relative value-spread floor and a calibration (ECE) cap.
+  Gates: ΔV must move in the right directions AND corrected Pearson
+  must stay within 10% (flag-tunable) of the unshaped control AND the
+  marginal/spread/ECE checks must pass. Two built-in bad-config probes
+  (inverted signs; clip-saturating ×N weights) ride along on every run
+  and must rank below the unshaped control, or the tool withholds the
+  ranking entirely.
+- **Tier C — micro-RL arms (10–20k games) for survivors only.** The
+  feedback-loop read the supervised tiers cannot give: exploration
+  shift, reward hacking, entropy. Same flags, small shapes
+  (`--embedding-dim 128`-class), watchdogs from 0.
+- **Tier D — 100k confirm at 512d.** Matched-milestone reads against the
+  historical width-wave controls (ΔV probe + E1 calibration + behavior
+  probe, per the shared-yardstick section above).
+- **Tier E — the 500k arm** (WS-4 slot 2), standard ladder and kill
+  criteria as specified above.

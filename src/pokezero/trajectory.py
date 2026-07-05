@@ -23,6 +23,10 @@ class TrajectoryStep:
     action_probability: Optional[float] = None
     value_estimate: Optional[float] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Dense potential-based shaping component for this decision (see pokezero.shaping),
+    # recorded SEPARATELY from the raw env reward. None = unshaped collection (the
+    # serialized key is omitted entirely, keeping shaping-off records byte-identical).
+    shaping_reward: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.turn_index < 0:
@@ -41,6 +45,8 @@ class TrajectoryStep:
             raise ValueError("action_probability must be between 0 and 1 when set.")
         if self.value_estimate is not None and not math.isfinite(float(self.value_estimate)):
             raise ValueError("value_estimate must be finite when set.")
+        if self.shaping_reward is not None and not math.isfinite(float(self.shaping_reward)):
+            raise ValueError("shaping_reward must be finite when set.")
 
 
 @dataclass
@@ -122,6 +128,9 @@ def _step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "action_probability": step.action_probability,
         "value_estimate": step.value_estimate,
         "metadata": dict(step.metadata),
+        # Optional shaping component: key omitted when absent so unshaped records stay
+        # byte-identical to pre-shaping collection and old readers never see the field.
+        **({"shaping_reward": step.shaping_reward} if step.shaping_reward is not None else {}),
     }
 
 
@@ -137,6 +146,7 @@ def _step_from_dict(payload: Mapping[str, Any]) -> TrajectoryStep:
         action_probability=_optional_float(payload.get("action_probability")),
         value_estimate=_optional_float(payload.get("value_estimate")),
         metadata=_mapping(payload.get("metadata", {})),
+        shaping_reward=_optional_float(payload.get("shaping_reward")),
     )
 
 

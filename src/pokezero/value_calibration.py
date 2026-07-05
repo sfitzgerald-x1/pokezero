@@ -295,6 +295,10 @@ def _trajectory_dataset_config_from_training_result(
         faint_delta_return_weight=training_config.faint_delta_return_weight,
         turn_penalty_after=training_config.turn_penalty_after,
         turn_penalty=training_config.turn_penalty,
+        # Calibration targets mirror the TRAINING targets (same posture as the hp/faint
+        # weights above): a shaped head is scored against shaped returns. Terminal-only
+        # reads (E1) construct their own unshaped config on purpose.
+        potential_shaping=training_config.resolved_shaping_config(),
     )
 
 

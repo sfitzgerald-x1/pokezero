@@ -624,6 +624,40 @@ def cache_feature_masks_by_path(paths: Iterable[Path | str]) -> tuple[tuple[Path
     return tuple(results)
 
 
+def cache_shaping_configs_by_path(
+    paths: Iterable[Path | str],
+) -> tuple[tuple[Path, dict | None, bool], ...]:
+    """Per training-cache directory: the dense-shaping config its dataset_config records.
+
+    The shaping-axis twin of ``cache_feature_masks_by_path``: collection bakes shaped
+    returns into the cache and stamps ``dataset_config.potential_shaping`` into
+    ``metadata.json``, so the trainer can hard-fail (both directions) on a cache-vs-flag
+    shaping mismatch. Each row is ``(path, shaping_config_dict | None, checkable)``:
+    shaping None with ``checkable=True`` means the cache is definitively UNSHAPED (all
+    pre-shaping caches — the field did not exist, so their returns were never shaped);
+    ``checkable=False`` marks unreadable metadata, which cannot be checked and is
+    skipped. Non-cache inputs (JSONL) are omitted, matching the mask helper.
+    """
+    results: list[tuple[Path, dict | None, bool]] = []
+    for path in paths:
+        resolved = Path(path)
+        metadata_path = resolved / "metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            dataset_config = payload.get("dataset_config") if isinstance(payload, Mapping) else None
+        except (OSError, json.JSONDecodeError):
+            results.append((resolved, None, False))
+            continue
+        if not isinstance(dataset_config, Mapping):
+            results.append((resolved, None, False))
+            continue
+        shaping = dataset_config.get("potential_shaping")
+        results.append((resolved, dict(shaping) if isinstance(shaping, Mapping) else None, True))
+    return tuple(results)
+
+
 def distinct_belief_set_source_hashes(paths: Iterable[Path | str]) -> tuple[str | None, ...]:
     """Distinct belief provenance across training inputs (rollout jsonl or cache directories).
 

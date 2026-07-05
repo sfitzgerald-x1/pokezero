@@ -44,11 +44,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from pokezero.actions import MOVE_ACTION_COUNT
-from pokezero.checkpoint_factors import build_corpus, choice_label
+from pokezero.checkpoint_factors import build_corpus, choice_label, with_opp_spikes, with_self_spikes
 from pokezero.neural_policy import (
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
@@ -64,33 +63,10 @@ def _is_move(state, idx: int, needle: str) -> bool:
     return label.startswith("move:") and needle in label
 
 
-def _with_self_spikes(state, layers: int):
-    """Counterfactual copy of `state` with exactly `layers` Spikes on the player's own side; all
-    other side conditions preserved. Feeds NUMERIC_SELF_HAZARDS = layers/3 to the encoder."""
-    counts = dict(state.self_side_condition_counts or {})
-    conds = set(state.self_side_conditions or ())
-    if layers <= 0:
-        counts.pop("spikes", None)
-        conds.discard("spikes")
-    else:
-        counts["spikes"] = layers
-        conds.add("spikes")
-    return replace(state, self_side_condition_counts=counts, self_side_conditions=tuple(sorted(conds)))
-
-
-def _with_opp_spikes(state, layers: int):
-    """Counterfactual copy of `state` with exactly `layers` Spikes on the OPPONENT side."""
-    counts = dict(state.opponent_side_condition_counts or {})
-    conds = set(state.opponent_side_conditions or ())
-    if layers <= 0:
-        counts.pop("spikes", None)
-        conds.discard("spikes")
-    else:
-        counts["spikes"] = layers
-        conds.add("spikes")
-    return replace(
-        state, opponent_side_condition_counts=counts, opponent_side_conditions=tuple(sorted(conds))
-    )
+# Injection primitives now live in pokezero.checkpoint_factors (shared with the shaping
+# candidate ranker); these aliases keep this script's call sites unchanged.
+_with_self_spikes = with_self_spikes
+_with_opp_spikes = with_opp_spikes
 
 
 def _mean(xs):
