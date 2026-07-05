@@ -1,0 +1,16 @@
+{
+  "seed": 148,
+  "source_commit": "3830480",
+  "generator": "LocalShowdownEnv + RolloutDriver, RandomLegalPolicy vs RandomLegalPolicy, gen3randombattle, max_decision_rounds=250, POKEZERO_BELIEF_SET_SOURCE=1",
+  "player_rng": "sha256(f\"{seed}:{player_id}\") per src/pokezero/rollout.py",
+  "determinism": "battle seed + per-player RNG only; |t:| timestamp lines stripped for byte stability",
+  "sha256_clean_log": "eed8ec4422a0ce2bc5f7d2ba2bd4d21c8f65805690b5f3bab2c3153406abc01e",
+  "key_events": {
+    "turn_7": "Weezing Explosion -> double faint (double cold replacement phase)",
+    "turn_12": "Toxic lands on Pidgeot",
+    "turn_13": "Cloyster Spikes (|-sidestart| p1)",
+    "turn_15": "Pidgeot eats Liechi Berry (|-enditem| [eat]) then faints",
+    "game_length_turns": 48
+  },
+  "purpose": "Reusable rich-history fixture: early Explosion double-faint + hazards + status + item reveal inside turn 16; chosen for the v2.1 token-format documentation and turn-merged-token tests."
+}
