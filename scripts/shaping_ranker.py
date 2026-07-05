@@ -17,16 +17,24 @@ Per candidate (fixed seed, fixed epochs, identical model config):
           injection primitives (pokezero.checkpoint_factors.with_self_spikes/with_opp_spikes)
           over a fixed scripted-driver corpus — self-spikes 0->3 (expect V down), opp-spikes
           0->3 (expect V up), judged against the head's value spread;
-     [ii] Pearson of the head's prediction vs the TERMINAL outcome on held-out games
-          (did shaping destroy outcome prediction?);
-     [iii] simple calibration vs terminal (bias + 10-bin ECE).
+     [ii] PBRS-corrected terminal Pearson on held-out games. Under potential-based
+          shaping with a zero terminal potential the OPTIMAL shaped value is
+          V'(s) = V(s) - Phi(s), so raw prediction-vs-terminal Pearson penalizes every
+          shaped head by construction. The eval-facing quantity is the corrected value
+          prediction + Phi_candidate(s): a head that actually learned its shaped targets
+          recovers V and retains terminal Pearson; a head trained on broken targets
+          (e.g. inverted signs, whose returns saturate the [-1,1] clip and whose
+          correction then actively anti-corrects) loses it. Raw Pearson is also
+          reported for reference;
+     [iii] simple calibration of the corrected prediction vs terminal (bias + 10-bin ECE).
 
 Ranking (documented composite):
     delta_v_score = (max(0, -value_self_response) + max(0, value_opp_response)) / value_spread
-  - constraint: heldout terminal Pearson must stay within --pearson-retention (default 10%)
-    of the unshaped control's Pearson; candidates failing the constraint sink below every
-    passing candidate regardless of dV.
-  - passing candidates sort by delta_v_score descending.
+  - constraint: heldout CORRECTED terminal Pearson must stay within --pearson-retention
+    (default 10%) of the unshaped control's Pearson; candidates failing the constraint
+    sink below every passing candidate regardless of dV.
+  - passing candidates sort by delta_v_score descending (dV is the primary read);
+    failing candidates sort by corrected Pearson descending (least-broken first).
 The candidate list MUST include the unshaped control ("shaping": null) — it defines the
 Pearson budget, and a deliberately-bad config ranking above sane ones marks the tool broken.
 
@@ -54,7 +62,11 @@ from pokezero.neural_policy import (
     train_transformer_policy,
 )
 from pokezero.randbat_vocab import gen3_category_vocabulary
-from pokezero.shaping import resolve_shaping_config
+from pokezero.shaping import (
+    ground_truth_components_by_step_index,
+    potential_from_components,
+    resolve_shaping_config,
+)
 from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC, observation_from_player_state
 
 SPIKES_LAYERS_PROBE = 3
@@ -123,7 +135,7 @@ def _std(values: list[float]) -> float:
     return (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
 
 
-def evaluate_candidate_model(model, result, *, heldout_records, corpus, vocab, dex, value_states: int):
+def evaluate_candidate_model(model, result, *, shaping, heldout_records, corpus, vocab, dex, value_states: int):
     def value_of(state) -> float:
         observation = observation_from_player_state(
             state, category_vocab=vocab, spec=DEFAULT_REPLAY_OBSERVATION_SPEC, dex=dex
@@ -145,17 +157,28 @@ def evaluate_candidate_model(model, result, *, heldout_records, corpus, vocab, d
     value_self_response = sum(self_deltas) / len(self_deltas) if self_deltas else 0.0
     value_opp_response = sum(opp_deltas) / len(opp_deltas) if opp_deltas else 0.0
 
-    # [ii]+[iii] terminal-outcome prediction on held-out games.
-    predictions: list[float] = []
+    # [ii]+[iii] terminal-outcome prediction on held-out games. The gate metric is the
+    # PBRS-corrected prediction (pred + Phi_candidate(s)): the shaped optimum is
+    # V' = V - Phi, so the corrected value is what search/eval would consume.
+    raw_predictions: list[float] = []
+    corrected_predictions: list[float] = []
     outcomes: list[float] = []
     for record in heldout_records:
         terminal = record.terminal or record.trajectory.terminal
         if terminal is None or terminal.capped or terminal.winner is None:
             continue
-        for step in record.trajectory.steps:
-            predictions.append(
-                evaluate_transformer_observation_value(model=model, result=result, observations=[step.observation])
+        components_by_step = ground_truth_components_by_step_index(record)
+        for step_index, step in enumerate(record.trajectory.steps):
+            prediction = evaluate_transformer_observation_value(
+                model=model, result=result, observations=[step.observation]
             )
+            correction = (
+                potential_from_components(components_by_step[step_index], shaping)
+                if shaping is not None
+                else 0.0
+            )
+            raw_predictions.append(prediction)
+            corrected_predictions.append(prediction + correction)
             outcomes.append(1.0 if terminal.winner == step.player_id else -1.0)
 
     return {
@@ -166,12 +189,15 @@ def evaluate_candidate_model(model, result, *, heldout_records, corpus, vocab, d
         "delta_v_score": (
             (max(0.0, -value_self_response) + max(0.0, value_opp_response)) / max(value_spread, 1e-6)
         ),
-        "heldout_examples": len(predictions),
-        "terminal_pearson": _pearson(predictions, outcomes),
+        "heldout_examples": len(raw_predictions),
+        "terminal_pearson": _pearson(corrected_predictions, outcomes),
+        "terminal_pearson_uncorrected": _pearson(raw_predictions, outcomes),
         "terminal_bias": (
-            sum(p - o for p, o in zip(predictions, outcomes)) / len(predictions) if predictions else None
+            sum(p - o for p, o in zip(corrected_predictions, outcomes)) / len(corrected_predictions)
+            if corrected_predictions
+            else None
         ),
-        "terminal_ece": _ece(predictions, outcomes),
+        "terminal_ece": _ece(corrected_predictions, outcomes),
     }
 
 
@@ -257,6 +283,7 @@ def main() -> int:
         evaluation = evaluate_candidate_model(
             model,
             result,
+            shaping=shaping,
             heldout_records=heldout_records,
             corpus=corpus,
             vocab=vocab,
@@ -277,6 +304,7 @@ def main() -> int:
             f"[ranker] {label}: dV_self={evaluation['value_self_response']:+.4f} "
             f"dV_opp={evaluation['value_opp_response']:+.4f} spread={evaluation['value_spread']:.4f} "
             f"pearson={evaluation['terminal_pearson']:.4f} "
+            f"(raw {evaluation['terminal_pearson_uncorrected']:.4f}) "
             f"({train_seconds:.1f}s train + {eval_seconds:.1f}s eval)"
         )
 
@@ -287,13 +315,23 @@ def main() -> int:
         pearson = row["terminal_pearson"] or 0.0
         row["pearson_floor"] = pearson_floor
         row["pearson_retained"] = bool(pearson >= pearson_floor)
-    ranked = sorted(rows, key=lambda row: (not row["pearson_retained"], -row["delta_v_score"]))
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            not row["pearson_retained"],
+            # Retained: primary read is the dV response. Failed: order by how much
+            # corrected-Pearson survives (least-broken first) — dV is noise once the
+            # head no longer predicts outcomes.
+            -row["delta_v_score"] if row["pearson_retained"] else 0.0,
+            -(row["terminal_pearson"] or -1.0),
+        ),
+    )
     for rank, row in enumerate(ranked, start=1):
         row["rank"] = rank
 
     header = (
         f"{'rank':>4} {'label':24} {'dV_self':>9} {'dV_opp':>8} {'spread':>8} {'dV_score':>9} "
-        f"{'pearson':>8} {'retained':>8} {'bias':>8} {'ece':>7} {'sec/cand':>9}"
+        f"{'pearson*':>8} {'raw_p':>8} {'retained':>8} {'bias':>8} {'ece':>7} {'sec/cand':>9}"
     )
     print()
     print(header)
@@ -303,14 +341,17 @@ def main() -> int:
             f"{row['rank']:>4} {row['label'][:24]:24} {row['value_self_response']:9.4f} "
             f"{row['value_opp_response']:8.4f} {row['value_spread']:8.4f} {row['delta_v_score']:9.4f} "
             f"{(row['terminal_pearson'] if row['terminal_pearson'] is not None else float('nan')):8.4f} "
+            f"{(row['terminal_pearson_uncorrected'] if row['terminal_pearson_uncorrected'] is not None else float('nan')):8.4f} "
             f"{('yes' if row['pearson_retained'] else 'NO'):>8} "
             f"{(row['terminal_bias'] if row['terminal_bias'] is not None else float('nan')):8.4f} "
             f"{(row['terminal_ece'] if row['terminal_ece'] is not None else float('nan')):7.4f} "
             f"{row['train_seconds'] + row['eval_seconds']:9.1f}"
         )
     print(
-        f"\ncomposite: pass Pearson >= {pearson_floor:.4f} "
-        f"(control {control_pearson:.4f} - {args.pearson_retention:.0%}), then delta_v_score desc."
+        f"\npearson* = PBRS-corrected (prediction + Phi_candidate) vs terminal; raw_p = uncorrected."
+        f"\ncomposite: pass corrected Pearson >= {pearson_floor:.4f} "
+        f"(control {control_pearson:.4f} - {args.pearson_retention:.0%}); retained sort by "
+        "delta_v_score desc, failed sort by corrected Pearson desc."
     )
 
     report = {
@@ -328,7 +369,11 @@ def main() -> int:
         },
         "pearson_retention": args.pearson_retention,
         "control_pearson": control_pearson,
-        "composite": "pearson_retained first, then delta_v_score = (max(0,-dV_self)+max(0,dV_opp))/spread desc",
+        "composite": (
+            "constraint: PBRS-corrected terminal Pearson within retention of control; "
+            "retained sort by delta_v_score = (max(0,-dV_self)+max(0,dV_opp))/spread desc; "
+            "failed sort by corrected Pearson desc"
+        ),
         "ranked": ranked,
     }
     if args.out is not None:
