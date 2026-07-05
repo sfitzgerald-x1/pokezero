@@ -576,6 +576,46 @@ class PerspectiveTest(unittest.TestCase):
         self.assertEqual((from_p2[2].own_spikes_layers, from_p2[2].opp_spikes_layers), (1, 0))
 
 
+class ExplosionFixtureTest(unittest.TestCase):
+    """The banked seed-148 engine game (real gen3 randbats, gzipped fixture): a turn-7
+    Explosion double-faint with both sides replacing cold — exactly the merged
+    replacement-pair shape, from a full engine-generated log rather than synthetic lines."""
+
+    def test_seed148_turn7_is_a_cold_pair_and_the_game_rebuilds(self) -> None:
+        import gzip
+
+        raw = gzip.open(FIXTURE_ROOT / "explosion-seed148.log.gz", "rb").read().decode()
+        lines = [line for line in raw.split("\n") if line]
+        replay = parse_showdown_replay(lines, battle_id="explosion-seed148")
+        merged = extract_turn_merged_tokens(replay, perspective_slot="p1")
+        per_action = extract_transition_tokens(replay, perspective_slot="p1")
+
+        turn_7 = [token for token in merged if token.turn == 7]
+        self.assertEqual(
+            [token.phase for token in turn_7], [PHASE_TURN, PHASE_REPLACEMENT]
+        )
+        explosion_turn, pair = turn_7
+        explosion_sub = next(
+            sub
+            for sub in (explosion_turn.first, explosion_turn.second)
+            if sub.status == SUB_BLOCK_ACTION and sub.action == "explosion"
+        )
+        self.assertEqual(explosion_sub.actor_species, "Weezing")
+        self.assertTrue(explosion_sub.ko)
+        # The cold pair: both sides replace blind, one merged token.
+        self.assertEqual(pair.first.status, SUB_BLOCK_ACTION)
+        self.assertEqual(pair.second.status, SUB_BLOCK_ACTION)
+        self.assertEqual(pair.first.kind, TOKEN_KIND_SWITCH)
+        self.assertEqual(pair.second.kind, TOKEN_KIND_SWITCH)
+        self.assertEqual({pair.first.actor_slot, pair.second.actor_slot}, {"p1", "p2"})
+        # No other double-faint in the game produced a false pair, no EXTRA fallback
+        # fired, and the whole real game reconstructs per-action exactly (this fixture
+        # happens to contain no intra-turn trio changer, so the bijection is total).
+        self.assertNotIn(PHASE_EXTRA, [token.phase for token in merged])
+        self.assertEqual(flatten_turn_merged_tokens(merged), per_action)
+        self.assertLess(len(merged), 0.62 * len(per_action))
+
+
 class FixtureReplayTest(unittest.TestCase):
     def test_p2_seat_replay_merges_and_rebuilds(self) -> None:
         lines = (FIXTURE_ROOT / "p2_seat_replay.txt").read_text().splitlines()

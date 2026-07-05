@@ -1,8 +1,9 @@
 """Turn-merged transition tokens (v2.1 batch 3): one token per TURN, two sub-blocks.
 
-Pure extraction layer over the same replay fold as :mod:`pokezero.transitions` — no
-observation-encoder changes live here (the encode/schema integration is staged
-separately and rebases onto the post-#512 dual-schema encode).
+Pure extraction layer over the same replay fold as :mod:`pokezero.transitions`; the
+encode side lives in ``showdown.py`` as observation schema v2.2 — the third entry in the
+checkpoint-driven dual-schema table #512 built (v2/v2.1 artifacts stay first-class; a
+checkpoint's stamped schema selects the encode).
 
 Design (Scott-approved, 2026-07-05):
 
@@ -54,8 +55,8 @@ Design (Scott-approved, 2026-07-05):
   * Wish / end-of-turn residuals are NOT actions and never form sub-blocks (the
     underlying fold already excludes the residual phase from action windows).
 - K budget: the transition budget flag counts TOKENS, and a turn-merged token covers a
-  whole turn — the old 64-action horizon is ≈ 32 turn tokens. See the encode-side
-  documentation for the loud unit-change note on K=64 configs.
+  whole turn — the old 64-action horizon is ≈ 32 turn tokens. See the v2.2 encode
+  docstring in ``showdown.py`` for the loud unit-change note on K=64 configs.
 
 Equivalence gate: :func:`flatten_turn_merged_tokens` reconstructs the per-action token
 stream exactly, modulo ONE documented merge: the context trio is stored once per merged
@@ -68,7 +69,7 @@ bijection test uses as its allowance.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from .belief import _CALLER_MOVES
@@ -144,6 +145,10 @@ class TurnSubBlock:
     n_hits: int = 1
     effectiveness: str = EFFECTIVENESS_NEUTRAL
     side_effect: str = SIDE_EFFECT_NONE
+    # Defender identity at declaration (v2.1 batch 1 field; move sub-blocks only). For a
+    # hazard-sack redirect this is what would name the mid-turn replacement — but the
+    # engine-verified disposition is a full fizzle, so a NEGATED sub-block never has one.
+    defender_species: Optional[str] = None
     cant_reason: Optional[str] = None
     baton_pass_species: Optional[str] = None
     residual: Optional[float] = None
@@ -195,6 +200,93 @@ def extract_turn_merged_and_tendencies(
     return _merge_fold(fold), _tendency_stats_from_fold(fold, perspective_slot=perspective)
 
 
+def extract_transition_products(
+    replay: ShowdownReplayState,
+    *,
+    perspective_slot: str,
+) -> tuple[tuple[TransitionToken, ...], tuple[TurnMergedToken, ...], TendencyStats]:
+    """Per-action tokens + turn-merged tokens + tendencies from ONE fold.
+
+    The v2.2 observe path needs all three: the per-action stream stays the Tier-2
+    annotation substrate (and the per-mon pinned-bit derivation source), the merged
+    stream is what the transition block encodes. Merging is O(windows) on top of the
+    shared fold.
+    """
+    perspective = _validated_slot(perspective_slot)
+    fold = _fold_replay(replay, perspective_slot=perspective)
+    return (
+        fold.tokens,
+        _merge_fold(fold),
+        _tendency_stats_from_fold(fold, perspective_slot=perspective),
+    )
+
+
+def annotate_turn_merged_tokens(
+    merged: tuple[TurnMergedToken, ...],
+    annotated_per_action: tuple[TransitionToken, ...],
+) -> tuple[TurnMergedToken, ...]:
+    """Copy Tier-2 annotations (residual / validity / cb_bit) onto the merged stream.
+
+    ``annotated_per_action`` must be the tier2-annotated form of exactly the per-action
+    stream this merged stream was built from (``Tier2LiveTracker.annotate`` only rewrites
+    the three Tier-2 fields). The flatten expansion order gives the exact positional
+    correspondence between sub-blocks and per-action tokens; chain-interior tokens (the
+    cant line and the protocol-constant Sleep Talk click, plus Baton Pass completions)
+    are never assessed strikes, so only each sub-block's representative is mapped.
+    """
+    total = sum(
+        _expansion_length(sub)
+        for token in merged
+        for sub in (token.first, token.second)
+        if sub.status == SUB_BLOCK_ACTION
+    )
+    if total != len(annotated_per_action):
+        raise ValueError(
+            "annotate_turn_merged_tokens: merged stream does not correspond to the "
+            "annotated per-action stream (length mismatch after flatten)."
+        )
+    out: list[TurnMergedToken] = []
+    cursor = 0
+    for token in merged:
+        updates: dict[str, TurnSubBlock] = {}
+        for position, sub in (("first", token.first), ("second", token.second)):
+            if sub.status != SUB_BLOCK_ACTION:
+                continue
+            representative_offset = 0
+            if sub.cant_reason is not None:
+                representative_offset += 1  # the cant token precedes the representative
+                if sub.called:
+                    representative_offset += 1  # so does the synthesized click
+            source = annotated_per_action[cursor + representative_offset]
+            cursor += _expansion_length(sub)
+            if (
+                source.residual == sub.residual
+                and source.residual_valid == sub.residual_valid
+                and source.cb_bit == sub.cb_bit
+            ):
+                continue
+            updates[position] = replace(
+                sub,
+                residual=source.residual,
+                residual_valid=source.residual_valid,
+                cb_bit=source.cb_bit,
+            )
+        out.append(replace(token, **updates) if updates else token)
+    return tuple(out)
+
+
+def _expansion_length(sub: "TurnSubBlock") -> int:
+    """How many per-action tokens this sub-block flattens to."""
+    length = 1
+    if sub.cant_reason is not None:
+        length += 1
+        if sub.called:
+            length += 1
+    if sub.baton_pass_species is not None:
+        length += 1
+    return length
+
+
 def flatten_turn_merged_tokens(
     tokens: tuple[TurnMergedToken, ...] | list[TurnMergedToken],
 ) -> tuple[TransitionToken, ...]:
@@ -233,7 +325,8 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
         )
         if sub.called:
             # The Sleep Talk click line: protocol-constant (no damage/effect events of
-            # its own — the merger verified default fields before collapsing).
+            # its own — the merger verified default fields before collapsing). The click
+            # is self-targeted, so its defender identity is the actor itself.
             expanded.append(
                 TransitionToken(
                     turn=token.turn,
@@ -242,6 +335,7 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
                     kind=TOKEN_KIND_MOVE,
                     action="sleeptalk",
                     transformed=sub.transformed,
+                    defender_species=sub.actor_species,
                     **trio,
                 )
             )
@@ -263,6 +357,7 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
             n_hits=sub.n_hits,
             effectiveness=sub.effectiveness,
             side_effect=sub.side_effect,
+            defender_species=sub.defender_species,
             residual=sub.residual,
             residual_valid=sub.residual_valid,
             cb_bit=sub.cb_bit,
@@ -523,6 +618,7 @@ def _action_sub_block(window: _Window, **collapse) -> TurnSubBlock:
         n_hits=window.n_hits,
         effectiveness=window.effectiveness,
         side_effect=window.side_effect,
+        defender_species=window.defender_species,
         **collapse,
     )
 
