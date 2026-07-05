@@ -158,13 +158,20 @@ class Tier2Config:
 
 @dataclass(frozen=True)
 class OwnMon:
-    """The perspective player's own mon — exact server-provided identity."""
+    """The perspective player's own mon — exact server-provided identity.
+
+    ``moves`` (normalized ids, from the request's move list) lets the own side act as
+    the ATTACKER in the shared damage core (defender-side investment inference): Hidden
+    Power resolves its type against the own set exactly like variant sets resolve it.
+    Empty means unknown/legacy callers — own-attacker assessment then skips the strike.
+    """
 
     species: str
     level: int
     stats: Mapping[str, int]  # includes "hp" = max HP
     ability: Optional[str] = None
     item: Optional[str] = None
+    moves: tuple[str, ...] = ()
 
 
 def own_team_from_request(request: Mapping[str, Any]) -> tuple[OwnMon, ...]:
@@ -211,6 +218,9 @@ def own_team_from_request(request: Mapping[str, Any]) -> tuple[OwnMon, ...]:
                 stats=stats,
                 ability=str(row.get("baseAbility") or row.get("ability") or "") or None,
                 item=str(row.get("item") or "") or None,
+                moves=tuple(
+                    canonical_move_id(str(move)) for move in (row.get("moves") or []) if str(move)
+                ),
             )
         )
     return tuple(team)
@@ -600,31 +610,68 @@ def _weather_suppressed(variant_ability: str, own_ability: Optional[str]) -> boo
     return normalize_id(own_ability or "") in _WEATHER_SUPPRESSORS
 
 
-def _variant_move_id(variant: CandidateVariant, observed_move: str) -> Optional[str]:
-    """The variant's own id for the observed move (Hidden Power resolves per variant)."""
+@dataclass(frozen=True)
+class StrikeParticipant:
+    """One side of a strike for the shared damage core, direction-neutral.
+
+    Base Tier 2 (opponent attacks us) builds the ATTACKER from a candidate variant and
+    the DEFENDER from the exact own mon; the investment inference (we attack them,
+    :mod:`pokezero.investment`) builds the ATTACKER from the exact own mon and the
+    DEFENDER from a candidate variant. Same conditioning code either way — the
+    defender-side extension must never fork the modifier chain.
+
+    ``stats`` are stored stats; the defender's must include ``"hp"`` (max HP).
+    ``moves`` are normalized ids used to resolve the observed move against the
+    participant's set (Hidden Power type resolution); empty means no set constraint.
+    """
+
+    species_key: str
+    level: int
+    stats: Mapping[str, int]
+    ability: str  # normalized id ("" when unknown)
+    item: str  # normalized id ("" when unknown)
+    moves: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _StrikeDamage:
+    rolls: tuple[int, ...]  # per-hit rolls under the FULL interpretation
+    baseline_rolls: tuple[int, ...]  # Choice Band neutralized when split is requested
+    ambiguous: bool  # a conditioning input sat in an ambiguity band
+
+
+def _participant_move_id(participant: StrikeParticipant, observed_move: str) -> Optional[str]:
+    """The participant's own id for the observed move (Hidden Power resolves per set)."""
     if observed_move.startswith("hiddenpower"):
-        for move in variant.moves:
+        for move in participant.moves:
             if move.startswith("hiddenpower"):
                 return move
         return None
-    return observed_move if observed_move in variant.moves else None
+    return observed_move if observed_move in participant.moves else None
 
 
-def _variant_damage(
+def _strike_damage(
     *,
-    variant: CandidateVariant,
-    attacker_species_key: str,
+    attacker: StrikeParticipant,
+    defender: StrikeParticipant,
+    defender_types: tuple[str, ...],
     observed_move: str,
     token: TransitionToken,
     context: StrikeContext,
-    own: OwnMon,
-    own_types: tuple[str, ...],
     dex: ShowdownDex,
-    config: Tier2Config,
-    stats_cache: dict[tuple, Mapping[str, int]],
     require_move_in_set: bool,
-) -> Optional[_VariantDamage]:
-    move_id = _variant_move_id(variant, observed_move)
+    pinch_ambiguity_band: float,
+    split_choice_band_baseline: bool,
+) -> Optional[_StrikeDamage]:
+    """Direction-neutral expected-damage core (the single Tier-2 conditioning chain).
+
+    ``context`` is always oriented with the ATTACKER as the acting side (the fold
+    snapshots ``attacker_*`` fields for whichever side declared the move).
+    ``split_choice_band_baseline`` requests the CB-neutralized baseline alongside the
+    full interpretation (base Tier 2's residual baseline); when False the baseline
+    equals the full rolls.
+    """
+    move_id = _participant_move_id(attacker, observed_move)
     if move_id is None:
         if require_move_in_set:
             return None
@@ -656,22 +703,22 @@ def _variant_damage(
     # the pinch abilities (onBasePower), and Thick Fat (onSourceBasePower).
     base_power_mods: list[tuple[float, float]] = []
     weather = normalize_id(token.weather or "")
-    suppressed = _weather_suppressed(variant.ability, own.ability)
+    suppressed = _weather_suppressed(attacker.ability, defender.ability)
     if move_id == "solarbeam" and weather in _SOLAR_BEAM_WEAK_WEATHERS and not suppressed:
         base_power_mods.append((0.5, 1))
     if move_id == "facade" and (context.attacker_status or "") in _FACADE_STATUSES:
         base_power_mods.append((2, 1))
-    ability = variant.ability
+    ability = attacker.ability
     pinch_type = _PINCH_ABILITY_TYPES.get(ability)
     if pinch_type is not None and move_type == pinch_type:
         fraction = context.attacker_hp_fraction
-        if abs(3.0 * fraction - 1.0) <= config.pinch_ambiguity_band:
+        if abs(3.0 * fraction - 1.0) <= pinch_ambiguity_band:
             ambiguous = True
             base_power_mods.append((1.5, 1))  # conservative-max interpretation
         elif fraction <= 1.0 / 3.0:
             base_power_mods.append((1.5, 1))
-    own_ability = normalize_id(own.ability or "")
-    if own_ability == "thickfat" and move_type in {"Fire", "Ice"}:
+    defender_ability = defender.ability
+    if defender_ability == "thickfat" and move_type in {"Fire", "Ice"}:
         base_power_mods.append((0.5, 1))
 
     # ModifyDamagePhase1 mods beyond the screen (which gen3_damage applies itself):
@@ -680,15 +727,12 @@ def _variant_damage(
     if context.attacker_flash_fire and move_type == "Fire":
         phase1_mods.append((1.5, 1))
 
-    stats = _variant_stats(variant, attacker_species_key, dex, stats_cache)
-    if stats is None:
-        return None
     attack_stat_key = "atk" if category == "Physical" else "spa"
     defense_stat_key = "def" if category == "Physical" else "spd"
-    attack = stats[attack_stat_key]
-    defense = own.stats.get(defense_stat_key)
-    max_hp = own.stats.get("hp")
-    if defense is None or max_hp is None:
+    attack = attacker.stats.get(attack_stat_key)
+    defense = defender.stats.get(defense_stat_key)
+    max_hp = defender.stats.get("hp")
+    if attack is None or defense is None or max_hp is None:
         return None
 
     # Attack-stat modifier chain (ModifyAtk/SpA events: abilities then items). Hustle
@@ -704,23 +748,23 @@ def _variant_damage(
     if ability in {"hugepower", "purepower"} and category == "Physical":
         attack_mods.append((2, 1))
     # Gen3 Plus/Minus check ALL actives, not allies (mods/gen3/abilities.ts) — in
-    # singles the partner is the OPPOSING active, i.e. our own mon, whose ability is
-    # exactly known. The inventory's "inert in singles" note is dex-level, not
-    # engine-level; reachable via Plusle/Minun.
+    # singles the partner is the OPPOSING active (the defender here). Reachable via
+    # Plusle/Minun; the inventory's "inert in singles" note is dex-level, not
+    # engine-level.
     partner = {"minus": "plus", "plus": "minus"}.get(ability)
-    if partner is not None and category == "Special" and own_ability == partner:
+    if partner is not None and category == "Special" and defender_ability == partner:
         attack_mods.append((1.5, 1))
 
     item_mods: list[tuple[float, float]] = []
     cb_mods: list[tuple[float, float]] = []
-    item = variant.item
+    item = attacker.item
     if item == "choiceband" and category == "Physical":
         cb_mods.append((1.5, 1))
-    elif item == "thickclub" and category == "Physical" and attacker_species_key in {"marowak", "cubone"}:
+    elif item == "thickclub" and category == "Physical" and attacker.species_key in {"marowak", "cubone"}:
         item_mods.append((2, 1))
-    elif item == "lightball" and category == "Special" and attacker_species_key == "pikachu":
+    elif item == "lightball" and category == "Special" and attacker.species_key == "pikachu":
         item_mods.append((2, 1))
-    elif item == "souldew" and category == "Special" and attacker_species_key in {"latias", "latios"}:
+    elif item == "souldew" and category == "Special" and attacker.species_key in {"latias", "latios"}:
         item_mods.append((1.5, 1))
     else:
         boost_type = TYPE_BOOST_ITEMS.get(item)
@@ -728,10 +772,13 @@ def _variant_damage(
             item_mods.append((_TYPE_BOOST_FACTORS.get(item, 1.1), 1))
 
     defense_mods: list[tuple[float, float]] = []
-    if own_ability == "marvelscale" and context.defender_status and category == "Physical":
+    if defender_ability == "marvelscale" and context.defender_status and category == "Physical":
         defense_mods.append((1.5, 1))
-    own_item = normalize_id(own.item or "")
-    if own_item == "souldew" and category == "Special" and _species_key(own.species) in {"latias", "latios"}:
+    if (
+        defender.item == "souldew"
+        and category == "Special"
+        and defender.species_key in {"latias", "latios"}
+    ):
         defense_mods.append((1.5, 1))
 
     weather_mod: Optional[tuple[float, float]] = None
@@ -747,9 +794,9 @@ def _variant_damage(
             elif move_type == "Fire":
                 weather_mod = (0.5, 1)
 
-    attacker_info = dex.species_info(attacker_species_key)
+    attacker_info = dex.species_info(attacker.species_key)
     stab = bool(attacker_info and move_type in attacker_info.types)
-    effectiveness = dex.effectiveness(move_type, own_types)
+    effectiveness = dex.effectiveness(move_type, defender_types)
     burned = (
         category == "Physical"
         and (context.attacker_status or "") == "brn"
@@ -761,7 +808,7 @@ def _variant_damage(
     def build(mods_with_item: Sequence[tuple[float, float]]) -> tuple[int, ...]:
         return gen3_damage_rolls(
             Gen3DamageContext(
-                level=variant.level,
+                level=attacker.level,
                 base_power=base_power,
                 category=category,
                 attack=attack,
@@ -784,11 +831,64 @@ def _variant_damage(
         )
 
     full_rolls = build(attack_mods + item_mods + cb_mods)
-    if config.baseline_includes_choice_band:
-        baseline_rolls = full_rolls
+    if cb_mods and split_choice_band_baseline:
+        baseline_rolls = build(attack_mods + item_mods)
     else:
-        baseline_rolls = build(attack_mods + item_mods) if cb_mods else full_rolls
-    return _VariantDamage(variant=variant, rolls=full_rolls, baseline_rolls=baseline_rolls, ambiguous=ambiguous)
+        baseline_rolls = full_rolls
+    return _StrikeDamage(rolls=full_rolls, baseline_rolls=baseline_rolls, ambiguous=ambiguous)
+
+
+def _variant_damage(
+    *,
+    variant: CandidateVariant,
+    attacker_species_key: str,
+    observed_move: str,
+    token: TransitionToken,
+    context: StrikeContext,
+    own: OwnMon,
+    own_types: tuple[str, ...],
+    dex: ShowdownDex,
+    config: Tier2Config,
+    stats_cache: dict[tuple, Mapping[str, int]],
+    require_move_in_set: bool,
+) -> Optional[_VariantDamage]:
+    """Base Tier-2 direction: candidate-variant attacker vs exact own defender."""
+    stats = _variant_stats(variant, attacker_species_key, dex, stats_cache)
+    if stats is None:
+        return None
+    damage = _strike_damage(
+        attacker=StrikeParticipant(
+            species_key=attacker_species_key,
+            level=variant.level,
+            stats=stats,
+            ability=variant.ability,
+            item=variant.item,
+            moves=variant.moves,
+        ),
+        defender=StrikeParticipant(
+            species_key=_species_key(own.species),
+            level=own.level,
+            stats=own.stats,
+            ability=normalize_id(own.ability or ""),
+            item=normalize_id(own.item or ""),
+        ),
+        defender_types=own_types,
+        observed_move=observed_move,
+        token=token,
+        context=context,
+        dex=dex,
+        require_move_in_set=require_move_in_set,
+        pinch_ambiguity_band=config.pinch_ambiguity_band,
+        split_choice_band_baseline=not config.baseline_includes_choice_band,
+    )
+    if damage is None:
+        return None
+    return _VariantDamage(
+        variant=variant,
+        rolls=damage.rolls,
+        baseline_rolls=damage.baseline_rolls,
+        ambiguous=damage.ambiguous,
+    )
 
 
 # --- Strike assessment and the top-level inference. ---
