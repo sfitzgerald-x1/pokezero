@@ -95,6 +95,98 @@ def _save_k32_checkpoint(path: Path):
     return config
 
 
+def _save_v2_checkpoint(path: Path):
+    """A real saved checkpoint stamped with the v2 observation schema (121-column census) —
+    the dual-schema window's live-training-run artifact shape."""
+    from pokezero.neural_policy import (
+        EntityTokenTransformerPolicy,
+        TransformerPolicyConfig,
+        TransformerTrainingConfig,
+        TransformerTrainingResult,
+        save_transformer_checkpoint,
+    )
+
+    config = TransformerPolicyConfig.compact_category(
+        policy_id="v2-arm",
+        category_vocab=tuple(f"token-{index}" for index in range(8)),
+        category_oov_buckets=2,
+        window_size=1,
+        embedding_dim=8,
+        transformer_layers=0,
+        attention_heads=1,
+        feedforward_dim=8,
+        dropout=0.0,
+        observation_schema_version="pokezero.observation.v2",
+        numeric_feature_count=121,
+    )
+    model = EntityTokenTransformerPolicy(config)
+    result = TransformerTrainingResult(
+        model_config=config,
+        training_config=TransformerTrainingConfig(window_size=1),
+        epochs=(),
+    )
+    save_transformer_checkpoint(path, model, result=result)
+    return config
+
+
+class EnvConfigSpecResolutionTest(unittest.TestCase):
+    """The dual-schema half of the latch: checkpoint-stamped observation specs resolve the
+    env's encode schema + width with the same adopt/agree/conflict semantics as masks."""
+
+    def test_default_env_adopts_the_checkpoint_v2_spec(self) -> None:
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        resolved = env_config_with_checkpoint_masks(
+            LocalShowdownConfig(), (), context="t", required_specs=V2_REPLAY_OBSERVATION_SPEC
+        )
+        self.assertEqual(resolved.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(resolved.observation_spec.numeric_feature_count, 121)
+
+    def test_matching_v2_1_spec_is_a_no_op(self) -> None:
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
+
+        config = LocalShowdownConfig()
+        resolved = env_config_with_checkpoint_masks(
+            config,
+            (),
+            context="t",
+            required_specs=(V2_1_REPLAY_OBSERVATION_SPEC, V2_1_REPLAY_OBSERVATION_SPEC),
+        )
+        self.assertIs(resolved, config)
+
+    def test_conflicting_schemas_hard_fail(self) -> None:
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC, V2_REPLAY_OBSERVATION_SPEC
+
+        with self.assertRaisesRegex(ValueError, "conflicting observation specs"):
+            env_config_with_checkpoint_masks(
+                LocalShowdownConfig(),
+                (),
+                context="t",
+                required_specs=(V2_REPLAY_OBSERVATION_SPEC, V2_1_REPLAY_OBSERVATION_SPEC),
+            )
+
+    def test_explicit_env_spec_conflicting_with_checkpoint_hard_fails(self) -> None:
+        from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC, V2_REPLAY_OBSERVATION_SPEC
+
+        config = LocalShowdownConfig(observation_spec=V2_REPLAY_OBSERVATION_SPEC)
+        with self.assertRaisesRegex(ValueError, "conflicts with the loaded checkpoint"):
+            env_config_with_checkpoint_masks(
+                config, (), context="t", required_specs=V2_1_REPLAY_OBSERVATION_SPEC
+            )
+
+    def test_masks_and_specs_resolve_together(self) -> None:
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        resolved = env_config_with_checkpoint_masks(
+            LocalShowdownConfig(),
+            K32_MASKS,
+            context="t",
+            required_specs=V2_REPLAY_OBSERVATION_SPEC,
+        )
+        self.assertEqual(resolved.feature_masks, K32_MASKS)
+        self.assertEqual(resolved.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
+
+
 class MaskDerivationTest(unittest.TestCase):
     def test_feature_masks_from_model_config_round_trips(self) -> None:
         if not _torch_available():
@@ -337,6 +429,134 @@ def _fake_priors(*, model, result, observations):
 
 def _fake_value(*, model, result, observations):
     return 0.0
+
+
+class V2CheckpointHarnessPathTest(unittest.TestCase):
+    """Dual-schema window: a saved v2 (121-column) checkpoint must load without refusal and
+    drive every env-construction path to the v2 encode — the live-training-run guarantee."""
+
+    def test_v2_checkpoint_loads_and_derives_the_v2_spec(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import (
+            load_transformer_model_config,
+            observation_spec_from_model_config,
+        )
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "v2.pt"
+            _save_v2_checkpoint(checkpoint_path)
+            config = load_transformer_model_config(checkpoint_path)
+        self.assertEqual(config.observation_schema_version, "pokezero.observation.v2")
+        self.assertEqual(config.numeric_feature_count, 121)
+        self.assertEqual(
+            observation_spec_from_model_config(config), V2_REPLAY_OBSERVATION_SPEC
+        )
+
+    def test_policy_spec_resolver_builds_v2_env_config(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.collection import env_config_with_policy_spec_masks
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "v2.pt"
+            _save_v2_checkpoint(checkpoint_path)
+            resolved = env_config_with_policy_spec_masks(
+                LocalShowdownConfig(),
+                (f"neural:{checkpoint_path}", "random-legal", None),
+                context="spec harness",
+            )
+        self.assertEqual(resolved.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
+        self.assertEqual(resolved.observation_spec.schema_version, "pokezero.observation.v2")
+
+    def test_neural_cli_benchmark_builds_v2_env(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_cli import main as neural_cli_main
+        from pokezero.showdown import V2_REPLAY_OBSERVATION_SPEC
+
+        captured: dict[str, object] = {}
+
+        def fake_benchmark_rollouts(*, games, env_factory, rollout_config, seed_start, matchups):
+            captured["env"] = env_factory()
+
+            class _Report:
+                def to_dict(self):
+                    return {}
+
+            return _Report()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "v2.pt"
+            _save_v2_checkpoint(checkpoint_path)
+            with (
+                patch("pokezero.neural_cli.benchmark_rollouts", fake_benchmark_rollouts),
+                patch("pokezero.neural_cli.print_benchmark_report"),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "benchmark",
+                        "--checkpoint",
+                        str(checkpoint_path),
+                        "--games",
+                        "1",
+                        "--device",
+                        "cpu",
+                    ]
+                )
+        self.assertEqual(exit_code, 0)
+        env = captured["env"]
+        self.assertEqual(env.config.observation_spec, V2_REPLAY_OBSERVATION_SPEC)
+
+    def test_v2_and_v2_1_checkpoints_in_one_env_hard_fail(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.collection import env_config_with_policy_spec_masks
+
+        from pokezero.neural_policy import (
+            EntityTokenTransformerPolicy,
+            TransformerPolicyConfig,
+            TransformerTrainingConfig,
+            TransformerTrainingResult,
+            save_transformer_checkpoint,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            v2_path = Path(temp_dir) / "v2.pt"
+            _save_v2_checkpoint(v2_path)
+            # A fresh default (v2.1-stamped) checkpoint with the SAME default masks, so the
+            # failure is unambiguously the schema axis, not the mask axis.
+            v21_config = TransformerPolicyConfig.compact_category(
+                policy_id="v21-arm",
+                category_vocab=tuple(f"token-{index}" for index in range(8)),
+                category_oov_buckets=2,
+                window_size=1,
+                embedding_dim=8,
+                transformer_layers=0,
+                attention_heads=1,
+                feedforward_dim=8,
+                dropout=0.0,
+            )
+            v21_path = Path(temp_dir) / "v21.pt"
+            save_transformer_checkpoint(
+                v21_path,
+                EntityTokenTransformerPolicy(v21_config),
+                result=TransformerTrainingResult(
+                    model_config=v21_config,
+                    training_config=TransformerTrainingConfig(window_size=1),
+                    epochs=(),
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "conflicting observation specs"):
+                env_config_with_policy_spec_masks(
+                    LocalShowdownConfig(),
+                    (f"neural:{v2_path}", f"neural:{v21_path}"),
+                    context="spec harness",
+                )
 
 
 class K32ProbeScriptPathTest(unittest.TestCase):

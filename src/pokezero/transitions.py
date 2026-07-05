@@ -189,6 +189,14 @@ class TransitionToken:
     own_spikes_layers: int = 0
     opp_spikes_layers: int = 0
     weather: Optional[str] = None
+    # Defender identity (spec v2.1): the BASE species (display form, Transform identity
+    # rule — the slot occupant recorded at its switch-in, never the acting/copied species)
+    # occupying the defender side when a MOVE was declared. None on switch/cant tokens and
+    # when the extractor cannot resolve the occupant. Extracted for every replay (pure
+    # extraction, schema-independent); only a v2.1 encode reads it — the defender is
+    # inferable from interleaved switch tokens EXCEPT when K-truncation drops the anchoring
+    # switch, and damage_fraction is defender-relative.
+    defender_species: Optional[str] = None
     # Tier-2 fields (populated only by pokezero.tier2 behind the #505 precision gate;
     # always None/False/False from this module's Tier-1 extraction). ``cb_bit`` is the
     # two-strike Choice Band conclusion for the ACTING mon as of this strike — monotone
@@ -261,6 +269,7 @@ class _Window:
     kind: str
     action: str
     defender_side: Optional[str]
+    defender_species: Optional[str] = None
     called: bool = False
     transformed: bool = False
     own_spikes_layers: int = 0
@@ -508,7 +517,17 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                 counters_for(side, stay.species).stayed_and_attacked += 1
             # Any non-Baton-Pass move clears a stale pending-BP flag (mirrors the parser).
             pending_baton_pass[side] = move_id == "batonpass"
-            defender = _slot_from_ident(parts[4]) if len(parts) > 4 else None
+            defender = (_slot_from_ident(parts[4]) if len(parts) > 4 else None) or _other_side(side)
+            # Defender identity (v2.1 token field): the extractor knows both actives at
+            # declaration time. The occupant record carries the BASE species from the
+            # switch-in details (Transform identity rule, robust to nicknamed idents);
+            # the target ident is the fallback for logs whose lead switch predates the fold.
+            defender_stay = occupant.get(defender)
+            defender_species = (
+                defender_stay.species
+                if defender_stay is not None
+                else (_species_from_ident(parts[4]) if len(parts) > 4 else None)
+            )
             own, opp, current_weather = context_trio()
             window = _Window(
                 event_index=index,
@@ -517,7 +536,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
                 species=species,
                 kind=TOKEN_KIND_MOVE,
                 action=move_id,
-                defender_side=defender or _other_side(side),
+                defender_side=defender,
+                defender_species=defender_species,
                 called=called,
                 transformed=transformed[side],
                 own_spikes_layers=own,
@@ -765,6 +785,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
             own_spikes_layers=window.own_spikes_layers,
             opp_spikes_layers=window.opp_spikes_layers,
             weather=window.weather,
+            defender_species=window.defender_species if window.kind == TOKEN_KIND_MOVE else None,
         )
         for window in windows
     )

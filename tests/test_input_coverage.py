@@ -58,7 +58,10 @@ NUMERIC_LABELS = {
     105: "TT_DAMAGE_FRACTION", 106: "TT_N_HITS", 107: "TT_CALLED", 108: "TT_TRANSFORMED",
     109: "TT_CRIT", 110: "TT_MISS", 111: "TT_KO", 112: "TT_PURSUIT_INTERCEPT",
     113: "TT_OWN_SPIKES", 114: "TT_OPP_SPIKES", 115: "TT_ABS_TURN", 116: "TT_TURNS_AGO",
-    117: "TT_RESIDUAL", 118: "TT_RESIDUAL_VALID",
+    117: "TT_RESIDUAL", 118: "TT_RESIDUAL_VALID", 119: "TT_CB_BIT", 120: "TT_INVESTMENT_BIT",
+    # ---- spec v2.1 (defender identity rides categorical MOVE_PRIORITY; numerics below). ----
+    **{121 + i: f"OPP_MOVE_PP_VALID[{i}]" for i in range(16)},
+    137: "SUB_HP_FRACTION",
 }
 
 def categorical_label(col: int) -> str:
@@ -102,7 +105,14 @@ ALLOW_NUMERIC: set[int] = {
                  # populated only by pokezero.tier2 behind the #505 gate + tier2_residuals mask
     119,         # TT_CB_BIT — structural BY DESIGN in Tier-1 corpora (same channel as 117/118)
     120,         # TT_INVESTMENT_BIT — structural BY DESIGN everywhere: a true always-zero
-                 # reserve held for the H3 defender-side/investment inference
+                 # reserve held for the H3 defender-side/investment inference (carried
+                 # forward into the v2.1 census, still constant zero; batch 2 populates it)
+    # ---- spec v2.1 allowances (12-seed sweep: validity bits 0..10 and SUB_HP_FRACTION
+    # all cover; the deep buckets mirror the OPP_MOVE_PP allowances exactly). ----
+    132, 133, 134,  # OPP_MOVE_PP_VALID[11..13] — situational (mirrors 87..89: needs a
+                    # REVEALED move that deep in the sorted bucket order)
+    135, 136,       # OPP_MOVE_PP_VALID[14..15] — structural (mirrors 90..91: 16 buckets,
+                    # Gen 3 cap is 14 moves/species)
 }
 ALLOW_CATEGORICAL: set[int] = {
     16,               # BELIEF_ITEM[5]  — structural (6 buckets, Gen 3 cap is 5 items/species)

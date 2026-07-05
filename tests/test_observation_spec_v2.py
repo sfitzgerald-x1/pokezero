@@ -767,6 +767,14 @@ class DataSideOneWayDoorTest(unittest.TestCase):
         record = self._record_with_schema(OBSERVATION_SCHEMA_VERSION)
         self.assertTrue(list(examples_from_record(record)))
 
+    def test_examples_from_record_accepts_v2_during_dual_schema_window(self) -> None:
+        # v2 rollouts stay ingestible while the live v2 training runs produce them; pairing
+        # them with the RIGHT model is enforced by the schema-keyed numeric-census guard.
+        from pokezero.dataset import examples_from_record
+
+        record = self._record_with_schema("pokezero.observation.v2")
+        self.assertTrue(list(examples_from_record(record)))
+
     def test_missing_observation_schema_version_is_refused_not_assumed_current(self) -> None:
         from pokezero.trajectory import _observation_from_dict as obs_from_dict
         from pokezero.trajectory import _observation_to_dict as obs_to_dict

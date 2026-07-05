@@ -53,8 +53,9 @@ def env_config_with_checkpoint_masks(
     required_masks: "ObservationFeatureMasks | Sequence[ObservationFeatureMasks]",
     *,
     context: str,
+    required_specs: "ObservationSpec | Sequence[ObservationSpec]" = (),
 ) -> "LocalShowdownConfig":
-    """Derive the env's encode-time feature masks from loaded checkpoint provenance.
+    """Derive the env's encode-time feature masks AND observation spec from checkpoint provenance.
 
     The train/eval consistency latch for the mask axis (same failure shape as the #492
     belief-source mismatch): a checkpoint stamped with ablation masks (K=32 budget, stats-off,
@@ -65,8 +66,15 @@ def env_config_with_checkpoint_masks(
     - checkpoints DISAGREE -> hard fail (one env cannot encode two ways);
     - env carries an EXPLICIT non-default mask config that differs from the checkpoints'
       -> hard fail loudly (never silently prefer either side).
+
+    ``required_specs`` extends the latch to the observation SCHEMA axis with identical
+    semantics (the dual-schema window's core mechanism): pass each loaded checkpoint's
+    ``observation_spec_from_model_config`` so a v2 checkpoint gets the v2 encode (121
+    columns, no v2.1 blocks) and a v2.1 checkpoint the v2.1 encode — resolved from stamped
+    provenance, never from the build's default. A v2 and a v2.1 checkpoint in one env, or an
+    explicit non-default env spec that disagrees with the checkpoints', hard-fails loudly.
     """
-    from .observation import ObservationFeatureMasks
+    from .observation import ObservationFeatureMasks, ObservationSpec
 
     if isinstance(required_masks, ObservationFeatureMasks):
         required_masks = (required_masks,)
@@ -74,7 +82,13 @@ def env_config_with_checkpoint_masks(
     for masks in required_masks:
         if masks not in distinct:
             distinct.append(masks)
-    if not distinct:
+    if isinstance(required_specs, ObservationSpec):
+        required_specs = (required_specs,)
+    distinct_specs: list[ObservationSpec] = []
+    for spec in required_specs:
+        if spec not in distinct_specs:
+            distinct_specs.append(spec)
+    if not distinct and not distinct_specs:
         return env_config
     if len(distinct) > 1:
         raise ValueError(
@@ -82,17 +96,37 @@ def env_config_with_checkpoint_masks(
             f"({', '.join(repr(masks) for masks in distinct)}); one env cannot encode both — "
             "evaluate them in separate runs."
         )
-    required = distinct[0]
-    if env_config.feature_masks == required:
-        return env_config
-    if env_config.feature_masks != DEFAULT_OBSERVATION_FEATURE_MASKS:
+    if len(distinct_specs) > 1:
         raise ValueError(
-            f"{context}: env feature masks {env_config.feature_masks!r} conflict with the "
-            f"loaded checkpoint's trained masks {required!r}. Refusing to encode observations "
-            "the model never trained on (the #492 train/eval-mismatch class); drop the "
-            "explicit env masks or evaluate a matching checkpoint."
+            f"{context}: checkpoints require conflicting observation specs "
+            f"({', '.join(repr(spec) for spec in distinct_specs)}); one env cannot encode "
+            "two observation schemas — evaluate them in separate runs."
         )
-    return replace(env_config, feature_masks=required)
+    resolved = env_config
+    if distinct:
+        required = distinct[0]
+        if resolved.feature_masks != required:
+            if resolved.feature_masks != DEFAULT_OBSERVATION_FEATURE_MASKS:
+                raise ValueError(
+                    f"{context}: env feature masks {resolved.feature_masks!r} conflict with the "
+                    f"loaded checkpoint's trained masks {required!r}. Refusing to encode observations "
+                    "the model never trained on (the #492 train/eval-mismatch class); drop the "
+                    "explicit env masks or evaluate a matching checkpoint."
+                )
+            resolved = replace(resolved, feature_masks=required)
+    if distinct_specs:
+        required_spec = distinct_specs[0]
+        if resolved.observation_spec != required_spec:
+            if resolved.observation_spec != DEFAULT_REPLAY_OBSERVATION_SPEC:
+                raise ValueError(
+                    f"{context}: env observation spec {resolved.observation_spec!r} conflicts "
+                    f"with the loaded checkpoint's trained spec {required_spec!r} "
+                    f"(schema {required_spec.schema_version!r}). Refusing to encode a schema "
+                    "the model never trained on (the census-mismatch class); drop the explicit "
+                    "env spec or evaluate a matching checkpoint."
+                )
+            resolved = replace(resolved, observation_spec=required_spec)
+    return resolved
 
 
 def belief_set_source_env_enabled() -> bool:

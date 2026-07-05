@@ -30,6 +30,9 @@ from .observation import (
     ACTION_CANDIDATE_TOKEN_COUNT,
     DEFAULT_OBSERVATION_FEATURE_MASKS,
     FIELD_TOKEN_COUNT,
+    OBSERVATION_SCHEMA_VERSION,
+    OBSERVATION_SCHEMA_VERSION_V2,
+    OBSERVATION_SCHEMA_VERSION_V2_1,
     OPPONENT_POKEMON_TOKEN_COUNT,
     STATS_TOKEN_COUNT,
     TRANSITION_TOKEN_COUNT,
@@ -53,10 +56,9 @@ BELIEF_FACT_BUCKET_COUNT = BELIEF_ABILITY_BUCKET_COUNT + BELIEF_ITEM_BUCKET_COUN
 # like belief facts; 6 columns cover any realistic simultaneous set on one mon.
 CATEGORY_FIXED_COUNT = 9
 VOLATILE_BUCKET_COUNT = 6
-DEFAULT_REPLAY_OBSERVATION_SPEC = ObservationSpec(
-    categorical_feature_count=CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT,
-    numeric_feature_count=121,
-)
+# The replay observation specs are schema-keyed and constructed AFTER the numeric column
+# constants below (see REPLAY_OBSERVATION_SPECS_BY_SCHEMA / DEFAULT_REPLAY_OBSERVATION_SPEC),
+# so each census is derived from the last named column of its schema rather than a bare int.
 CATEGORY_ID_BUCKETS = 1_000_000
 CATEGORY_PRIMARY = 0
 CATEGORY_SECONDARY = 1
@@ -247,7 +249,79 @@ NUMERIC_TT_CB_BIT = 119
 # defender-side/offensive-investment inference (the symmetric Tier-2 extension in
 # docs/next_train_readiness_plan.md); nothing may write it until that work lands behind
 # its own gate. Kept at constant zero so flipping it on later is not a spec break.
+# Carried forward unchanged (same column, still constant zero) into the v2.1 table below;
+# populating it is the v2.1 window's batch-2 PR, gated separately.
 NUMERIC_TT_INVESTMENT_BIT = 120
+# The v2 numeric census ends here.
+_V2_NUMERIC_FEATURE_COUNT = NUMERIC_TT_INVESTMENT_BIT + 1
+
+# ---- observation spec v2.1 additions (checkpoint-driven; written ONLY under a v2.1 spec —
+# the v2 encode path never touches columns >= _V2_NUMERIC_FEATURE_COUNT, keeping v2-mode
+# encodes byte-identical to the pre-v2.1 encoder). ----
+# Opponent tokens — per-bucket REVEALED-move validity bits, positionally aligned with the
+# PP-fraction columns (NUMERIC_OPP_MOVE_PP_OFFSET) and the belief-move categorical buckets:
+# bit k = 1 iff bucket k's move is protocol-revealed, REGARDLESS of remaining PP. This closes
+# the v2 revealed-at-0-PP collision (a revealed move ledgered to exactly 0 PP encoded 0.0,
+# indistinguishable from an unrevealed bucket) and doubles as the explicit confirmed-move
+# flag per bucket.
+NUMERIC_OPP_MOVE_PP_VALID_OFFSET = 121  # ..136 (BELIEF_MOVE_BUCKET_COUNT columns)
+# Pokemon tokens — the ACTIVE mon's substitute HP fraction while the volatile is up.
+# ENGINE-VERIFIED (vendored pokemon-showdown, data/moves.ts substitute condition + the
+# gen5/gen4 mod overrides gen3 inherits): sub HP = floor(maxhp/4) at creation
+# (condition onStart, `effectState.hp = Math.floor(target.maxhp / 4)`), but chip against the
+# sub is NOT protocol-derivable — a surviving hit emits only
+# `|-activate|<target>|Substitute|[damage]` with no magnitude (the corpus confirms the bare
+# gen3 form), and the break emits `|-end|<target>|Substitute`. The only magnitude leak is
+# drain-vs-sub (attacker heal = ceil(damage/2), corrections item 3), which is Tier-2
+# residual territory, not exact-state bookkeeping. So per the hard-rule asymmetry this
+# column carries presence + the KNOWN INITIAL fraction: floor(maxhp/4)/maxhp exact for the
+# self side (max HP from the request), the 0.25 baseline for the opponent (max HP hidden;
+# floor error < 1%). 0.0 while no sub is up. Exact chip tracking can upgrade the value
+# in-place later without a spec break (same column, tighter semantics).
+NUMERIC_SUB_HP_FRACTION = NUMERIC_OPP_MOVE_PP_VALID_OFFSET + BELIEF_MOVE_BUCKET_COUNT  # 137
+# The v2.1 numeric census ends here.
+_V2_1_NUMERIC_FEATURE_COUNT = NUMERIC_SUB_HP_FRACTION + 1
+
+_CATEGORICAL_FEATURE_COUNT = CATEGORY_FIXED_COUNT + BELIEF_FACT_BUCKET_COUNT + VOLATILE_BUCKET_COUNT
+# Schema-keyed replay observation specs: BOTH schemas stay first-class encode modes during
+# the dual-schema window. Which one an env/harness uses resolves from the loaded checkpoint's
+# model_config (neural_policy.observation_spec_from_model_config through the
+# env_config_with_checkpoint_masks latch); DEFAULT_REPLAY_OBSERVATION_SPEC is only the
+# checkpoint-free default (fresh trains, fresh encodes) and tracks the CURRENT schema.
+V2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
+    categorical_feature_count=_CATEGORICAL_FEATURE_COUNT,
+    numeric_feature_count=_V2_NUMERIC_FEATURE_COUNT,
+    schema_version=OBSERVATION_SCHEMA_VERSION_V2,
+)
+V2_1_REPLAY_OBSERVATION_SPEC = ObservationSpec(
+    categorical_feature_count=_CATEGORICAL_FEATURE_COUNT,
+    numeric_feature_count=_V2_1_NUMERIC_FEATURE_COUNT,
+    schema_version=OBSERVATION_SCHEMA_VERSION_V2_1,
+)
+REPLAY_OBSERVATION_SPECS_BY_SCHEMA: Mapping[str, ObservationSpec] = {
+    OBSERVATION_SCHEMA_VERSION_V2: V2_REPLAY_OBSERVATION_SPEC,
+    OBSERVATION_SCHEMA_VERSION_V2_1: V2_1_REPLAY_OBSERVATION_SPEC,
+}
+DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION_SCHEMA_VERSION]
+
+
+def observation_spec_for_schema(schema_version: str) -> ObservationSpec:
+    """The canonical replay observation spec for a supported schema version.
+
+    Loud on anything else: an unsupported schema at spec-resolution time is the same
+    train/eval mismatch class the census guard bounces at tensor time, caught earlier and
+    with both supported versions named.
+    """
+    spec = REPLAY_OBSERVATION_SPECS_BY_SCHEMA.get(schema_version)
+    if spec is None:
+        supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
+        raise ValueError(
+            f"No replay observation spec for schema {schema_version!r}; supported schemas "
+            f"are {supported}. Legacy artifacts replay from their pinned tag "
+            "(docs/model_versioning.md)."
+        )
+    return spec
+
 
 FIELD_TOKEN_OFFSET = 0
 SELF_POKEMON_TOKEN_OFFSET = FIELD_TOKEN_OFFSET + FIELD_TOKEN_COUNT
@@ -789,7 +863,20 @@ def observation_from_player_state(
     populated into the type/mechanic feature slots; without it those slots stay padding.
     ``feature_masks`` darkens ablation-arm blocks (zeroed + attention-masked) without changing
     shapes or the spec version.
+
+    ``spec.schema_version`` selects the encode mode (dual-schema window): a v2 spec produces
+    the v2 layout byte-identically to the pre-v2.1 encoder (no v2.1 column is even attempted);
+    a v2.1 spec additionally writes defender identity on move transition tokens, the
+    revealed-move PP-validity bits, and the substitute HP fraction. Anything else refuses
+    loudly here rather than encoding an undeclared hybrid.
     """
+    if spec.schema_version not in REPLAY_OBSERVATION_SPECS_BY_SCHEMA:
+        supported = ", ".join(repr(version) for version in REPLAY_OBSERVATION_SPECS_BY_SCHEMA)
+        raise ValueError(
+            f"observation encode: unsupported spec schema {spec.schema_version!r}; supported "
+            f"schemas are {supported}."
+        )
+    schema_v2_1 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
     categorical_ids = _blank_categorical_rows(spec)
     numeric_features = _blank_numeric_rows(spec)
     _encode_field_token(categorical_ids, numeric_features, state, masks=feature_masks)
@@ -811,6 +898,7 @@ def observation_from_player_state(
         dex=dex,
         exact_beliefs_by_species=self_exact_beliefs,
         masks=feature_masks,
+        schema_v2_1=schema_v2_1,
     )
     opponent_beliefs = state.belief_view.opponent_by_species()
     tendency_by_species = (
@@ -841,10 +929,13 @@ def observation_from_player_state(
             _normalize_identifier(member.species): member for member in state.self_team
         },
         masks=feature_masks,
+        schema_v2_1=schema_v2_1,
     )
     _encode_action_tokens(categorical_ids, numeric_features, state, dex=dex)
     _encode_stats_token(categorical_ids, numeric_features, state, masks=feature_masks)
-    _encode_transition_tokens(categorical_ids, numeric_features, state, spec, masks=feature_masks)
+    _encode_transition_tokens(
+        categorical_ids, numeric_features, state, spec, masks=feature_masks, schema_v2_1=schema_v2_1
+    )
     # Convert the raw category strings to compact embedding rows in one pass.
     categorical_rows = [[category_vocab.encode(value) for value in row] for row in categorical_ids]
     token_type_ids = _token_type_ids(spec)
@@ -857,6 +948,7 @@ def observation_from_player_state(
         legal_action_mask=state.legal_action_mask,
         perspective=state.perspective,
         metadata=_observation_metadata(state),
+        schema_version=spec.schema_version,
     )
 
 
@@ -1649,6 +1741,7 @@ def _encode_pokemon_tokens(
     tendency_by_species: Mapping[str, "OpponentMonTendency"] | None = None,
     transform_targets_by_species: Mapping[str, ShowdownPokemon] | None = None,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+    schema_v2_1: bool = False,
 ) -> None:
     for slot_index, candidate in enumerate(pokemon[:limit]):
         token_index = offset + slot_index
@@ -1732,9 +1825,19 @@ def _encode_pokemon_tokens(
                 status=status,
                 fainted=condition.fainted,
             )
+            if schema_v2_1 and candidate.active and _has_substitute(active_volatiles):
+                _set_numeric(
+                    numeric_features[token_index],
+                    NUMERIC_SUB_HP_FRACTION,
+                    _substitute_hp_fraction(candidate),
+                )
             if role == "opponent":
                 _encode_opponent_move_pp_fractions(
-                    numeric_features[token_index], exact, bucket_moves, dex=dex
+                    numeric_features[token_index],
+                    exact,
+                    bucket_moves,
+                    dex=dex,
+                    write_validity=schema_v2_1,
                 )
                 _encode_expected_stats(
                     numeric_features[token_index],
@@ -1835,6 +1938,7 @@ def _encode_opponent_move_pp_fractions(
     bucket_moves: Sequence[str],
     *,
     dex: "ShowdownDex | None",
+    write_validity: bool = False,
 ) -> None:
     """Remaining-PP fraction per REVEALED opponent move, aligned with the belief-move buckets.
 
@@ -1842,11 +1946,13 @@ def _encode_opponent_move_pp_fractions(
     engine-side charging rules (Pressure x2, Sleep-Talk-charges-caller, Transform scoping).
     Unrevealed bucket columns stay 0.0 — no PP knowledge is claimed for merely-possible moves.
 
-    KNOWN COLLISION (accepted for this spec revision): a REVEALED move ledgered to exactly
-    0 PP also encodes 0.0, indistinguishable in this channel from an unrevealed bucket. The
-    categorical bucket + revealed-move count disambiguate weakly; "confirmed empty" vs "no
-    knowledge" matters in pp-stall endgames, so a follow-up may add a numeric validity bit
-    (config-level, no spec break) rather than an epsilon floor.
+    The v2 revealed-at-0-PP collision (a REVEALED move ledgered to exactly 0 PP encoded 0.0,
+    indistinguishable in this channel from an unrevealed bucket — "confirmed empty" vs "no
+    knowledge", which matters in pp-stall endgames) is CLOSED under spec v2.1: with
+    ``write_validity`` (v2.1 specs only) the bucket-aligned NUMERIC_OPP_MOVE_PP_VALID_OFFSET
+    column carries 1.0 for every protocol-revealed bucket move, regardless of remaining PP —
+    the explicit confirmed-move flag per bucket. Under a v2 spec the collision stands exactly
+    as before (byte-identical v2 encodes; no epsilon floor).
     """
     if exact is None or dex is None:
         return
@@ -1860,12 +1966,35 @@ def _encode_opponent_move_pp_fractions(
         key = _normalize_identifier(move)
         if key not in revealed_keys:
             continue
+        # Revealed is protocol ground truth: the validity bit does not depend on the dex
+        # carrying a max PP for the move (the PP fraction below still does).
+        if write_validity:
+            _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_VALID_OFFSET + index, 1.0)
         info = dex.move_info(key)
         max_pp = info.max_pp if info is not None else 0
         if max_pp <= 0:
             continue
         remaining = max(0, max_pp - int(uses_by_move.get(key, 0)))
         _set_numeric(num_row, NUMERIC_OPP_MOVE_PP_OFFSET + index, remaining / float(max_pp))
+
+
+def _has_substitute(active_volatiles: Sequence[str]) -> bool:
+    """Whether the active mon's tracked volatiles include a live Substitute."""
+    return any(_normalize_identifier(name) == "substitute" for name in active_volatiles)
+
+
+def _substitute_hp_fraction(candidate: ShowdownPokemon) -> float:
+    """The KNOWN INITIAL substitute HP fraction for a mon with a sub up (v2.1 column).
+
+    Gen 3 sub HP = floor(maxhp/4) (engine-verified; see NUMERIC_SUB_HP_FRACTION). Exact for
+    the self side, whose max HP comes from the request; the 0.25 baseline for the opponent
+    (hidden max HP; floor error < 1%). Chip against the sub is not protocol-derivable, so
+    the value is presence + initial size, not a running ledger.
+    """
+    max_hp = candidate.stats.get("hp") if candidate.stats else None
+    if isinstance(max_hp, int) and max_hp > 0:
+        return (max_hp // 4) / float(max_hp)
+    return 0.25
 
 
 def _gen3_stat(base: int, level: int, *, ev: int, iv: int, hp: bool) -> int:
@@ -2088,6 +2217,7 @@ def _encode_transition_tokens(
     spec: ObservationSpec,
     *,
     masks: ObservationFeatureMasks = DEFAULT_OBSERVATION_FEATURE_MASKS,
+    schema_v2_1: bool = False,
 ) -> None:
     """Encode the ordered transition-token block (corrections item 9 schema).
 
@@ -2099,6 +2229,14 @@ def _encode_transition_tokens(
     ``NUMERIC_TT_RESIDUAL``/``NUMERIC_TT_RESIDUAL_VALID`` fill only from tokens whose Tier-2
     fields were populated (``pokezero.tier2``), gated by ``masks.tier2_residuals``; they stay
     0.0 for the plain extraction path.
+
+    v2.1 defender identity: move tokens carry the defender's base species in the
+    CATEGORY_MOVE_PRIORITY column — unused on transition tokens under v2 (the priority
+    bracket is an action-candidate-token fact; transition rows never set it, verified by the
+    v2 byte-identity gate), so reusing it costs no new column. The defender shares the
+    ``species:`` vocabulary family. Rationale on record: the defender is inferable from the
+    interleaved switch tokens EXCEPT when K-truncation drops the anchoring switch, and
+    ``damage_fraction`` is defender-relative — the anchor must survive truncation.
     """
     budget = min(masks.transition_token_budget, spec.transition_token_count)
     tokens = state.transition_tokens[-budget:] if budget else ()
@@ -2121,6 +2259,10 @@ def _encode_transition_tokens(
             _set_category(cat_row, CATEGORY_TYPE_1, f"tt_outcome:{token.damage_outcome}")
             _set_category(cat_row, CATEGORY_TYPE_2, f"tt_effectiveness:{token.effectiveness}")
             _set_category(cat_row, CATEGORY_MOVE_CATEGORY, f"tt_side_effect:{token.side_effect}")
+            if schema_v2_1 and token.defender_species:
+                _set_category(
+                    cat_row, CATEGORY_MOVE_PRIORITY, f"species:{token.defender_species}"
+                )
         if token.weather:
             _set_category(cat_row, CATEGORY_MOVE_EFFECT, f"weather:{token.weather}")
         _set_numeric(num_row, NUMERIC_PRESENT, 1.0)
