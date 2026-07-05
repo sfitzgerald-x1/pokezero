@@ -23,20 +23,33 @@ Subcommands:
                      window; --no-persist reads but never writes it (dry-run).
   record             Assemble one ledger JSONL line for a probed (or skipped)
                      milestone and append it. Idempotent; the check-then-append
-                     runs under an exclusive flock on the ledger file.
+                     runs under an exclusive flock on the ledger file. Refuses
+                     --pearson payloads that carry no pool pin (pool.path +
+                     pool.sha256, injected by annotate-pearson) — every
+                     recorded Pearson number must be attributable to the exact
+                     pool file that produced it.
+  annotate-pearson   --json FILE --label L --pool-path P --pool-sha256 SHA
+                     Inject the pool pin into a value-calibration --json
+                     payload (in place; the caller writes to a .tmp and
+                     renames after annotating, so published artifacts always
+                     carry their pin).
   lock               --fd N: take a non-blocking exclusive flock on inherited
                      file descriptor N (exit 1 if already held). The caller keeps
                      the fd open so the lock lives for the caller's lifetime.
-  pools              --repo DIR [--format tsv|json]
+  pools              --repo DIR [--format json|nul] [--hash]
                      Resolve the value-calibration eval pools from
-                     POKEZERO_POOL_SELF / POKEZERO_POOL_FP (falling back to the
-                     frozen v1 defaults) and print one TSV row per pool
-                     (role, path, label, source) plus "# WARNING:" comment
-                     lines. A pool's label keys its ledger entries and pearson
-                     output filenames. Resolving to a v1 pool emits a
-                     deprecation warning: v1 pools store v1-encoded
-                     observations that the v2 schema guards refuse, so they
-                     cannot score obsv2 checkpoints.
+                     POKEZERO_POOL_SELF / POKEZERO_POOL_FP (falling back to
+                     the frozen v2 defaults). A pool's label keys its ledger
+                     entries and pearson output filenames; with --hash each
+                     existing pool file also gets a streaming sha256 (hashed
+                     once per sweep) that pins artifacts and ledger lines to
+                     the exact pool bytes. --format nul emits NUL-delimited
+                     key/value pairs — the transport to the bash sweep, immune
+                     to whitespace/newline-containing paths. Explicitly
+                     selecting a v1 pool via the env vars emits a deprecation
+                     warning: v1 pools store v1-encoded observations that the
+                     v2 schema guards refuse, so they cannot score v2 (obsv2)
+                     checkpoints.
 
 Watchdog thresholds (the 4L lesson — see evaluate_watchdogs). All alarms fire
 strictly beyond their threshold (exactly-at-threshold is quiet):
@@ -63,6 +76,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -77,22 +91,25 @@ BASELINE_SCHEMA_VERSION = "pokezero.drift_baseline.v1"
 
 POOL_SELF_ENV = "POKEZERO_POOL_SELF"
 POOL_FP_ENV = "POKEZERO_POOL_FP"
-# Default eval pools, repo-relative. Still the frozen v1 pools: switch these
-# to runs/pool-self-v2-20260705/ and runs/pool-fp-v2-20260705/ once those
-# pools exist and their READMEs say FROZEN (they are built from the 50k obsv2
-# checkpoint). Until then obsv2 runs must override via the env vars above —
-# the v2 schema guards refuse the v1-encoded observations stored here.
-DEFAULT_POOL_SELF = "runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl"
-DEFAULT_POOL_FP = "runs/pool-fp-v1-20260704/pool-fp-v1.jsonl"
-# Historical ledger/filename labels for the v1 defaults (the self pool's
+# Default eval pools, repo-relative: the frozen v2 pools (built from the 50k
+# obsv2 checkpoint; each pool's README records FROZEN status + sha256).
+# Labels derive from the filename stems (pool-self-v2 / pool-fp-v2).
+DEFAULT_POOL_SELF = "runs/pool-self-v2-20260705/pool-self-v2.jsonl"
+DEFAULT_POOL_FP = "runs/pool-fp-v2-20260705/pool-fp-v2.jsonl"
+# The frozen v1 pools — fixed path constants, deliberately NOT keyed off the
+# defaults (review #509 M2: "is v1" must mean "is one of these files", not
+# "is the default", or every future default flip mislabels the new pools and
+# blares false deprecation warnings). Explicitly selecting one of these via
+# the env vars keeps its historical label and warns: v1 pools store
+# v1-encoded observations that the v2 schema guards refuse, so they cannot
+# score v2 (obsv2) checkpoints.
+V1_POOL_SELF = "runs/e1-value-readiness-20260703/belief-1-5m/heldout-rollouts.jsonl"
+V1_POOL_FP = "runs/pool-fp-v1-20260704/pool-fp-v1.jsonl"
+# Historical ledger/filename labels for the v1 pools (the self pool's
 # filename stem, heldout-rollouts, never was its label).
 V1_POOL_LABELS = {
-    DEFAULT_POOL_SELF: "pool-self-v1",
-    DEFAULT_POOL_FP: "pool-fp-v1",
-}
-V2_POOL_HINTS = {
-    "self": "runs/pool-self-v2-20260705/",
-    "fp": "runs/pool-fp-v2-20260705/",
+    V1_POOL_SELF: "pool-self-v1",
+    V1_POOL_FP: "pool-fp-v1",
 }
 
 MILESTONE_STEP = 100_000
@@ -558,18 +575,25 @@ def _pool_label(path: str) -> str:
 def resolve_pools(repo_root: Path | str, env) -> dict:
     """Resolve the value-calibration eval pools from the environment.
 
-    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen v1 defaults
+    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen v2 defaults
     (empty values count as unset, matching shell ${VAR:-default} semantics);
-    relative and ~ paths resolve against the repo root / home. No filesystem
-    access — existence checks stay in the caller.
+    relative and ~ paths resolve against the repo root / home, then normalize
+    through os.path.realpath so ``..``-spelled or symlinked spellings of the
+    same file cannot evade v1 detection or fork a fresh label (review #509
+    L1). No existence checks — those stay in the caller.
 
     Returns {"self": {path, label, source}, "fp": {...}, "warnings": [...]}.
-    A pool resolving to a v1 default carries a deprecation warning whatever
-    its source: v1 pools store v1-encoded observations that the v2 schema
-    guards refuse, so every Pearson probe of an obsv2 checkpoint against
-    them fails.
+    A pool resolving to one of the frozen v1 pool files (V1_POOL_SELF /
+    V1_POOL_FP — after the v2 default flip that can only happen via an
+    explicit env override) keeps its historical label and carries a
+    deprecation warning: v1 pools store v1-encoded observations that the v2
+    schema guards refuse, so they cannot score v2 (obsv2) checkpoints.
     """
     repo_root = Path(repo_root)
+    v1_labels = {
+        Path(os.path.realpath(repo_root / rel)): label
+        for rel, label in V1_POOL_LABELS.items()
+    }
     pools: dict = {"warnings": []}
     for role, env_var, default in (
         ("self", POOL_SELF_ENV, DEFAULT_POOL_SELF),
@@ -580,19 +604,20 @@ def resolve_pools(repo_root: Path | str, env) -> dict:
         path = Path(os.path.expanduser(raw))
         if not path.is_absolute():
             path = repo_root / path
-        # v1 pools keep their historical labels so existing ledgers/pearson
-        # files stay valid even when the path arrives via the env var.
-        v1_default = path == repo_root / default
-        label = V1_POOL_LABELS[default] if v1_default else _pool_label(raw)
+        path = Path(os.path.realpath(path))
+        # v1 pools keep their historical labels so v1-era ledgers/pearson
+        # files stay valid however the path is spelled; everything else
+        # (the v2 defaults included) labels by sanitized filename stem.
+        v1_label = v1_labels.get(path)
+        label = v1_label if v1_label is not None else _pool_label(path.name)
         pools[role] = {"path": str(path), "label": label, "source": source}
-        if v1_default:
+        if v1_label is not None:
             pools["warnings"].append(
-                f"DEPRECATED {role} pool: {label} ({path}) is v1-encoded; the v2 "
-                f"schema guards refuse it, so it CANNOT score obsv2 checkpoints "
-                f"and every ~100k milestone Pearson probe on an obsv2 run will "
-                f"fail. Set {env_var} to the frozen v2 pool "
-                f"(expected under {V2_POOL_HINTS[role]}) for obsv2 runs; the "
-                f"defaults switch to v2 once those pools are frozen."
+                f"DEPRECATED {role} pool: {label} ({path}) is v1-encoded; the "
+                f"v2 schema guards refuse it, so v1 pools CANNOT score v2 "
+                f"(obsv2) checkpoints and every ~100k milestone Pearson probe "
+                f"of a v2 checkpoint will fail. Unset {env_var} to use the "
+                f"frozen v2 default ({default}), or point it at a v2 pool."
             )
     if pools["self"]["label"] == pools["fp"]["label"]:
         raise SystemExit(
@@ -601,6 +626,19 @@ def resolve_pools(repo_root: Path | str, env) -> dict:
             f"files would collide; rename one pool file"
         )
     return pools
+
+
+def _sha256_file(path: Path) -> str | None:
+    """Streaming sha256 of ``path`` (1 MiB chunks — pool files run to GBs;
+    never slurped). None when the file is absent or unreadable."""
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +793,27 @@ def _cmd_record(args: argparse.Namespace) -> int:
             if not path:
                 raise SystemExit(f"--pearson expects POOL=PATH, got {spec!r}")
             report = json.loads(Path(path).read_text(encoding="utf-8"))
-            entry["pools"][pool] = _scalars(report)
+            # Every ledger line pins the exact pool file behind each Pearson
+            # number (review #509 M1): a label alone does not identify a pool
+            # — same-stem files would silently merge into one series.
+            pin = report.get("pool") if isinstance(report, dict) else None
+            if not isinstance(pin, dict) or not pin.get("path") or not pin.get("sha256"):
+                raise SystemExit(
+                    f"pearson payload {path} carries no pool pin (pool.path + "
+                    f"pool.sha256) — its numbers cannot be attributed to a "
+                    f"specific pool file; re-probe with the current sweep "
+                    f"(annotate-pearson injects the pin)"
+                )
+            if pin.get("label") not in (None, pool):
+                raise SystemExit(
+                    f"pearson payload {path} was produced against pool "
+                    f"{pin.get('label')!r} but is being recorded as {pool!r} — "
+                    f"refusing to misattribute it"
+                )
+            row = _scalars(report)
+            row["pool"] = _scalars(pin)
+            row["pearson_file"] = os.path.abspath(path)
+            entry["pools"][pool] = row
         if args.hazard:
             payload = json.loads(Path(args.hazard).read_text(encoding="utf-8"))
             entry["hazard"] = _hazard_row(payload, args.hazard_label)
@@ -797,19 +855,54 @@ def _cmd_lock(args: argparse.Namespace) -> int:
 
 def _cmd_pools(args: argparse.Namespace) -> int:
     pools = resolve_pools(Path(args.repo), os.environ)
+    if args.hash:
+        # Hashed HERE, once per sweep (the sweep calls `pools --hash` exactly
+        # once) — the sha256 pins every pearson artifact filename/payload and
+        # ledger line of the sweep to the exact pool bytes (review #509 M1).
+        # An absent/unreadable file hashes to "" — existence stays a caller
+        # (preflight) concern.
+        for role in ("self", "fp"):
+            pools[role]["sha256"] = _sha256_file(Path(pools[role]["path"])) or ""
     if args.format == "json":
         print(json.dumps(pools, indent=2, sort_keys=True))
         return 0
-    # tsv for the bash config block: "# WARNING:" comments, then one row per
-    # pool (role, path, label, source).
+    # nul: key\0value\0 pairs — the transport to the bash sweep. NUL cannot
+    # appear in env values or file paths, so a pool path containing tabs or
+    # newlines cannot mis-split the way a TSV row would (review #509 L2).
+    # Long warnings are pre-wrapped into one pair per banner line.
+    pairs: list[tuple[str, str]] = []
     for warning in pools["warnings"]:
         for line in textwrap.wrap(
             warning, width=96, break_long_words=False, break_on_hyphens=False
         ):
-            print(f"# WARNING: {line}")
+            pairs.append(("warning", line))
     for role in ("self", "fp"):
         pool = pools[role]
-        print(f"{role}\t{pool['path']}\t{pool['label']}\t{pool['source']}")
+        for field in ("path", "label", "source", "sha256"):
+            if field in pool:
+                pairs.append((f"{role}.{field}", str(pool[field])))
+    for key, value in pairs:
+        sys.stdout.write(f"{key}\0{value}\0")
+    sys.stdout.flush()
+    return 0
+
+
+def _cmd_annotate_pearson(args: argparse.Namespace) -> int:
+    if not args.pool_path or not args.pool_sha256:
+        raise SystemExit(
+            "annotate-pearson needs a non-empty --pool-path and --pool-sha256 — "
+            "an unpinned pearson artifact cannot be attributed to a pool file"
+        )
+    path = Path(args.json)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit(f"{path}: value-calibration payload is not a JSON object")
+    payload["pool"] = {
+        "label": args.label,
+        "path": args.pool_path,
+        "sha256": args.pool_sha256,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
@@ -868,13 +961,25 @@ def main() -> int:
     )
     record.set_defaults(func=_cmd_record)
 
+    annotate = sub.add_parser("annotate-pearson")
+    annotate.add_argument("--json", required=True, help="value-calibration --json output to annotate in place")
+    annotate.add_argument("--label", required=True, help="the pool's ledger/filename label")
+    annotate.add_argument("--pool-path", required=True, help="resolved absolute pool file path")
+    annotate.add_argument("--pool-sha256", required=True, help="sha256 of the pool file (from `pools --hash`)")
+    annotate.set_defaults(func=_cmd_annotate_pearson)
+
     lock = sub.add_parser("lock")
     lock.add_argument("--fd", type=int, required=True, help="inherited fd to flock (LOCK_EX|LOCK_NB)")
     lock.set_defaults(func=_cmd_lock)
 
     pools = sub.add_parser("pools")
     pools.add_argument("--repo", required=True, help="repo root for the repo-relative default pools")
-    pools.add_argument("--format", choices=("tsv", "json"), default="tsv")
+    pools.add_argument("--format", choices=("json", "nul"), default="json")
+    pools.add_argument(
+        "--hash",
+        action="store_true",
+        help="emit a streaming sha256 per existing pool file (once per sweep; pins artifacts/ledger lines)",
+    )
     pools.set_defaults(func=_cmd_pools)
 
     args = parser.parse_args()

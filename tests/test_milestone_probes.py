@@ -6,6 +6,8 @@ straight from the scripts directory.
 """
 from __future__ import annotations
 
+import argparse
+import hashlib
 import importlib.util
 import json
 import math
@@ -774,12 +776,19 @@ class TestMilestoneDistanceGuard:
 
 class TestResolvePools:
     """Eval-pool resolution for the sweep's cross-pool Pearson read:
-    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen-v1 defaults,
-    labels key ledger entries and pearson filenames, and any v1 pool in use
-    carries a deprecation warning (v1 pools store v1-encoded observations
-    that the v2 schema guards refuse — they cannot score obsv2 checkpoints)."""
+    POKEZERO_POOL_SELF / POKEZERO_POOL_FP override the frozen-v2 defaults,
+    labels key ledger entries and pearson filenames, and explicitly selecting
+    a retired v1 pool carries a deprecation warning (v1 pools store v1-encoded
+    observations that the v2 schema guards refuse — they cannot score v2
+    (obsv2) checkpoints)."""
 
     _REPO = Path("/repo")
+
+    def test_defaults_are_the_frozen_v2_pools(self) -> None:
+        # the default flip (review #509 M2): pinned so a silent revert to the
+        # v1 pools — which cannot score v2 checkpoints — fails the suite
+        assert mp.DEFAULT_POOL_SELF == "runs/pool-self-v2-20260705/pool-self-v2.jsonl"
+        assert mp.DEFAULT_POOL_FP == "runs/pool-fp-v2-20260705/pool-fp-v2.jsonl"
 
     def test_defaults_resolve_under_repo_root(self) -> None:
         pools = mp.resolve_pools(self._REPO, {})
@@ -788,16 +797,27 @@ class TestResolvePools:
         assert pools["fp"]["path"] == str(self._REPO / mp.DEFAULT_POOL_FP)
         assert pools["fp"]["source"] == "default"
 
-    def test_default_labels_preserve_ledger_compat(self) -> None:
-        # existing ledgers and pearson-<label>-<milestone>.json files were
-        # written under these keys; the defaults must keep producing them
-        # (the self pool's filename stem, heldout-rollouts, never was its label)
+    def test_default_labels_derive_from_the_v2_filename_stems(self) -> None:
+        # labels come from the actual filename stem, NOT from a mapping keyed
+        # off the defaults — review #509 M2: the flipped defaults must never
+        # write v2 results under the historical v1 ledger keys
         pools = mp.resolve_pools(self._REPO, {})
+        assert pools["self"]["label"] == "pool-self-v2"
+        assert pools["fp"]["label"] == "pool-fp-v2"
+
+    def test_v2_defaults_do_not_warn(self) -> None:
+        # review #509 M2: the pre-flip code blared false v1 deprecation
+        # banners after the documented DEFAULT_POOL_* flip
+        assert mp.resolve_pools(self._REPO, {})["warnings"] == []
+
+    def test_explicit_v1_pools_warn_and_keep_historical_labels(self) -> None:
+        # v1-era ledgers/pearson files were written under these labels; an
+        # explicitly selected v1 pool must keep them AND warn that v1 pools
+        # cannot score v2 checkpoints (the only remaining v1 path is via env)
+        env = {mp.POOL_SELF_ENV: mp.V1_POOL_SELF, mp.POOL_FP_ENV: mp.V1_POOL_FP}
+        pools = mp.resolve_pools(self._REPO, env)
         assert pools["self"]["label"] == "pool-self-v1"
         assert pools["fp"]["label"] == "pool-fp-v1"
-
-    def test_v1_defaults_warn_that_obsv2_checkpoints_refuse_them(self) -> None:
-        pools = mp.resolve_pools(self._REPO, {})
         assert len(pools["warnings"]) == 2
         for warning, env_var in zip(
             pools["warnings"], (mp.POOL_SELF_ENV, mp.POOL_FP_ENV)
@@ -805,7 +825,23 @@ class TestResolvePools:
             assert "obsv2" in warning
             assert env_var in warning
 
-    def test_env_overrides_take_precedence_and_silence_the_warning(self) -> None:
+    def test_v1_detection_keys_off_the_v1_paths_not_the_defaults(self) -> None:
+        # regression for review #509 M2: "is v1" was implemented as "is the
+        # default", so ANY future default flip would silently relabel the new
+        # pools as v1. Simulate the next flip and assert both halves.
+        original = mp.DEFAULT_POOL_SELF
+        mp.DEFAULT_POOL_SELF = "runs/pool-self-v3-20270101/pool-self-v3.jsonl"
+        try:
+            pools = mp.resolve_pools(self._REPO, {})
+            assert pools["self"]["label"] == "pool-self-v3"
+            assert pools["warnings"] == []
+            pools = mp.resolve_pools(self._REPO, {mp.POOL_SELF_ENV: mp.V1_POOL_SELF})
+            assert pools["self"]["label"] == "pool-self-v1"
+            assert len(pools["warnings"]) == 1
+        finally:
+            mp.DEFAULT_POOL_SELF = original
+
+    def test_env_overrides_take_precedence_without_warnings(self) -> None:
         env = {
             mp.POOL_SELF_ENV: "/pools/pool-self-v2-20260705/pool-self-v2.jsonl",
             mp.POOL_FP_ENV: "/pools/pool-fp-v2-20260705/pool-fp-v2.jsonl",
@@ -823,9 +859,11 @@ class TestResolvePools:
         }
         assert pools["warnings"] == []
 
-    def test_partial_override_still_warns_about_the_defaulted_pool(self) -> None:
-        env = {mp.POOL_SELF_ENV: "/pools/pool-self-v2.jsonl"}
-        (warning,) = mp.resolve_pools(self._REPO, env)["warnings"]
+    def test_partial_v1_override_warns_only_about_that_pool(self) -> None:
+        env = {mp.POOL_FP_ENV: mp.V1_POOL_FP}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"]["label"] == "pool-self-v2"  # v2 default, quiet
+        (warning,) = pools["warnings"]
         assert mp.POOL_FP_ENV in warning
         assert "pool-fp-v1" in warning
 
@@ -838,9 +876,11 @@ class TestResolvePools:
         assert pools["self"]["source"] == "env"
 
     def test_tilde_override_expands_to_home(self) -> None:
-        env = {mp.POOL_FP_ENV: "~/pools/pool-fp-v2.jsonl"}
+        env = {mp.POOL_FP_ENV: "~/pools/pool-fp-v2b.jsonl"}
         pools = mp.resolve_pools(self._REPO, env)
-        assert pools["fp"]["path"] == os.path.expanduser("~/pools/pool-fp-v2.jsonl")
+        assert pools["fp"]["path"] == os.path.realpath(
+            os.path.expanduser("~/pools/pool-fp-v2b.jsonl")
+        )
 
     def test_empty_env_value_means_unset(self) -> None:
         # matches the shell's ${VAR:-default}: an exported empty string must
@@ -848,16 +888,40 @@ class TestResolvePools:
         pools = mp.resolve_pools(self._REPO, {mp.POOL_SELF_ENV: "", mp.POOL_FP_ENV: ""})
         assert pools["self"]["source"] == "default"
         assert pools["fp"]["source"] == "default"
-        assert len(pools["warnings"]) == 2
+        assert pools["warnings"] == []
 
-    def test_override_spelling_the_default_keeps_v1_label_and_warning(self) -> None:
-        # an env var pointing at the v1 default (any spelling) is still a v1
+    def test_override_spelling_the_v1_path_keeps_v1_label_and_warning(self) -> None:
+        # an env var pointing at the v1 pool (any spelling) is still a v1
         # pool: historical label and deprecation warning, but source stays env
-        env = {mp.POOL_SELF_ENV: str(self._REPO / mp.DEFAULT_POOL_SELF)}
+        env = {mp.POOL_SELF_ENV: str(self._REPO / mp.V1_POOL_SELF)}
         pools = mp.resolve_pools(self._REPO, env)
         assert pools["self"]["label"] == "pool-self-v1"
         assert pools["self"]["source"] == "env"
-        assert len(pools["warnings"]) == 2
+        assert len(pools["warnings"]) == 1
+
+    def test_dotdot_spelling_cannot_evade_v1_detection(self) -> None:
+        # review #509 L1: lexical Path equality let a ..-spelled v1 path
+        # dodge the deprecation warning AND fork a fresh ledger label for
+        # the same pool file; paths normalize (realpath) before comparison
+        env = {mp.POOL_SELF_ENV: str(self._REPO / "runs" / ".." / mp.V1_POOL_SELF)}
+        pools = mp.resolve_pools(self._REPO, env)
+        assert pools["self"]["label"] == "pool-self-v1"
+        assert pools["self"]["path"] == str(
+            Path(os.path.realpath(self._REPO / mp.V1_POOL_SELF))
+        )
+        assert len(pools["warnings"]) == 1
+
+    def test_symlink_spelling_cannot_evade_v1_detection(self, tmp_path) -> None:
+        # review #509 L1, symlink flavor
+        repo = tmp_path / "repo"
+        v1 = repo / mp.V1_POOL_SELF
+        v1.parent.mkdir(parents=True)
+        v1.write_text("{}\n", encoding="utf-8")
+        alias = tmp_path / "alias.jsonl"
+        alias.symlink_to(v1)
+        pools = mp.resolve_pools(repo, {mp.POOL_SELF_ENV: str(alias)})
+        assert pools["self"]["label"] == "pool-self-v1"
+        assert len(pools["warnings"]) == 1
 
     def test_label_is_sanitized_filename_stem(self) -> None:
         env = {mp.POOL_SELF_ENV: "/pools/pool self (v2)!.jsonl"}
@@ -887,3 +951,168 @@ class TestResolvePools:
     def test_underivable_label_is_fatal(self) -> None:
         message = self._fatal_message({mp.POOL_SELF_ENV: "/pools/___.jsonl"})
         assert "pool label" in message
+
+
+class TestPoolsCLITransport:
+    """The `pools` CLI transports resolution to the bash sweep as
+    NUL-delimited key/value pairs (review #509 L2 — a TSV row mis-splits on
+    tab/newline-containing paths; NUL cannot appear in paths or env values),
+    and --hash pins each existing pool file with a streaming sha256, computed
+    once per sweep (review #509 M1)."""
+
+    @staticmethod
+    def _pairs(monkeypatch, capsys, repo: Path, *, with_hash: bool) -> list[tuple[str, str]]:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["milestone_probes.py", "pools", "--repo", str(repo), "--format", "nul"]
+            + (["--hash"] if with_hash else []),
+        )
+        assert mp.main() == 0
+        out = capsys.readouterr().out
+        parts = out.split("\0")
+        assert parts[-1] == ""  # every value is NUL-terminated
+        parts = parts[:-1]
+        assert len(parts) % 2 == 0
+        return list(zip(parts[0::2], parts[1::2]))
+
+    def test_nul_transport_survives_tab_and_newline_paths(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        evil = tmp_path / "pool\tself\nv9.jsonl"
+        monkeypatch.setenv(mp.POOL_SELF_ENV, str(evil))
+        monkeypatch.delenv(mp.POOL_FP_ENV, raising=False)
+        pairs = dict(self._pairs(monkeypatch, capsys, tmp_path, with_hash=False))
+        # the path round-trips byte-exact — a TSV hop would have split it
+        assert pairs["self.path"] == os.path.realpath(str(evil))
+        assert pairs["self.label"] == "pool-self-v9"
+        assert pairs["self.source"] == "env"
+        assert pairs["fp.source"] == "default"
+        assert "self.sha256" not in pairs  # no --hash (dry-run)
+
+    def test_hash_pins_the_exact_pool_bytes(self, tmp_path, monkeypatch, capsys) -> None:
+        content = b'{"observation": [1, 2, 3]}\n' * 257
+        pool = tmp_path / mp.DEFAULT_POOL_SELF
+        pool.parent.mkdir(parents=True)
+        pool.write_bytes(content)
+        monkeypatch.delenv(mp.POOL_SELF_ENV, raising=False)
+        monkeypatch.delenv(mp.POOL_FP_ENV, raising=False)
+        pairs = dict(self._pairs(monkeypatch, capsys, tmp_path, with_hash=True))
+        assert pairs["self.sha256"] == hashlib.sha256(content).hexdigest()
+        # absent pool (the fp default is not on disk here) hashes to "" —
+        # existence stays a preflight concern, resolution never dies on it
+        assert pairs["fp.sha256"] == ""
+
+    def test_warnings_travel_as_warning_pairs(self, tmp_path, monkeypatch, capsys) -> None:
+        monkeypatch.setenv(mp.POOL_SELF_ENV, mp.V1_POOL_SELF)
+        monkeypatch.delenv(mp.POOL_FP_ENV, raising=False)
+        pairs = self._pairs(monkeypatch, capsys, tmp_path, with_hash=False)
+        banner = "\n".join(value for key, value in pairs if key == "warning")
+        assert "pool-self-v1" in banner
+        assert mp.POOL_SELF_ENV in banner
+
+
+class TestPearsonPoolPin:
+    """Review #509 M1: every pearson artifact payload and every ledger line
+    pins the exact pool file that produced its numbers (absolute path +
+    sha256). annotate-pearson injects the pin; record embeds it and refuses
+    unpinned or misattributed payloads — a label alone does not identify a
+    pool file."""
+
+    _SHA = "0123456789abcdef" * 4
+
+    def _annotate(self, path: Path, **overrides) -> int:
+        args = {
+            "json": str(path),
+            "label": "pool-self-v2",
+            "pool_path": "/pools/pool-self-v2-20260705/pool-self-v2.jsonl",
+            "pool_sha256": self._SHA,
+        }
+        args.update(overrides)
+        return mp._cmd_annotate_pearson(argparse.Namespace(**args))
+
+    def _record(self, ledger: Path, pearson_specs: list[str]) -> int:
+        return mp._cmd_record(
+            argparse.Namespace(
+                ledger=str(ledger),
+                run_id="test-run",
+                milestone=100_000,
+                iteration=7,
+                checkpoint="checkpoints/curated/test-run-i7.pt",
+                games_at=98_304,
+                pearson=pearson_specs,
+                hazard=None,
+                hazard_label=None,
+                skip_reason=None,
+            )
+        )
+
+    def test_annotate_injects_the_pool_pin(self, tmp_path) -> None:
+        artifact = tmp_path / "pearson.json.tmp"
+        artifact.write_text(
+            json.dumps({"pearson": 0.91, "n_states": 4096}), encoding="utf-8"
+        )
+        assert self._annotate(artifact) == 0
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["pearson"] == 0.91  # value-calibration fields intact
+        assert payload["n_states"] == 4096
+        assert payload["pool"] == {
+            "label": "pool-self-v2",
+            "path": "/pools/pool-self-v2-20260705/pool-self-v2.jsonl",
+            "sha256": self._SHA,
+        }
+
+    def test_annotate_refuses_empty_pin_fields(self, tmp_path) -> None:
+        artifact = tmp_path / "pearson.json.tmp"
+        original = json.dumps({"pearson": 0.91})
+        artifact.write_text(original, encoding="utf-8")
+        for overrides in ({"pool_path": ""}, {"pool_sha256": ""}):
+            try:
+                self._annotate(artifact, **overrides)
+            except SystemExit as exc:
+                assert "pool" in str(exc)
+            else:
+                raise AssertionError("expected annotate-pearson to raise SystemExit")
+        # refused BEFORE writing: the artifact is untouched
+        assert artifact.read_text(encoding="utf-8") == original
+
+    def test_record_embeds_the_pool_pin_in_the_ledger(self, tmp_path, capsys) -> None:
+        artifact = tmp_path / "pearson-pool-self-v2-01234567-100000.json"
+        artifact.write_text(json.dumps({"pearson": 0.91}), encoding="utf-8")
+        self._annotate(artifact)
+        ledger = tmp_path / "ledger.jsonl"
+        assert self._record(ledger, [f"pool-self-v2={artifact}"]) == 0
+        capsys.readouterr()
+        (line,) = ledger.read_text(encoding="utf-8").splitlines()
+        row = json.loads(line)["pools"]["pool-self-v2"]
+        assert row["pearson"] == 0.91
+        assert row["pool"]["path"] == "/pools/pool-self-v2-20260705/pool-self-v2.jsonl"
+        assert row["pool"]["sha256"] == self._SHA
+        assert row["pearson_file"] == str(artifact)
+
+    def test_record_refuses_unpinned_payloads(self, tmp_path, capsys) -> None:
+        # a pre-#509 artifact (no pool pin) must never produce a ledger line
+        # whose numbers cannot be attributed to a specific pool file
+        artifact = tmp_path / "pearson-pool-self-v2-100000.json"
+        artifact.write_text(json.dumps({"pearson": 0.91}), encoding="utf-8")
+        ledger = tmp_path / "ledger.jsonl"
+        try:
+            self._record(ledger, [f"pool-self-v2={artifact}"])
+        except SystemExit as exc:
+            assert "pool pin" in str(exc)
+        else:
+            raise AssertionError("expected record to raise SystemExit")
+        assert not ledger.exists()
+
+    def test_record_refuses_misattributed_payloads(self, tmp_path, capsys) -> None:
+        artifact = tmp_path / "pearson.json"
+        artifact.write_text(json.dumps({"pearson": 0.91}), encoding="utf-8")
+        self._annotate(artifact)  # pinned to pool-self-v2
+        ledger = tmp_path / "ledger.jsonl"
+        try:
+            self._record(ledger, [f"pool-fp-v2={artifact}"])
+        except SystemExit as exc:
+            assert "misattribute" in str(exc)
+        else:
+            raise AssertionError("expected record to raise SystemExit")
+        assert not ledger.exists()
