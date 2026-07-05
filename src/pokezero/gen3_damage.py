@@ -137,6 +137,21 @@ def hidden_power_type(moves: Sequence[str]) -> Optional[str]:
     return None
 
 
+@dataclass(frozen=True)
+class RandbatsSpread:
+    """A generated set's full spread: stored stats plus the EVs/IVs that produced them.
+
+    ``stats`` is exactly :func:`randbats_spread_stats`'s output; the EV/IV maps expose
+    the variant-conditioned axes (corrections item 1) for consumers that need the
+    INVESTMENT CLASS, not just the value — e.g. the defender-side investment inference
+    labels a pinned max HP "full" vs "trimmed" by whether ``evs["hp"] == 85``.
+    """
+
+    stats: Mapping[str, int]
+    evs: Mapping[str, int]
+    ivs: Mapping[str, int]
+
+
 def randbats_spread_stats(
     base_stats: Mapping[str, int],
     *,
@@ -145,7 +160,27 @@ def randbats_spread_stats(
     item: Optional[str],
     has_physical_attack: bool,
 ) -> dict[str, int]:
-    """Actual stats for a gen3 randbats set, replicating the generator's spread logic.
+    """Actual stats for a gen3 randbats set (see :func:`randbats_spread_details`)."""
+    return dict(
+        randbats_spread_details(
+            base_stats,
+            level=level,
+            moves=moves,
+            item=item,
+            has_physical_attack=has_physical_attack,
+        ).stats
+    )
+
+
+def randbats_spread_details(
+    base_stats: Mapping[str, int],
+    *,
+    level: int,
+    moves: Sequence[str],
+    item: Optional[str],
+    has_physical_attack: bool,
+) -> RandbatsSpread:
+    """Full spread for a gen3 randbats set, replicating the generator's spread logic.
 
     Mirrors ``data/random-battles/gen3/teams.ts`` exactly (corrections layer item 1):
     85 EVs / 31 IVs / neutral nature everywhere, THEN
@@ -216,7 +251,7 @@ def randbats_spread_stats(
     }
     # Shedinja (the only base-1-HP species): the engine pins max HP to 1.
     stats["hp"] = 1 if int(base_stats.get("hp", 0)) == 1 else hp_value()
-    return stats
+    return RandbatsSpread(stats=stats, evs=dict(evs), ivs=dict(ivs))
 
 
 # --- The damage chain itself. ---
