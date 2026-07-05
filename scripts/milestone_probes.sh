@@ -23,8 +23,11 @@
 #   3. ecology watchdogs over the run's eval-timeline.jsonl: game-length drift
 #      (+50% vs the run's own 30k-100k band, falling back to the earliest rows
 #      in the window for continuation runs, degrading LOUDLY when no baseline
-#      exists), matched-milestone max-damage regression (>10 points below run
-#      peak), policy_entropy < 0.35, and a non-finite-data warning. Alarms
+#      exists; the first-computed baseline is persisted to
+#      runs/milestone-probes/<run>/drift-baseline.json and reused by later
+#      sweeps, so it cannot slide forward with the tail window), per-fidelity
+#      max-damage regression (>10 points below that fidelity's run peak),
+#      policy_entropy < 0.35, and a non-finite-data warning. Alarms
 #      append to runs/milestone-probes/ALERTS.jsonl and print loudly.
 #
 # Every kubectl call carries --request-timeout and kubectl cp is additionally
@@ -280,8 +283,13 @@ process_run() {
   # -- ecology watchdogs over eval-timeline.jsonl -----------------------------
   local timeline="$TMP/timeline-$run.jsonl"
   local alarms="$TMP/alarms-$run.jsonl"
+  # The drift baseline persists at first computation so later sweeps cannot
+  # ratchet it forward as the tail window slides; dry-run reads but never writes.
+  local wd_flags=(--run-id "$run" --timeline "$timeline"
+                  --baseline-file "$PROBE_ROOT/$run/drift-baseline.json")
+  [ "$DRY_RUN" -eq 0 ] || wd_flags+=(--no-persist)
   if "${KC[@]}" exec "$pod" -- sh -c "tail -n $TIMELINE_TAIL '$run_root/eval-timeline.jsonl'" > "$timeline"; then
-    "${HELPER[@]}" watchdog --run-id "$run" --timeline "$timeline" > "$alarms" || {
+    "${HELPER[@]}" watchdog "${wd_flags[@]}" > "$alarms" || {
       log "FAIL $run: watchdog evaluation failed"; return 1; }
     if [ -s "$alarms" ]; then
       loud "ECOLOGY ALARM — run $run" "$(cat "$alarms")"
