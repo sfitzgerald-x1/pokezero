@@ -349,6 +349,14 @@ class _FoldResult:
     # uses it to name the mon whose declared action was consumed without a protocol
     # trace (negated sub-blocks).
     turn_start_occupants: dict[int, dict[str, str]] = field(default_factory=dict)
+    # Consumption-confirmation signals for the turn-merged NEGATED gate (review MED-1):
+    # a missing declared action is only provably CONSUMED once its turn reached the
+    # residual boundary (|upkeep| / a later |turn| / |win|) or a mid-turn faint occurred
+    # (engine-verified: any mid-turn faint cancels every remaining action). A replay
+    # prefix cut at a mid-turn forceSwitch boundary (Baton Pass completion choice)
+    # satisfies neither -> the pending opponent action must NOT read as negated.
+    completed_turns: set[int] = field(default_factory=set)
+    fainted_turns: set[int] = field(default_factory=set)
 
 
 def extract_transition_tokens(
@@ -481,6 +489,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
     weather_reveals: list[tuple[str, str, bool]] = []
     mon_counters: dict[tuple[str, str], _MonCounters] = {}
     turn_start_occupants: dict[int, dict[str, str]] = {}
+    completed_turns: set[int] = set()
+    fainted_turns: set[int] = set()
 
     def counters_for(side: str, species: str) -> _MonCounters:
         return mon_counters.setdefault((side, species), _MonCounters())
@@ -510,10 +520,13 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         # contiguous event chunk: nothing in the residual phase may attach to a window.
         if event_type in {"", "upkeep"}:
             close_window()
+            if event_type == "upkeep":
+                completed_turns.add(turn_number)
             continue
 
         if event_type == "turn":
             close_window()
+            completed_turns.add(turn_number)  # |turn|N+1 closes turn N even sans |upkeep|
             try:
                 turn_number = int(parts[2])
             except (IndexError, TypeError, ValueError):
@@ -527,6 +540,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
 
         if event_type == "win":
             close_window()
+            completed_turns.add(turn_number)
             continue
 
         if event_type == "move" and len(parts) >= 4:
@@ -704,6 +718,7 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         elif event_type == "faint" and target in {"p1", "p2"}:
             hp_fraction[target] = 0.0
             pending_faint_replacement[target] = True
+            fainted_turns.add(turn_number)
             if current is not None and target == current.defender_side and current.defender_hit_by_move:
                 current.ko = True
 
@@ -838,6 +853,8 @@ def _fold_replay(replay: ShowdownReplayState, *, perspective_slot: str) -> _Fold
         weather_reveals=tuple(weather_reveals),
         mon_counters=mon_counters,
         turn_start_occupants=turn_start_occupants,
+        completed_turns=completed_turns,
+        fainted_turns=fainted_turns,
     )
 
 

@@ -121,7 +121,7 @@ GEN3_CANT_REASONS = (
 # families/columns unchanged (including the per-action precedent that actor species and
 # switch-target species share one family).
 TURN_MERGED_PHASES = ("turn", "lead", "replacement", "extra")
-TURN_MERGED_SECOND_STATUSES = ("negated", "absent")
+TURN_MERGED_SECOND_STATUSES = ("negated", "pending", "absent")
 
 
 def _gen3_sets_path(showdown_root: str | Path) -> Path:

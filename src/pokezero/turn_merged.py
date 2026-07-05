@@ -72,7 +72,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from .belief import _CALLER_MOVES
 from .showdown import ShowdownReplayState
 from .transitions import (
     DAMAGE_OUTCOME_NORMAL,
@@ -97,11 +96,16 @@ from .transitions import (
 )
 
 # Sub-block status. ACTION: an executed declared action. NEGATED: the side declared an
-# action this turn but the engine consumed it with no protocol trace (mid-turn faint
-# fizzle — see module docstring). ABSENT: no declaration expected (the empty half of a
-# single replacement token).
+# action this turn and the engine PROVABLY consumed it with no protocol trace (mid-turn
+# faint fizzle, or the turn closed without it — see module docstring). PENDING: the turn
+# is still open with no consumption proof — the side's action simply has not resolved
+# yet (a replay prefix cut at a mid-turn forceSwitch boundary, e.g. the Baton Pass
+# completion choice; review MED-1 — encoding these as negated would assert the
+# free-pivot semantics exactly where they are false). ABSENT: no declaration expected
+# (the empty half of a single replacement token).
 SUB_BLOCK_ACTION = "action"
 SUB_BLOCK_NEGATED = "negated"
+SUB_BLOCK_PENDING = "pending"
 SUB_BLOCK_ABSENT = "absent"
 
 # Token phases. TURN: a numbered battle turn's declared-action pair. LEAD: the turn-0
@@ -154,6 +158,10 @@ class TurnSubBlock:
     residual: Optional[float] = None
     residual_valid: bool = False
     cb_bit: bool = False
+    # Defender-side investment conclusion code (#513; as-of-strike, rides assessed OWN
+    # move sub-blocks and describes the struck defender). Populated only via
+    # annotate_turn_merged_tokens from an investment-annotated per-action stream.
+    investment: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -225,11 +233,12 @@ def annotate_turn_merged_tokens(
     merged: tuple[TurnMergedToken, ...],
     annotated_per_action: tuple[TransitionToken, ...],
 ) -> tuple[TurnMergedToken, ...]:
-    """Copy Tier-2 annotations (residual / validity / cb_bit) onto the merged stream.
+    """Copy Tier-2 annotations (residual / validity / cb_bit / investment) onto the
+    merged stream.
 
-    ``annotated_per_action`` must be the tier2-annotated form of exactly the per-action
-    stream this merged stream was built from (``Tier2LiveTracker.annotate`` only rewrites
-    the three Tier-2 fields). The flatten expansion order gives the exact positional
+    ``annotated_per_action`` must be the annotated form of exactly the per-action stream
+    this merged stream was built from (``Tier2LiveTracker.annotate`` + the #513
+    investment tracker only rewrite the four Tier-2-family fields). The flatten expansion order gives the exact positional
     correspondence between sub-blocks and per-action tokens; chain-interior tokens (the
     cant line and the protocol-constant Sleep Talk click, plus Baton Pass completions)
     are never assessed strikes, so only each sub-block's representative is mapped.
@@ -263,6 +272,7 @@ def annotate_turn_merged_tokens(
                 source.residual == sub.residual
                 and source.residual_valid == sub.residual_valid
                 and source.cb_bit == sub.cb_bit
+                and source.investment == sub.investment
             ):
                 continue
             updates[position] = replace(
@@ -270,6 +280,7 @@ def annotate_turn_merged_tokens(
                 residual=source.residual,
                 residual_valid=source.residual_valid,
                 cb_bit=source.cb_bit,
+                investment=source.investment,
             )
         out.append(replace(token, **updates) if updates else token)
     return tuple(out)
@@ -361,6 +372,7 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
             residual=sub.residual,
             residual_valid=sub.residual_valid,
             cb_bit=sub.cb_bit,
+            investment=sub.investment,
             **trio,
         )
     )
@@ -432,7 +444,16 @@ def _merge_fold(fold) -> tuple[TurnMergedToken, ...]:
         while index < len(windows) and windows[index].turn == turn:
             turn_windows.append(windows[index])
             index += 1
-        tokens.extend(_merge_turn(turn, turn_windows, fold.turn_start_occupants))
+        tokens.extend(
+            _merge_turn(
+                turn,
+                turn_windows,
+                fold.turn_start_occupants,
+                consumption_confirmed=(
+                    turn in fold.completed_turns or turn in fold.fainted_turns
+                ),
+            )
+        )
     return tuple(tokens)
 
 
@@ -440,6 +461,8 @@ def _merge_turn(
     turn: int,
     turn_windows: list[_Window],
     turn_start_occupants: dict[int, dict[str, str]],
+    *,
+    consumption_confirmed: bool,
 ) -> list[TurnMergedToken]:
     declared: list[_Window] = []
     replacements: list[_Window] = []
@@ -479,8 +502,15 @@ def _merge_turn(
         if len(chains) > 1:
             second = _chain_sub_block(chains[1])
         else:
-            second = _negated_sub_block(
-                _other_side(first_chain.side), turn, turn_start_occupants
+            # NEGATED only on proof of consumption (the turn closed, or a mid-turn
+            # faint — which the engine turns into a full cancel of every remaining
+            # action); an open turn with neither is a PENDING resolution, not a
+            # free pivot (review MED-1: the Baton Pass completion boundary).
+            second = _missing_sub_block(
+                _other_side(first_chain.side),
+                turn,
+                turn_start_occupants,
+                status=SUB_BLOCK_NEGATED if consumption_confirmed else SUB_BLOCK_PENDING,
             )
         anchor = first_chain.representative
         phases.append(
@@ -537,9 +567,10 @@ def _reduce_side_chain(side: str, seq: list[_Window]) -> tuple[_Chain, list[_Win
     """Collapse one side's declared windows of a turn into a representative chain.
 
     Recognized shapes (everything else falls into the EXTRA safety valve):
-    ``[any]``; ``[cant, click]`` / ``[cant, click, called-exec]`` (RestTalk — the click
-    must be protocol-constant to collapse); a trailing Baton Pass completion switch
-    after a move.
+    ``[any]``; ``[cant, sleeptalk-click]`` / ``[cant, sleeptalk-click, called-exec]``
+    (RestTalk — the cant/click must be protocol-constant to collapse, and the click must
+    be Sleep Talk, the only caller flatten resynthesizes); a trailing Baton Pass
+    completion switch after a move.
     """
     start_index = seq[0].event_index
     cant_reason: Optional[str] = None
@@ -548,7 +579,11 @@ def _reduce_side_chain(side: str, seq: list[_Window]) -> tuple[_Chain, list[_Win
         len(rest) >= 2
         and rest[0].kind == TOKEN_KIND_CANT
         and rest[1].kind == TOKEN_KIND_MOVE
-        and rest[1].action in _CALLER_MOVES
+        # Sleep Talk is the only reachable caller in gen3 randbats (design doc, verified
+        # on the movepools) AND the only click flatten resynthesizes — restricting the
+        # collapse to it makes that invariant structural (review NIT); any other caller
+        # chain would fall to the EXTRA safety valve, preserving bijection.
+        and rest[1].action == "sleeptalk"
         and _is_protocol_constant(rest[0])
     ):
         if len(rest) >= 3 and rest[2].kind == TOKEN_KIND_MOVE and rest[2].called:
@@ -631,11 +666,15 @@ def _chain_sub_block(chain: _Chain) -> TurnSubBlock:
     )
 
 
-def _negated_sub_block(
-    side: str, turn: int, turn_start_occupants: dict[int, dict[str, str]]
+def _missing_sub_block(
+    side: str,
+    turn: int,
+    turn_start_occupants: dict[int, dict[str, str]],
+    *,
+    status: str,
 ) -> TurnSubBlock:
     species = turn_start_occupants.get(turn, {}).get(side, "")
-    return TurnSubBlock(status=SUB_BLOCK_NEGATED, actor_slot=side, actor_species=species)
+    return TurnSubBlock(status=status, actor_slot=side, actor_species=species)
 
 
 def _single_phase(window: _Window, phase: str) -> TurnMergedToken:

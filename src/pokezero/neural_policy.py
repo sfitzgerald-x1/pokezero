@@ -24,6 +24,7 @@ from .observation import (
     OBSERVATION_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION_V2,
     OBSERVATION_SCHEMA_VERSION_V2_1,
+    OBSERVATION_SCHEMA_VERSION_V2_2,
     SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
     TRANSITION_TOKEN_COUNT,
     UNVERSIONED_OBSERVATION_SCHEMA,
@@ -1945,10 +1946,12 @@ def _numeric_shape_message(observed_shape: tuple, config: "TransformerPolicyConf
             f" Numeric column count {observed_width} != model's {config.numeric_feature_count}: "
             f"the numeric census is schema-keyed — {OBSERVATION_SCHEMA_VERSION_V2!r} is the "
             "121-column family (119 before the reserved Tier-2 CB/investment slots "
-            f"materialized) and {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
+            f"materialized), {OBSERVATION_SCHEMA_VERSION_V2_1!r} is the 140-column family "
             "(revealed-move PP-validity bits + substitute HP fraction + per-mon pinned "
-            "Tier-2 conclusions + the investment reserves). This artifact and this model "
-            "were built against different censuses "
+            f"Tier-2 conclusions + the investment surfaces), and "
+            f"{OBSERVATION_SCHEMA_VERSION_V2_2!r} is the 153-column family (turn-merged "
+            "transition tokens: the appended second-sub-block block). This artifact and "
+            "this model were built against different censuses "
             "and must not be mixed; the schema + width an env encodes resolve from the "
             "loaded checkpoint's model_config (observation_spec_from_model_config)."
         )

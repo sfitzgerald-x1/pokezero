@@ -384,7 +384,11 @@ NUMERIC_TM2_RESIDUAL = TURN_MERGED_NUMERIC_BASE + 8
 NUMERIC_TM2_RESIDUAL_VALID = TURN_MERGED_NUMERIC_BASE + 9
 NUMERIC_TM2_CB_BIT = TURN_MERGED_NUMERIC_BASE + 10
 NUMERIC_TM2_PRESENT = TURN_MERGED_NUMERIC_BASE + 11
-TURN_MERGED_NUMERIC_EXTRA = 12
+# Second-sub-block twin of NUMERIC_TT_INVESTMENT_BIT (#513): the as-of-strike
+# defender-side investment code when the second mover's strike carried one. Same
+# double mask (tier2_residuals AND tier2_investment); v2.2-only column.
+NUMERIC_TM2_INVESTMENT = TURN_MERGED_NUMERIC_BASE + 12
+TURN_MERGED_NUMERIC_EXTRA = 13
 _V2_2_NUMERIC_FEATURE_COUNT = TURN_MERGED_NUMERIC_BASE + TURN_MERGED_NUMERIC_EXTRA
 
 V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
@@ -408,6 +412,17 @@ DEFAULT_REPLAY_OBSERVATION_SPEC = REPLAY_OBSERVATION_SPECS_BY_SCHEMA[OBSERVATION
 # pre-CB/investment relic family whose narrowing is deliberate ("feed the model the
 # shape it was trained on") and whose dropped tail columns are all-zero under those
 # checkpoints' latched masks; v2.1 has NO narrowed family (born at the full census).
+# Categorical twin of the numeric floor (review MED-3): v2.2 is the FIRST schema whose
+# categorical width differs (39 -> 51 + the investment column round), and _set_category
+# bounds-drops silently — a v2.2-stamped spec narrowed to 39 categorical columns would
+# encode the whole second-sub-block categorical surface away while staying numerically
+# byte-identical to full v2.2. No narrowed relic family exists on this axis, so every
+# schema floors at its own census.
+_MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA: Mapping[str, int] = {
+    OBSERVATION_SCHEMA_VERSION_V2: _CATEGORICAL_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_1: _CATEGORICAL_FEATURE_COUNT,
+    OBSERVATION_SCHEMA_VERSION_V2_2: _V2_2_CATEGORICAL_FEATURE_COUNT,
+}
 _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA: Mapping[str, int] = {
     OBSERVATION_SCHEMA_VERSION_V2: 119,
     OBSERVATION_SCHEMA_VERSION_V2_1: _V2_1_NUMERIC_FEATURE_COUNT,
@@ -1021,6 +1036,18 @@ def observation_from_player_state(
             "undeclared hybrid stamped with the wider version; the 119-column relic family "
             f"is a {OBSERVATION_SCHEMA_VERSION_V2!r}-only exception."
         )
+    categorical_floor = _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA[spec.schema_version]
+    if spec.categorical_feature_count < categorical_floor:
+        raise ValueError(
+            f"observation encode: spec schema {spec.schema_version!r} requires at least "
+            f"{categorical_floor} categorical columns, got {spec.categorical_feature_count}. "
+            "The categorical census is schema-keyed "
+            f"({OBSERVATION_SCHEMA_VERSION_V2!r} and {OBSERVATION_SCHEMA_VERSION_V2_1!r}: "
+            f"{_CATEGORICAL_FEATURE_COUNT}; {OBSERVATION_SCHEMA_VERSION_V2_2!r}: "
+            f"{_V2_2_CATEGORICAL_FEATURE_COUNT}); a narrower spec would silently "
+            "bounds-drop the schema's own categorical surface (v2.2's whole second "
+            "sub-block) and encode an undeclared hybrid stamped with the wider version."
+        )
     schema_v2_2 = spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
     # v2.2 carries every v2.1 block forward unchanged; only the transition surface differs.
     schema_v2_1 = schema_v2_2 or spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_1
@@ -1028,6 +1055,14 @@ def observation_from_player_state(
         raise ValueError(
             "observation encode: a v2.2 (turn-merged) spec requires the state's "
             "turn_merged_tokens — normalize with include_turn_merged=True."
+        )
+    if schema_v2_2 and not category_vocab.is_enumerated("tt_phase:turn"):
+        raise ValueError(
+            "observation encode: a v2.2 (turn-merged) spec requires a vocabulary built "
+            "with include_turn_merged=True — this one lacks the tt_phase/tt2_* families, "
+            "so every turn-merged label would silently hash into the OOV band and the "
+            "encoded rows could never align with a v2.2 checkpoint's embedding "
+            "(review MED-2: the vocabulary axis of the #492/#512 mismatch class)."
         )
     # Per-mon pinned Tier-2 CB conclusions (v2.1, NUMERIC_TIER2_CB_PINNED): derived from the
     # tier2-annotated token stream under the same tier2_residuals gate as the tt columns —
@@ -2597,6 +2632,11 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TT_RESIDUAL_VALID, 1.0)
         if masks.tier2_residuals and first.cb_bit:
             _set_numeric(num_row, NUMERIC_TT_CB_BIT, 1.0)
+        # Investment column (#513): double-masked like the per-action write; the v2.2
+        # schema gate is satisfied by construction (this encoder only runs under v2.2,
+        # a v2.1 superset).
+        if masks.tier2_residuals and masks.tier2_investment and first.investment:
+            _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, first.investment)))
 
         second = token.second
         if second.status != _TM_SUB_BLOCK_ACTION:
@@ -2642,6 +2682,8 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TM2_RESIDUAL_VALID, 1.0)
         if masks.tier2_residuals and second.cb_bit:
             _set_numeric(num_row, NUMERIC_TM2_CB_BIT, 1.0)
+        if masks.tier2_residuals and masks.tier2_investment and second.investment:
+            _set_numeric(num_row, NUMERIC_TM2_INVESTMENT, max(-1.0, min(1.0, second.investment)))
 
 
 def _tm_first_action_label(kind: str, action: str) -> str:

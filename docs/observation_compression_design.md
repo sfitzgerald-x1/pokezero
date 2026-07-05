@@ -152,12 +152,37 @@
 >   cold double replacement; turn 0 carries no real speed order).
 >
 > **Equivalence.** `flatten_turn_merged_tokens` reconstructs the
-> per-action stream field-for-field; the ONE lossy merge is the
-> second sub-block's context trio (inherits the first mover's), which
-> can differ only under a trio-changing first mover (side-effect ∈
+> per-action stream field-for-field; the ONE merge is the second
+> sub-block's context trio (inherits the first mover's), which can
+> differ only under a trio-changing first mover (side-effect ∈
 > {hazard-set, hazard-clear, weather-set}). Corpus gate: 5 games ×
 > both seats × every boundary — 313 per-action → 172 merged tokens
 > (**45.0% reduction**), 1 trio allowance total.
+>
+> **Why the single trio is a re-parameterization, NOT information
+> loss (#516 review, argument on record):** whenever the second
+> mover's true trio differs from the stored one, the delta is
+> deterministically recoverable from the merged token itself — the
+> first sub-block's `side_effect` says the trio changed, its `action`
+> says how (the weather move names the weather; a hazard set/clear is
+> ±1 layer on the side implied by the actor role). Two hard
+> mitigators bound even the residual modeling burden: the field token
+> always carries the CURRENT field state, and every Tier-2
+> residual/CB/investment computation runs on the per-action substrate
+> with exact per-action trios (`annotate_turn_merged_tokens` maps
+> conclusions back), so no inference arithmetic ever sees the stale
+> trio. A per-sub-block context copy or delta flag is therefore
+> deliberately NOT carried; this paragraph exists so "documented
+> merge" is never mistaken for an accepted information hole.
+>
+> **NEGATED requires proof (review MED-1).** A missing second half is
+> encoded `negated` only when consumption is CERTAIN: the turn closed
+> (`|upkeep`/`|turn|N+1`/`|win`) or a mid-turn faint occurred (the
+> engine-verified full cancel). A replay prefix cut at a mid-turn
+> forceSwitch boundary — the Baton Pass completion choice is a real
+> live decision point — encodes the opponent's unresolved action as
+> `pending`, never as the free-pivot negation it would otherwise
+> falsely assert.
 >
 > **K BUDGET UNIT CHANGE (loud).** The transition budget flag
 > (`transition_token_budget`) counts TOKENS in BOTH modes — but in

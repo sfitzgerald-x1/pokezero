@@ -338,7 +338,14 @@ class LocalShowdownEnv:
         state = self._state_for_player(player)
         root = self.config.resolved_showdown_root()
         # Prefer the explicitly-paired model vocabulary; otherwise build it from the root.
-        vocab = self.config.category_vocab or gen3_category_vocabulary(root)
+        # A v2.2 (turn-merged) spec needs the tt_phase/tt2_* families or every merged
+        # label would land in the OOV band.
+        vocab = self.config.category_vocab or gen3_category_vocabulary(
+            root,
+            include_turn_merged=(
+                self.config.observation_spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
+            ),
+        )
         return observation_from_player_state(
             state,
             category_vocab=vocab,

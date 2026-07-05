@@ -40,6 +40,7 @@ from pokezero.turn_merged import (
     SUB_BLOCK_ABSENT,
     SUB_BLOCK_ACTION,
     SUB_BLOCK_NEGATED,
+    SUB_BLOCK_PENDING,
     extract_turn_merged_tokens,
     flatten_turn_merged_tokens,
 )
@@ -189,6 +190,58 @@ class TurnMergedEngineVerificationTest(unittest.TestCase):
         self.assertEqual(turn.second.status, SUB_BLOCK_ACTION)
         self.assertEqual(turn.second.kind, TOKEN_KIND_SWITCH)
         self.assertEqual(turn.second.action, "Starmie")
+        self.assertEqual(flatten_turn_merged_tokens(merged), per_action)
+
+    def test_bp_completion_boundary_reads_pending_then_resolves(self) -> None:
+        """Review MED-1 reproduction: at the LIVE mid-turn Baton Pass forceSwitch
+        boundary (the pass-recipient decision point), the opponent's still-pending
+        declared move must read PENDING — the engine then demonstrably executes it
+        right after the completion, which is exactly why NEGATED there would be an
+        inverted claim."""
+        from pokezero.showdown_fixture import _BridgeFixtureSession, pack_team
+
+        session = _BridgeFixtureSession(_integration_config())
+        try:
+            session.start(
+                format_id="gen3customgame",
+                seed=42,
+                p1_team=pack_team(
+                    [
+                        _mon("Jolteon", ("Baton Pass", "Agility"), "Volt Absorb"),
+                        _mon("Snorlax", ("Body Slam",), "Immunity"),
+                    ]
+                ),
+                p2_team=pack_team([_mon("Skarmory", ("Drill Peck", "Spikes"), "Keen Eye")]),
+            )
+            session.read_until_boundary()
+            session.send_choices({"p1": "move batonpass", "p2": "move drillpeck"})
+            session.read_until_boundary()
+            # This IS the live forceSwitch boundary: p1 chooses the recipient, p2 waits.
+            self.assertTrue(session.requests.get("p1", {}).get("forceSwitch"))
+            boundary_lines = list(session.protocol_lines)
+            self.assertFalse(any("Drill Peck" in line for line in boundary_lines))
+            merged_at_boundary = extract_turn_merged_tokens(
+                parse_showdown_replay(boundary_lines, battle_id="bp-boundary"),
+                perspective_slot="p1",
+            )
+            boundary_turn = merged_at_boundary[1]
+            self.assertEqual(boundary_turn.first.action, "batonpass")
+            self.assertEqual(boundary_turn.second.status, SUB_BLOCK_PENDING)
+            self.assertEqual(boundary_turn.second.actor_species, "Skarmory")
+            # Complete the pass: the pending action executes against the NEW mon.
+            session.send_choices({"p1": "switch 2"})
+            session.read_until_boundary()
+            final_lines = list(session.protocol_lines)
+        finally:
+            session.close()
+        self.assertTrue(
+            any(line.startswith("|move|p2a: Skarmory|Drill Peck|p1a: Snorlax") for line in final_lines)
+        )
+        merged, per_action = _extract_both(final_lines)
+        resolved_turn = merged[1]
+        self.assertEqual(resolved_turn.first.baton_pass_species, "Snorlax")
+        self.assertEqual(resolved_turn.second.status, SUB_BLOCK_ACTION)
+        self.assertEqual(resolved_turn.second.action, "drillpeck")
         self.assertEqual(flatten_turn_merged_tokens(merged), per_action)
 
     def test_baton_pass_completion_folds_into_the_passers_sub_block(self) -> None:

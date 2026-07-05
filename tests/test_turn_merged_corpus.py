@@ -36,6 +36,8 @@ from pokezero.turn_merged import (
     PHASE_EXTRA,
     PHASE_TURN,
     SUB_BLOCK_ACTION,
+    SUB_BLOCK_NEGATED,
+    SUB_BLOCK_PENDING,
     extract_turn_merged_tokens,
     flatten_turn_merged_tokens,
 )
@@ -141,6 +143,56 @@ class TurnMergedCorpusGateTest(unittest.TestCase):
             )
             allowances += 1
         return allowances
+
+    def test_mid_turn_prefixes_never_fabricate_negation(self) -> None:
+        """Review MED-1's corpus-scale gate: the |turn|/|win| boundaries above never see
+        a mid-turn cut, so replay every prefix ending at an action/faint line too (the
+        forceSwitch-boundary class). NEGATED may appear in an OPEN turn only with a
+        faint as consumption proof; otherwise the missing half is PENDING, and PENDING
+        never appears in a closed turn. Bijection (with the trio allowance) holds at
+        every cut."""
+        capture_paths = sorted(CAPTURE_ROOT.glob("lines-*.log"))
+        prefixes_checked = 0
+        pending_seen = 0
+        for path in capture_paths:
+            lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+            cut_points = [
+                index
+                for index, line in enumerate(lines)
+                if line.startswith(("|move|", "|switch|", "|cant|", "|faint|"))
+            ]
+            for cut in cut_points:
+                prefix = lines[: cut + 1]
+                turn_lines = [line for line in prefix if line.startswith("|turn|")]
+                current_turn = int(turn_lines[-1].split("|")[2]) if turn_lines else 0
+                open_turn_has_faint = any(
+                    line.startswith("|faint|")
+                    for line in prefix[
+                        prefix.index(turn_lines[-1]) if turn_lines else 0 :
+                    ]
+                ) and not any(
+                    line.startswith(("|upkeep", "|win|"))
+                    for line in prefix[
+                        prefix.index(turn_lines[-1]) if turn_lines else 0 :
+                    ]
+                )
+                replay = parse_showdown_replay(prefix, battle_id=path.stem)
+                for slot in ("p1", "p2"):
+                    merged = extract_turn_merged_tokens(replay, perspective_slot=slot)
+                    per_action = extract_transition_tokens(replay, perspective_slot=slot)
+                    self._assert_equivalent(merged, per_action, path, slot)
+                    for token in merged:
+                        for sub in (token.first, token.second):
+                            if sub.status == SUB_BLOCK_PENDING:
+                                pending_seen += 1
+                                # Only ever in the current, still-open turn.
+                                self.assertEqual(token.turn, current_turn, path.name)
+                            if sub.status == SUB_BLOCK_NEGATED and token.turn == current_turn:
+                                # An open-turn negation requires the faint proof.
+                                self.assertTrue(open_turn_has_faint, f"{path.name}@{cut}")
+                    prefixes_checked += 1
+        self.assertGreater(prefixes_checked, 500)
+        self.assertGreater(pending_seen, 50)
 
     def _assert_structure(self, merged, path, slot) -> None:
         turn_phase_turns = []

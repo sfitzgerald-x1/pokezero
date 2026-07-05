@@ -30,6 +30,7 @@ from pokezero.turn_merged import (
     SUB_BLOCK_ABSENT,
     SUB_BLOCK_ACTION,
     SUB_BLOCK_NEGATED,
+    SUB_BLOCK_PENDING,
     TurnMergedToken,
     extract_turn_merged_tokens,
     flatten_turn_merged_tokens,
@@ -286,6 +287,74 @@ class NegatedSubBlockTest(unittest.TestCase):
         self.assertTrue(turn.first.ko)
         self.assertEqual(turn.second.status, SUB_BLOCK_NEGATED)
         self.assertEqual(turn.second.actor_species, "Machamp")
+
+
+class PendingSubBlockTest(unittest.TestCase):
+    """Review MED-1: NEGATED requires PROOF of consumption (turn closed or a mid-turn
+    faint). A replay prefix cut at a mid-turn forceSwitch boundary — the Baton Pass
+    completion choice, a REAL live decision point — must read the opponent's
+    still-pending action as PENDING, never as the free-pivot negation."""
+
+    _BP_PREFIX = None  # set in setUp for clarity
+
+    def setUp(self) -> None:
+        self._BP_PREFIX = _leads("Jolteon", "Skarmory") + [
+            "|move|p1a: Jolteon|Baton Pass|p1a: Jolteon",
+        ]
+
+    def test_bp_completion_boundary_is_pending_not_negated(self) -> None:
+        merged = _merged(self._BP_PREFIX)
+        turn = merged[1]
+        self.assertEqual(turn.phase, PHASE_TURN)
+        self.assertEqual(turn.first.action, "batonpass")
+        self.assertIsNone(turn.first.baton_pass_species)  # completion not chosen yet
+        self.assertEqual(turn.second.status, SUB_BLOCK_PENDING)
+        self.assertEqual(turn.second.actor_slot, "p2")
+        self.assertEqual(turn.second.actor_species, "Skarmory")
+        # Flatten skips pending halves; bijection holds on the prefix.
+        _assert_bijection(self, self._BP_PREFIX)
+
+    def test_pending_resolves_to_the_executed_action_after_completion(self) -> None:
+        completed = self._BP_PREFIX + [
+            "|switch|p1a: Snorlax|Snorlax, L80|100/100|[from] Baton Pass",
+            "|move|p2a: Skarmory|Drill Peck|p1a: Snorlax",
+            "|-damage|p1a: Snorlax|77/100",
+            "|upkeep",
+            "|turn|2",
+        ]
+        merged = _assert_bijection(self, completed)
+        turn = merged[1]
+        self.assertEqual(turn.first.baton_pass_species, "Snorlax")
+        self.assertEqual(turn.second.status, SUB_BLOCK_ACTION)
+        self.assertEqual(turn.second.action, "drillpeck")
+
+    def test_mid_turn_faint_confirms_negation_before_the_turn_closes(self) -> None:
+        # The hazard-sack pause boundary: the faint IS the consumption proof
+        # (engine-verified full cancel), so NEGATED fires even though the turn is open.
+        prefix = _leads("Magikarp", "Skarmory") + [
+            "|move|p1a: Magikarp|Splash|p1a: Magikarp",
+            "|-nothing",
+            "|move|p2a: Skarmory|Spikes|p1a: Magikarp",
+            "|-sidestart|p1: Alice|Spikes",
+            "|",
+            "|upkeep",
+            "|turn|2",
+            "|switch|p1a: Shedinja|Shedinja, L82|100/100",
+            "|-damage|p1a: Shedinja|0 fnt|[from] Spikes",
+            "|faint|p1a: Shedinja",
+        ]
+        merged = _merged(prefix)
+        sack_turn = merged[2]
+        self.assertEqual(sack_turn.second.status, SUB_BLOCK_NEGATED)
+        self.assertEqual(sack_turn.second.actor_species, "Skarmory")
+
+    def test_open_turn_after_first_mover_without_faint_is_pending(self) -> None:
+        prefix = _leads("Alakazam", "Machamp") + [
+            "|move|p1a: Alakazam|Psychic|p2a: Machamp",
+            "|-damage|p2a: Machamp|55/100",
+        ]
+        merged = _merged(prefix)
+        self.assertEqual(merged[1].second.status, SUB_BLOCK_PENDING)
 
 
 class ReplacementPhaseTest(unittest.TestCase):
