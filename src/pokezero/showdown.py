@@ -388,7 +388,16 @@ NUMERIC_TM2_PRESENT = TURN_MERGED_NUMERIC_BASE + 11
 # defender-side investment code when the second mover's strike carried one. Same
 # double mask (tier2_residuals AND tier2_investment); v2.2-only column.
 NUMERIC_TM2_INVESTMENT = TURN_MERGED_NUMERIC_BASE + 12
-TURN_MERGED_NUMERIC_EXTRA = 13
+# SELF_HP_COST (v2.2-only pair, mirroring the first/second block layout): fraction of
+# the ACTOR'S max HP lost to its OWN declared action within that action's chunk —
+# recoil family, crash on miss, Substitute/Belly Drum cost, Ghost Curse, Pain Split
+# down-side, and self-faint moves (= the actor's entire remaining fraction at strike).
+# Source classification + rationale: transitions._SELF_COST_FROM_TAGS. The v2/v2.1
+# encodes never touch these columns (they sit above the v2.1 census), keeping both
+# legacy modes byte-frozen.
+NUMERIC_TT_SELF_HP_COST = TURN_MERGED_NUMERIC_BASE + 13
+NUMERIC_TM2_SELF_HP_COST = TURN_MERGED_NUMERIC_BASE + 14
+TURN_MERGED_NUMERIC_EXTRA = 15
 _V2_2_NUMERIC_FEATURE_COUNT = TURN_MERGED_NUMERIC_BASE + TURN_MERGED_NUMERIC_EXTRA
 
 V2_2_REPLAY_OBSERVATION_SPEC = ObservationSpec(
@@ -2637,6 +2646,8 @@ def _encode_turn_merged_transition_tokens(
         # a v2.1 superset).
         if masks.tier2_residuals and masks.tier2_investment and first.investment:
             _set_numeric(num_row, NUMERIC_TT_INVESTMENT_BIT, max(-1.0, min(1.0, first.investment)))
+        if first.self_hp_cost:
+            _set_numeric(num_row, NUMERIC_TT_SELF_HP_COST, min(1.0, first.self_hp_cost))
 
         second = token.second
         if second.status != _TM_SUB_BLOCK_ACTION:
@@ -2684,6 +2695,8 @@ def _encode_turn_merged_transition_tokens(
             _set_numeric(num_row, NUMERIC_TM2_CB_BIT, 1.0)
         if masks.tier2_residuals and masks.tier2_investment and second.investment:
             _set_numeric(num_row, NUMERIC_TM2_INVESTMENT, max(-1.0, min(1.0, second.investment)))
+        if second.self_hp_cost:
+            _set_numeric(num_row, NUMERIC_TM2_SELF_HP_COST, min(1.0, second.self_hp_cost))
 
 
 def _tm_first_action_label(kind: str, action: str) -> str:

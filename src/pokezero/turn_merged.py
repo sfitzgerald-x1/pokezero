@@ -141,6 +141,9 @@ class TurnSubBlock:
     called: bool = False
     transformed: bool = False
     damage_fraction: float = 0.0
+    # Fraction of the ACTOR'S max HP lost to its own action (v2.2 SELF_HP_COST; see
+    # transitions._SELF_COST_FROM_TAGS for the source classification).
+    self_hp_cost: float = 0.0
     damage_outcome: str = DAMAGE_OUTCOME_NORMAL
     crit: bool = False
     miss: bool = False
@@ -360,6 +363,7 @@ def _expand_sub_block(token: TurnMergedToken, sub: TurnSubBlock) -> list[Transit
             called=sub.called,
             transformed=sub.transformed,
             damage_fraction=sub.damage_fraction,
+            self_hp_cost=sub.self_hp_cost,
             damage_outcome=sub.damage_outcome,
             crit=sub.crit,
             miss=sub.miss,
@@ -623,6 +627,7 @@ def _is_protocol_constant(window: _Window) -> bool:
     representative and deliberately not checked."""
     return (
         window.damage_fraction == 0.0
+        and window.self_hp_cost == 0.0
         and window.outcome == DAMAGE_OUTCOME_NORMAL
         and not window.crit
         and not window.miss
@@ -645,6 +650,7 @@ def _action_sub_block(window: _Window, **collapse) -> TurnSubBlock:
         called=window.called,
         transformed=window.transformed,
         damage_fraction=window.damage_fraction,
+        self_hp_cost=window.self_hp_cost,
         damage_outcome=window.outcome,
         crit=window.crit,
         miss=window.miss,

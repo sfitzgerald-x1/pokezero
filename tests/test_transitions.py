@@ -697,6 +697,179 @@ class SideEffectCategoryTest(unittest.TestCase):
         self.assertEqual(rest.side_effect, SIDE_EFFECT_NONE)
 
 
+class SelfHpCostTest(unittest.TestCase):
+    """SELF_HP_COST: fraction of the ACTOR'S max HP lost to its OWN declared action
+    within the action's chunk. Emission shapes engine-verified 2026-07-05 (crash and
+    Ghost Curse are bare |-damage| on the actor; Pain Split is tagged -sethp; recoil is
+    [from] Recoil; self-faint moves emit no self-damage line at all)."""
+
+    def test_recoil_is_a_cost_and_not_defender_damage(self) -> None:
+        tokens = _tokens(
+            _leads("Tauros", "Milotic")
+            + [
+                "|move|p1a: Tauros|Double-Edge|p2a: Milotic",
+                "|-damage|p2a: Milotic|60/100",
+                "|-damage|p1a: Tauros|87/100|[from] Recoil|[of] p2a: Milotic",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        move = _moves_only(tokens)[0]
+        self.assertAlmostEqual(move.self_hp_cost, 0.13)
+        self.assertAlmostEqual(move.damage_fraction, 0.40)
+
+    def test_crash_on_miss_bare_actor_damage(self) -> None:
+        # Engine-verified shape: |-miss| then a bare |-damage| on the ACTOR.
+        tokens = _tokens(
+            _leads("Hitmonlee", "Dugtrio")
+            + [
+                "|move|p1a: Hitmonlee|High Jump Kick|p2a: Dugtrio|[miss]",
+                "|-miss|p1a: Hitmonlee|p2a: Dugtrio",
+                "|-damage|p1a: Hitmonlee|62/100",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        move = _moves_only(tokens)[0]
+        self.assertTrue(move.miss)
+        self.assertAlmostEqual(move.self_hp_cost, 0.38)
+        self.assertEqual(move.damage_fraction, 0.0)
+
+    def test_substitute_and_belly_drum_costs(self) -> None:
+        tokens = _tokens(
+            _leads("Poliwrath", "Skarmory")
+            + [
+                "|move|p1a: Poliwrath|Substitute|p1a: Poliwrath",
+                "|-start|p1a: Poliwrath|Substitute",
+                "|-damage|p1a: Poliwrath|75/100",
+                "|upkeep",
+                "|turn|2",
+                "|move|p1a: Poliwrath|Belly Drum|p1a: Poliwrath",
+                "|-damage|p1a: Poliwrath|25/100",
+                "|-setboost|p1a: Poliwrath|atk|6|[from] move: Belly Drum",
+                "|upkeep",
+                "|turn|3",
+            ]
+        )
+        substitute, belly_drum = _moves_only(tokens)
+        self.assertAlmostEqual(substitute.self_hp_cost, 0.25)
+        # Self-target class: the delta stays visible as damage_fraction too (unchanged
+        # pre-existing behavior) — the cost channel is the actor-relative reading.
+        self.assertAlmostEqual(substitute.damage_fraction, 0.25)
+        self.assertAlmostEqual(belly_drum.self_hp_cost, 0.50)
+
+    def test_ghost_curse_bare_actor_damage(self) -> None:
+        tokens = _tokens(
+            _leads("Gengar", "Skarmory")
+            + [
+                "|move|p1a: Gengar|Curse|p2a: Skarmory",
+                "|-start|p2a: Skarmory|Curse|[of] p1a: Gengar",
+                "|-damage|p1a: Gengar|50/100",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        curse = _moves_only(tokens)[0]
+        self.assertAlmostEqual(curse.self_hp_cost, 0.50)
+        self.assertEqual(curse.damage_fraction, 0.0)
+
+    def test_pain_split_costs_only_the_losing_actor(self) -> None:
+        lines = _leads("Misdreavus", "Blissey") + [
+            # Actor is the loser: healthy user splits with a hurt target.
+            "|move|p1a: Misdreavus|Pain Split|p2a: Blissey",
+            "|-sethp|p2a: Blissey|60/100|[from] move: Pain Split|[silent]",
+            "|-sethp|p1a: Misdreavus|65/100|[from] move: Pain Split",
+            "|upkeep",
+            "|turn|2",
+            # Actor is the gainer: no cost.
+            "|move|p1a: Misdreavus|Pain Split|p2a: Blissey",
+            "|-sethp|p2a: Blissey|55/100|[from] move: Pain Split|[silent]",
+            "|-sethp|p1a: Misdreavus|70/100|[from] move: Pain Split",
+            "|upkeep",
+            "|turn|3",
+        ]
+        losing, gaining = _moves_only(_tokens(lines))
+        self.assertAlmostEqual(losing.self_hp_cost, 0.35)
+        self.assertEqual(gaining.self_hp_cost, 0.0)
+
+    def test_explosion_costs_the_entire_remaining_fraction(self) -> None:
+        tokens = _tokens(
+            _leads("Golem", "Milotic")
+            + [
+                "|move|p2a: Milotic|Surf|p1a: Golem",
+                "|-damage|p1a: Golem|40/100",
+                "|upkeep",
+                "|turn|2",
+                "|move|p1a: Golem|Explosion|p2a: Milotic",
+                "|-damage|p2a: Milotic|10/100",
+                "|faint|p1a: Golem",
+                "|upkeep",
+                "|turn|3",
+            ]
+        )
+        explosion = _moves_only(tokens)[1]
+        self.assertEqual(explosion.action, "explosion")
+        # Documented choice: the cost is the actor's remaining fraction AT STRIKE.
+        self.assertAlmostEqual(explosion.self_hp_cost, 0.40)
+        self.assertAlmostEqual(explosion.damage_fraction, 0.90)
+
+    def test_opponent_sourced_and_environmental_tags_are_not_costs(self) -> None:
+        # Rough Skin (opponent ability, tagged) and Spikes on a switch-in (tagged,
+        # environmental, derivable from the context trio): both excluded.
+        tokens = _tokens(
+            _leads("Machamp", "Sharpedo")
+            + [
+                "|move|p1a: Machamp|Cross Chop|p2a: Sharpedo",
+                "|-damage|p2a: Sharpedo|40/100",
+                "|-damage|p1a: Machamp|88/100|[from] ability: Rough Skin|[of] p2a: Sharpedo",
+                "|upkeep",
+                "|turn|2",
+                "|switch|p1a: Skarmory|Skarmory, L76|100/100",
+                "|-damage|p1a: Skarmory|88/100|[from] Spikes",
+                "|upkeep",
+                "|turn|3",
+            ]
+        )
+        cross_chop = _moves_only(tokens)[0]
+        self.assertEqual(cross_chop.self_hp_cost, 0.0)
+        switch_in = [t for t in tokens if t.kind == TOKEN_KIND_SWITCH][-1]
+        self.assertEqual(switch_in.self_hp_cost, 0.0)
+
+    def test_destiny_bond_faint_in_own_chunk_is_not_a_cost(self) -> None:
+        # The attacker faints inside its OWN chunk via the opponent's Destiny Bond —
+        # an opponent-set trap, not a cost of the chosen action (whitelist rationale).
+        tokens = _tokens(
+            _leads("Machamp", "Gengar")
+            + [
+                "|move|p1a: Machamp|Rock Slide|p2a: Gengar",
+                "|-damage|p2a: Gengar|0 fnt",
+                "|faint|p2a: Gengar",
+                "|-activate|p2a: Gengar|move: Destiny Bond",
+                "|faint|p1a: Machamp",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        rock_slide = _moves_only(tokens)[0]
+        self.assertTrue(rock_slide.ko)
+        self.assertEqual(rock_slide.self_hp_cost, 0.0)
+
+    def test_chip_and_residual_protections_unchanged(self) -> None:
+        tokens = _tokens(
+            _leads("Skarmory", "Milotic")
+            + [
+                "|move|p1a: Skarmory|Drill Peck|p2a: Milotic",
+                "|-damage|p2a: Milotic|80/100",
+                "|",
+                "|-damage|p1a: Skarmory|88/100|[from] brn",
+                "|upkeep",
+                "|turn|2",
+            ]
+        )
+        drill_peck = _moves_only(tokens)[0]
+        self.assertEqual(drill_peck.self_hp_cost, 0.0)
+
+
 class TendencyStatsTest(unittest.TestCase):
     def _small_game(self) -> list[str]:
         return _leads("Zapdos", "Milotic") + [
