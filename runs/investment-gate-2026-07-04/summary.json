@@ -1,0 +1,281 @@
+{
+  "generated": "2026-07-04",
+  "harness": "scripts/investment_gate.py",
+  "policy": "move-biased random-legal (move_bias=0.75), both seats",
+  "games_requested": 120,
+  "games_completed": 120,
+  "seed": 11,
+  "mean_turns": 48.91,
+  "randbat_source_hash": "e648ed6a6fbf7c78",
+  "config": {
+    "lattice_tolerance_hp": 1e-06,
+    "fraction_granularity": 0.0,
+    "rejection_margin_hp": 0.25,
+    "required_pin_strikes": 2
+  },
+  "strikes_assessed": 5435,
+  "strikes_clean": 3415,
+  "strikes_hp_pin": 67,
+  "strikes_defense_pin": 59,
+  "strike_disqualifier_histogram": {
+    "ko-clipped": 908,
+    "no-damage-event": 790,
+    "ability-overridden": 90,
+    "unmodeled-damage": 45,
+    "margin-ambiguity": 43,
+    "called": 42,
+    "transformed-defender": 24,
+    "transformed-attacker": 24,
+    "item-mutated": 23,
+    "type-changed": 21,
+    "conditioning-ambiguity": 3,
+    "truncated-outcome": 2,
+    "multi-hit": 2,
+    "struggle": 2,
+    "no-consistent-variant": 1
+  },
+  "conclusions": {
+    "hp_value": {
+      "predictions": 13,
+      "true_positives": 13,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "hp_class": {
+      "predictions": 13,
+      "true_positives": 13,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "defense": {
+      "predictions": 9,
+      "true_positives": 9,
+      "false_positives": 0,
+      "precision": 1.0
+    },
+    "blocked_mons": {
+      "hp": 0,
+      "defense": 0
+    },
+    "false_positive_detail": [],
+    "true_positive_sample": [
+      {
+        "game": 3,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 238,
+        "true_moves": [
+          "rockslide",
+          "brickbreak",
+          "surf",
+          "swordsdance"
+        ],
+        "true_item": "salacberry",
+        "type": "hp",
+        "pinned": 238,
+        "class": "full",
+        "turns": [
+          10,
+          15
+        ]
+      },
+      {
+        "game": 15,
+        "perspective": "p2",
+        "mon": "persian",
+        "true_maxhp": 252,
+        "true_moves": [
+          "return",
+          "shadowball",
+          "substitute",
+          "irontail"
+        ],
+        "true_item": "liechiberry",
+        "type": "hp",
+        "pinned": 252,
+        "class": "trimmed",
+        "turns": [
+          3,
+          4
+        ]
+      },
+      {
+        "game": 22,
+        "perspective": "p1",
+        "mon": "yanma",
+        "true_maxhp": 267,
+        "true_moves": [
+          "substitute",
+          "hiddenpowerflying",
+          "hypnosis",
+          "reversal"
+        ],
+        "true_item": "liechiberry",
+        "type": "hp",
+        "pinned": 267,
+        "class": "trimmed",
+        "turns": [
+          2,
+          15
+        ]
+      },
+      {
+        "game": 22,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 237,
+        "true_moves": [
+          "brickbreak",
+          "rockslide",
+          "hiddenpowerflying",
+          "surf"
+        ],
+        "true_item": "choiceband",
+        "type": "hp",
+        "pinned": 237,
+        "class": "full",
+        "turns": [
+          47,
+          48
+        ]
+      },
+      {
+        "game": 22,
+        "perspective": "p1",
+        "mon": "kabutops",
+        "true_maxhp": 237,
+        "true_moves": [
+          "brickbreak",
+          "rockslide",
+          "hiddenpowerflying",
+          "surf"
+        ],
+        "true_item": "choiceband",
+        "type": "defense-spd",
+        "pinned": 165,
+        "class": "reduced"
+      },
+      {
+        "game": 22,
+        "perspective": "p2",
+        "mon": "raticate",
+        "true_maxhp": 232,
+        "true_moves": [
+          "return",
+          "shadowball",
+          "facade",
+          "hiddenpowerground"
+        ],
+        "true_item": "choiceband",
+        "type": "hp",
+        "pinned": 232,
+        "class": "full",
+        "turns": [
+          3,
+          4
+        ]
+      },
+      {
+        "game": 22,
+        "perspective": "p2",
+        "mon": "charizard",
+        "true_maxhp": 251,
+        "true_moves": [
+          "hiddenpowerflying",
+          "bellydrum",
+          "earthquake",
+          "rockslide"
+        ],
+        "true_item": "lumberry",
+        "type": "hp",
+        "pinned": 251,
+        "class": "trimmed",
+        "turns": [
+          40,
+          41
+        ]
+      },
+      {
+        "game": 39,
+        "perspective": "p1",
+        "mon": "hariyama",
+        "true_maxhp": 375,
+        "true_moves": [
+          "crosschop",
+          "hiddenpowerghost",
+          "sleeptalk",
+          "rest"
+        ],
+        "true_item": "leftovers",
+        "type": "defense-def",
+        "pinned": 146,
+        "class": "reduced"
+      },
+      {
+        "game": 46,
+        "perspective": "p1",
+        "mon": "medicham",
+        "true_maxhp": 228,
+        "true_moves": [
+          "substitute",
+          "brickbreak",
+          "shadowball",
+          "bulkup"
+        ],
+        "true_item": "salacberry",
+        "type": "hp",
+        "pinned": 228,
+        "class": "trimmed",
+        "turns": [
+          13,
+          14
+        ]
+      },
+      {
+        "game": 49,
+        "perspective": "p2",
+        "mon": "hariyama",
+        "true_maxhp": 375,
+        "true_moves": [
+          "rest",
+          "hiddenpowerghost",
+          "crosschop",
+          "sleeptalk"
+        ],
+        "true_item": "leftovers",
+        "type": "defense-def",
+        "pinned": 146,
+        "class": "reduced"
+      }
+    ]
+  },
+  "coverage": {
+    "opponent_mons_seen": 1403,
+    "hp_mixed_family_mons_seen": 168,
+    "hp_mixed_family_mons_concluded": 13,
+    "hp_conclusion_rate_on_mixed": 0.07738095238095238,
+    "trimmed_truth_mons_seen": 67,
+    "trimmed_truth_mons_concluded": 6
+  },
+  "calibration_known_set": {
+    "clean_strikes": 3459,
+    "off_model_strikes": 0,
+    "true_variant_consistency": 1.0,
+    "mismatch_examples": [],
+    "spread_mons_checked": 1440,
+    "spread_stat_mismatches": 0,
+    "spread_mismatch_examples": [],
+    "hp_denominator_mismatches": 0,
+    "hp_denominator_examples": []
+  },
+  "gate": {
+    "precision_pass": true,
+    "calibration_pass": true,
+    "verdict": "PASS",
+    "criteria": {
+      "precision": "zero false pins across all conclusion types and >= 3 hp-value conclusions",
+      "calibration": ">= 200 clean control strikes, true-variant consistency >= 0.98, zero spread mismatches, zero HP-denominator mismatches"
+    },
+    "mask_recommendation": "populate NUMERIC_TT_INVESTMENT_BIT behind tier2_investment"
+  }
+}
