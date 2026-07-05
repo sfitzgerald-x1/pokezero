@@ -97,10 +97,14 @@ def env_config_with_checkpoint_masks(
             "evaluate them in separate runs."
         )
     if len(distinct_specs) > 1:
+        schemas = sorted({spec.schema_version for spec in distinct_specs})
         raise ValueError(
             f"{context}: checkpoints require conflicting observation specs "
             f"({', '.join(repr(spec) for spec in distinct_specs)}); one env cannot encode "
-            "two observation schemas — evaluate them in separate runs."
+            "two observation schemas. For eval, score them in separate runs; for "
+            "iterate/resume, a training line keeps its own stamped schema "
+            f"({' vs '.join(repr(schema) for schema in schemas)}) — continue it on the "
+            "build it is pinned to instead of mixing it with fresh-stamped configs."
         )
     resolved = env_config
     if distinct:

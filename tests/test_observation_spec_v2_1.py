@@ -164,6 +164,32 @@ class DualEncodeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported spec schema"):
             _encode(state, bad_spec)
 
+    def test_encode_refuses_a_narrowed_v2_1_spec_census_floor(self) -> None:
+        # #512 review MED-LOW: a v2.1-stamped spec at v2 width would silently
+        # bounds-drop every v2.1 numeric column while still writing defender identity —
+        # an undeclared hybrid stamped v2.1. The encoder refuses below the schema floor.
+        from dataclasses import replace
+
+        state = _state([])
+        hybrid = replace(V2_1_REPLAY_OBSERVATION_SPEC, numeric_feature_count=121)
+        with self.assertRaisesRegex(ValueError, "undeclared hybrid"):
+            _encode(state, hybrid)
+        with self.assertRaisesRegex(ValueError, "at least 140"):
+            _encode(state, replace(V2_1_REPLAY_OBSERVATION_SPEC, numeric_feature_count=139))
+
+    def test_v2_relic_narrowing_still_encodes_but_has_its_own_floor(self) -> None:
+        from dataclasses import replace
+
+        state = _state([])
+        # The 119-column pre-CB/investment v2 relic family stays encodable...
+        relic = replace(V2_REPLAY_OBSERVATION_SPEC, numeric_feature_count=119)
+        observation = _encode(state, relic)
+        self.assertEqual(len(observation.numeric_features[0]), 119)
+        self.assertEqual(observation.schema_version, OBSERVATION_SCHEMA_VERSION_V2)
+        # ...but anything below the v2 floor refuses too.
+        with self.assertRaisesRegex(ValueError, "at least 119"):
+            _encode(state, replace(V2_REPLAY_OBSERVATION_SPEC, numeric_feature_count=118))
+
     def test_validate_refuses_cross_schema_pairing(self) -> None:
         state = _state([])
         v2 = _encode(state, V2_REPLAY_OBSERVATION_SPEC)
@@ -212,6 +238,22 @@ class DefenderIdentityTest(unittest.TestCase):
         # The slot occupant's switch-in details carry the base species; the nicknamed
         # target ident does not.
         self.assertEqual(move.defender_species, "Xatu")
+
+    def test_truncated_log_yields_no_defender_never_a_nickname(self) -> None:
+        # #512 review LOW: with no occupant record (a truncated log whose lead switch
+        # predates the fold), the ident tail is a NICKNAME — the extractor must record
+        # None (absent defender) rather than a species:<nickname> label bound for the
+        # OOV bucket.
+        lines = [
+            "|player|p1|Us|",
+            "|player|p2|Them|",
+            "|move|p2a: Birdy|Psychic|p1a: Charlie",
+            "|turn|8",
+        ]
+        replay = parse_showdown_replay(lines, battle_id="battle-1")
+        tokens = extract_transition_tokens(replay, perspective_slot="p1")
+        move = next(token for token in tokens if token.kind == TOKEN_KIND_MOVE)
+        self.assertIsNone(move.defender_species)
 
     def test_self_targeted_move_records_the_actor_as_defender(self) -> None:
         lines = [
