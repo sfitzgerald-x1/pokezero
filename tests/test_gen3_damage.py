@@ -750,6 +750,35 @@ class ChainOrderSensitiveTest(unittest.TestCase):
             )),
         )
 
+    def test_brick_break_lands_unscreened_shattering_reflect_first(self) -> None:
+        # Brick Break's gen3 onTryHit removes Reflect/Light Screen BEFORE dealing
+        # damage ("before you hit"), so its own strike is UNSCREENED even though the
+        # screen is live at the |move| line. The correct lattice is screen=False; the
+        # wrong one (the pre-fix context that kept the screen on the strike) halves it.
+        def reflect_up_then_shattered(lines, stats):
+            up = any(l.startswith("|-sidestart|p1") and "Reflect" in l for l in lines)
+            shattered = any(l.startswith("|-sideend|p1") and "Reflect" in l for l in lines)
+            return up and shattered
+
+        self._run_order_scenario(
+            p1_team=[_mon("Snorlax", ["Reflect", "Splash"], "Immunity")],
+            p2_team=[_mon("Machamp", ["Splash", "Brick Break"], "Guts")],
+            turn_choices=[("move 1", "move 1"), ("move 2", "move 2")],
+            seeds=(3, 7, 11),
+            attacker="p2", move="brickbreak", turn=2,
+            right_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=75, category="Physical",
+                attack=s["p2"]["atk"], defense=s["p1"]["def"], stab=True, effectiveness=2.0,
+                screen=False,
+            )),
+            wrong_builder=lambda s: gen3_damage_rolls(Gen3DamageContext(
+                level=100, base_power=75, category="Physical",
+                attack=s["p2"]["atk"], defense=s["p1"]["def"], stab=True, effectiveness=2.0,
+                screen=True,
+            )),
+            precondition=reflect_up_then_shattered,
+        )
+
     def test_flash_fire_is_phase1_damage_mod_not_stat_mod(self) -> None:
         self._run_order_scenario(
             p1_team=[_mon("Charizard", ["Flamethrower", "Splash"], "Blaze")],
