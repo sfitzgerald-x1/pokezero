@@ -2779,6 +2779,9 @@ class _PolicyIdAlias:
     policy: Policy
     policy_id: str
 
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.policy, name)
+
     def reset(self) -> None:
         reset = getattr(self.policy, "reset", None)
         if callable(reset):
