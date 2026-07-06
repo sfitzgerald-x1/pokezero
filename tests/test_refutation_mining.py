@@ -29,6 +29,11 @@ from pokezero.refutation_mining import (
     validate_refutation_report_payload,
     write_refutation_report,
 )
+from pokezero.refutation_population import (
+    REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION,
+    RefutationBehaviorSeedConfig,
+    build_refutation_behavior_seed_manifest,
+)
 from pokezero.refutation_training import (
     RefutationTrainingConfig,
     refutation_training_examples,
@@ -917,6 +922,141 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
         self.assertEqual(batch.ppo_value_target_mask, (True,))
         self.assertEqual(batch.action_probability_mask, (False,))
+
+    def test_refutation_behavior_seed_manifest_uses_certified_rows_only(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        failed = dict(row)
+        failed["certification"] = dict(row["certification"])
+        failed["certification"]["passed"] = False
+
+        manifest = build_refutation_behavior_seed_manifest(
+            (failed, row),
+            config=RefutationBehaviorSeedConfig(min_flip_rate=0.60, mode="oracle"),
+        )
+        payload = manifest.to_dict()
+
+        self.assertEqual(payload["schema_version"], REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION)
+        self.assertRegex(payload["source_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(payload["source_row_count"], 2)
+        self.assertEqual(payload["seed_count"], 1)
+        self.assertEqual(payload["skipped_count"], 1)
+        seed = payload["seeds"][0]
+        self.assertEqual(seed["seed_id"], "battle-1:round-0:step-1:action-2")
+        self.assertEqual(seed["population_use"]["kind"], "refutation_behavior_seed")
+        self.assertIn("legacy_checkpoint_strength_eval", seed["population_use"]["not_for"])
+
+    def test_refutation_behavior_seed_manifest_cli_writes_payload(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "fragile.jsonl"
+            output_path = root / "behavior-seeds.json"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "behavior-seeds",
+                        "--archive",
+                        str(archive_path),
+                        "--out",
+                        str(output_path),
+                        "--min-flip-rate",
+                        "0.6",
+                    ]
+                )
+            printed = json.loads(stdout.getvalue())
+            written = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(printed, written)
+        self.assertEqual(written["seed_count"], 1)
+        self.assertEqual(written["seeds"][0]["deviation_action_index"], 2)
+
+    def test_refutation_behavior_seed_manifest_filters_and_caps_rows(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        oracle = report.certified_refutations[0].to_dict()
+        fair = report.certified_refutations[0].to_dict()
+        fair["mode"] = "fair"
+
+        fair_only = build_refutation_behavior_seed_manifest(
+            (oracle, fair),
+            config=RefutationBehaviorSeedConfig(mode="fair"),
+        ).to_dict()
+        capped = build_refutation_behavior_seed_manifest(
+            (oracle, fair),
+            config=RefutationBehaviorSeedConfig(max_seeds=1),
+        ).to_dict()
+        filtered = build_refutation_behavior_seed_manifest(
+            (oracle, fair),
+            config=RefutationBehaviorSeedConfig(min_flip_rate=0.99),
+        ).to_dict()
+
+        self.assertEqual(fair_only["seed_count"], 1)
+        self.assertEqual(fair_only["seeds"][0]["mode"], "fair")
+        self.assertEqual(capped["seed_count"], 1)
+        self.assertEqual(capped["skipped_count"], 1)
+        self.assertEqual(filtered["seed_count"], 0)
+        self.assertEqual(filtered["skipped_count"], 2)
+
+    def test_refutation_behavior_seed_manifest_rejects_non_terminal_rollout_rows(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        row["evaluation_source"] = "value_head"
+
+        with self.assertRaisesRegex(ValueError, "terminal-rollout"):
+            build_refutation_behavior_seed_manifest((row,))
 
     def test_refutation_curriculum_start_count_uses_ceiling_and_cap(self) -> None:
         self.assertEqual(
