@@ -40,6 +40,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from pokezero.behavior_metrics import move_class_summary
 from pokezero.checkpoint_factors import choice_label
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.online_client import build_agent
@@ -111,6 +112,7 @@ def _self_play_behavior(agent, showdown_root: str, num_games: int, seed_start: i
         "move_decisions": move_decisions,
         "distinct_moves": len(move_counts),
         "move_usage": move_usage,
+        "move_class_usage": move_class_summary(move_counts, dex=agent.dex),
         "avg_turns": round(total_turns / g, 2),
         "voluntary_pivots": voluntary_pivots,
         "forced_switches": forced_switches,
