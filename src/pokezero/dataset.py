@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 import json
+import math
 from os import PathLike
 from pathlib import Path
 import shutil
@@ -155,6 +156,14 @@ class TrajectoryExample:
     # off). Stored separately from `reward` (raw env reward, unchanged) and already
     # folded into return_value / PPO targets when the dataset config enables shaping.
     shaping_reward: float | None = None
+    # Generic per-example training emphasis. Defaults to neutral weight; refutation
+    # caches can raise this for certified high-surprise rows without changing the
+    # primary rollout data contract.
+    training_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(float(self.training_weight)) or float(self.training_weight) <= 0.0:
+            raise ValueError("training_weight must be positive and finite.")
 
     @property
     def window_size(self) -> int:
@@ -182,6 +191,7 @@ class TrainingBatch:
     opponent_action_mask: tuple[bool, ...]
     action_probabilities: tuple[float, ...]
     action_probability_mask: tuple[bool, ...]
+    training_weights: tuple[float, ...]
     battle_ids: tuple[str, ...]
     seeds: tuple[int, ...]
     format_ids: tuple[str, ...]
@@ -215,6 +225,7 @@ class TrainingBatch:
             ("opponent_action_mask", self.opponent_action_mask),
             ("action_probabilities", self.action_probabilities),
             ("action_probability_mask", self.action_probability_mask),
+            ("training_weights", self.training_weights),
             ("battle_ids", self.battle_ids),
             ("seeds", self.seeds),
             ("format_ids", self.format_ids),
@@ -333,6 +344,7 @@ class TrainingCacheBuilder:
         self._opponent_action_masks: list[bool] = []
         self._action_probabilities: list[float] = []
         self._action_probability_masks: list[bool] = []
+        self._training_weights: list[float] = []
         self._seeds: list[int] = []
         self._turn_indices: list[int] = []
         self._terminal_capped: list[bool] = []
@@ -386,6 +398,7 @@ class TrainingCacheBuilder:
             self._opponent_action_masks.append(example.opponent_action_index is not None)
             self._action_probabilities.append(_optional_float(example.action_probability))
             self._action_probability_masks.append(example.action_probability is not None)
+            self._training_weights.append(float(example.training_weight))
             self._seeds.append(example.seed)
             self._turn_indices.append(example.turn_index)
             self._terminal_capped.append(example.terminal_capped)
@@ -446,6 +459,7 @@ class TrainingCacheBuilder:
         self._opponent_action_masks.append(example.opponent_action_index is not None)
         self._action_probabilities.append(_optional_float(example.action_probability))
         self._action_probability_masks.append(example.action_probability is not None)
+        self._training_weights.append(float(example.training_weight))
         self._seeds.append(example.seed)
         self._turn_indices.append(example.turn_index)
         self._terminal_capped.append(example.terminal_capped)
@@ -572,6 +586,7 @@ class TrainingCacheBuilder:
             "opponent_action_mask": numpy.asarray(self._opponent_action_masks, dtype=numpy.bool_),
             "action_probabilities": numpy.asarray(self._action_probabilities, dtype=numpy.float32),
             "action_probability_mask": numpy.asarray(self._action_probability_masks, dtype=numpy.bool_),
+            "training_weights": numpy.asarray(self._training_weights, dtype=numpy.float32),
             "seeds": numpy.asarray(self._seeds, dtype=numpy.int64),
             "turn_indices": numpy.asarray(self._turn_indices, dtype=numpy.int32),
             "terminal_capped": numpy.asarray(self._terminal_capped, dtype=numpy.bool_),
@@ -858,6 +873,7 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         opponent_action_mask=_concat_batch_field(tuple(batch.opponent_action_mask for batch in batches)),
         action_probabilities=_concat_batch_field(tuple(batch.action_probabilities for batch in batches)),
         action_probability_mask=_concat_batch_field(tuple(batch.action_probability_mask for batch in batches)),
+        training_weights=_concat_batch_field(tuple(batch.training_weights for batch in batches)),
         battle_ids=_concat_batch_field(tuple(batch.battle_ids for batch in batches)),
         seeds=_concat_batch_field(tuple(batch.seeds for batch in batches)),
         format_ids=_concat_batch_field(tuple(batch.format_ids for batch in batches)),
@@ -899,6 +915,7 @@ def _combine_row_indexed_training_batches(batches: Sequence[TrainingBatch]) -> T
         opponent_action_mask=_concat_batch_field(tuple(batch.opponent_action_mask for batch in batches)),
         action_probabilities=_concat_batch_field(tuple(batch.action_probabilities for batch in batches)),
         action_probability_mask=_concat_batch_field(tuple(batch.action_probability_mask for batch in batches)),
+        training_weights=_concat_batch_field(tuple(batch.training_weights for batch in batches)),
         battle_ids=_concat_batch_field(tuple(batch.battle_ids for batch in batches)),
         seeds=_concat_batch_field(tuple(batch.seeds for batch in batches)),
         format_ids=_concat_batch_field(tuple(batch.format_ids for batch in batches)),
@@ -990,6 +1007,7 @@ def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Traini
         opponent_action_mask=_slice_batch_field(batch.opponent_action_mask, start, stop),
         action_probabilities=_slice_batch_field(batch.action_probabilities, start, stop),
         action_probability_mask=_slice_batch_field(batch.action_probability_mask, start, stop),
+        training_weights=_slice_batch_field(batch.training_weights, start, stop),
         battle_ids=_slice_batch_field(batch.battle_ids, start, stop),
         seeds=_slice_batch_field(batch.seeds, start, stop),
         format_ids=_slice_batch_field(batch.format_ids, start, stop),
@@ -1123,6 +1141,7 @@ def iter_training_cache_batches(
                 opponent_action_mask=_owned_array(arrays["opponent_action_mask"][example_slice]),
                 action_probabilities=_owned_array(arrays["action_probabilities"][example_slice]),
                 action_probability_mask=_owned_array(arrays["action_probability_mask"][example_slice]),
+                training_weights=_owned_array(arrays["training_weights"][example_slice]),
                 battle_ids=tuple("" for _ in range(batch_len)),
                 seeds=_owned_array(arrays["seeds"][example_slice]),
                 format_ids=tuple("" for _ in range(batch_len)),
@@ -1157,6 +1176,7 @@ def iter_training_cache_batches(
             opponent_action_mask=_owned_array(arrays["opponent_action_mask"][example_slice]),
             action_probabilities=_owned_array(arrays["action_probabilities"][example_slice]),
             action_probability_mask=_owned_array(arrays["action_probability_mask"][example_slice]),
+            training_weights=_owned_array(arrays["training_weights"][example_slice]),
             battle_ids=tuple("" for _ in range(batch_len)),
             seeds=_owned_array(arrays["seeds"][example_slice]),
             format_ids=tuple("" for _ in range(batch_len)),
@@ -1195,6 +1215,7 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         opponent_action_mask=tuple(example.opponent_action_index is not None for example in examples),
         action_probabilities=tuple(_optional_float(example.action_probability) for example in examples),
         action_probability_mask=tuple(example.action_probability is not None for example in examples),
+        training_weights=tuple(float(example.training_weight) for example in examples),
         battle_ids=tuple(example.battle_id for example in examples),
         seeds=tuple(example.seed for example in examples),
         format_ids=tuple(example.format_id for example in examples),
@@ -1543,6 +1564,7 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
         "opponent_action_mask",
         "action_probabilities",
         "action_probability_mask",
+        "training_weights",
         "seeds",
         "turn_indices",
         "terminal_capped",
@@ -1555,7 +1577,7 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
     missing_required = [
         name
         for name in names
-        if name not in arrays and name not in {"value_estimates", "value_estimate_mask"}
+        if name not in arrays and name not in {"value_estimates", "value_estimate_mask", "training_weights"}
     ]
     if missing_required:
         raise FileNotFoundError(f"training cache is missing required arrays: {missing_required}")
@@ -1563,6 +1585,8 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
         arrays["value_estimates"] = numpy.zeros_like(arrays["returns"], dtype=numpy.float32)
     if "value_estimate_mask" not in arrays:
         arrays["value_estimate_mask"] = numpy.zeros_like(arrays["returns"], dtype=numpy.bool_)
+    if "training_weights" not in arrays:
+        arrays["training_weights"] = numpy.ones_like(arrays["returns"], dtype=numpy.float32)
     return arrays
 
 

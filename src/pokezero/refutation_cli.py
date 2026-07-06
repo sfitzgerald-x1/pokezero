@@ -129,6 +129,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     training_cache.add_argument("--max-examples", type=int, default=None, help="Optional cap on fragile examples emitted.")
+    training_cache.add_argument(
+        "--surprise-weight-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional certification-strength weighting scale. 0 leaves every refutation row "
+            "at neutral training weight 1.0."
+        ),
+    )
+    training_cache.add_argument(
+        "--surprise-weight-max",
+        type=float,
+        default=4.0,
+        help="Maximum per-example training weight when --surprise-weight-scale is enabled.",
+    )
     training_cache.add_argument("--window-size", type=int, default=1, help="Training observation window size.")
     training_cache.add_argument("--discount", type=float, default=1.0, help="Dataset discount used while materializing source windows before refutation targets are applied.")
     training_cache.add_argument(
@@ -280,6 +295,8 @@ def _training_cache(args: argparse.Namespace) -> int:
         config=RefutationTrainingConfig(
             target_mode=args.target_mode,
             max_examples=args.max_examples,
+            surprise_weight_scale=args.surprise_weight_scale,
+            surprise_weight_max=args.surprise_weight_max,
         ),
         overwrite=args.overwrite,
     )

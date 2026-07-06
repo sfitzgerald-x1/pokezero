@@ -1121,6 +1121,48 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertGreater(weighted["policy_loss"], unweighted["policy_loss"])
 
+    def test_training_weights_upweight_supervised_policy_rows(self) -> None:
+        if not torch_available():
+            self.skipTest("requires torch")
+        import torch
+
+        from pokezero.neural_policy import TransformerPolicyOutput, _transformer_loss
+
+        logits = torch.zeros(2, 9)
+        logits[0, 0] = 8.0
+        logits[1, 0] = 8.0  # Wrong for row 1 target action 1.
+        output = TransformerPolicyOutput(
+            policy_logits=logits,
+            value=torch.zeros(2),
+            opponent_action_logits=torch.zeros(2, 9),
+        )
+        base_tensors = {
+            "legal_action_mask": torch.ones(2, 9, dtype=torch.bool),
+            "action_indices": torch.tensor([0, 1], dtype=torch.long),
+            "returns": torch.ones(2),
+            "action_probabilities": torch.full((2,), 1.0 / 9.0),
+            "action_probability_mask": torch.ones(2, dtype=torch.bool),
+            "opponent_action_mask": torch.zeros(2, dtype=torch.bool),
+            "opponent_action_indices": torch.zeros(2, dtype=torch.long),
+        }
+        config = TransformerTrainingConfig(
+            objective="behavior-cloning",
+            opponent_action_loss_weight=0.0,
+            value_loss_weight=0.0,
+        )
+
+        _, unweighted = _transformer_loss(output, base_tensors, config)
+        _, weighted = _transformer_loss(
+            output,
+            {
+                **base_tensors,
+                "training_weights": torch.tensor([1.0, 8.0]),
+            },
+            config,
+        )
+
+        self.assertGreater(weighted["policy_loss"], unweighted["policy_loss"])
+
     def test_action_family_loss_trains_move_vs_switch_decisions(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")

@@ -174,6 +174,13 @@ only and should be consumed by PPO/value-only paths, not behavior cloning or
 reward-weighted objectives, because it intentionally leaves the recorded loser
 action untouched.
 
+The cache builder can also persist optional per-example `training_weights` for
+R1 surprise weighting. The first source is certification strength: rows whose
+terminal-rollout flip rate clears the miner's threshold by more can be upweighted
+with `--surprise-weight-scale`, capped by `--surprise-weight-max`. This is
+default-off and uses the generic training-weight field so later search-prior/KL
+surprise can reuse the same ingestion path without changing the cache contract.
+
 `pokezero-neural train --refutation-cache ...` is the opt-in ingestion path: it
 streams certified refutation caches as capped auxiliary examples, hard-limits the
 mix to at most 20% of emitted training examples, applies the same cache
@@ -364,8 +371,9 @@ calendar time.
   reproducible examples. Watch refutation rate and archive quality before
   feeding examples back into training. The feed-back primitive is now a separate
   refutation training cache plus capped `pokezero-neural train
-  --refutation-cache` ingestion; it is not yet evidence that R1 improves value
-  calibration or strength.
+  --refutation-cache` ingestion, including default-off certification-strength
+  surprise weights; it is not yet evidence that R1 improves value calibration or
+  strength.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
   unsupervised skill discovery (DIAYN-class, *learned* z with no semantic axes;

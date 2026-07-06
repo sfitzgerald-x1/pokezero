@@ -548,6 +548,7 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(example.action_index, 2)
         self.assertAlmostEqual(example.return_value, 0.3)
         self.assertAlmostEqual(example.ppo_value_target, 0.3)
+        self.assertEqual(example.training_weight, 1.0)
         self.assertIsNone(example.action_probability)
         self.assertEqual(example.step_metadata["refutation_training"]["deviation_action_index"], 2)
 
@@ -579,6 +580,41 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertAlmostEqual(examples[0].return_value, 0.3)
         self.assertAlmostEqual(examples[0].ppo_value_target, 0.3)
         self.assertIsNone(examples[0].action_probability)
+
+    def test_refutation_training_prioritizes_higher_surprise_weights_before_cap(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        low = report.certified_refutations[0].to_dict()
+        high = dict(low)
+        high["certification"] = dict(low["certification"])
+        high["certification"]["flip_rate"] = 0.95
+        high["terminal_results"] = list(low["terminal_results"])
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(low, high),
+            config=RefutationTrainingConfig(
+                target_mode="policy-value",
+                max_examples=1,
+                surprise_weight_scale=2.0,
+            ),
+        )
+
+        self.assertEqual(len(examples), 1)
+        self.assertGreater(examples[0].training_weight, 2.0)
+        self.assertAlmostEqual(examples[0].step_metadata["refutation_training"]["flip_rate"], 0.95)
 
     def test_refutation_training_skips_non_certified_rows(self) -> None:
         config = RefutationMiningConfig(
@@ -638,6 +674,8 @@ class RefutationMiningTest(unittest.TestCase):
                         str(archive_path),
                         "--out",
                         str(cache_path),
+                        "--surprise-weight-scale",
+                        "2.0",
                     ]
                 )
             payload = json.loads(stdout.getvalue())
@@ -650,10 +688,22 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(metadata["example_count"], 1)
         self.assertEqual(metadata["refutation_training"]["target_mode"], "policy-value")
         self.assertEqual(
+            metadata["refutation_training"]["surprise_weighting"],
+            {
+                "field": "training_weights",
+                "max": 4.0,
+                "mode": "certification-flip-rate",
+                "scale": 2.0,
+            },
+        )
+        self.assertAlmostEqual(metadata["refutation_training"]["training_weight_stats"]["mean"], 1.25)
+        self.assertAlmostEqual(payload["training_weight_mean"], 1.25)
+        self.assertEqual(
             metadata["refutation_training"]["compatible_objectives"],
             ["behavior-cloning", "ppo", "reward-weighted"],
         )
         self.assertEqual(batch.action_indices, (2,))
+        self.assertAlmostEqual(batch.training_weights[0], 1.25, places=6)
         self.assertAlmostEqual(batch.returns[0], 0.3, places=6)
         self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
         self.assertEqual(batch.ppo_value_target_mask, (True,))
