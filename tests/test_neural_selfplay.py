@@ -3179,11 +3179,16 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("0.600", output)
         self.assertIn("0.250000", output)
         self.assertIn("0.7500", output)
-        self.assertIn("benchmark_opponent_curves:", output)
-        self.assertIn("note: fixed yardsticks only; rates are candidate wins / total games.", output)
+        self.assertIn("benchmark_strength_curves:", output)
+        self.assertIn(
+            "note: max-damage and explicit benchmark references only; rates are candidate wins / total games.",
+            output,
+        )
+        self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
+        self.assertIn("benchmark_plumbing_curves:", output)
+        self.assertIn("note: random/simple are saturated harness-health checks, not strength gradients.", output)
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- simple-legal: 1:1.000/20g", output)
-        self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
         self.assertIn("foundation_readiness:", output)
         self.assertIn(
             "note: presence/sample-size only; inspect value quality and strength separately.",
@@ -3233,12 +3238,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
-        self.assertIn("benchmark_opponent_curves:", output)
+        self.assertIn("benchmark_strength_curves:", output)
+        self.assertIn("benchmark_plumbing_curves:", output)
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
         self.assertNotIn("entity-test-iter-0000", output)
 
-    def test_neural_cli_report_yardstick_curves_fall_back_to_legacy_matchups(self) -> None:
+    def test_neural_cli_report_plumbing_curves_fall_back_to_legacy_matchups(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
             write_neural_report_manifest(run_dir)
@@ -3303,7 +3309,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertEqual(exit_code, 0)
-        self.assertIn("benchmark_opponent_curves:", output)
+        self.assertNotIn("benchmark_strength_curves:", output)
+        self.assertIn("benchmark_plumbing_curves:", output)
         self.assertIn("- random-legal: 1:0.550/20g,cap=3", output)
         self.assertNotIn("entity-test-iter-0000", output)
 
@@ -4930,8 +4937,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("opponent-signal", output)
         self.assertIn("0.250", output)
         self.assertIn("0.400", output)
-        self.assertIn("1.000", output)
-        self.assertIn("0.700", output)
+        table_header = next(line for line in output.splitlines() if line.startswith("label "))
+        self.assertNotIn("simple", table_header)
+        self.assertNotIn("random", table_header)
         self.assertIn("manifest=loaded", output)
         self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["source"], "manifest")
         self.assertEqual(payload["entries"][0]["yardsticks"]["max-damage"]["win_rate"], 0.25)
@@ -5095,8 +5103,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(entry["latest_iteration"], 3)
         self.assertEqual(entry["candidate_iteration"], 2)
         self.assertEqual(entry["yardsticks"]["max-damage"]["win_rate"], 0.45)
-        self.assertEqual(entry["yardsticks"]["simple-legal"]["win_rate"], 0.65)
-        self.assertEqual(entry["yardsticks"]["random-legal"]["win_rate"], 0.9)
+        self.assertFalse(entry["yardsticks"]["simple-legal"]["available"])
+        self.assertFalse(entry["yardsticks"]["random-legal"]["available"])
         self.assertEqual(entry["best_yardsticks"]["max-damage"]["iteration"], 2)
 
     def test_neural_cli_foundation_compare_keeps_good_rows_when_summary_load_fails(self) -> None:
