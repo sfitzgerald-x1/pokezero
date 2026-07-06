@@ -24,6 +24,7 @@ from pokezero.checkpoint_factors import (
     build_corpus,
     evaluate_checkpoint,
 )
+from pokezero.opponents import require_current_family_checkpoint_paths
 
 
 def main() -> int:
@@ -35,12 +36,25 @@ def main() -> int:
     parser.add_argument("--max-states", type=int, default=800)
     parser.add_argument("--setup-moves", default=",".join(DEFAULT_SETUP_MOVES))
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
 
     specs = []
     for raw in args.checkpoint:
         path, _, label = raw.partition("=")
         specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="checkpoint-factors probe",
+        )
 
     setup_moves = tuple(s.strip() for s in args.setup_moves.split(",") if s.strip())
     print(f"[corpus] generating from {args.num_games} games (seed {args.seed_start}+), fixed heuristic drivers…")

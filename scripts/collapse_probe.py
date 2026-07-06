@@ -40,6 +40,7 @@ from pokezero.actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from pokezero.checkpoint_factors import HEALTHY_HP, build_corpus
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
+from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
 
 
@@ -103,16 +104,32 @@ def main() -> int:
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument("--corpus-games", type=int, default=60, help="unique games sampled for the corpus")
     parser.add_argument("--out", default=None, help="write the full result JSON here")
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
+
+    specs = []
+    for spec in args.checkpoint:
+        path, _, label = spec.partition("=")
+        specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="collapse probe",
+        )
 
     print(f"[collapse] building shared corpus ({args.corpus_games} games)…", file=sys.stderr)
     corpus = build_corpus(args.showdown_root, num_games=args.corpus_games)
     print(f"[collapse] corpus: {len(corpus)} decision states", file=sys.stderr)
 
     rows = []
-    for spec in args.checkpoint:
-        path, _, label = spec.partition("=")
-        label = label or Path(path).stem
+    for label, path in specs:
         print(f"[collapse] probing {label}…", file=sys.stderr)
         row = probe_checkpoint(label, path, args.showdown_root, corpus)
         rows.append(row)

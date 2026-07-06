@@ -42,8 +42,9 @@ from pokezero.local_showdown import (
     LocalShowdownEnv,
     env_config_with_checkpoint_masks,
 )
-from pokezero.online_client import build_agent
 from pokezero.neural_policy import evaluate_transformer_action_priors
+from pokezero.online_client import build_agent
+from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import (
     CATEGORY_SECONDARY,
     NUMERIC_TOXIC_STAGE,
@@ -304,12 +305,25 @@ def main() -> int:
     )
     parser.add_argument("--max-seeds", type=int, default=80, help="games to scan for a target staller")
     parser.add_argument("--out", default=None, help="write the full result JSON here")
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
 
     specs = []
     for raw in args.checkpoint:
         path, _, label = raw.partition("=")
         specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="policy probe",
+        )
 
     targets = tuple(s.strip() for s in args.active_species.split(",") if s.strip())
     driver = specs[0][1]

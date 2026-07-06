@@ -28,7 +28,9 @@ reproduces the same states and only the checkpoint list changes.
 
 Use current-family v2+ checkpoints for new longitudinal evals. The
 `pokezero-no-belief-*` milestones remain historical baselines, but no-belief
-continuations past 500k should not be added as new comparison targets.
+continuations past 500k should not be added as new comparison targets. Probe
+scripts enforce this by default; pass `--allow-legacy-checkpoints` only when
+intentionally reproducing an archived historical baseline.
 
 Render it as a grouped bar chart (one panel per state, one bar per checkpoint per choice):
 

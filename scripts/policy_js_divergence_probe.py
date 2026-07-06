@@ -23,6 +23,7 @@ from pathlib import Path
 from pokezero.checkpoint_factors import build_corpus
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
+from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
 
 
@@ -98,10 +99,27 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--device", default=None)
     parser.add_argument("--out", type=Path, default=None, help="write the full result JSON here")
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current diversity evals"
+        ),
+    )
     args = parser.parse_args()
 
     if args.temperature <= 0.0:
         raise ValueError("--temperature must be positive")
+    specs = []
+    for spec in args.checkpoint:
+        path, _, label = spec.partition("=")
+        specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="policy-JS divergence probe",
+        )
     print(f"[policy-js] building shared corpus ({args.corpus_games} games)…", file=sys.stderr)
     corpus = build_corpus(
         args.showdown_root,
@@ -112,9 +130,7 @@ def main() -> int:
     print(f"[policy-js] corpus: {len(corpus)} decision states", file=sys.stderr)
 
     policies = []
-    for spec in args.checkpoint:
-        path, _, label = spec.partition("=")
-        label = label or Path(path).stem
+    for label, path in specs:
         print(f"[policy-js] probing {label}…", file=sys.stderr)
         policies.append(
             probe_checkpoint(
