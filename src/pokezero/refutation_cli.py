@@ -35,6 +35,11 @@ from .refutation_population import (
     build_refutation_behavior_seed_manifest,
     write_refutation_behavior_seed_manifest,
 )
+from .refutation_progress import (
+    build_refutation_cycle_report,
+    load_refutation_cycle_report_input,
+    write_refutation_cycle_report,
+)
 from .refutation_training import RefutationTrainingConfig, write_refutation_training_cache
 from .rollout import RolloutConfig
 
@@ -233,6 +238,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional refutation mode filter. Defaults to including both oracle and fair rows.",
     )
     behavior_seeds.set_defaults(func=_behavior_seeds)
+
+    cycle_report = subparsers.add_parser(
+        "cycle-report",
+        help="Aggregate R0 refutation reports into per-mode trends and oracle/fair gaps.",
+    )
+    cycle_report.add_argument(
+        "--report",
+        action="append",
+        required=True,
+        help=(
+            "Refutation report JSON. May be '[cycle_id=]path'. Repeat for each cycle/mode; "
+            "cycle ids are naturally sorted for trend calculations."
+        ),
+    )
+    cycle_report.add_argument("--out", type=Path, default=None, help="Optional output JSON path.")
+    cycle_report.set_defaults(func=_cycle_report)
     return parser
 
 
@@ -434,6 +455,18 @@ def _behavior_seeds(args: argparse.Namespace) -> int:
     )
     write_refutation_behavior_seed_manifest(args.out, manifest)
     print(json.dumps(manifest.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cycle_report(args: argparse.Namespace) -> int:
+    inputs = tuple(
+        load_refutation_cycle_report_input(spec, default_index=index)
+        for index, spec in enumerate(args.report)
+    )
+    report = build_refutation_cycle_report(inputs)
+    if args.out is not None:
+        write_refutation_cycle_report(args.out, report)
+    print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     return 0
 
 

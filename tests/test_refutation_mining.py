@@ -34,6 +34,11 @@ from pokezero.refutation_population import (
     RefutationBehaviorSeedConfig,
     build_refutation_behavior_seed_manifest,
 )
+from pokezero.refutation_progress import (
+    REFUTATION_CYCLE_REPORT_SCHEMA_VERSION,
+    RefutationCycleReportInput,
+    build_refutation_cycle_report,
+)
 from pokezero.refutation_training import (
     RefutationTrainingConfig,
     refutation_training_examples,
@@ -88,6 +93,40 @@ def _record(
         terminal=terminal,
         trajectory=trajectory,
     )
+
+
+def _refutation_report_payload(
+    *,
+    mode: str,
+    sampled_win_count: int,
+    refuted_game_count: int,
+    certified_refutation_count: int | None = None,
+) -> dict:
+    certified = certified_refutation_count if certified_refutation_count is not None else refuted_game_count
+    return {
+        "schema_version": "pokezero.refutation_report.v1",
+        "config": {
+            "champion_policy_id": "champion",
+            "champion_player_id": None,
+            "max_wins": sampled_win_count,
+            "max_decision_points_per_game": 1,
+            "max_deviations_per_state": 1,
+            "certification_seed_count": 20,
+            "min_flip_rate": 0.6,
+            "mode": mode,
+        },
+        "source_record_count": sampled_win_count,
+        "sampled_win_count": sampled_win_count,
+        "scanned_decision_count": sampled_win_count,
+        "candidate_deviation_count": sampled_win_count,
+        "evaluated_deviation_count": sampled_win_count,
+        "certified_refutation_count": certified,
+        "refuted_game_count": refuted_game_count,
+        "refutation_rate": refuted_game_count / sampled_win_count,
+        "certified_refutations_per_sampled_win": certified / sampled_win_count,
+        "archive_path": "fragile.jsonl",
+        "examples": [],
+    }
 
 
 class FakeTerminalEvaluator:
@@ -1057,6 +1096,140 @@ class RefutationMiningTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "terminal-rollout"):
             build_refutation_behavior_seed_manifest((row,))
+
+    def test_refutation_cycle_report_tracks_mode_trends_and_oracle_fair_gap(self) -> None:
+        report = build_refutation_cycle_report(
+            (
+                RefutationCycleReportInput(
+                    cycle_id="cycle-a",
+                    report_path=Path("oracle-a.json"),
+                    report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=80),
+                ),
+                RefutationCycleReportInput(
+                    cycle_id="cycle-a",
+                    report_path=Path("fair-a.json"),
+                    report=_refutation_report_payload(mode="fair", sampled_win_count=200, refuted_game_count=50),
+                ),
+                RefutationCycleReportInput(
+                    cycle_id="cycle-b",
+                    report_path=Path("oracle-b.json"),
+                    report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=40),
+                ),
+                RefutationCycleReportInput(
+                    cycle_id="cycle-b",
+                    report_path=Path("fair-b.json"),
+                    report=_refutation_report_payload(mode="fair", sampled_win_count=200, refuted_game_count=20),
+                ),
+            )
+        ).to_dict()
+
+        self.assertEqual(report["schema_version"], REFUTATION_CYCLE_REPORT_SCHEMA_VERSION)
+        self.assertEqual(report["cycle_count"], 2)
+        self.assertTrue(report["mode_trends"]["oracle"]["declining"])
+        self.assertEqual(report["mode_trends"]["oracle"]["delta"], -0.2)
+        self.assertTrue(report["mode_trends"]["fair"]["declining"])
+        self.assertEqual(len(report["oracle_fair_gaps"]), 2)
+        self.assertEqual(report["oracle_fair_gaps"][0]["cycle_id"], "cycle-a")
+        self.assertAlmostEqual(report["oracle_fair_gaps"][0]["oracle_minus_fair_refutation_rate"], 0.15)
+
+    def test_refutation_cycle_report_sorts_cycles_before_trend(self) -> None:
+        report = build_refutation_cycle_report(
+            (
+                RefutationCycleReportInput(
+                    cycle_id="cycle-2",
+                    report_path=Path("oracle-2.json"),
+                    report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=40),
+                ),
+                RefutationCycleReportInput(
+                    cycle_id="cycle-1",
+                    report_path=Path("oracle-1.json"),
+                    report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=80),
+                ),
+            )
+        ).to_dict()
+
+        self.assertEqual([row["cycle_id"] for row in report["mode_trends"]["oracle"]["rows"]], ["cycle-1", "cycle-2"])
+        self.assertTrue(report["mode_trends"]["oracle"]["declining"])
+        self.assertEqual(report["mode_trends"]["oracle"]["delta"], -0.2)
+
+    def test_refutation_cycle_report_rejects_duplicate_cycle_mode(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate refutation report"):
+            build_refutation_cycle_report(
+                (
+                    RefutationCycleReportInput(
+                        cycle_id="cycle-a",
+                        report_path=Path("oracle-a-1.json"),
+                        report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=80),
+                    ),
+                    RefutationCycleReportInput(
+                        cycle_id="cycle-a",
+                        report_path=Path("oracle-a-2.json"),
+                        report=_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=70),
+                    ),
+                )
+            )
+
+    def test_refutation_cycle_report_rejects_zero_sample_reports(self) -> None:
+        payload = _refutation_report_payload(mode="oracle", sampled_win_count=1, refuted_game_count=0)
+        payload["sampled_win_count"] = 0
+        payload["refutation_rate"] = 0.0
+
+        with self.assertRaisesRegex(ValueError, "sampled_win_count must be positive"):
+            build_refutation_cycle_report(
+                (
+                    RefutationCycleReportInput(
+                        cycle_id="cycle-a",
+                        report_path=Path("oracle-a.json"),
+                        report=payload,
+                    ),
+                )
+            )
+
+    def test_refutation_cycle_report_cli_writes_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            oracle_a = root / "oracle-a.json"
+            fair_a = root / "fair-a.json"
+            out = root / "cycle-report.json"
+            oracle_a.write_text(
+                json.dumps(_refutation_report_payload(mode="oracle", sampled_win_count=200, refuted_game_count=80)),
+                encoding="utf-8",
+            )
+            fair_a.write_text(
+                json.dumps(_refutation_report_payload(mode="fair", sampled_win_count=200, refuted_game_count=50)),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "cycle-report",
+                        "--report",
+                        f"cycle-a={oracle_a}",
+                        "--report",
+                        f"cycle-a={fair_a}",
+                        "--out",
+                        str(out),
+                    ]
+                )
+            printed = json.loads(stdout.getvalue())
+            written = json.loads(out.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(printed, written)
+        self.assertEqual(written["oracle_fair_gaps"][0]["cycle_id"], "cycle-a")
+
+    def test_refutation_cycle_report_rejects_schema_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported refutation report schema"):
+            build_refutation_cycle_report(
+                (
+                    RefutationCycleReportInput(
+                        cycle_id="cycle-a",
+                        report_path=Path("bad.json"),
+                        report={"schema_version": "wrong"},
+                    ),
+                )
+            )
 
     def test_refutation_curriculum_start_count_uses_ceiling_and_cap(self) -> None:
         self.assertEqual(
