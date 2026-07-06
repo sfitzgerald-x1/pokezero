@@ -1,13 +1,14 @@
 """Stage-0 shaping rescoring: score a shaping-weights config against frozen rollout records.
 
 Given rollout-record JSONL file(s) (e.g. the frozen pools under runs/) and a shaping config,
-compute every per-turn potential-based shaping term the config WOULD have produced at
+compute every per-turn dense shaping term the config WOULD have produced at
 collection time (the exact pokezero.shaping code path collection uses) and report:
 
   - per-turn |shaping| distribution (mean / p50 / p95 / max),
   - total shaped-sum vs terminal-return ratio per game (does dense signal swamp the outcome?),
-  - per-category contribution shares (hp vs faint vs status vs hazard),
-  - a telescoping check (sum_k gamma^k f_k == gamma^K * Phi_T - Phi_0 per player-episode),
+  - per-category contribution shares (hp vs faint vs status vs hazard vs action classes),
+  - a potential telescoping check
+    (sum_k gamma^k f_k == gamma^K * Phi_T - Phi_0 per player-episode),
   - the fraction of turns with |shaping| above a threshold fraction of the terminal return.
 
 This is the tool for killing bad weight configs WITHOUT training: a config whose per-game
@@ -28,10 +29,13 @@ from pathlib import Path
 from pokezero.collection import iter_rollout_records
 from pokezero.shaping import (
     ShapingConfig,
+    action_class_components_by_step_index,
+    action_class_names,
     component_names,
     ground_truth_components_by_step_index,
     parse_shaping_spec,
     potential_from_components,
+    shaping_rewards_by_step_index,
     shaping_terms,
 )
 
@@ -53,10 +57,12 @@ def rescore_records(
     terminal_threshold_frac: float,
 ) -> dict:
     weights = config.component_weights()
+    action_weights = config.action_class_weights()
     names = component_names()
+    action_names = action_class_names()
 
     all_terms_abs: list[float] = []
-    category_abs_totals: dict[str, float] = {name: 0.0 for name in names}
+    category_abs_totals: dict[str, float] = {name: 0.0 for name in (*names, *action_names)}
     games = 0
     episodes = 0
     threshold_hits = 0
@@ -70,6 +76,8 @@ def rescore_records(
         for record in iter_rollout_records(records_path):
             games += 1
             components_by_step = ground_truth_components_by_step_index(record)
+            action_components_by_step = action_class_components_by_step_index(record)
+            dense_rewards_by_step = shaping_rewards_by_step_index(record, config=config, gamma=gamma)
             step_indices_by_player: dict[str, list[int]] = {}
             for step_index, step in enumerate(record.trajectory.steps):
                 step_indices_by_player.setdefault(step.player_id, []).append(step_index)
@@ -90,10 +98,11 @@ def rescore_records(
                     for index in step_indices
                 ]
                 terminal_potential = 0.0 if config.terminal_mode == "zero" else potentials[-1]
-                terms = shaping_terms(potentials, gamma=gamma, terminal_potential=terminal_potential)
+                potential_terms = shaping_terms(potentials, gamma=gamma, terminal_potential=terminal_potential)
+                terms = [dense_rewards_by_step.get(index, 0.0) for index in step_indices]
 
-                # Per-category terms: the potential is linear in its components, so the
-                # category split of f_k is exact (sums to f_k).
+                # Per-category terms: the potential is linear in its components, and
+                # action classes are direct linear terms, so this split is exact.
                 for name in names:
                     weight = weights[name]
                     if weight == 0.0:
@@ -102,10 +111,17 @@ def rescore_records(
                     terminal_component = 0.0 if config.terminal_mode == "zero" else series[-1]
                     for term in shaping_terms(series, gamma=gamma, terminal_potential=terminal_component):
                         category_abs_totals[name] += abs(term)
+                for name in action_names:
+                    weight = action_weights[name]
+                    if weight == 0.0:
+                        continue
+                    for index in step_indices:
+                        category_abs_totals[name] += abs(weight * action_components_by_step[index].get(name, 0.0))
 
+                potential_discounted_total = sum((gamma**k) * term for k, term in enumerate(potential_terms))
+                expected_total = (gamma ** len(potential_terms)) * terminal_potential - potentials[0]
+                max_telescoping_error = max(max_telescoping_error, abs(potential_discounted_total - expected_total))
                 discounted_total = sum((gamma**k) * term for k, term in enumerate(terms))
-                expected_total = (gamma ** len(terms)) * terminal_potential - potentials[0]
-                max_telescoping_error = max(max_telescoping_error, abs(discounted_total - expected_total))
 
                 terminal_return = 0.0
                 if terminal is not None and not terminal.capped and terminal.winner is not None:
@@ -132,6 +148,7 @@ def rescore_records(
                     "decisions": len(terms),
                     "phi_initial": potentials[0],
                     "phi_final": potentials[-1],
+                    "potential_discounted_total": potential_discounted_total,
                     "shaped_discounted_total": discounted_total,
                     "terminal_return": terminal_return,
                 }
@@ -172,7 +189,7 @@ def rescore_records(
         },
         "category_abs_contribution_share": {
             name: (category_abs_totals[name] / category_total if category_total > 0 else 0.0)
-            for name in names
+            for name in (*names, *action_names)
         },
         "telescoping": {
             "max_abs_error": max_telescoping_error,
@@ -195,7 +212,7 @@ def print_summary(report: dict) -> None:
     )
     ratio = report["shaped_total_vs_terminal"]
     print(
-        "|shaped total| / |terminal| (net effect; ~0 under terminal_mode=zero): "
+        "|shaped total| / |terminal| (net effect; potential-only configs telescope under terminal_mode=zero): "
         f"mean={_fmt(ratio['mean'])} p50={_fmt(ratio['p50'])} p95={_fmt(ratio['p95'])} "
         f"max={_fmt(ratio['max'])} (over {ratio['decided_episodes']} decided episodes)"
     )

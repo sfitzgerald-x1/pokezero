@@ -14,7 +14,7 @@ from .actions import ACTION_COUNT
 from .collection import RolloutRecord, iter_rollout_records
 from .observation import require_current_observation_schema
 from .padding import zeros_like as _zeros_like
-from .shaping import ShapingConfig, potential_shaping_rewards_by_step_index
+from .shaping import ShapingConfig, shaping_rewards_by_step_index
 from .trajectory import TrajectoryStep
 
 MISSING_ACTION_INDEX = -1
@@ -1235,15 +1235,16 @@ def _potential_shaping_terms(
     *,
     config: TrajectoryDatasetConfig,
 ) -> dict[int, float]:
-    """Per-step dense potential-based shaping terms (empty when shaping is off).
+    """Per-step dense shaping terms (empty when shaping is off).
 
-    Always recomputed from the record's ground-truth metadata via the pure functions in
-    ``pokezero.shaping`` (the single source of truth); step-level ``shaping_reward``
-    annotations, when present, are provenance only. Gamma is the training discount.
+    Always recomputed from the record's ground-truth metadata and selected-action
+    metadata via the pure functions in ``pokezero.shaping`` (the single source of
+    truth); step-level ``shaping_reward`` annotations, when present, are provenance
+    only. Gamma is the training discount for potential-based terms.
     """
     if config.potential_shaping is None or config.potential_shaping.is_zero():
         return {}
-    return potential_shaping_rewards_by_step_index(
+    return shaping_rewards_by_step_index(
         record,
         config=config.potential_shaping,
         gamma=config.discount,

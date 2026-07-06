@@ -17,7 +17,7 @@ _SPEC = importlib.util.spec_from_file_location(
 shaping_ranker = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(shaping_ranker)
 
-from pokezero.shaping import SHAPING_PRESETS  # noqa: E402
+from pokezero.shaping import SHAPING_PRESETS, ShapingConfig  # noqa: E402
 
 
 class PartialPearsonTest(unittest.TestCase):
@@ -106,13 +106,21 @@ class ValidityProbeTest(unittest.TestCase):
         self.assertTrue(all(probe["builtin"] for probe in probes))
 
     def test_scale_preserves_terminal_mode_and_status_keys(self) -> None:
-        base = SHAPING_PRESETS["wse-arm1"]
+        base = ShapingConfig.from_dict(
+            {
+                **SHAPING_PRESETS["wse-arm1"].to_dict(),
+                "damage_dealt_weight": 0.3,
+                "switch_made_weight": -0.4,
+            }
+        )
         scaled = shaping_ranker.scale_shaping_config(base, -1.0)
         self.assertEqual(scaled.terminal_mode, base.terminal_mode)
         self.assertEqual(
             [status for status, _ in scaled.status_weights],
             [status for status, _ in base.status_weights],
         )
+        self.assertEqual(scaled.damage_dealt_weight, -0.3)
+        self.assertEqual(scaled.switch_made_weight, 0.4)
 
 
 class EceTest(unittest.TestCase):

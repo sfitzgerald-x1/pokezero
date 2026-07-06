@@ -135,6 +135,12 @@ def scale_shaping_config(config: ShapingConfig, factor: float) -> ShapingConfig:
         status_weights=tuple((status, weight * factor) for status, weight in config.status_weights),
         hazard_weight=config.hazard_weight * factor,
         terminal_mode=config.terminal_mode,
+        damage_dealt_weight=config.damage_dealt_weight * factor,
+        damage_taken_weight=config.damage_taken_weight * factor,
+        switch_made_weight=config.switch_made_weight * factor,
+        boost_used_weight=config.boost_used_weight * factor,
+        heal_used_weight=config.heal_used_weight * factor,
+        ko_weight=config.ko_weight * factor,
     )
 
 
