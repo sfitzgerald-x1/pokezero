@@ -1,6 +1,8 @@
 """Shaping provenance: cache stamps, checkpoint stamps, and the train cross-check."""
 
 import argparse
+import contextlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -139,6 +141,26 @@ class CheckpointShapingStampTest(unittest.TestCase):
         self.assertEqual(
             _resolved_training_shaping_json(explicit_on, unshaped_checkpoint), WSE.canonical_json()
         )
+
+    def test_resolved_training_shaping_compares_old_json_semantically(self) -> None:
+        from types import SimpleNamespace
+
+        from pokezero.neural_cli import _resolved_training_shaping_json
+
+        old_style_wse = {
+            "hp_weight": WSE.hp_weight,
+            "faint_weight": WSE.faint_weight,
+            "status_weights": dict(WSE.status_weights),
+            "hazard_weight": WSE.hazard_weight,
+            "terminal_mode": WSE.terminal_mode,
+        }
+        checkpoint = SimpleNamespace(model_config=SimpleNamespace(reward_shaping=json.dumps(old_style_wse)))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            resolved = _resolved_training_shaping_json(argparse.Namespace(shaping_weights="wse-arm1"), checkpoint)
+
+        self.assertEqual(resolved, WSE.canonical_json())
+        self.assertNotIn("re-targets", stderr.getvalue())
 
 
 if __name__ == "__main__":

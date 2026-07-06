@@ -2034,7 +2034,8 @@ def _resolved_training_shaping_json(args: argparse.Namespace, initial_training_r
         return checkpoint_json
     explicit = parse_shaping_spec(args.shaping_weights)
     explicit_json = explicit.canonical_json() if explicit is not None else None
-    if initial_training_result is not None and explicit_json != checkpoint_json:
+    checkpoint_compare_json = _canonical_shaping_json_for_compare(checkpoint_json)
+    if initial_training_result is not None and explicit_json != checkpoint_compare_json:
         print(
             "notice: --shaping-weights re-targets the initial checkpoint "
             f"(checkpoint shaping: {checkpoint_json or 'unshaped'} -> {explicit_json or 'unshaped'}); "
@@ -2042,6 +2043,13 @@ def _resolved_training_shaping_json(args: argparse.Namespace, initial_training_r
             file=sys.stderr,
         )
     return explicit_json
+
+
+def _canonical_shaping_json_for_compare(value: str | None) -> str | None:
+    if not value:
+        return None
+    config = parse_shaping_spec(value)
+    return config.canonical_json() if config is not None else None
 
 
 def _require_cache_shaping_matches_training_config(paths, shaping_json: str | None) -> None:

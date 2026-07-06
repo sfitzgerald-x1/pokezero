@@ -487,7 +487,9 @@ def action_class_components_by_step_index(record: "RolloutRecord") -> dict[int, 
     from each recorded decision: selected switch/setup/heal action plus state deltas to
     that player's next decision when available. Final decisions without a following
     player-relative observation get only action-identity terms; the terminal game outcome
-    remains the source of terminal credit.
+    remains the source of terminal credit. Unlike potential terms, stale opponent self
+    views can shift direct damage/KO credit timing and magnitude; these terms are
+    diversity-arm heuristics, not policy-invariant PBRS.
     """
     sides_by_step = ground_truth_sides_by_step_index(record)
     step_indices_by_player: dict[str, list[int]] = {}

@@ -24,7 +24,7 @@ from pokezero.dataset import (
 )
 from pokezero.env import TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
-from pokezero.shaping import SHAPING_PRESETS, potential_shaping_rewards_by_step_index
+from pokezero.shaping import SHAPING_PRESETS, ShapingConfig, potential_shaping_rewards_by_step_index, shaping_rewards_by_step_index
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -1052,7 +1052,7 @@ def _batch_payload(batches) -> list[dict]:
 
 
 class PotentialShapingDatasetTest(unittest.TestCase):
-    """Dense potential-based shaping through returns/GAE and the training cache."""
+    """Dense shaping through returns/GAE and the training cache."""
 
     WSE = SHAPING_PRESETS["wse-arm1"]
 
@@ -1115,6 +1115,48 @@ class PotentialShapingDatasetTest(unittest.TestCase):
             trajectory=trajectory,
         )
 
+    def action_shaped_record(self) -> RolloutRecord:
+        def metadata(move_id: str | None = None):
+            payload = {"self_team": [{"hp_fraction": 1.0}]}
+            if move_id is not None:
+                payload["action_candidates"] = [
+                    {"action_index": 0, "kind": "move", "move_id": move_id, "move_name": move_id}
+                ]
+            return payload
+
+        trajectory = BattleTrajectory(battle_id="action-shaping", format_id="gen3randombattle", seed=10)
+        trajectory.append(
+            step(
+                player_id="p1",
+                turn_index=0,
+                value=1,
+                reward=0.0,
+                value_estimate=0.0,
+                observation_metadata=metadata("swordsdance"),
+            )
+        )
+        trajectory.append(
+            step(
+                player_id="p2",
+                turn_index=0,
+                value=2,
+                reward=0.0,
+                value_estimate=0.0,
+                observation_metadata=metadata(),
+            )
+        )
+        trajectory.record_terminal(TerminalState(winner="p2", turn_count=1))
+        return RolloutRecord(
+            battle_id=trajectory.battle_id,
+            seed=trajectory.seed,
+            format_id=trajectory.format_id,
+            policy_ids={"p1": "test", "p2": "test"},
+            decision_round_count=1,
+            elapsed_seconds=0.1,
+            terminal=trajectory.terminal,
+            trajectory=trajectory,
+        )
+
     def test_potential_shaping_folds_into_returns_and_example_field(self) -> None:
         record = self.shaped_record()
         config = TrajectoryDatasetConfig(window_size=1, potential_shaping=self.WSE)
@@ -1144,6 +1186,36 @@ class PotentialShapingDatasetTest(unittest.TestCase):
         self.assertAlmostEqual(
             shaped_examples[0].ppo_advantage - base_examples[0].ppo_advantage,
             terms[0] + terms[2],
+            places=9,
+        )
+
+    def test_action_class_shaping_folds_into_returns_and_example_field(self) -> None:
+        record = self.action_shaped_record()
+        shaping = ShapingConfig(boost_used_weight=0.25)
+        config = TrajectoryDatasetConfig(window_size=1, potential_shaping=shaping, discount=1.0)
+        expected_terms = shaping_rewards_by_step_index(record, config=shaping, gamma=config.discount)
+        examples = list(examples_from_record(record, config=config))
+
+        p1_example = next(example for example in examples if example.player_id == "p1")
+        self.assertAlmostEqual(p1_example.shaping_reward, expected_terms[0])
+        # p1 lost, so terminal -1 plus the direct boost-used shaping term.
+        self.assertAlmostEqual(p1_example.return_value, -0.75)
+
+    def test_action_class_shaping_enters_gae_targets(self) -> None:
+        record = self.action_shaped_record()
+        base = TrajectoryDatasetConfig(window_size=1, ppo_target_mode="gae", gae_lambda=1.0, discount=1.0)
+        shaped = TrajectoryDatasetConfig(
+            window_size=1,
+            ppo_target_mode="gae",
+            gae_lambda=1.0,
+            discount=1.0,
+            potential_shaping=ShapingConfig(boost_used_weight=0.25),
+        )
+        base_examples = list(examples_from_record(record, config=base))
+        shaped_examples = list(examples_from_record(record, config=shaped))
+        self.assertAlmostEqual(
+            shaped_examples[0].ppo_advantage - base_examples[0].ppo_advantage,
+            0.25,
             places=9,
         )
 
