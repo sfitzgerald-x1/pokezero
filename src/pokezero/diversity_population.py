@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = "pokezero.diversity_population_dashboard.v1"
 
@@ -13,6 +13,7 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "pivot_rate": 0.05,
     "avg_turns": 5.0,
     "distinct_moves": 3.0,
+    "behavior_cluster_distance": 0.20,
 }
 
 AXIS_METRICS: dict[str, tuple[str, ...]] = {
@@ -22,7 +23,6 @@ AXIS_METRICS: dict[str, tuple[str, ...]] = {
     "interaction": ("pivot_rate",),
     "generic_behavior": ("distinct_moves",),
 }
-
 
 def number_or_none(value: Any) -> float | None:
     if value is None:
@@ -139,6 +139,169 @@ def summarize_behavior_spread(
     }
 
 
+def _euclidean_distance(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("embedding vectors must have equal length")
+    if not left:
+        return 0.0
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right)) / len(left))
+
+
+def _move_usage_features(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    moves: set[str] = set()
+    for row in rows:
+        usage = row.get("move_usage")
+        if not isinstance(usage, Mapping):
+            continue
+        for move, value in usage.items():
+            if number_or_none(value) is not None:
+                moves.add(str(move))
+    return tuple(f"move_usage:{move}" for move in sorted(moves))
+
+
+def _move_usage_embedding(row: Mapping[str, Any], moves: Sequence[str]) -> tuple[tuple[float, ...], int] | None:
+    usage = row.get("move_usage")
+    if not isinstance(usage, Mapping):
+        return None
+    values: list[float] = []
+    active = 0
+    for move in moves:
+        value = number_or_none(usage.get(move))
+        if value is None:
+            value = 0.0
+        elif value != 0.0:
+            active += 1
+        values.append(value)
+    if active == 0:
+        return None
+    return tuple(values), active
+
+
+def _connected_components_from_distances(
+    labels: Sequence[str],
+    distances: Mapping[tuple[str, str], float],
+    *,
+    threshold: float,
+) -> list[list[str]]:
+    adjacency: dict[str, set[str]] = {label: set() for label in labels}
+    for left in labels:
+        for right in labels:
+            if left >= right:
+                continue
+            distance = distances.get((left, right), distances.get((right, left)))
+            if distance is not None and distance <= threshold:
+                adjacency[left].add(right)
+                adjacency[right].add(left)
+
+    components: list[list[str]] = []
+    visited: set[str] = set()
+    for label in sorted(labels):
+        if label in visited:
+            continue
+        stack = [label]
+        component: list[str] = []
+        visited.add(label)
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for neighbor in sorted(adjacency[current], reverse=True):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                stack.append(neighbor)
+        components.append(sorted(component))
+    return components
+
+
+def behavior_embedding_summary(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    distance_threshold: float | None = None,
+) -> dict[str, Any]:
+    """Cluster behavior-probe rows by a stable read-only behavior embedding.
+
+    This is a dashboard cross-check only. It is intentionally deterministic and
+    uses raw move-usage probe outputs rather than the curated strategy-axis
+    buckets, reward, admission, or matchmaking signals.
+    """
+    threshold = (
+        DEFAULT_THRESHOLDS["behavior_cluster_distance"]
+        if distance_threshold is None
+        else float(distance_threshold)
+    )
+    if not math.isfinite(threshold) or threshold < 0.0:
+        raise ValueError("distance_threshold must be finite and non-negative")
+    materialized = [dict(row) for row in rows]
+    labels = [_label(row, index) for index, row in enumerate(materialized)]
+    feature_names = _move_usage_features(materialized)
+    moves = tuple(feature.split(":", 1)[1] for feature in feature_names)
+    embedded_rows: list[dict[str, Any]] = []
+    skipped_labels: list[str] = []
+    for label, row in zip(labels, materialized):
+        embedding = _move_usage_embedding(row, moves)
+        if embedding is None:
+            skipped_labels.append(label)
+            continue
+        vector, active = embedding
+        embedded_rows.append(
+            {
+                "label": label,
+                "vector": vector,
+                "active_feature_count": active,
+                "zero_feature_count": len(feature_names) - active,
+            }
+        )
+    embedded_rows.sort(key=lambda item: item["label"])
+
+    pairwise: list[dict[str, Any]] = []
+    raw_distances: dict[tuple[str, str], float] = {}
+    for left_index, left in enumerate(embedded_rows):
+        for right in embedded_rows[left_index + 1:]:
+            distance = _euclidean_distance(left["vector"], right["vector"])
+            raw_distances[(left["label"], right["label"])] = distance
+            pairwise.append(
+                {
+                    "left": left["label"],
+                    "right": right["label"],
+                    "distance": round(distance, 6),
+                }
+            )
+
+    components = _connected_components_from_distances(
+        [row["label"] for row in embedded_rows],
+        raw_distances,
+        threshold=threshold,
+    )
+
+    public_clusters = [
+        {
+            "representative_label": component[0],
+            "members": component,
+            "size": len(component),
+        }
+        for component in components
+    ]
+    return {
+        "embedding_kind": "move_usage_distribution",
+        "feature_names": list(feature_names),
+        "distance_threshold": threshold,
+        "embedded_count": len(embedded_rows),
+        "skipped_count": len(skipped_labels),
+        "skipped_labels": skipped_labels,
+        "cluster_count": len(public_clusters),
+        "clusters": public_clusters,
+        "pairwise_distances": pairwise,
+        "rows": [
+            {
+                "label": row["label"],
+                "active_feature_count": row["active_feature_count"],
+                "zero_feature_count": row["zero_feature_count"],
+            }
+            for row in embedded_rows
+        ],
+    }
+
+
 def _jacobi_eigenvalues_symmetric(matrix: list[list[float]], *, max_sweeps: int = 80) -> list[float]:
     n = len(matrix)
     if n == 0:
@@ -231,10 +394,17 @@ def diversity_population_dashboard(
     payoff_vectors: Mapping[str, Mapping[str, Any]] | None = None,
     thresholds: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    behavior = summarize_behavior_spread(behavior_rows, thresholds=thresholds)
+    threshold_values = {**DEFAULT_THRESHOLDS, **dict(thresholds or {})}
+    rows = [dict(row) for row in behavior_rows]
+    behavior = summarize_behavior_spread(rows, thresholds=threshold_values)
+    behavior_embedding = behavior_embedding_summary(
+        rows,
+        distance_threshold=threshold_values["behavior_cluster_distance"],
+    )
     payoff_rank = payoff_effective_rank(payoff_vectors or {})
     return {
         "schema_version": SCHEMA_VERSION,
         "behavior": behavior,
+        "behavior_embedding": behavior_embedding,
         "payoff_rank": payoff_rank,
     }

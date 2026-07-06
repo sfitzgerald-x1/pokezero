@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.behavior_metrics import classify_move, move_class_summary
-from pokezero.diversity_population import diversity_population_dashboard, payoff_effective_rank
+from pokezero.diversity_population import behavior_embedding_summary, diversity_population_dashboard, payoff_effective_rank
 from pokezero.hazard_metrics import aggregate_hazard_rows, correct_pricing, parse_milestone_games_text
 
 
@@ -80,6 +80,7 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                     "attack": {"count": 53, "rate": 0.6625},
                     "other": {"count": 0, "rate": 0.0},
                 },
+                "move_usage": {"Spikes": 0.25, "Thunderbolt": 0.55, "Recover": 0.20},
                 "pivot_rate": 0.2,
                 "avg_turns": 68.0,
                 "distinct_moves": 19,
@@ -96,6 +97,7 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                     "attack": {"count": 88, "rate": 0.88},
                     "other": {"count": 0, "rate": 0.0},
                 },
+                "move_usage": {"Thunderbolt": 0.88, "Swords Dance": 0.08, "Roar": 0.04},
                 "pivot_rate": 0.02,
                 "avg_turns": 42.0,
                 "distinct_moves": 11,
@@ -114,6 +116,10 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual(hazard_metric["min_label"], "tempo-agent")
         self.assertEqual(hazard_metric["max_label"], "hazard-agent")
         self.assertEqual(hazard_metric["spread"], 0.25)
+        self.assertEqual(payload["behavior_embedding"]["embedded_count"], 2)
+        self.assertGreaterEqual(payload["behavior_embedding"]["cluster_count"], 1)
+        self.assertEqual(payload["behavior_embedding"]["embedding_kind"], "move_usage_distribution")
+        self.assertIn("move_usage:Thunderbolt", payload["behavior_embedding"]["feature_names"])
 
     def test_payoff_effective_rank_distinguishes_duplicate_and_independent_vectors(self) -> None:
         duplicate = payoff_effective_rank(
@@ -145,6 +151,64 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual(payload["member_count"], 2)
         self.assertGreaterEqual(payload["linear_rank"], 1)
 
+    def test_behavior_embedding_clusters_duplicate_and_distinct_rows(self) -> None:
+        rows = [
+            {
+                "label": "hazard-a",
+                "move_usage": {"Spikes": 0.25, "Thunderbolt": 0.60, "Recover": 0.15},
+            },
+            {
+                "label": "hazard-b",
+                "move_usage": {"Spikes": 0.25, "Thunderbolt": 0.60, "Recover": 0.15},
+            },
+            {
+                "label": "tempo",
+                "move_usage": {"Thunderbolt": 0.92, "Swords Dance": 0.08},
+            },
+        ]
+
+        payload = behavior_embedding_summary(rows, distance_threshold=0.05)
+
+        self.assertEqual(payload["embedded_count"], 3)
+        self.assertEqual(payload["cluster_count"], 2)
+        self.assertEqual(payload["clusters"][0]["members"], ["hazard-a", "hazard-b"])
+        self.assertEqual(payload["clusters"][1]["members"], ["tempo"])
+        self.assertEqual(payload["skipped_count"], 0)
+        distances = {
+            (entry["left"], entry["right"]): entry["distance"]
+            for entry in payload["pairwise_distances"]
+        }
+        self.assertEqual(distances[("hazard-a", "hazard-b")], 0.0)
+        self.assertGreater(distances[("hazard-a", "tempo")], 0.05)
+
+    def test_behavior_embedding_skips_rows_without_raw_move_usage(self) -> None:
+        rows = [
+            {"label": "observed-a", "move_usage": {"Spikes": 0.25, "Thunderbolt": 0.75}},
+            {"label": "unmeasured", "avg_turns": 0, "distinct_moves": 0},
+            {"label": "observed-b", "move_usage": {"Spikes": 0.25, "Thunderbolt": 0.75}},
+        ]
+
+        payload = behavior_embedding_summary(rows)
+
+        self.assertEqual(payload["embedded_count"], 2)
+        self.assertEqual(payload["skipped_count"], 1)
+        self.assertEqual(payload["skipped_labels"], ["unmeasured"])
+        self.assertEqual(payload["cluster_count"], 1)
+
+    def test_behavior_embedding_cluster_count_is_order_independent(self) -> None:
+        rows = [
+            {"label": "a", "move_usage": {"Tackle": 1.0}},
+            {"label": "b", "move_usage": {"Tackle": 0.85, "Recover": 0.15}},
+            {"label": "c", "move_usage": {"Tackle": 0.70, "Recover": 0.30}},
+        ]
+
+        forward = behavior_embedding_summary(rows, distance_threshold=0.16)
+        reversed_payload = behavior_embedding_summary(list(reversed(rows)), distance_threshold=0.16)
+
+        self.assertEqual(forward["cluster_count"], 1)
+        self.assertEqual(reversed_payload["cluster_count"], 1)
+        self.assertEqual(forward["clusters"], reversed_payload["clusters"])
+
     def test_population_dashboard_cli_reads_behavior_and_pool_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -157,6 +221,7 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                         "checkpoints": [
                             {
                                 "label": "a",
+                                "move_usage": {"Spikes": 0.2, "Thunderbolt": 0.6, "Recover": 0.2},
                                 "move_class_usage": {"hazard": {"rate": 0.2}, "attack": {"rate": 0.6}},
                                 "pivot_rate": 0.2,
                                 "avg_turns": 60,
@@ -164,6 +229,7 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                             },
                             {
                                 "label": "b",
+                                "move_usage": {"Thunderbolt": 0.9, "Swords Dance": 0.1},
                                 "move_class_usage": {"hazard": {"rate": 0.0}, "attack": {"rate": 0.9}},
                                 "pivot_rate": 0.01,
                                 "avg_turns": 40,
@@ -193,6 +259,8 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                         str(behavior),
                         "--pool-ledger",
                         str(ledger),
+                        "--threshold-behavior-cluster-distance",
+                        "0.05",
                         "--out",
                         str(out),
                     ]
@@ -202,6 +270,8 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("[diversity-population] wrote", stderr.getvalue())
         self.assertTrue(payload["behavior"]["axes"]["hazard_cycle"]["live_spread"])
+        self.assertEqual(payload["behavior_embedding"]["distance_threshold"], 0.05)
+        self.assertEqual(payload["behavior_embedding"]["cluster_count"], 2)
         self.assertEqual(payload["payoff_rank"]["member_count"], 2)
 
 
