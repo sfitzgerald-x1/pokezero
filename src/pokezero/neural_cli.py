@@ -321,7 +321,8 @@ NEURAL_FOUNDATION_VARIANTS: Mapping[str, Mapping[str, Any]] = {
         "teacher_cut": False,
     },
 }
-_DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
+_DEFAULT_BENCHMARK_YARDSTICK_POLICY_IDS = frozenset({"max-damage"})
+_PLUMBING_BENCHMARK_POLICY_IDS = frozenset({"random-legal", "simple-legal"})
 _NAMED_REPORT_POLICY_IDS = frozenset(
     {
         "random-legal",
@@ -4801,7 +4802,7 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
         return
     header = (
         f"{'label':<44} {'status':>7} {'profile':>7} {'variant':>15} {'iter':>4} "
-        f"{'evidence':>24} {'gate':>5} {'max_wr':>7} {'max_g':>5} {'simple':>7} {'random':>7} "
+        f"{'evidence':>24} {'gate':>5} {'max_wr':>7} {'max_g':>5} "
         f"{'val_corr':>8} {'val_sign':>8} {'val_ece':>8}"
     )
     print(header)
@@ -4809,8 +4810,6 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
     for entry in entries:
         yardsticks = _optional_mapping(entry.get("yardsticks"))
         max_damage = _optional_mapping(yardsticks.get("max-damage"))
-        simple = _optional_mapping(yardsticks.get("simple-legal"))
-        random = _optional_mapping(yardsticks.get("random-legal"))
         value = _optional_mapping(entry.get("value_calibration"))
         gate = _optional_mapping(entry.get("quality_gate"))
         print(
@@ -4823,8 +4822,6 @@ def _print_foundation_compare(payload: Mapping[str, Any]) -> None:
             f"{_foundation_gate_status(gate):>5} "
             f"{_foundation_rate(max_damage):>7} "
             f"{_foundation_games(max_damage):>5} "
-            f"{_foundation_rate(simple):>7} "
-            f"{_foundation_rate(random):>7} "
             f"{_format_optional_float(value.get('pearson_correlation'), digits=4):>8} "
             f"{_format_optional_float(value.get('sign_accuracy'), digits=4):>8} "
             f"{_format_optional_float(value.get('expected_calibration_error'), digits=4):>8}"
@@ -6042,6 +6039,7 @@ def _print_manifest_report(manifest: Mapping[str, Any]) -> None:
             f"{iteration.get('checkpoint_path')}"
         )
     _print_benchmark_opponent_curves(iterations)
+    _print_benchmark_plumbing_curves(iterations)
     _print_foundation_readiness(iterations)
     _print_recipe_fidelity(manifest)
 
@@ -6254,8 +6252,8 @@ def _print_benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) 
     if not curves:
         return
     print("")
-    print("benchmark_opponent_curves:")
-    print("note: fixed yardsticks only; rates are candidate wins / total games.")
+    print("benchmark_strength_curves:")
+    print("note: max-damage and explicit benchmark references only; rates are candidate wins / total games.")
     for opponent, entries in curves.items():
         cells = " ".join(
             f"{entry['iteration']}:{entry['win_rate']:.3f}/{entry['games']}g"
@@ -6265,13 +6263,33 @@ def _print_benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) 
         print(f"- {opponent}: {cells}")
 
 
-def _benchmark_opponent_curves(iterations: tuple[Mapping[str, Any], ...]) -> dict[str, list[dict[str, Any]]]:
+def _print_benchmark_plumbing_curves(iterations: tuple[Mapping[str, Any], ...]) -> None:
+    curves = _benchmark_opponent_curves(iterations, policy_ids=_PLUMBING_BENCHMARK_POLICY_IDS)
+    if not curves:
+        return
+    print("")
+    print("benchmark_plumbing_curves:")
+    print("note: random/simple are saturated harness-health checks, not strength gradients.")
+    for opponent, entries in curves.items():
+        cells = " ".join(
+            f"{entry['iteration']}:{entry['win_rate']:.3f}/{entry['games']}g"
+            f"{',cap=' + str(entry['capped_games']) if entry['capped_games'] else ''}"
+            for entry in entries
+        )
+        print(f"- {opponent}: {cells}")
+
+
+def _benchmark_opponent_curves(
+    iterations: tuple[Mapping[str, Any], ...],
+    *,
+    policy_ids: frozenset[str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     curves: dict[str, list[dict[str, Any]]] = {}
     for iteration in iterations:
         candidate_policy_id = _iteration_policy_id(iteration)
         if not candidate_policy_id:
             continue
-        yardstick_policy_ids = _benchmark_yardstick_policy_ids(iteration)
+        yardstick_policy_ids = policy_ids if policy_ids is not None else _benchmark_yardstick_policy_ids(iteration)
         benchmark = _optional_mapping(iteration.get("benchmark"))
         head_to_heads = tuple(_mapping(item) for item in _sequence(benchmark.get("head_to_heads", ())))
         entries = (
@@ -6305,7 +6323,7 @@ def _benchmark_yardstick_policy_ids(iteration: Mapping[str, Any]) -> frozenset[s
         policy_id = _report_policy_id_from_spec(spec)
         if policy_id is not None:
             ids.add(policy_id)
-    return frozenset(ids)
+    return frozenset(ids - set(_PLUMBING_BENCHMARK_POLICY_IDS))
 
 
 def _benchmark_reference_policy_specs(iteration: Mapping[str, Any]) -> tuple[str, ...]:
