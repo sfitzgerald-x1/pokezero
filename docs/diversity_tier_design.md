@@ -110,9 +110,9 @@ with no strategy-specific priors).
   not strength (a weak-but-weird opponent still retrains the main value head:
   games against it are still outcome-labeled).
 
-Axiom-1 audit of G2: the only human content is the *basis* (spanning) and the
-*bounds* (scale hygiene). No sampled direction is chosen, weighted, or filtered by
-what strategy we hope appears.
+Axiom-1 audit of G2: the only human content is the generic *behavior-class basis*
+and the *bounds* (scale hygiene). No sampled direction is chosen, weighted, or
+filtered by what strategy we hope appears.
 
 ### G3 — Exploiters (the adversarial engine)
 
