@@ -1,6 +1,17 @@
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
-from pokezero.opponents import historical_opponent_policy_specs, opponent_pool_policy_specs
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2
+from pokezero.opponents import (
+    checkpoint_policy_spec_observation_schema,
+    current_family_checkpoint_policy_specs,
+    current_family_historical_opponent_policy_specs,
+    historical_opponent_policy_specs,
+    is_current_family_checkpoint_policy_spec,
+    opponent_pool_policy_specs,
+)
 
 
 class OpponentPoolTest(unittest.TestCase):
@@ -100,6 +111,67 @@ class OpponentPoolTest(unittest.TestCase):
                 max_historical_opponents=1,
                 selection_mode="unknown",
             )
+
+    def test_current_family_filter_accepts_supported_v2_checkpoint(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            checkpoint = _write_checkpoint_stub(Path(temp_dir) / "v2.json", OBSERVATION_SCHEMA_VERSION_V2)
+            spec = f"linear:{checkpoint}"
+
+            self.assertEqual(checkpoint_policy_spec_observation_schema(spec), OBSERVATION_SCHEMA_VERSION_V2)
+            self.assertTrue(is_current_family_checkpoint_policy_spec(spec))
+            self.assertEqual(current_family_checkpoint_policy_specs((spec,)), (spec,))
+
+    def test_current_family_filter_rejects_legacy_checkpoint_by_default(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            legacy = _write_checkpoint_stub(Path(temp_dir) / "legacy.json", "pokezero.observation.v1")
+            spec = f"linear:{legacy}"
+
+            with self.assertRaisesRegex(ValueError, "legacy or unreadable checkpoint opponents"):
+                current_family_checkpoint_policy_specs((spec,))
+
+    def test_current_family_filter_can_drop_legacy_checkpoint_from_mixed_history(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            current = _write_checkpoint_stub(Path(temp_dir) / "current.json", OBSERVATION_SCHEMA_VERSION_V2)
+            legacy = _write_checkpoint_stub(Path(temp_dir) / "legacy.json", "pokezero.observation.v1")
+            current_spec = f"linear:{current}"
+            legacy_spec = f"linear:{legacy}"
+
+            self.assertEqual(
+                current_family_checkpoint_policy_specs((legacy_spec, current_spec), legacy_mode="drop"),
+                (current_spec,),
+            )
+
+    def test_current_family_historical_selection_filters_before_spread_sampling(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            legacy = _write_checkpoint_stub(Path(temp_dir) / "legacy.json", "pokezero.observation.v1")
+            first = _write_checkpoint_stub(Path(temp_dir) / "first.json", OBSERVATION_SCHEMA_VERSION_V2)
+            second = _write_checkpoint_stub(Path(temp_dir) / "second.json", OBSERVATION_SCHEMA_VERSION_V2)
+            legacy_spec = f"linear:{legacy}"
+            first_spec = f"linear:{first}"
+            second_spec = f"linear:{second}"
+
+            selected = current_family_historical_opponent_policy_specs(
+                (legacy_spec, first_spec, second_spec),
+                current_policy_spec=None,
+                max_historical_opponents=2,
+                selection_mode="spread",
+                legacy_mode="drop",
+            )
+
+            self.assertEqual(selected, (first_spec, second_spec))
+
+
+def _write_checkpoint_stub(path: Path, observation_schema_version: str) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pokezero.linear_policy.v1",
+                "observation_schema_version": observation_schema_version,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 if __name__ == "__main__":

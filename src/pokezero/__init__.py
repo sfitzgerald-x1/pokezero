@@ -182,7 +182,11 @@ from .observation import (
 from .opponents import (
     DEFAULT_MAX_HISTORICAL_OPPONENTS,
     HISTORICAL_OPPONENT_SELECTION_MODES,
+    checkpoint_policy_spec_observation_schema,
+    current_family_checkpoint_policy_specs,
+    current_family_historical_opponent_policy_specs,
     historical_opponent_policy_specs,
+    is_current_family_checkpoint_policy_spec,
     opponent_pool_policy_specs,
 )
 from .policy import ContextAwarePolicy, PolicyContext, ScriptedTeacherPolicy
@@ -495,7 +499,11 @@ __all__ = [
     "flat_branch_search",
     "greedy_opponent_action_planner",
     "HISTORICAL_OPPONENT_SELECTION_MODES",
+    "checkpoint_policy_spec_observation_schema",
+    "current_family_checkpoint_policy_specs",
+    "current_family_historical_opponent_policy_specs",
     "historical_opponent_policy_specs",
+    "is_current_family_checkpoint_policy_spec",
     "is_move_action",
     "is_switch_action",
     "linear_feature_fingerprint",

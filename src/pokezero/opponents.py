@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable
+
+from .observation import require_current_observation_schema
 
 
 DEFAULT_MAX_HISTORICAL_OPPONENTS = 3
 CHECKPOINT_POLICY_SPEC_PREFIXES = ("linear:", "neural:")
 HISTORICAL_OPPONENT_SELECTION_MODES = ("recent", "spread")
+LEGACY_CHECKPOINT_FILTER_MODES = ("reject", "drop")
 
 
 def policy_spec_identity(policy_spec: str | None) -> tuple[str, str] | None:
@@ -22,6 +26,92 @@ def policy_spec_identity(policy_spec: str | None) -> tuple[str, str] | None:
             checkpoint_path = body[len(prefix) :].strip()
             return (prefix[:-1], str(Path(checkpoint_path).expanduser().resolve(strict=False)))
     return ("named", lowered)
+
+
+def checkpoint_policy_spec_observation_schema(policy_spec: str) -> str:
+    """Return the stamped observation schema for a checkpoint policy spec.
+
+    This is intentionally metadata-only: linear checkpoints are JSON and neural
+    checkpoints use the cheap model-config loader instead of constructing a policy.
+    """
+    body = str(policy_spec).strip().partition("?")[0].strip()
+    lowered = body.lower()
+    if lowered.startswith("linear:"):
+        checkpoint_path = Path(body[len("linear:") :].strip()).expanduser()
+        payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        try:
+            return str(payload["observation_schema_version"])
+        except KeyError as exc:
+            raise ValueError(
+                f"linear checkpoint policy spec {policy_spec!r} has no observation_schema_version"
+            ) from exc
+    if lowered.startswith("neural:"):
+        from .neural_policy import load_transformer_model_config
+
+        checkpoint_path = Path(body[len("neural:") :].strip()).expanduser()
+        return str(load_transformer_model_config(checkpoint_path).observation_schema_version)
+    raise ValueError(f"policy spec is not a checkpoint policy spec: {policy_spec!r}")
+
+
+def is_current_family_checkpoint_policy_spec(policy_spec: str) -> bool:
+    """Return whether a checkpoint spec belongs to the supported v2+ family."""
+    schema_version = checkpoint_policy_spec_observation_schema(policy_spec)
+    require_current_observation_schema(
+        schema_version,
+        context=f"checkpoint opponent {policy_spec!r}",
+    )
+    return True
+
+
+def current_family_checkpoint_policy_specs(
+    checkpoint_history: Iterable[str],
+    *,
+    legacy_mode: str = "reject",
+) -> tuple[str, ...]:
+    """Filter checkpoint history to supported v2+ checkpoints.
+
+    ``legacy_mode='reject'`` is for strength-eval setup where a stale opponent
+    should fail loudly. ``legacy_mode='drop'`` is for mixed historical registries
+    where older no-belief/pre-v2 checkpoints should simply be unavailable as
+    frozen opponents.
+    """
+    if legacy_mode not in LEGACY_CHECKPOINT_FILTER_MODES:
+        choices = ", ".join(LEGACY_CHECKPOINT_FILTER_MODES)
+        raise ValueError(f"legacy checkpoint filter mode must be one of: {choices}.")
+    selected: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    for spec in checkpoint_history:
+        try:
+            is_current_family_checkpoint_policy_spec(spec)
+        except (OSError, ValueError) as exc:
+            if legacy_mode == "reject":
+                rejected.append((str(spec), str(exc)))
+            continue
+        selected.append(str(spec))
+    if rejected:
+        details = "; ".join(f"{spec}: {reason}" for spec, reason in rejected)
+        raise ValueError(
+            "legacy or unreadable checkpoint opponents are not allowed in current-family "
+            f"strength evals: {details}"
+        )
+    return tuple(selected)
+
+
+def current_family_historical_opponent_policy_specs(
+    checkpoint_history: Iterable[str],
+    *,
+    current_policy_spec: str | None,
+    max_historical_opponents: int,
+    selection_mode: str = "recent",
+    legacy_mode: str = "reject",
+) -> tuple[str, ...]:
+    """Select historical opponents after enforcing the v2+ checkpoint family."""
+    return historical_opponent_policy_specs(
+        current_family_checkpoint_policy_specs(checkpoint_history, legacy_mode=legacy_mode),
+        current_policy_spec=current_policy_spec,
+        max_historical_opponents=max_historical_opponents,
+        selection_mode=selection_mode,
+    )
 
 
 def historical_opponent_policy_specs(
