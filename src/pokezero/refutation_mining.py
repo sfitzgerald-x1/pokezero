@@ -22,7 +22,7 @@ from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
-FRAGILE_STATE_SCHEMA_VERSION = "pokezero.fragile_state.v1"
+FRAGILE_STATE_SCHEMA_VERSION = "pokezero.fragile_state.v2"
 REFUTATION_REPORT_SCHEMA_VERSION = "pokezero.refutation_report.v1"
 TERMINAL_ROLLOUT_EVALUATION_SOURCE = "terminal_rollout"
 DEFAULT_R0_MIN_SAMPLED_WINS = 200
@@ -303,6 +303,8 @@ class RefutationMiningReport:
     scanned_decision_count: int
     candidate_deviation_count: int
     evaluated_deviation_count: int
+    skipped_candidate_error_count: int
+    candidate_error_examples: tuple[Mapping[str, Any], ...]
     certified_refutations: tuple[CertifiedRefutation, ...]
     archive_path: Path
 
@@ -323,6 +325,20 @@ class RefutationMiningReport:
     def certified_refutations_per_sampled_win(self) -> float:
         return len(self.certified_refutations) / self.sampled_win_count if self.sampled_win_count else 0.0
 
+    @property
+    def distinct_certified_root_count(self) -> int:
+        return len(
+            {
+                (
+                    refutation.candidate.source_record_index,
+                    refutation.candidate.decision_round_index,
+                    refutation.candidate.step_index,
+                    refutation.candidate.deviation_action_index,
+                )
+                for refutation in self.certified_refutations
+            }
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": REFUTATION_REPORT_SCHEMA_VERSION,
@@ -342,7 +358,10 @@ class RefutationMiningReport:
             "scanned_decision_count": self.scanned_decision_count,
             "candidate_deviation_count": self.candidate_deviation_count,
             "evaluated_deviation_count": self.evaluated_deviation_count,
+            "skipped_candidate_error_count": self.skipped_candidate_error_count,
+            "candidate_error_examples": [dict(example) for example in self.candidate_error_examples[:10]],
             "certified_refutation_count": len(self.certified_refutations),
+            "distinct_certified_root_count": self.distinct_certified_root_count,
             "refuted_game_count": self.refuted_game_count,
             "refutation_rate": self.refutation_rate,
             "certified_refutations_per_sampled_win": self.certified_refutations_per_sampled_win,
@@ -366,6 +385,8 @@ def mine_refutations(
     scanned_decision_count = 0
     candidate_deviation_count = 0
     evaluated_deviation_count = 0
+    skipped_candidate_error_count = 0
+    candidate_error_examples: list[Mapping[str, Any]] = []
     certified: list[CertifiedRefutation] = []
 
     with archive_path.open("w", encoding="utf-8") as handle:
@@ -388,12 +409,25 @@ def mine_refutations(
                 candidate_deviation_count += len(candidates)
                 for candidate in candidates:
                     evaluated_deviation_count += 1
-                    maybe = certify_candidate(
-                        record=record,
-                        candidate=candidate,
-                        config=config,
-                        evaluator=evaluator,
-                    )
+                    try:
+                        maybe = certify_candidate(
+                            record=record,
+                            candidate=candidate,
+                            config=config,
+                            evaluator=evaluator,
+                        )
+                    except ValueError as exc:
+                        if evaluator.evaluation_source != TERMINAL_ROLLOUT_EVALUATION_SOURCE or evaluator.value_head_used:
+                            raise
+                        skipped_candidate_error_count += 1
+                        if len(candidate_error_examples) < 10:
+                            candidate_error_examples.append(
+                                {
+                                    "candidate": candidate.to_dict(),
+                                    "error": str(exc),
+                                }
+                            )
+                        continue
                     if maybe is None:
                         continue
                     certified.append(maybe)
@@ -406,6 +440,8 @@ def mine_refutations(
         scanned_decision_count=scanned_decision_count,
         candidate_deviation_count=candidate_deviation_count,
         evaluated_deviation_count=evaluated_deviation_count,
+        skipped_candidate_error_count=skipped_candidate_error_count,
+        candidate_error_examples=tuple(candidate_error_examples),
         certified_refutations=tuple(certified),
         archive_path=archive_path,
     )
@@ -563,12 +599,18 @@ def validate_refutation_report_payload(
         message="report mined enough sampled champion wins",
     )
     reported_certified_count = _int_value(report.get("certified_refutation_count"))
+    reported_distinct_root_count = _int_value(report.get("distinct_certified_root_count"))
+    certified_gate_count = (
+        reported_distinct_root_count
+        if reported_distinct_root_count is not None
+        else reported_certified_count
+    )
     add_check(
-        "certified_refutation_count",
-        reported_certified_count is not None and reported_certified_count >= min_certified_refutations,
-        observed=reported_certified_count,
+        "distinct_certified_root_count",
+        certified_gate_count is not None and certified_gate_count >= min_certified_refutations,
+        observed=certified_gate_count,
         threshold=min_certified_refutations,
-        message="report contains enough certified refutations",
+        message="report contains enough distinct certified refutation roots",
     )
     add_check(
         "archive_count_matches_report",
@@ -716,6 +758,7 @@ def validate_refutation_report_payload(
         "summary": {
             "sampled_win_count": sampled_win_count,
             "certified_refutation_count": reported_certified_count,
+            "distinct_certified_root_count": certified_gate_count,
             "archive_row_count": len(rows),
             "min_sampled_wins": min_sampled_wins,
             "min_certified_refutations": min_certified_refutations,

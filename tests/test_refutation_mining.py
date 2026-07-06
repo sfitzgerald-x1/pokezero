@@ -112,6 +112,7 @@ def _refutation_report_payload(
             "max_wins": sampled_win_count,
             "max_decision_points_per_game": 1,
             "max_deviations_per_state": 1,
+            "max_line_depth": 1,
             "certification_seed_count": 20,
             "min_flip_rate": 0.6,
             "mode": mode,
@@ -121,7 +122,10 @@ def _refutation_report_payload(
         "scanned_decision_count": sampled_win_count,
         "candidate_deviation_count": sampled_win_count,
         "evaluated_deviation_count": sampled_win_count,
+        "skipped_candidate_error_count": 0,
+        "candidate_error_examples": [],
         "certified_refutation_count": certified,
+        "distinct_certified_root_count": certified,
         "refuted_game_count": refuted_game_count,
         "refutation_rate": refuted_game_count / sampled_win_count,
         "certified_refutations_per_sampled_win": certified / sampled_win_count,
@@ -376,6 +380,38 @@ class RefutationMiningTest(unittest.TestCase):
                 [{"p1": 0, "p2": 2}, {"p1": 0, "p2": 4}],
             )
 
+    def test_depth_variants_do_not_inflate_distinct_certified_roots(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            max_line_depth=2,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=40)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+            validation = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=tuple(iter_fragile_states(archive_path)),
+                min_sampled_wins=1,
+                min_certified_refutations=2,
+            )
+
+        self.assertEqual(len(report.certified_refutations), 2)
+        self.assertEqual(report.distinct_certified_root_count, 1)
+        self.assertEqual(report.to_dict()["distinct_certified_root_count"], 1)
+        failed = {check["name"] for check in validation["checks"] if not check["passed"]}
+        self.assertIn("distinct_certified_root_count", failed)
+
     def test_miner_rejects_rng_luck_at_or_below_threshold(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
@@ -490,6 +526,35 @@ class RefutationMiningTest(unittest.TestCase):
 
         self.assertEqual(result.winner, "p2")
         self.assertEqual(env.step_calls, [{"p1": 0, "p2": 2}, {"p1": 0}])
+
+    def test_miner_skips_infeasible_depth_line_without_aborting_run(self) -> None:
+        record = _record()
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            max_line_depth=2,
+        )
+        evaluator = ReplayTerminalBranchEvaluator(
+            env_factory=BranchReplayEnv,
+            policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(record,),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        self.assertEqual(report.candidate_deviation_count, 2)
+        self.assertEqual(report.evaluated_deviation_count, 2)
+        self.assertEqual(report.skipped_candidate_error_count, 1)
+        self.assertEqual(len(report.candidate_error_examples), 1)
+        self.assertIn("does not match environment request", report.candidate_error_examples[0]["error"])
+        self.assertEqual(len(report.certified_refutations), 1)
 
     def test_cli_plan_reads_rollout_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -664,7 +729,7 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertFalse(payload["passed"])
         failed = {check["name"] for check in payload["checks"] if not check["passed"]}
         self.assertIn("sampled_win_count", failed)
-        self.assertIn("certified_refutation_count", failed)
+        self.assertIn("distinct_certified_root_count", failed)
 
     def test_cli_validate_passes_with_explicit_smoke_thresholds(self) -> None:
         config = RefutationMiningConfig(
