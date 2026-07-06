@@ -147,6 +147,128 @@ def _euclidean_distance(left: Sequence[float], right: Sequence[float]) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right)) / len(left))
 
 
+def _probability_vector(value: Any) -> tuple[float, ...] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    vector: list[float] = []
+    for item in value:
+        parsed = number_or_none(item)
+        if parsed is None or parsed < 0.0:
+            return None
+        vector.append(parsed)
+    total = sum(vector)
+    if not vector or total <= 0.0:
+        return None
+    return tuple(item / total for item in vector)
+
+
+def _jensen_shannon_divergence(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("probability vectors must have equal length")
+    if not left:
+        return 0.0
+
+    def kl_divergence(probs: Sequence[float], baseline: Sequence[float]) -> float:
+        total = 0.0
+        for prob, base in zip(probs, baseline):
+            if prob <= 0.0:
+                continue
+            if base <= 0.0:
+                raise ValueError("baseline probability must be positive when compared value is positive")
+            total += prob * math.log(prob / base)
+        return total
+
+    midpoint = tuple((a + b) * 0.5 for a, b in zip(left, right))
+    return 0.5 * kl_divergence(left, midpoint) + 0.5 * kl_divergence(right, midpoint)
+
+
+def _policy_state_vectors(row: Mapping[str, Any]) -> dict[str, tuple[float, ...]]:
+    states = row.get("states")
+    if not isinstance(states, Sequence) or isinstance(states, (str, bytes)):
+        return {}
+    vectors: dict[str, tuple[float, ...]] = {}
+    for index, state in enumerate(states):
+        if not isinstance(state, Mapping):
+            continue
+        state_id = state.get("state_id", index)
+        vector = _probability_vector(state.get("action_probabilities"))
+        if vector is None:
+            continue
+        vectors[str(state_id)] = vector
+    return vectors
+
+
+def policy_js_divergence_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize pairwise policy JS-divergence over a fixed state corpus.
+
+    Rows are read-only probe artifacts. Each row should contain a unique label
+    and a ``states`` list with stable ``state_id`` plus action probabilities.
+    Pairwise divergences are computed only over shared state ids so incomplete
+    probes do not invent zero-probability states.
+    """
+    materialized = [dict(row) for row in rows]
+    labels = [_label(row, index) for index, row in enumerate(materialized)]
+    policies: list[dict[str, Any]] = []
+    skipped_labels: list[str] = []
+    for label, row in zip(labels, materialized):
+        vectors = _policy_state_vectors(row)
+        if not vectors:
+            skipped_labels.append(label)
+            continue
+        policies.append({"label": label, "vectors": vectors})
+    policies.sort(key=lambda item: item["label"])
+
+    pairwise: list[dict[str, Any]] = []
+    all_distances: list[float] = []
+    state_ids: set[str] = set()
+    for policy in policies:
+        state_ids.update(policy["vectors"])
+
+    for left_index, left in enumerate(policies):
+        for right in policies[left_index + 1:]:
+            shared = sorted(set(left["vectors"]) & set(right["vectors"]))
+            distances: list[float] = []
+            for state_id in shared:
+                left_vector = left["vectors"][state_id]
+                right_vector = right["vectors"][state_id]
+                if len(left_vector) != len(right_vector):
+                    continue
+                distances.append(_jensen_shannon_divergence(left_vector, right_vector))
+            all_distances.extend(distances)
+            mean_distance = sum(distances) / len(distances) if distances else None
+            max_distance = max(distances) if distances else None
+            pairwise.append(
+                {
+                    "left": left["label"],
+                    "right": right["label"],
+                    "shared_state_count": len(distances),
+                    "js_divergence_mean": round(mean_distance, 6) if mean_distance is not None else None,
+                    "js_divergence_max": round(max_distance, 6) if max_distance is not None else None,
+                }
+            )
+
+    mean_pairwise = sum(all_distances) / len(all_distances) if all_distances else None
+    max_pairwise = max(all_distances) if all_distances else None
+    return {
+        "divergence": "jensen_shannon_nats",
+        "policy_count": len(policies),
+        "skipped_count": len(skipped_labels),
+        "skipped_labels": sorted(skipped_labels),
+        "state_count": len(state_ids),
+        "pair_count": len(pairwise),
+        "mean_pairwise_js_divergence": round(mean_pairwise, 6) if mean_pairwise is not None else None,
+        "max_pairwise_js_divergence": round(max_pairwise, 6) if max_pairwise is not None else None,
+        "pairwise": pairwise,
+        "rows": [
+            {
+                "label": policy["label"],
+                "state_count": len(policy["vectors"]),
+            }
+            for policy in policies
+        ],
+    }
+
+
 def _move_usage_features(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     moves: set[str] = set()
     for row in rows:
@@ -392,6 +514,7 @@ def diversity_population_dashboard(
     behavior_rows: Iterable[Mapping[str, Any]],
     *,
     payoff_vectors: Mapping[str, Mapping[str, Any]] | None = None,
+    policy_prior_rows: Iterable[Mapping[str, Any]] | None = None,
     thresholds: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     threshold_values = {**DEFAULT_THRESHOLDS, **dict(thresholds or {})}
@@ -406,5 +529,6 @@ def diversity_population_dashboard(
         "schema_version": SCHEMA_VERSION,
         "behavior": behavior,
         "behavior_embedding": behavior_embedding,
+        "policy_js_divergence": policy_js_divergence_summary(policy_prior_rows or ()),
         "payoff_rank": payoff_rank,
     }

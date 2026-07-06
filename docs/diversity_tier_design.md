@@ -272,8 +272,11 @@ cap binds on aggregate compute, not calendar time.
   `hazard_probe.py` JSON into the `correct_pricing` trend gate.
   `scripts/diversity_population_dashboard.py` combines behavior-probe rows with
   diversity-pool payoff vectors into the read-only population view
-  (live-spread axes plus payoff effective rank). Without D0 the tier cannot
-  demonstrate its own effect.
+  (live-spread axes, behavior-embedding cluster count, policy JS-divergence, and
+  payoff effective rank). `scripts/policy_js_divergence_probe.py` records
+  checkpoint action-prior distributions over a fixed corpus for the generic
+  pairwise JS-divergence cross-check. Without D0 the tier cannot demonstrate its
+  own effect.
 - **D1**: collector pool-sampling PR; populate the pool with existing checkpoints
   + anchors; continue the current main-agent line on pool collection. First read:
   ΔV probe at +50k games vs the vanilla trajectory.
