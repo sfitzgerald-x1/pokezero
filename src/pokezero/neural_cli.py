@@ -6323,7 +6323,7 @@ def _benchmark_yardstick_policy_ids(iteration: Mapping[str, Any]) -> frozenset[s
         policy_id = _report_policy_id_from_spec(spec)
         if policy_id is not None:
             ids.add(policy_id)
-    return frozenset(ids)
+    return frozenset(ids - set(_PLUMBING_BENCHMARK_POLICY_IDS))
 
 
 def _benchmark_reference_policy_specs(iteration: Mapping[str, Any]) -> tuple[str, ...]:

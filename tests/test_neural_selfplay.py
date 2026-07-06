@@ -3152,6 +3152,16 @@ class NeuralSelfPlayTest(unittest.TestCase):
             run_dir = Path(temp_dir) / "run"
             source = neural_report_source_metadata(branch="scott/neural-report", head="abc123", dirty=True)
             write_neural_report_manifest(run_dir, source=source)
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for iteration in manifest["iterations"]:
+                iteration["benchmark_reference_policy_specs"] = ["max-damage", "random-legal", "simple-legal"]
+                iteration["invocation_config"]["benchmark_reference_policy_specs"] = [
+                    "max-damage",
+                    "random-legal",
+                    "simple-legal",
+                ]
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 exit_code = neural_cli_main(["report", "--run-dir", str(run_dir)])
@@ -3189,6 +3199,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("note: random/simple are saturated harness-health checks, not strength gradients.", output)
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- simple-legal: 1:1.000/20g", output)
+        strength_section = _output_section(output, "benchmark_strength_curves:", "benchmark_plumbing_curves:")
+        plumbing_section = _output_section(output, "benchmark_plumbing_curves:", "foundation_readiness:")
+        self.assertIn("- max-damage: 1:0.250/20g,cap=2", strength_section)
+        self.assertNotIn("random-legal", strength_section)
+        self.assertNotIn("simple-legal", strength_section)
+        self.assertIn("random-legal", plumbing_section)
+        self.assertIn("simple-legal", plumbing_section)
         self.assertIn("foundation_readiness:", output)
         self.assertIn(
             "note: presence/sample-size only; inspect value quality and strength separately.",
@@ -3242,6 +3259,9 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertIn("benchmark_plumbing_curves:", output)
         self.assertIn("- random-legal: 1:0.600/20g,cap=1", output)
         self.assertIn("- max-damage: 1:0.250/20g,cap=2", output)
+        strength_section = _output_section(output, "benchmark_strength_curves:", "benchmark_plumbing_curves:")
+        self.assertNotIn("random-legal", strength_section)
+        self.assertNotIn("simple-legal", strength_section)
         self.assertNotIn("entity-test-iter-0000", output)
 
     def test_neural_cli_report_plumbing_curves_fall_back_to_legacy_matchups(self) -> None:
@@ -5747,6 +5767,14 @@ def _rewrite_neural_manifest_yardstick(
             result["first_policy_wins"] = random_wins
             result["second_policy_wins"] = int(result["games"]) - random_wins
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _output_section(output: str, header: str, next_header: str | None = None) -> str:
+    start = output.index(header)
+    if next_header is None:
+        return output[start:]
+    end = output.index(next_header, start + len(header))
+    return output[start:end]
 
 
 def _append_neural_report_manifest_iteration(
