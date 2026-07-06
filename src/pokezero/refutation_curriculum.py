@@ -25,6 +25,7 @@ from .rollout import RolloutConfig, continue_rollout_from_current_state
 
 
 REFUTATION_CURRICULUM_SUMMARY_SCHEMA_VERSION = "pokezero.refutation_curriculum_summary.v1"
+REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION = "pokezero.refutation_curriculum_metadata.v1"
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,6 @@ class RefutationCurriculumConfig:
     seed_start: int = 1
     max_starts: int | None = None
     reset_policies: bool = True
-    check_prefix_observations: bool = False
 
     def __post_init__(self) -> None:
         if self.total_games < 0:
@@ -72,7 +72,6 @@ class RefutationCurriculumSummary:
                 "seed_start": self.config.seed_start,
                 "max_starts": self.config.max_starts,
                 "reset_policies": self.config.reset_policies,
-                "check_prefix_observations": self.config.check_prefix_observations,
             },
         }
 
@@ -134,7 +133,6 @@ def collect_refutation_curriculum_rollouts(
                 rollout_config=rollout_config,
                 seed=config.seed_start + curriculum_index,
                 reset_policies=config.reset_policies,
-                check_prefix_observations=config.check_prefix_observations,
             )
             write_rollout_record(handle, curriculum_record)
             emitted += 1
@@ -165,9 +163,13 @@ def _collect_one_curriculum_record(
     rollout_config: RolloutConfig,
     seed: int,
     reset_policies: bool,
-    check_prefix_observations: bool,
 ) -> RolloutRecord:
     candidate = _candidate_from_row(row)
+    if rollout_config.format_id != record.format_id:
+        raise ValueError(
+            "curriculum rollout format must match the source record format: "
+            f"rollout_config={rollout_config.format_id!r}, source={record.format_id!r}."
+        )
     env = env_factory()
     start = perf_counter()
     try:
@@ -175,7 +177,7 @@ def _collect_one_curriculum_record(
             env,
             record.trajectory,
             decision_round_count=candidate.decision_round_index,
-            check_prefix_observations=check_prefix_observations,
+            check_prefix_observations=False,
         )
         if prefix.terminal is not None:
             raise ValueError("cannot start curriculum from a terminal replay prefix.")
@@ -232,7 +234,8 @@ def _curriculum_metadata(
 ) -> dict[str, Any]:
     certification = _mapping(row.get("certification"))
     return {
-        "schema_version": FRAGILE_STATE_SCHEMA_VERSION,
+        "schema_version": REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION,
+        "source_schema_version": row.get("schema_version"),
         "source_battle_id": source_record.battle_id,
         "source_record_index": candidate.source_record_index,
         "source_seed": source_record.seed,

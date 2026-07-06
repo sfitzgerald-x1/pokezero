@@ -200,11 +200,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     curriculum.add_argument("--seed-start", type=int, default=1, help="First continuation-policy RNG seed.")
     curriculum.add_argument("--max-starts", type=int, default=None, help="Optional hard cap on curriculum starts.")
-    curriculum.add_argument(
-        "--check-prefix-observations",
-        action="store_true",
-        help="Strictly compare replay prefix observations before starting curriculum continuation.",
-    )
     curriculum.set_defaults(func=_curriculum)
     return parser
 
@@ -388,7 +383,6 @@ def _curriculum(args: argparse.Namespace) -> int:
             curriculum_fraction=args.curriculum_fraction,
             seed_start=args.seed_start,
             max_starts=args.max_starts,
-            check_prefix_observations=args.check_prefix_observations,
         ),
     )
     summary_path = args.summary or args.out.with_suffix(args.out.suffix + ".summary.json")

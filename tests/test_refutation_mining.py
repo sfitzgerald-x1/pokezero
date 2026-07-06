@@ -13,6 +13,7 @@ from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.refutation_cli import main as refutation_cli_main
 from pokezero.refutation_curriculum import (
+    REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION,
     RefutationCurriculumConfig,
     collect_refutation_curriculum_rollouts,
     refutation_curriculum_start_count,
@@ -165,6 +166,31 @@ class BranchReplayEnv:
 
     def close(self):
         self.closed = True
+
+
+class PrefixReplayEnv(BranchReplayEnv):
+    def requested_players(self):
+        if self._terminal is not None:
+            return ()
+        return ("p1", "p2")
+
+    def step(self, actions):
+        self.step_calls.append(dict(actions))
+        self.round_index += 1
+        if len(self.step_calls) == 1:
+            return StepResult(
+                observations={"p1": _observation((0,)), "p2": _observation((0,))},
+                rewards={"p1": 0.0, "p2": 0.0},
+                terminal=None,
+                requested_players=("p1", "p2"),
+            )
+        self._terminal = TerminalState(winner="p2", turn_count=2, capped=False)
+        return StepResult(
+            observations={},
+            rewards={"p1": -1.0, "p2": 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
 
 
 class RefutationMiningTest(unittest.TestCase):
@@ -774,6 +800,8 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(record.policy_ids, {"p1": "first-legal", "p2": "first-legal"})
         self.assertEqual(record.trajectory.metadata["starting_decision_round_index"], 0)
         curriculum = record.trajectory.metadata["refutation_curriculum"]
+        self.assertEqual(curriculum["schema_version"], REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION)
+        self.assertEqual(curriculum["source_schema_version"], FRAGILE_STATE_SCHEMA_VERSION)
         self.assertEqual(curriculum["source_battle_id"], "battle-1")
         self.assertEqual(curriculum["source_seed"], 100)
         self.assertEqual(curriculum["decision_round_index"], 0)
@@ -782,6 +810,109 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertAlmostEqual(curriculum["flip_rate"], 13 / 20)
         self.assertEqual(envs[0].reset_calls, [(100, "gen3randombattle")])
         self.assertTrue(getattr(envs[0], "closed"))
+
+    def test_refutation_curriculum_replays_nonzero_prefix_before_policy_control(self) -> None:
+        mining_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=2,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = mine_refutations(
+                records=(_record(),),
+                config=mining_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={5}, loser_win_count=13),
+                archive_path=root / "fragile.jsonl",
+            )
+            row = report.certified_refutations[0].to_dict()
+            self.assertEqual(row["candidate"]["decision_round_index"], 1)
+            envs = []
+
+            def env_factory():
+                env = PrefixReplayEnv()
+                envs.append(env)
+                return env
+
+            collect_refutation_curriculum_rollouts(
+                records=(_record(),),
+                fragile_states=(row,),
+                env_factory=env_factory,
+                policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                output_path=root / "curriculum.jsonl",
+                config=RefutationCurriculumConfig(total_games=1, curriculum_fraction=1.0),
+            )
+
+        self.assertEqual(envs[0].step_calls[0], {"p1": 0, "p2": 1})
+        self.assertEqual(envs[0].step_calls[1], {"p1": 0, "p2": 0})
+
+    def test_refutation_curriculum_cycles_rows_with_repeat_metadata(self) -> None:
+        mining_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = mine_refutations(
+                records=(_record(),),
+                config=mining_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=root / "fragile.jsonl",
+            )
+            output_path = root / "curriculum.jsonl"
+            collect_refutation_curriculum_rollouts(
+                records=(_record(),),
+                fragile_states=(report.certified_refutations[0].to_dict(),),
+                env_factory=BranchReplayEnv,
+                policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                output_path=output_path,
+                config=RefutationCurriculumConfig(total_games=3, curriculum_fraction=1.0),
+            )
+            records = read_rollout_records(output_path)
+
+        self.assertEqual(len(records), 3)
+        self.assertEqual(
+            [record.trajectory.metadata["refutation_curriculum"]["repeat_index"] for record in records],
+            [0, 1, 2],
+        )
+        self.assertEqual([record.seed for record in records], [1, 2, 3])
+
+    def test_refutation_curriculum_rejects_mismatched_source_coordinates(self) -> None:
+        mining_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = mine_refutations(
+                records=(_record(),),
+                config=mining_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=root / "fragile.jsonl",
+            )
+            row = report.certified_refutations[0].to_dict()
+            row["candidate"] = dict(row["candidate"])
+            row["candidate"]["seed"] = 999
+            with self.assertRaisesRegex(ValueError, "seed does not match"):
+                collect_refutation_curriculum_rollouts(
+                    records=(_record(),),
+                    fragile_states=(row,),
+                    env_factory=BranchReplayEnv,
+                    policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    output_path=root / "curriculum.jsonl",
+                    config=RefutationCurriculumConfig(total_games=1, curriculum_fraction=1.0),
+                )
 
 
 if __name__ == "__main__":
