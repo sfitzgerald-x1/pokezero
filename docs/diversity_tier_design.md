@@ -163,6 +163,16 @@ row, replay coordinates, and archive/report count consistency. It does not rerun
 the simulations; it verifies that a mined report is strong enough to treat as an
 R0 readout.
 
+`pokezero-refutation cycle-report` is the cross-cycle G4 readout. It aggregates
+one or more `refutation-report.json` files into per-mode refutation-rate trends,
+including the "is the champion becoming less refutable?" decline signal, and it
+computes oracle-vs-fair gaps when both modes are present for the same cycle id.
+Cycle ids are naturally sorted for trend calculations, and duplicate
+cycle/mode pairs fail loudly so the headline decline signal is not sensitive to
+CLI argument order. This is the public artifact for the tier metric; deployment
+may decide when to run miners, but the trend math stays repository-owned and
+reproducible.
+
 `pokezero-refutation training-cache` is the first R1 primitive. It turns a
 validated fragile-state archive plus the source rollout records into a separate
 cache of corrected loser-perspective examples: value targets are retargeted to
