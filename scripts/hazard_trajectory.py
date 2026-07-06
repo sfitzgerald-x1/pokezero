@@ -20,17 +20,26 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from pokezero.hazard_metrics import aggregate_hazard_rows, parse_milestone_games
+from pokezero.hazard_metrics import aggregate_hazard_rows
 
 
 _HAZARD_MILESTONE_RE = re.compile(r"^hazard-(\d+)\.json$")
 
 
 def _milestone_games_from_path(path: Path) -> int | None:
+    # Keep this in sync with scripts/milestone_probes.sh hazard_out.
     match = _HAZARD_MILESTONE_RE.match(path.name)
     if match is None:
         return None
     return int(match.group(1))
+
+
+def _has_explicit_milestone_games(row: Mapping[str, Any]) -> bool:
+    for key in ("milestone_games", "games_at", "games"):
+        value = row.get(key)
+        if isinstance(value, int) and value >= 0:
+            return True
+    return False
 
 
 def _load_rows(path: Path) -> list[Mapping[str, Any]]:
@@ -46,7 +55,7 @@ def _load_rows(path: Path) -> list[Mapping[str, Any]]:
     for row in rows:
         if not isinstance(row, Mapping):
             continue
-        if milestone_games is not None and parse_milestone_games(row) is None:
+        if milestone_games is not None and not _has_explicit_milestone_games(row):
             row = {**row, "milestone_games": milestone_games}
         loaded.append(row)
     return loaded

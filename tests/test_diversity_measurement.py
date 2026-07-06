@@ -346,8 +346,12 @@ class HazardTrajectoryTest(unittest.TestCase):
                                 {
                                     # milestone_probes.sh labels rows as
                                     # <run>-i<iteration>, so filename is the
-                                    # only durable milestone source.
-                                    "label": f"cycle-a-main-i{index}",
+                                    # only durable milestone source. The run
+                                    # id intentionally contains a parseable
+                                    # game token to prove filenames win over
+                                    # label text unless an explicit numeric
+                                    # metadata field is already present.
+                                    "label": f"sweep-500k-main-i{index}",
                                     "value_spread": 1.0,
                                     "value_self_hazard_response": -pricing / 2,
                                     "value_opp_hazard_response": pricing / 2,
@@ -365,7 +369,7 @@ class HazardTrajectoryTest(unittest.TestCase):
             with contextlib.redirect_stderr(stderr):
                 exit_code = hazard_trajectory.main(
                     [
-                        *(arg for hazard in hazards for arg in ("--hazard", str(hazard))),
+                        *(arg for hazard in reversed(hazards) for arg in ("--hazard", str(hazard))),
                         "--out",
                         str(out),
                     ]
