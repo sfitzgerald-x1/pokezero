@@ -6,12 +6,17 @@ import unittest
 from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT
-from pokezero.collection import RolloutRecord, write_rollout_record
+from pokezero.collection import RolloutRecord, read_rollout_records, write_rollout_record
 from pokezero.dataset import iter_training_cache_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
 from pokezero.refutation_cli import main as refutation_cli_main
+from pokezero.refutation_curriculum import (
+    RefutationCurriculumConfig,
+    collect_refutation_curriculum_rollouts,
+    refutation_curriculum_start_count,
+)
 from pokezero.refutation_mining import (
     BranchTerminalResult,
     FRAGILE_STATE_SCHEMA_VERSION,
@@ -708,6 +713,75 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
         self.assertEqual(batch.ppo_value_target_mask, (True,))
         self.assertEqual(batch.action_probability_mask, (False,))
+
+    def test_refutation_curriculum_start_count_uses_ceiling_and_cap(self) -> None:
+        self.assertEqual(
+            refutation_curriculum_start_count(
+                RefutationCurriculumConfig(total_games=101, curriculum_fraction=0.01)
+            ),
+            2,
+        )
+        self.assertEqual(
+            refutation_curriculum_start_count(
+                RefutationCurriculumConfig(total_games=1000, curriculum_fraction=0.10, max_starts=7)
+            ),
+            7,
+        )
+
+    def test_refutation_curriculum_collects_from_fragile_decision_boundary(self) -> None:
+        mining_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "fragile.jsonl"
+            output_path = root / "curriculum.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=mining_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            envs = []
+
+            def env_factory():
+                env = BranchReplayEnv()
+                envs.append(env)
+                return env
+
+            summary = collect_refutation_curriculum_rollouts(
+                records=(_record(),),
+                fragile_states=(report.certified_refutations[0].to_dict(),),
+                env_factory=env_factory,
+                policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                output_path=output_path,
+                config=RefutationCurriculumConfig(
+                    total_games=10,
+                    curriculum_fraction=0.1,
+                    seed_start=500,
+                ),
+            )
+            (record,) = read_rollout_records(output_path)
+
+        self.assertEqual(summary.requested_start_count, 1)
+        self.assertEqual(summary.emitted_count, 1)
+        self.assertEqual(record.seed, 500)
+        self.assertEqual(record.policy_ids, {"p1": "first-legal", "p2": "first-legal"})
+        self.assertEqual(record.trajectory.metadata["starting_decision_round_index"], 0)
+        curriculum = record.trajectory.metadata["refutation_curriculum"]
+        self.assertEqual(curriculum["source_battle_id"], "battle-1")
+        self.assertEqual(curriculum["source_seed"], 100)
+        self.assertEqual(curriculum["decision_round_index"], 0)
+        self.assertEqual(curriculum["loser_player_id"], "p2")
+        self.assertEqual(curriculum["deviation_action_index"], 2)
+        self.assertAlmostEqual(curriculum["flip_rate"], 13 / 20)
+        self.assertEqual(envs[0].reset_calls, [(100, "gen3randombattle")])
+        self.assertTrue(getattr(envs[0], "closed"))
 
 
 if __name__ == "__main__":
