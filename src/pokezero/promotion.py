@@ -13,7 +13,7 @@ import warnings
 from typing import Any, Mapping
 
 from .evaluation import PromotionGateConfig, PromotionGateResult, evaluate_promotion_gate
-from .opponents import historical_opponent_policy_specs
+from .opponents import current_family_historical_opponent_policy_specs
 
 PROMOTION_REGISTRY_SCHEMA_VERSION = "pokezero.promotion_registry.v1"
 NEURAL_SELFPLAY_SOURCE_TYPE = "pokezero.neural_selfplay_run.v1"
@@ -113,11 +113,12 @@ class PromotionRegistry:
         current_policy_spec: str | None = None,
         selection_mode: str = "recent",
     ) -> tuple[str, ...]:
-        return historical_opponent_policy_specs(
+        return current_family_historical_opponent_policy_specs(
             self.selection_checkpoint_policy_specs(),
             current_policy_spec=current_policy_spec,
             max_historical_opponents=max_historical_opponents,
             selection_mode=selection_mode,
+            legacy_mode="drop",
         )
 
 

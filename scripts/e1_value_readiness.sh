@@ -42,7 +42,6 @@ CANDIDATES=(
   "belief-1-5m:checkpoints/pokezero-belief-gen3-1-5m.pt"
   "fpdistill-1-5m:checkpoints/fpdistill-gen3-1-5m.pt"
   "fpdistill-1m:checkpoints/pokezero-fpdistill-gen3-1m.pt"
-  "no-belief-1-5m:checkpoints/pokezero-no-belief-gen3-1-5m.pt"
 )
 
 mkdir -p "$OUT_ROOT"

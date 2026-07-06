@@ -38,7 +38,9 @@ use v2+ checkpoints/frozen pools and matched milestones. Legacy-family
 checkpoints at any milestone, including longer historical runs beyond 500k
 games, are historical context, not opponents to evaluate against. Calibration
 pools can still be used for value/diagnostic reads when their role is stated
-explicitly.
+explicitly. The `current_family_*` helpers enforce both sides of this rule:
+schema v2+ is required, and no-belief/pre-v2 family markers in checkpoint
+filenames or adjacent checkpoint metadata are rejected.
 
 ### foul-play as a graded ladder (the randbats-native rung system)
 

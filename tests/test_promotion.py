@@ -196,6 +196,44 @@ class PromotionRegistryTest(unittest.TestCase):
             (specs[0], specs[3]),
         )
 
+    def test_registry_opponent_pool_preview_drops_legacy_family_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registry_path = temp_path / "promotions.json"
+            legacy_checkpoint = temp_path / "pokezero-no-belief-gen3-2m.json"
+            current_checkpoint = temp_path / "belief-v2-500k.json"
+            save_linear_model(
+                legacy_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="legacy-no-belief",
+                ),
+            )
+            save_linear_model(
+                current_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="current-belief",
+                ),
+            )
+            payload = promotion_registry_payload(checkpoint_path=str(legacy_checkpoint))
+            payload["entries"][0]["policy_id"] = "legacy-no-belief"
+            second_entry = dict(payload["entries"][0])
+            second_entry["sequence"] = 2
+            second_entry["policy_id"] = "current-belief"
+            second_entry["checkpoint_path"] = str(current_checkpoint)
+            payload["entries"].append(second_entry)
+            write_manifest(registry_path, payload)
+
+            registry = load_promotion_registry(registry_path)
+
+        self.assertEqual(
+            registry.opponent_pool_policy_specs(max_historical_opponents=2),
+            (f"linear:{current_checkpoint}",),
+        )
+
     def test_historical_opponent_policy_specs_excludes_current_checkpoint_by_resolved_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -2470,8 +2508,22 @@ class PromotionRegistryTest(unittest.TestCase):
             first_checkpoint = registry_path.parent / "promoted" / "first.json"
             second_checkpoint = registry_path.parent / "promoted" / "second.json"
             first_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-            first_checkpoint.write_text("{}", encoding="utf-8")
-            second_checkpoint.write_text("{}", encoding="utf-8")
+            save_linear_model(
+                first_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="linear-selfplay-test-iter-0001",
+                ),
+            )
+            save_linear_model(
+                second_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="linear-selfplay-test-iter-0002",
+                ),
+            )
             payload = promotion_registry_payload(
                 checkpoint_path="promoted/first.json",
                 manifest_path="selfplay-a/manifest.json",
@@ -2521,8 +2573,22 @@ class PromotionRegistryTest(unittest.TestCase):
             first_checkpoint = registry_path.parent / "promoted" / "first.json"
             second_checkpoint = registry_path.parent / "promoted" / "second.json"
             first_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-            first_checkpoint.write_text("{}", encoding="utf-8")
-            second_checkpoint.write_text("{}", encoding="utf-8")
+            save_linear_model(
+                first_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="linear-selfplay-test-iter-0001",
+                ),
+            )
+            save_linear_model(
+                second_checkpoint,
+                LinearPolicyModel.initialized(
+                    feature_count=16,
+                    window_size=1,
+                    policy_id="linear-selfplay-test-iter-0002",
+                ),
+            )
             payload = promotion_registry_payload(
                 checkpoint_path="promoted/first.json",
                 manifest_path="selfplay-a/manifest.json",
@@ -2801,7 +2867,14 @@ def write_registry_with_entries(temp_path: Path, *, count: int) -> Path:
     entries = []
     for sequence in range(1, count + 1):
         checkpoint_path = (temp_path / f"checkpoint-{sequence}.json").resolve(strict=False)
-        checkpoint_path.write_text("{}", encoding="utf-8")
+        save_linear_model(
+            checkpoint_path,
+            LinearPolicyModel.initialized(
+                feature_count=16,
+                window_size=1,
+                policy_id=f"linear-selfplay-test-iter-{sequence:04d}",
+            ),
+        )
         entries.append(
             {
                 "sequence": sequence,
