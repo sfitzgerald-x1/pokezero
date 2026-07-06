@@ -390,6 +390,8 @@ class SelfPlayTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
+            checkpoint_path = Path(temp_dir) / "current-policy.json"
+            checkpoint_path.write_text("{}", encoding="utf-8")
 
             with patch("pokezero.linear_policy.load_linear_model", return_value=model) as load:
                 result = run_selfplay_iterations(
@@ -404,12 +406,12 @@ class SelfPlayTest(unittest.TestCase):
                         shuffle_buffer_size=0,
                         policy_id="linear-selfplay-test",
                     ),
-                    initial_policy_spec="linear:/tmp/current-policy.json?sample=true",
+                    initial_policy_spec=f"linear:{checkpoint_path}?sample=true",
                     fixed_opponent_policy_specs=("random-legal",),
                 )
 
         self.assertEqual(load.call_count, 1)
-        self.assertEqual(result.iterations[0].current_policy_spec, "linear:/tmp/current-policy.json?sample=true")
+        self.assertEqual(result.iterations[0].current_policy_spec, f"linear:{checkpoint_path}?sample=true")
 
     def test_reused_current_model_collection_matches_reloaded_model_collection(self) -> None:
         model = LinearPolicyModel.initialized(
