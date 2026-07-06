@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import TrajectoryDatasetConfig, write_training_cache_from_rollouts
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
+    _PolicyIdAlias,
     _input_data_paths_byte_size,
     _training_cache_lifecycle,
     build_arg_parser as build_neural_arg_parser,
@@ -52,7 +54,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
-from pokezero.policy import PolicyContext
+from pokezero.policy import PolicyContext, PolicyDecision
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -1941,6 +1943,67 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertIs(matchups[3].p2_policy, fake_policy)
         self.assertEqual(json.loads(stdout.getvalue()), {"ok": True})
 
+    def test_neural_cli_benchmark_can_alias_candidate_policy_id(self) -> None:
+        class FakePolicy:
+            policy_id = "checkpoint-policy"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--policy-id",
+                    "candidate-member",
+                    "--json",
+                ]
+            )
+
+        matchups = captured["matchups"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "candidate-member vs random-legal",
+            "random-legal vs candidate-member",
+            "candidate-member vs simple-legal",
+            "simple-legal vs candidate-member",
+        ])
+        self.assertEqual(matchups[0].p1_policy.policy_id, "candidate-member")
+        self.assertEqual(matchups[1].p2_policy.policy_id, "candidate-member")
+
+    def test_policy_id_alias_relabels_decisions(self) -> None:
+        class FakePolicy:
+            policy_id = "checkpoint-policy"
+
+            def select_action(self, observation, *, rng):
+                return PolicyDecision(
+                    action_index=1,
+                    policy_id=self.policy_id,
+                    action_probability=0.5,
+                    metadata={"source": "underlying"},
+                )
+
+        aliased = _PolicyIdAlias(FakePolicy(), policy_id="pool-member")
+
+        decision = aliased.select_action(observation(1), rng=random.Random(1))
+
+        self.assertEqual(decision.policy_id, "pool-member")
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata, {"source": "underlying"})
+
     def test_neural_cli_benchmark_wires_reference_policy_matchups(self) -> None:
         class FakePolicy:
             policy_id = "neural-smoke"
@@ -2008,6 +2071,82 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             f"max-damage?{urlencode({'showdown_root': str(Path('/tmp/showdown').resolve())})}"
         )
         self.assertEqual(resolved_reference_specs, [(expected_reference_spec, "cpu"), (expected_reference_spec, "cpu")])
+
+    def test_neural_cli_benchmark_can_alias_reference_policy_ids(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        class FakeReferencePolicy:
+            policy_id = "checkpoint-policy"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+            patch("pokezero.neural_cli._policy_from_spec_for_evaluation", return_value=FakeReferencePolicy()),
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--benchmark-reference-policy",
+                    "neural:/pool/member.pt",
+                    "--benchmark-reference-policy-id",
+                    "pool-member",
+                    "--json",
+                ]
+            )
+
+        matchups = captured["matchups"]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([matchup.label for matchup in matchups], [
+            "neural-smoke vs random-legal",
+            "random-legal vs neural-smoke",
+            "neural-smoke vs simple-legal",
+            "simple-legal vs neural-smoke",
+            "neural-smoke vs pool-member",
+            "pool-member vs neural-smoke",
+        ])
+        self.assertEqual(matchups[4].p2_policy.policy_id, "pool-member")
+        self.assertEqual(matchups[5].p1_policy.policy_id, "pool-member")
+
+    def test_neural_cli_benchmark_rejects_reference_policy_id_count_mismatch(self) -> None:
+        class FakePolicy:
+            policy_id = "neural-smoke"
+
+        stderr = io.StringIO()
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "checkpoint.pt",
+                    "--benchmark-reference-policy",
+                    "max-damage",
+                    "--benchmark-reference-policy-id",
+                    "max-damage-a",
+                    "--benchmark-reference-policy-id",
+                    "max-damage-b",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--benchmark-reference-policy-id", stderr.getvalue())
 
     def test_neural_cli_benchmark_skips_duplicate_reference_policy_ids(self) -> None:
         class FakePolicy:
