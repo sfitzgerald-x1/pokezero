@@ -1261,8 +1261,10 @@ class CollectionTest(unittest.TestCase):
                 OpponentPoolEntry(policy_spec="simple-legal", weight=3.0, member_id="anchor-simple"),
             ),
         )
+        self.assertEqual(kwargs["opponent_pool_self_play_share"], 0.5)
         self.assertIn(f"opponent_pool: {manifest_path}", stdout.getvalue())
         self.assertIn("opponent_pool_members: 2", stdout.getvalue())
+        self.assertIn("opponent_pool_self_play_share: 0.5", stdout.getvalue())
 
     def test_rollout_cli_collect_selfplay_training_cache_rejects_pool_with_opponent_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

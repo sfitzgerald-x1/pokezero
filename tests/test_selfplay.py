@@ -289,6 +289,7 @@ class SelfPlayTest(unittest.TestCase):
                         checkpoint_hash="hash-b",
                     ),
                 ),
+                opponent_pool_self_play_share=0.0,
                 policy_factory_overrides={
                     "current": lambda: RandomLegalPolicy(policy_id="current"),
                     "opp-a": lambda: RandomLegalPolicy(policy_id="opp-a"),
@@ -339,6 +340,47 @@ class SelfPlayTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_collect_selfplay_rollouts_can_reserve_pool_share_for_current_policy_mirror(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "rollouts.jsonl"
+            training_output_path = Path(temp_dir) / "training-rollouts.jsonl"
+
+            collect_selfplay_rollouts(
+                output_path=output_path,
+                training_output_path=training_output_path,
+                games=2,
+                env_factory=OneTurnEnv,
+                rollout_config=RolloutConfig(max_decision_rounds=5),
+                seed_start=1,
+                current_policy_spec="current",
+                opponent_policy_specs=("opp-a",),
+                opponent_pool_entries=(
+                    OpponentPoolEntry(
+                        policy_spec="opp-a",
+                        weight=1.0,
+                        member_id="pool-a",
+                        checkpoint_hash="hash-a",
+                    ),
+                ),
+                opponent_pool_self_play_share=0.5,
+                policy_factory_overrides={
+                    "current": lambda: RandomLegalPolicy(policy_id="current"),
+                    "opp-a": lambda: RandomLegalPolicy(policy_id="opp-a"),
+                },
+            )
+
+            records = read_rollout_records(output_path)
+            training_records = read_rollout_records(training_output_path)
+
+        self.assertEqual(records[0].policy_ids, {"p1": "current", "p2": "current"})
+        self.assertEqual(records[1].policy_ids, {"p1": "opp-a", "p2": "current"})
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_policy_spec"], "current")
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_member_id"], "current-policy")
+        self.assertEqual(training_records[0].trajectory.metadata["opponent_pool_weight"], 1.0)
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_policy_spec"], "opp-a")
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_member_id"], "pool-a")
+        self.assertEqual(training_records[1].trajectory.metadata["opponent_pool_checkpoint_hash"], "hash-a")
 
     def test_run_selfplay_iterations_reuses_loaded_current_model_during_collection(self) -> None:
         model = LinearPolicyModel.initialized(
