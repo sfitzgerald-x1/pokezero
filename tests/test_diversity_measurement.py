@@ -12,6 +12,7 @@ import unittest
 from pokezero.behavior_metrics import classify_move, move_class_summary
 from pokezero.diversity_population import (
     behavior_embedding_summary,
+    diversity_coverage_rate_report,
     diversity_population_dashboard,
     payoff_effective_rank,
     policy_js_divergence_summary,
@@ -31,6 +32,12 @@ _POP_SPEC = importlib.util.spec_from_file_location("diversity_population_dashboa
 assert _POP_SPEC is not None and _POP_SPEC.loader is not None
 diversity_population_dashboard_script = importlib.util.module_from_spec(_POP_SPEC)
 _POP_SPEC.loader.exec_module(diversity_population_dashboard_script)
+
+_COVERAGE_SCRIPT = ROOT / "scripts" / "diversity_coverage_rate.py"
+_COVERAGE_SPEC = importlib.util.spec_from_file_location("diversity_coverage_rate", _COVERAGE_SCRIPT)
+assert _COVERAGE_SPEC is not None and _COVERAGE_SPEC.loader is not None
+diversity_coverage_rate_script = importlib.util.module_from_spec(_COVERAGE_SPEC)
+_COVERAGE_SPEC.loader.exec_module(diversity_coverage_rate_script)
 
 
 class _FakeDex:
@@ -349,6 +356,146 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual(payload["policy_js_divergence"]["pair_count"], 1)
         self.assertGreater(payload["policy_js_divergence"]["mean_pairwise_js_divergence"], 0.0)
         self.assertEqual(payload["payoff_rank"]["member_count"], 2)
+
+    def test_coverage_rate_report_computes_per_100k_dashboard_growth(self) -> None:
+        payload = diversity_coverage_rate_report(
+            [
+                {
+                    "games": 200_000,
+                    "label": "200k",
+                    "dashboard": _coverage_dashboard(
+                        payoff_rank=2.5,
+                        live_axis_count=3,
+                        cluster_count=4,
+                        mean_js=0.12,
+                        max_js=0.30,
+                    ),
+                },
+                {
+                    "games": 50_000,
+                    "label": "50k",
+                    "dashboard": _coverage_dashboard(
+                        payoff_rank=1.0,
+                        live_axis_count=0,
+                        cluster_count=1,
+                        mean_js=0.02,
+                        max_js=0.10,
+                    ),
+                },
+            ]
+        )
+
+        self.assertEqual(payload["schema_version"], "pokezero.diversity_coverage_rate.v1")
+        self.assertEqual([point["games"] for point in payload["points"]], [50_000, 200_000])
+        interval = payload["intervals"][0]
+        self.assertEqual(interval["game_delta"], 150_000)
+        self.assertEqual(interval["deltas"]["payoff_effective_rank"], 1.5)
+        self.assertEqual(interval["rates_per_100k_games"]["payoff_effective_rank"], 1.0)
+        self.assertEqual(interval["rates_per_100k_games"]["behavior_live_axis_count"], 2.0)
+        self.assertEqual(interval["rates_per_100k_games"]["behavior_cluster_count"], 2.0)
+        self.assertAlmostEqual(
+            interval["rates_per_100k_games"]["policy_mean_pairwise_js_divergence"],
+            0.066667,
+        )
+        self.assertEqual(payload["latest_interval"], interval)
+
+    def test_coverage_rate_report_rejects_duplicate_milestones(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate coverage milestone"):
+            diversity_coverage_rate_report(
+                [
+                    {"games": 100_000, "dashboard": _coverage_dashboard()},
+                    {"games": 100_000, "dashboard": _coverage_dashboard()},
+                ]
+            )
+
+    def test_coverage_rate_report_keeps_missing_metric_rates_empty(self) -> None:
+        payload = diversity_coverage_rate_report(
+            [
+                {
+                    "games": 0,
+                    "dashboard": {
+                        "payoff_rank": {"effective_rank": 1.0},
+                        "behavior": {"live_axis_count": 1},
+                        "behavior_embedding": {"cluster_count": 1},
+                        "policy_js_divergence": {},
+                    },
+                },
+                {
+                    "games": 100_000,
+                    "dashboard": {
+                        "payoff_rank": {"effective_rank": 2.0},
+                        "behavior": {"live_axis_count": 3},
+                        "behavior_embedding": {"cluster_count": 2},
+                        "policy_js_divergence": {},
+                    },
+                },
+            ]
+        )
+
+        interval = payload["intervals"][0]
+        self.assertEqual(interval["rates_per_100k_games"]["payoff_effective_rank"], 1.0)
+        self.assertEqual(interval["rates_per_100k_games"]["behavior_live_axis_count"], 2.0)
+        self.assertEqual(interval["rates_per_100k_games"]["behavior_cluster_count"], 1.0)
+        self.assertIsNone(interval["rates_per_100k_games"]["policy_mean_pairwise_js_divergence"])
+        self.assertIsNone(interval["rates_per_100k_games"]["policy_max_pairwise_js_divergence"])
+
+    def test_coverage_rate_cli_reads_explicit_milestone_dashboards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = root / "coverage-50k.json"
+            second = root / "coverage-150k.json"
+            out = root / "coverage-rate.json"
+            first.write_text(json.dumps(_coverage_dashboard(payoff_rank=1.0, cluster_count=2)), encoding="utf-8")
+            second.write_text(json.dumps(_coverage_dashboard(payoff_rank=2.0, cluster_count=5)), encoding="utf-8")
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = diversity_coverage_rate_script.main(
+                    [
+                        "--dashboard",
+                        f"150000={second}",
+                        "--dashboard",
+                        f"50000={first}",
+                        "--out",
+                        str(out),
+                    ]
+                )
+            payload = json.loads(out.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("[diversity-coverage-rate] wrote", stderr.getvalue())
+        self.assertEqual([point["games"] for point in payload["points"]], [50_000, 150_000])
+        self.assertEqual(payload["intervals"][0]["rates_per_100k_games"]["behavior_cluster_count"], 3.0)
+
+    def test_coverage_rate_cli_reports_bad_dashboard_arg_without_traceback(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            diversity_coverage_rate_script.main(["--dashboard", "not-a-milestone"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--dashboard must use GAMES=/path/to/dashboard.json", stderr.getvalue())
+
+
+def _coverage_dashboard(
+    *,
+    payoff_rank: float = 1.0,
+    live_axis_count: int = 0,
+    cluster_count: int = 1,
+    mean_js: float | None = 0.0,
+    max_js: float | None = 0.0,
+) -> dict:
+    policy_js: dict[str, float] = {}
+    if mean_js is not None:
+        policy_js["mean_pairwise_js_divergence"] = mean_js
+    if max_js is not None:
+        policy_js["max_pairwise_js_divergence"] = max_js
+    return {
+        "schema_version": "pokezero.diversity_population_dashboard.v1",
+        "payoff_rank": {"effective_rank": payoff_rank},
+        "behavior": {"live_axis_count": live_axis_count},
+        "behavior_embedding": {"cluster_count": cluster_count},
+        "policy_js_divergence": policy_js,
+    }
 
 
 class HazardTrajectoryTest(unittest.TestCase):

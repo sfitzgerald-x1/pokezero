@@ -398,7 +398,10 @@ calendar time.
   `scripts/diversity_population_dashboard.py` combines behavior-probe rows with
   diversity-pool payoff vectors into the read-only population view
   (live-spread axes, behavior-embedding cluster count, policy JS-divergence, and
-  payoff effective rank). `scripts/policy_js_divergence_probe.py` records
+  payoff effective rank). `scripts/diversity_coverage_rate.py` then compares
+  explicit milestone dashboard snapshots and reports payoff-rank growth,
+  live-axis count growth, behavior-cluster growth, and policy JS-divergence
+  growth as deltas per 100k games. `scripts/policy_js_divergence_probe.py` records
   checkpoint action-prior distributions over a fixed corpus for the generic
   pairwise JS-divergence cross-check. Without D0 the tier cannot demonstrate its
   own effect.
