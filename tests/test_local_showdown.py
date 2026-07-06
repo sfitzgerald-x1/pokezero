@@ -94,6 +94,14 @@ def _without_timestamp_lines(lines: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(line for line in lines if not line.startswith("|t:|"))
 
 
+def _without_timestamp_or_reseed_lines(lines: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        line
+        for line in lines
+        if not line.startswith("|t:|") and "Reseeded to" not in line
+    )
+
+
 class LocalShowdownRequestTest(unittest.TestCase):
     def test_showdown_seed_from_int_is_four_part_deterministic_seed(self) -> None:
         seed = showdown_seed_from_int(123)
@@ -314,6 +322,41 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             restored_branch = env.step({"p1": 1, "p2": 0})
 
         self.assertIsNone(restored_branch.terminal)
+
+    def test_reseed_simulator_rng_replays_same_seed_and_diverges_different_seed(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(
+            player_teams={
+                "p1": pack_team(
+                    (FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember", "Tackle")),)
+                ),
+                "p2": pack_team(
+                    (FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun", "Tackle")),)
+                ),
+            },
+        )
+
+        def run_branch(reseed: int):
+            with LocalShowdownEnv(config) as env:
+                env.reset_with_start_override(seed=31, start_override=start_override)
+                self.assertEqual(env.requested_players(), ("p1", "p2"))
+                prefix_len = len(env.protocol_lines)
+                env.reseed_simulator_rng(reseed)
+                self.assertEqual(env.requested_players(), ("p1", "p2"))
+                result = env.step({"p1": 0, "p2": 1})
+                suffix = _without_timestamp_or_reseed_lines(env.protocol_lines[prefix_len:])
+            return result, suffix
+
+        first_result, first_suffix = run_branch(777)
+        same_seed_result, same_seed_suffix = run_branch(777)
+        different_seed_result, different_seed_suffix = run_branch(778)
+
+        self.assertIsNone(first_result.terminal)
+        self.assertIsNone(same_seed_result.terminal)
+        self.assertIsNone(different_seed_result.terminal)
+        self.assertEqual(same_seed_suffix, first_suffix)
+        self.assertNotEqual(different_seed_suffix, first_suffix)
 
     def test_random_vs_random_rollout_reaches_terminal_or_cap_without_showdown_errors(self) -> None:
         config = integration_config()

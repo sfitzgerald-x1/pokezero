@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.collection import RolloutRecord, read_rollout_records, write_rollout_record
@@ -199,6 +200,8 @@ class BranchReplayEnv:
     def __init__(self) -> None:
         self.reset_calls = []
         self.step_calls = []
+        self.reseed_calls = []
+        self.events = []
         self.round_index = 0
         self._terminal = None
 
@@ -219,8 +222,13 @@ class BranchReplayEnv:
     def terminal(self):
         return self._terminal
 
+    def reseed_simulator_rng(self, seed: int) -> None:
+        self.reseed_calls.append(seed)
+        self.events.append(("reseed", seed))
+
     def step(self, actions):
         self.step_calls.append(dict(actions))
+        self.events.append(("step", dict(actions)))
         self.round_index += 1
         if len(self.step_calls) == 1:
             return StepResult(
@@ -499,6 +507,40 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(evaluator.value_head_used, False)
         self.assertEqual(evaluator.reseed_scope, "continuation_policy_rng")
 
+    def test_replay_terminal_evaluator_can_reseed_simulator_before_branch(self) -> None:
+        record = _record()
+        env = BranchReplayEnv()
+        evaluator = ReplayTerminalBranchEvaluator(
+            env_factory=lambda: env,
+            policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            reseed_simulator_rng=True,
+        )
+        candidate = RefutationCandidate(
+            battle_id=record.battle_id,
+            source_record_index=0,
+            seed=record.seed,
+            format_id=record.format_id,
+            champion_player_id="p1",
+            loser_player_id="p2",
+            decision_round_index=0,
+            step_index=1,
+            recorded_action_index=1,
+            deviation_action_index=2,
+            branch_actions={"p1": 0, "p2": 2},
+        )
+
+        result = evaluator.evaluate(record=record, candidate=candidate, certification_seed=777)
+
+        self.assertEqual(result.winner, "p2")
+        self.assertEqual(env.reseed_calls, [777])
+        self.assertEqual(env.step_calls[0], {"p1": 0, "p2": 2})
+        self.assertEqual(
+            env.events[:2],
+            [("reseed", 777), ("step", {"p1": 0, "p2": 2})],
+        )
+        self.assertEqual(evaluator.reseed_scope, "simulator_rng")
+
     def test_replay_terminal_evaluator_can_force_bounded_branch_line_before_rollout(self) -> None:
         record = _record()
         env = BranchReplayEnv()
@@ -576,6 +618,54 @@ class RefutationMiningTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn('"candidate_deviation_count": 3', stdout.getvalue())
+
+    def test_cli_mine_uses_simulator_rng_reseeded_evaluator(self) -> None:
+        class FakeReport:
+            def to_dict(self):
+                return {
+                    "schema_version": "pokezero.refutation_report.v1",
+                    "archive_path": "fragile-states.jsonl",
+                }
+
+        captured = {}
+
+        def fake_mine_refutations(**kwargs):
+            captured["evaluator"] = kwargs["evaluator"]
+            return FakeReport()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            records_path = temp_path / "records.jsonl"
+            with records_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record())
+
+            stdout = io.StringIO()
+            with (
+                patch("pokezero.refutation_cli.env_config_with_policy_spec_masks", side_effect=lambda config, *_args, **_kwargs: config),
+                patch("pokezero.refutation_cli.policy_spec_with_showdown_root", side_effect=lambda spec, _root: spec),
+                patch("pokezero.refutation_cli.policy_from_spec", return_value=FirstLegalPolicy()),
+                patch("pokezero.refutation_cli.mine_refutations", side_effect=fake_mine_refutations),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = refutation_cli_main(
+                    [
+                        "mine",
+                        "--records",
+                        str(records_path),
+                        "--out-dir",
+                        str(temp_path / "out"),
+                        "--champion-policy-id",
+                        "champion",
+                        "--p1-policy",
+                        "random-legal",
+                        "--p2-policy",
+                        "random-legal",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(captured["evaluator"].reseed_simulator_rng)
+        self.assertEqual(captured["evaluator"].reseed_scope, "simulator_rng")
 
     def test_validate_refutation_report_payload_accepts_complete_terminal_archive(self) -> None:
         config = RefutationMiningConfig(

@@ -419,6 +419,21 @@ class LocalShowdownEnv:
         self._parsed_line_count = 0
         self._belief_fed_count = 0
 
+    def reseed_simulator_rng(self, seed: int) -> None:
+        """Reset Showdown's battle PRNG at the current simulator state."""
+
+        if self._battle_token is None:
+            raise LocalShowdownError("Cannot reseed before reset.")
+        showdown_seed = showdown_seed_from_int(seed)
+        self._send_command(
+            {
+                "type": "reseed",
+                "battleId": self._battle_token,
+                "seed": showdown_seed,
+            }
+        )
+        self._read_until_event_type("reseeded")
+
     def step(self, actions: Mapping[PlayerId, int]) -> StepResult:
         requested = self.requested_players()
         if not requested:
@@ -602,6 +617,7 @@ class LocalShowdownEnv:
                 continue
             if event.get("type") == event_type:
                 return event
+            self._apply_event(event)
 
     def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")

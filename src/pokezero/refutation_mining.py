@@ -17,7 +17,13 @@ from .actions import ACTION_COUNT
 from .collection import RolloutRecord
 from .env import PokeZeroEnv, TerminalState
 from .policy import Policy, legal_action_indices
-from .replay_branching import action_rounds_from_trajectory, replay_trajectory_branch
+from .replay_branching import (
+    ReplayActionRound,
+    ReplayBranchResult,
+    action_rounds_from_trajectory,
+    replay_trajectory_branch,
+    replay_trajectory_prefix,
+)
 from .rollout import RolloutConfig, continue_rollout_from_current_state
 from .trajectory import BattleTrajectory, TrajectoryStep
 
@@ -178,10 +184,10 @@ class TerminalBranchEvaluator(Protocol):
 class ReplayTerminalBranchEvaluator:
     """Replay-from-root branch evaluator backed by the live environment.
 
-    Replay uses the recorded battle seed to reach the branch state.  The
-    certification seed is then used for continuation policy RNG.  This keeps R0
-    compatible with today's replay-from-root harness; full simulator-RNG
-    reseeding needs a future snapshot/restore backend.
+    Replay uses the recorded battle seed to reach the branch state. When
+    ``reseed_simulator_rng`` is enabled, each certification seed resets the
+    Showdown battle PRNG before the deviation is submitted, so immediate branch
+    rolls and rollout continuation are both resampled.
     """
 
     env_factory: Callable[[], PokeZeroEnv]
@@ -191,7 +197,11 @@ class ReplayTerminalBranchEvaluator:
     check_prefix_observations: bool = False
     evaluation_source: str = TERMINAL_ROLLOUT_EVALUATION_SOURCE
     value_head_used: bool = False
-    reseed_scope: str = "continuation_policy_rng"
+    reseed_simulator_rng: bool = False
+
+    @property
+    def reseed_scope(self) -> str:
+        return "simulator_rng" if self.reseed_simulator_rng else "continuation_policy_rng"
 
     def evaluate(
         self,
@@ -202,12 +212,21 @@ class ReplayTerminalBranchEvaluator:
     ) -> BranchTerminalResult:
         env: PokeZeroEnv = self.env_factory()
         try:
-            branch = replay_trajectory_branch(
-                env,
-                record.trajectory,
-                prefix_decision_round_count=candidate.decision_round_index,
-                branch_actions=candidate.branch_actions,
-                check_prefix_observations=self.check_prefix_observations,
+            branch = (
+                self._replay_simulator_reseeded_branch(
+                    env=env,
+                    record=record,
+                    candidate=candidate,
+                    certification_seed=certification_seed,
+                )
+                if self.reseed_simulator_rng
+                else replay_trajectory_branch(
+                    env,
+                    record.trajectory,
+                    prefix_decision_round_count=candidate.decision_round_index,
+                    branch_actions=candidate.branch_actions,
+                    check_prefix_observations=self.check_prefix_observations,
+                )
             )
             step_result = branch.step_result
             forced_round_count = 1
@@ -259,6 +278,50 @@ class ReplayTerminalBranchEvaluator:
             if callable(close):
                 close()
 
+    def _replay_simulator_reseeded_branch(
+        self,
+        *,
+        env: PokeZeroEnv,
+        record: RolloutRecord,
+        candidate: RefutationCandidate,
+        certification_seed: int,
+    ):
+        prefix = replay_trajectory_prefix(
+            env,
+            record.trajectory,
+            decision_round_count=candidate.decision_round_index,
+            check_prefix_observations=self.check_prefix_observations,
+        )
+        if prefix.terminal is not None:
+            raise ValueError("cannot branch from a terminal replay prefix.")
+        reseeder = getattr(env, "reseed_simulator_rng", None)
+        if not callable(reseeder):
+            raise ValueError(
+                "simulator-RNG refutation certification requires an environment "
+                "with reseed_simulator_rng(seed)."
+            )
+        reseeder(certification_seed)
+        _require_branch_requested_players(
+            candidate.branch_actions,
+            requested_players=prefix.requested_players,
+            turn_index=candidate.decision_round_index,
+        )
+        try:
+            step_result = env.step(candidate.branch_actions)
+        except RuntimeError as exc:
+            raise InfeasibleRefutationLineError(
+                f"branch action sequence round {candidate.decision_round_index} "
+                f"failed during simulator-reseeded branch: {exc}"
+            ) from exc
+        return ReplayBranchResult(
+            prefix=prefix,
+            branch_round=ReplayActionRound(
+                turn_index=candidate.decision_round_index,
+                actions=candidate.branch_actions,
+            ),
+            step_result=step_result,
+        )
+
 
 @dataclass(frozen=True)
 class CertifiedRefutation:
@@ -295,8 +358,8 @@ class CertifiedRefutation:
                 "reseed_scope": self.reseed_scope,
                 "simulator_rng_reseeded": self.simulator_rng_reseeded,
                 "limitation": (
-                    "certification varied continuation policy RNG only; true simulator-RNG "
-                    "reseeding requires a snapshot/restore backend"
+                    "certification varied continuation policy RNG only; R0 acceptance "
+                    "requires a simulator-RNG reseeded evaluator"
                     if not self.simulator_rng_reseeded
                     else None
                 ),
@@ -785,7 +848,7 @@ def validate_refutation_report_payload(
                 "threshold": len(rows),
                 "message": (
                     "some archived refutations vary continuation policy RNG only; true "
-                    "simulator-RNG reseeding requires a snapshot/restore backend"
+                    "simulator-RNG reseeding requires an evaluator with simulator RNG reseed support"
                 ),
             }
         )
