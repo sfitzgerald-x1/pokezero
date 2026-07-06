@@ -14,10 +14,14 @@ from .collection import (
 )
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .refutation_mining import (
+    DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
+    DEFAULT_R0_MIN_SAMPLED_WINS,
     RefutationMiningConfig,
     ReplayTerminalBranchEvaluator,
     candidate_count_for_records,
+    iter_fragile_states,
     mine_refutations,
+    validate_refutation_report_payload,
     write_refutation_report,
 )
 from .rollout import RolloutConfig
@@ -64,6 +68,40 @@ def build_arg_parser() -> argparse.ArgumentParser:
     plan.add_argument("--records", action="append", required=True, type=Path, help="Rollout-record JSONL. May repeat.")
     _add_common_args(plan)
     plan.set_defaults(func=_plan)
+
+    validate = subparsers.add_parser(
+        "validate",
+        help="Validate a refutation report and fragile-state archive against the R0 artifact gate.",
+    )
+    validate.add_argument("--report", type=Path, required=True, help="Refutation report JSON.")
+    validate.add_argument(
+        "--archive",
+        type=Path,
+        default=None,
+        help="Fragile-state JSONL archive. Defaults to report.archive_path.",
+    )
+    validate.add_argument(
+        "--min-sampled-wins",
+        type=int,
+        default=DEFAULT_R0_MIN_SAMPLED_WINS,
+        help=f"Minimum sampled champion wins required for R0 acceptance (default {DEFAULT_R0_MIN_SAMPLED_WINS}).",
+    )
+    validate.add_argument(
+        "--min-certified-refutations",
+        type=int,
+        default=DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
+        help=(
+            "Minimum certified fragile-state examples required for R0 acceptance "
+            f"(default {DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS})."
+        ),
+    )
+    validate.add_argument(
+        "--min-certification-seeds",
+        type=int,
+        default=20,
+        help="Minimum terminal-rollout reseeds per certified example (default 20).",
+    )
+    validate.set_defaults(func=_validate)
     return parser
 
 
@@ -168,6 +206,25 @@ def _mine(args: argparse.Namespace) -> int:
     write_refutation_report(args.out_dir / args.report_name, report)
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     return 0
+
+
+def _validate(args: argparse.Namespace) -> int:
+    report = json.loads(args.report.read_text(encoding="utf-8"))
+    archive_path = args.archive
+    if archive_path is None:
+        raw_archive_path = report.get("archive_path")
+        if not raw_archive_path:
+            raise ValueError("--archive is required when report.archive_path is missing.")
+        archive_path = Path(str(raw_archive_path))
+    payload = validate_refutation_report_payload(
+        report=report,
+        fragile_states=tuple(iter_fragile_states(archive_path)),
+        min_sampled_wins=args.min_sampled_wins,
+        min_certified_refutations=args.min_certified_refutations,
+        min_certification_seed_count=args.min_certification_seeds,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["passed"] else 2
 
 
 def main(argv: list[str] | None = None) -> int:

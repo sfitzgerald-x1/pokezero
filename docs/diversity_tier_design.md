@@ -156,6 +156,13 @@ forking backend. Later phases feed certified states back through value
 retargeting, policy distillation at mined states, surprise weighting, and
 curriculum starts.
 
+`pokezero-refutation validate` is the artifact-level R0 gate: by default it
+requires at least 200 sampled champion wins, at least 10 certified fragile-state
+rows, terminal-rollout evaluation, no value-head use, ≥20 certification seeds per
+row, replay coordinates, and archive/report count consistency. It does not rerun
+the simulations; it verifies that a mined report is strong enough to treat as an
+R0 readout.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection

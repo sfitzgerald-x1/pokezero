@@ -25,6 +25,8 @@ from .trajectory import BattleTrajectory, TrajectoryStep
 FRAGILE_STATE_SCHEMA_VERSION = "pokezero.fragile_state.v1"
 REFUTATION_REPORT_SCHEMA_VERSION = "pokezero.refutation_report.v1"
 TERMINAL_ROLLOUT_EVALUATION_SOURCE = "terminal_rollout"
+DEFAULT_R0_MIN_SAMPLED_WINS = 200
+DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS = 10
 
 
 @dataclass(frozen=True)
@@ -460,6 +462,217 @@ def iter_fragile_states(path: Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
+def validate_refutation_report_payload(
+    *,
+    report: Mapping[str, Any],
+    fragile_states: Iterable[Mapping[str, Any]],
+    min_sampled_wins: int = DEFAULT_R0_MIN_SAMPLED_WINS,
+    min_certified_refutations: int = DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
+    min_certification_seed_count: int = 20,
+) -> dict[str, Any]:
+    """Validate an R0 refutation report/archive against the artifact-level gate."""
+
+    if min_sampled_wins <= 0:
+        raise ValueError("min_sampled_wins must be positive.")
+    if min_certified_refutations <= 0:
+        raise ValueError("min_certified_refutations must be positive.")
+    if min_certification_seed_count < 20:
+        raise ValueError("min_certification_seed_count must be at least 20.")
+
+    rows = tuple(dict(row) for row in fragile_states)
+    checks: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def add_check(name: str, passed: bool, *, observed: Any = None, threshold: Any = None, message: str) -> None:
+        checks.append(
+            {
+                "name": name,
+                "passed": bool(passed),
+                "observed": observed,
+                "threshold": threshold,
+                "message": message,
+            }
+        )
+
+    add_check(
+        "report_schema",
+        report.get("schema_version") == REFUTATION_REPORT_SCHEMA_VERSION,
+        observed=report.get("schema_version"),
+        threshold=REFUTATION_REPORT_SCHEMA_VERSION,
+        message="report schema version is supported",
+    )
+    sampled_win_count = _int_value(report.get("sampled_win_count"))
+    add_check(
+        "sampled_win_count",
+        sampled_win_count is not None and sampled_win_count >= min_sampled_wins,
+        observed=sampled_win_count,
+        threshold=min_sampled_wins,
+        message="report mined enough sampled champion wins",
+    )
+    reported_certified_count = _int_value(report.get("certified_refutation_count"))
+    add_check(
+        "certified_refutation_count",
+        reported_certified_count is not None and reported_certified_count >= min_certified_refutations,
+        observed=reported_certified_count,
+        threshold=min_certified_refutations,
+        message="report contains enough certified refutations",
+    )
+    add_check(
+        "archive_count_matches_report",
+        reported_certified_count is not None and len(rows) == reported_certified_count,
+        observed=len(rows),
+        threshold=reported_certified_count,
+        message="fragile-state archive row count matches the report",
+    )
+
+    terminal_rollout_rows = 0
+    no_value_head_rows = 0
+    seed_count_rows = 0
+    distinct_seed_rows = 0
+    certification_consistency_rows = 0
+    flip_rate_rows = 0
+    replay_coordinate_rows = 0
+    terminal_result_rows = 0
+    simulator_rng_reseeded_rows = 0
+    reseed_scope_counts: dict[str, int] = {}
+    for row in rows:
+        certification = _mapping_or_empty(row.get("certification"))
+        candidate = _mapping_or_empty(row.get("candidate"))
+        search_stats = _mapping_or_empty(row.get("search_stats"))
+        seed_count = _int_value(certification.get("seed_count"))
+        min_flip_rate = _float_value(certification.get("min_flip_rate"))
+        terminal_results = row.get("terminal_results")
+        result_rows = tuple(_mapping_or_empty(result) for result in terminal_results) if isinstance(terminal_results, list) else ()
+        result_seeds = tuple(_int_value(result.get("certification_seed")) for result in result_rows)
+        champion_player_id = candidate.get("champion_player_id")
+        loser_player_id = candidate.get("loser_player_id")
+        computed_deviation_wins = sum(1 for result in result_rows if result.get("winner") == loser_player_id)
+        computed_champion_wins = sum(1 for result in result_rows if result.get("winner") == champion_player_id)
+        computed_ties_or_caps = len(result_rows) - computed_deviation_wins - computed_champion_wins
+        computed_flip_rate = computed_deviation_wins / len(result_rows) if result_rows else None
+        reseed_scope = certification.get("reseed_scope") or search_stats.get("reseed_scope") or "unknown"
+        reseed_scope_counts[str(reseed_scope)] = reseed_scope_counts.get(str(reseed_scope), 0) + 1
+
+        if row.get("schema_version") == FRAGILE_STATE_SCHEMA_VERSION and row.get("evaluation_source") == TERMINAL_ROLLOUT_EVALUATION_SOURCE:
+            terminal_rollout_rows += 1
+        if search_stats.get("value_head_used") is False:
+            no_value_head_rows += 1
+        if seed_count is not None and seed_count >= min_certification_seed_count:
+            seed_count_rows += 1
+        if seed_count is not None and len(result_seeds) == seed_count and None not in result_seeds and len(set(result_seeds)) == seed_count:
+            distinct_seed_rows += 1
+        if (
+            seed_count is not None
+            and computed_flip_rate is not None
+            and _int_value(certification.get("deviation_wins")) == computed_deviation_wins
+            and _int_value(certification.get("champion_wins")) == computed_champion_wins
+            and _int_value(certification.get("ties_or_caps")) == computed_ties_or_caps
+            and _float_equal(_float_value(certification.get("flip_rate")), computed_flip_rate)
+            and len(result_rows) == seed_count
+        ):
+            certification_consistency_rows += 1
+        if (
+            computed_flip_rate is not None
+            and min_flip_rate is not None
+            and computed_flip_rate > min_flip_rate
+            and certification.get("passed") is True
+        ):
+            flip_rate_rows += 1
+        if _candidate_has_replay_coordinates(candidate):
+            replay_coordinate_rows += 1
+        if isinstance(terminal_results, list) and seed_count is not None and len(result_rows) == seed_count:
+            terminal_result_rows += 1
+        if certification.get("simulator_rng_reseeded") is True:
+            simulator_rng_reseeded_rows += 1
+
+    add_check(
+        "terminal_rollout_rows",
+        terminal_rollout_rows == len(rows),
+        observed=terminal_rollout_rows,
+        threshold=len(rows),
+        message="all archived refutations use terminal-rollout evaluation",
+    )
+    add_check(
+        "no_value_head_rows",
+        no_value_head_rows == len(rows),
+        observed=no_value_head_rows,
+        threshold=len(rows),
+        message="all archived refutations avoid champion value-head evaluation",
+    )
+    add_check(
+        "certification_seed_count_rows",
+        seed_count_rows == len(rows),
+        observed=seed_count_rows,
+        threshold=len(rows),
+        message="all archived refutations use enough certification seeds",
+    )
+    add_check(
+        "distinct_certification_seed_rows",
+        distinct_seed_rows == len(rows),
+        observed=distinct_seed_rows,
+        threshold=len(rows),
+        message="all archived refutations include distinct certification seeds",
+    )
+    add_check(
+        "certification_consistency_rows",
+        certification_consistency_rows == len(rows),
+        observed=certification_consistency_rows,
+        threshold=len(rows),
+        message="all archived certification summaries match terminal results",
+    )
+    add_check(
+        "flip_rate_rows",
+        flip_rate_rows == len(rows),
+        observed=flip_rate_rows,
+        threshold=len(rows),
+        message="all archived refutations exceed their configured flip-rate threshold",
+    )
+    add_check(
+        "replay_coordinate_rows",
+        replay_coordinate_rows == len(rows),
+        observed=replay_coordinate_rows,
+        threshold=len(rows),
+        message="all archived refutations carry replay coordinates needed for reproduction",
+    )
+    add_check(
+        "terminal_result_rows",
+        terminal_result_rows == len(rows),
+        observed=terminal_result_rows,
+        threshold=len(rows),
+        message="all archived refutations include one terminal result per certification seed",
+    )
+    if rows and simulator_rng_reseeded_rows < len(rows):
+        warnings.append(
+            {
+                "name": "simulator_rng_not_fully_reseeded",
+                "observed": simulator_rng_reseeded_rows,
+                "threshold": len(rows),
+                "message": (
+                    "some archived refutations vary continuation policy RNG only; true "
+                    "simulator-RNG reseeding requires a snapshot/restore backend"
+                ),
+            }
+        )
+
+    passed = all(check["passed"] for check in checks)
+    return {
+        "schema_version": "pokezero.refutation_report_validation.v1",
+        "passed": passed,
+        "checks": checks,
+        "warnings": warnings,
+        "summary": {
+            "sampled_win_count": sampled_win_count,
+            "certified_refutation_count": reported_certified_count,
+            "archive_row_count": len(rows),
+            "min_sampled_wins": min_sampled_wins,
+            "min_certified_refutations": min_certified_refutations,
+            "min_certification_seed_count": min_certification_seed_count,
+            "simulator_rng_reseeded_count": simulator_rng_reseeded_rows,
+            "reseed_scope_counts": dict(sorted(reseed_scope_counts.items())),
+        },
+    }
+
+
 def _iter_champion_wins(
     records: Sequence[RolloutRecord],
     *,
@@ -559,3 +772,42 @@ def _write_fragile_state(handle: TextIO, refutation: CertifiedRefutation) -> Non
     handle.write(json.dumps(refutation.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False))
     handle.write("\n")
     handle.flush()
+
+
+def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _float_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _float_equal(left: float | None, right: float | None, *, tolerance: float = 1e-12) -> bool:
+    return left is not None and right is not None and abs(left - right) <= tolerance
+
+
+def _candidate_has_replay_coordinates(candidate: Mapping[str, Any]) -> bool:
+    required = (
+        "battle_id",
+        "source_record_index",
+        "seed",
+        "format_id",
+        "champion_player_id",
+        "loser_player_id",
+        "decision_round_index",
+        "step_index",
+        "recorded_action_index",
+        "deviation_action_index",
+        "branch_actions",
+    )
+    return all(key in candidate for key in required) and isinstance(candidate.get("branch_actions"), Mapping)
