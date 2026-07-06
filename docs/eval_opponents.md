@@ -23,7 +23,7 @@ it isn't re-litigated (below).
 | `max-damage` | scripted | low-mid | greedy damage estimate (needs Showdown dex) |
 | `scripted-teacher` | scripted | mid | curated branch logic incl. hazards/Rapid-Spin (`policy.py`) |
 | **foul-play @ search-time-ms** | external search bot (poke-engine, MCTS) | **mid → SOTA, tunable** | `third_party/foul-play` pinned submodule + local patches; `--search-time-ms` sets strength |
-| historical self checkpoints | frozen nets | matched | `opponents.py` pools; curated milestones at `/shared` + `checkpoints/curated/` |
+| historical self checkpoints | frozen nets | matched | v2+ current-family only; enforce with `opponents.py` `current_family_*` helpers; curated milestones at `/shared` + `checkpoints/curated/` |
 
 `random-legal` and `simple-legal` are plumbing checks only. They saturated by
 the 1M no-belief family (~99% and ~95%), so they should not be used as strength
@@ -35,9 +35,10 @@ family. In this registry, **v2+** means current-family checkpoints encoded with
 observation-schema v2 or newer, not older no-belief/pre-v2 families and not
 pool-version labels such as `pool-self-v1`. For new wave strength evaluation,
 use v2+ checkpoints/frozen pools and matched milestones. Legacy-family
-checkpoints at any milestone are historical context, not opponents to evaluate
-against. Calibration pools can still be used for value/diagnostic reads when
-their role is stated explicitly.
+checkpoints at any milestone, including longer historical runs beyond 500k
+games, are historical context, not opponents to evaluate against. Calibration
+pools can still be used for value/diagnostic reads when their role is stated
+explicitly.
 
 ### foul-play as a graded ladder (the randbats-native rung system)
 
