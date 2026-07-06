@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -46,12 +47,16 @@ class BenchmarkMatchupResult:
     p2_policy_id: str
     seed_start: int
     metrics: "CollectionMetrics"
+    p1_policy_provenance: Mapping[str, Any] | None = None
+    p2_policy_provenance: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "label": self.label,
             "p1_policy_id": self.p1_policy_id,
             "p2_policy_id": self.p2_policy_id,
+            "p1_policy_provenance": dict(self.p1_policy_provenance or {}),
+            "p2_policy_provenance": dict(self.p2_policy_provenance or {}),
             "seed_start": self.seed_start,
             "metrics": self.metrics.to_dict(),
         }
@@ -97,6 +102,7 @@ class BenchmarkReport:
     max_decision_rounds: int
     games_per_matchup: int
     matchups: tuple[BenchmarkMatchupResult, ...]
+    policy_provenance: Mapping[str, Mapping[str, Any]] | None = None
 
     @property
     def total_games(self) -> int:
@@ -146,6 +152,10 @@ class BenchmarkReport:
             "decisions_per_second": self.decisions_per_second,
             "average_decision_rounds": self.average_decision_rounds,
             **({"peak_rss_mb": self.peak_rss_mb} if self.peak_rss_mb is not None else {}),
+            "policy_provenance": {
+                policy_id: dict(provenance)
+                for policy_id, provenance in sorted((self.policy_provenance or {}).items())
+            },
             "matchups": [result.to_dict() for result in self.matchups],
             "head_to_heads": [result.to_dict() for result in self.head_to_head_results],
         }
@@ -367,6 +377,8 @@ def benchmark_rollouts(
                     p2_policy_id=matchup.p2_policy.policy_id,
                     seed_start=seed_start,
                     metrics=accumulator.to_metrics(elapsed_seconds=elapsed, peak_rss_mb=current_peak_rss_mb()),
+                    p1_policy_provenance=benchmark_policy_provenance(matchup.p1_policy),
+                    p2_policy_provenance=benchmark_policy_provenance(matchup.p2_policy),
                 )
             )
     finally:
@@ -379,7 +391,70 @@ def benchmark_rollouts(
         max_decision_rounds=rollout_config.max_decision_rounds,
         games_per_matchup=games,
         matchups=tuple(results),
+        policy_provenance=_benchmark_report_policy_provenance(results),
     )
+
+
+def benchmark_policy_provenance(policy: Policy) -> dict[str, Any]:
+    """Audit payload for the concrete policy object used in a benchmark seat.
+
+    Policy IDs are labels and may be aliases. The checkpoint path/hash fields are the guardrail
+    that catches alias plumbing bugs where a benchmark row looks right but loaded the wrong
+    weights.
+    """
+
+    policy_id = str(getattr(policy, "policy_id", "unknown"))
+    base_policy = _unwrap_policy_alias(policy)
+    base_policy_id = str(getattr(base_policy, "policy_id", policy_id))
+    checkpoint_path = _optional_str(getattr(base_policy, "checkpoint_path", None))
+    weights_sha256 = _optional_str(getattr(base_policy, "weights_sha256", None))
+    return {
+        "policy_id": policy_id,
+        "base_policy_id": base_policy_id,
+        "policy_class": type(base_policy).__name__,
+        "checkpoint_path": checkpoint_path,
+        "weights_sha256": weights_sha256,
+        "aliased": policy is not base_policy or policy_id != base_policy_id,
+    }
+
+
+def _unwrap_policy_alias(policy: Policy) -> Policy:
+    current = policy
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        wrapped = getattr(current, "policy", None)
+        if wrapped is None:
+            break
+        current = wrapped
+    return current
+
+
+def _benchmark_report_policy_provenance(
+    results: Iterable[BenchmarkMatchupResult],
+) -> dict[str, Mapping[str, Any]]:
+    provenance: dict[str, Mapping[str, Any]] = {}
+    for result in results:
+        if result.p1_policy_provenance is not None:
+            provenance[result.p1_policy_id] = result.p1_policy_provenance
+        if result.p2_policy_provenance is not None:
+            provenance[result.p2_policy_id] = result.p2_policy_provenance
+    return provenance
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def default_benchmark_matchups() -> tuple[BenchmarkMatchup, ...]:
@@ -836,8 +911,20 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
         if not checkpoint:
             raise ValueError("linear policy spec must include a checkpoint path after 'linear:'.")
         linear_options = _linear_policy_options(options)
-        model = load_linear_model(Path(checkpoint))
-        return lambda: LinearSoftmaxPolicy(model=model, **linear_options)
+        checkpoint_path = Path(checkpoint)
+        model = load_linear_model(checkpoint_path)
+        checkpoint_provenance = {
+            "checkpoint_path": str(checkpoint_path.resolve(strict=False)),
+            "weights_sha256": _file_sha256(checkpoint_path),
+        }
+
+        def factory() -> Policy:
+            policy = LinearSoftmaxPolicy(model=model, **linear_options)
+            policy.checkpoint_path = checkpoint_provenance["checkpoint_path"]
+            policy.weights_sha256 = checkpoint_provenance["weights_sha256"]
+            return policy
+
+        return factory
     if lowered.startswith(NEURAL_POLICY_SPEC_PREFIX):
         from .neural_policy import load_transformer_policy
 
