@@ -1146,6 +1146,7 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
             selection_mode = "recent"
         promoted_specs = _string_sequence(opponent_pool.get("promoted_checkpoint_policy_specs", ()))
         fixed_specs = set(_string_sequence(opponent_pool.get("fixed_opponent_policy_specs", ())))
+        fixed_spec_bodies = {_policy_spec_body(spec) for spec in fixed_specs}
         first_iteration = _optional_int(invocation_config.get("first_iteration"))
         first_iteration_payload = iterations_by_number.get(first_iteration or 0)
         current_policy_spec = (
@@ -1179,7 +1180,9 @@ def _promoted_opponent_pool_requirement_check(manifest: Mapping[str, Any]) -> Ru
                 failures.append(f"invocation_{invocation_index}:iteration_{iteration_number}:missing_opponent_policy_specs")
                 requirements.append((0, required_size))
                 continue
-            selected_promoted_specs = tuple(spec for spec in opponent_specs if spec not in fixed_specs)
+            selected_promoted_specs = tuple(
+                spec for spec in opponent_specs if _policy_spec_body(spec) not in fixed_spec_bodies
+            )
             requirements.append((len(selected_promoted_specs), required_size))
             if len(selected_promoted_specs) < required_size:
                 failures.append(
@@ -1568,6 +1571,10 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _policy_spec_body(value: str) -> str:
+    return str(value).partition("?")[0]
 
 
 def _optional_float(value: Any) -> float | None:

@@ -97,6 +97,7 @@ from .value_calibration import (
 )
 from .neural_selfplay import (
     COLLECTOR_ADVANCEMENT_MODES,
+    DEFAULT_COLLECTION_EXPLORATION_EPSILON,
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
     NeuralValueSelectionConfig,
@@ -1081,6 +1082,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Softmax sampling temperature for the self-play collector (>1 explores more). Applies "
             "only to rollout collection; benchmark/advancement use the deterministic policy. "
             "Default 1.0 (unchanged)."
+        ),
+    )
+    iterate.add_argument(
+        "--collection-epsilon",
+        type=float,
+        default=DEFAULT_COLLECTION_EXPLORATION_EPSILON,
+        help=(
+            "Minimum random legal exploration rate for learned policies during self-play "
+            "collection. Applies only to rollout collection; benchmark/advancement stay "
+            f"deterministic. Default {DEFAULT_COLLECTION_EXPLORATION_EPSILON}."
         ),
     )
     iterate.add_argument(
@@ -3846,6 +3857,7 @@ def _iterate(args: argparse.Namespace) -> int:
         benchmark_reference_policy_specs=benchmark_references,
         mirror_match=args.mirror_match,
         collection_temperature=args.collection_temperature,
+        collection_exploration_epsilon=args.collection_epsilon,
         tensorboard_log_dir=args.tensorboard_logdir,
         max_historical_opponents=args.max_historical_opponents,
         historical_opponent_selection=args.historical_opponent_selection,

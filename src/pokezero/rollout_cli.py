@@ -28,6 +28,10 @@ from .rollout import RolloutConfig
 from .selfplay import OpponentPoolEntry, collect_selfplay_rollouts
 from .showdown import observation_schema_version_from_choice, observation_spec_for_schema
 from .shaping import parse_shaping_spec
+from .neural_selfplay import (
+    DEFAULT_COLLECTION_EXPLORATION_EPSILON,
+    _with_collection_sampling_options,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -137,6 +141,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "When --opponent-pool is used, reserve this opponent-sampling share for a mirror "
             "match against --current-policy before drawing from the pool weights (default: 0.5)."
+        ),
+    )
+    collect_selfplay_cache.add_argument(
+        "--collection-epsilon",
+        type=float,
+        default=DEFAULT_COLLECTION_EXPLORATION_EPSILON,
+        help=(
+            "Minimum random legal exploration rate for learned policies during self-play "
+            "training-cache collection. Applies only to collection; scripted/random/simple "
+            f"policies are unchanged. Default {DEFAULT_COLLECTION_EXPLORATION_EPSILON}."
         ),
     )
     # Ablation-arm feature masks for the checkpoint-less iteration-0 case (the cluster
@@ -392,7 +406,11 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         node_binary=args.node_binary,
     )
     policy_showdown_root = env_config.resolved_showdown_root()
-    current_policy = policy_spec_with_showdown_root(args.current_policy, policy_showdown_root)
+    current_policy = _with_collection_sampling_options(
+        policy_spec_with_showdown_root(args.current_policy, policy_showdown_root),
+        temperature=1.0,
+        exploration_epsilon=args.collection_epsilon,
+    )
     if args.opponent_pool is not None and args.opponent_policy:
         raise ValueError("--opponent-pool cannot be combined with --opponent-policy.")
     opponent_pool_entries = (
@@ -400,11 +418,27 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         if args.opponent_pool is not None
         else None
     )
+    if opponent_pool_entries is not None:
+        opponent_pool_entries = tuple(
+            dataclasses.replace(
+                entry,
+                policy_spec=_with_collection_sampling_options(
+                    entry.policy_spec,
+                    temperature=1.0,
+                    exploration_epsilon=args.collection_epsilon,
+                ),
+            )
+            for entry in opponent_pool_entries
+        )
     opponent_policies = (
         tuple(entry.policy_spec for entry in opponent_pool_entries)
         if opponent_pool_entries is not None
         else tuple(
-            policy_spec_with_showdown_root(spec, policy_showdown_root)
+            _with_collection_sampling_options(
+                policy_spec_with_showdown_root(spec, policy_showdown_root),
+                temperature=1.0,
+                exploration_epsilon=args.collection_epsilon,
+            )
             for spec in (args.opponent_policy or (args.current_policy,))
         )
     )

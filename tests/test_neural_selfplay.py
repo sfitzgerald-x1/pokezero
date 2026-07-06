@@ -21,6 +21,7 @@ from pokezero.neural_policy import (
 )
 from pokezero.observation import ObservationPerspective, ObservationSpec, PokeZeroObservationV0
 from pokezero.neural_selfplay import (
+    DEFAULT_COLLECTION_EXPLORATION_EPSILON,
     NEURAL_SELFPLAY_RUN_SCHEMA_VERSION,
     NeuralSelfPlayPromotionConfig,
     NeuralValueCalibrationConfig,
@@ -366,6 +367,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertTrue(kwargs["mirror_match"])
         self.assertEqual(kwargs["collector_advancement_mode"], "always")
         self.assertEqual(kwargs["collection_temperature"], 1.4)
+        self.assertEqual(
+            kwargs["collection_exploration_epsilon"],
+            DEFAULT_COLLECTION_EXPLORATION_EPSILON,
+        )
         self.assertEqual(kwargs["historical_opponent_selection"], "spread")
         self.assertEqual(kwargs["evaluation_games"], 200)
         self.assertEqual(kwargs["benchmark_reference_policy_specs"], ("max-damage?showdown_root=%2Ftmp%2Fshowdown",))
@@ -404,6 +409,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
                         "--obj",
                         "behavior-cloning",
                         "--collection-temp=1.1",
+                        "--collection-epsilon=0.05",
                         "--collector-advancement-mode",
                         "incumbent-gate",
                         "--historical-opponent-selection",
@@ -423,6 +429,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(kwargs["collector_advancement_mode"], "incumbent-gate")
         self.assertEqual(kwargs["collection_temperature"], 1.1)
+        self.assertEqual(kwargs["collection_exploration_epsilon"], 0.05)
         self.assertEqual(kwargs["historical_opponent_selection"], "recent")
         self.assertEqual(kwargs["evaluation_games"], 12)
         self.assertEqual(
@@ -1852,6 +1859,43 @@ class NeuralSelfPlayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             _with_collection_temperature("neural:/m.pt?Sample=true&sample=false", 1.5)
 
+    def test_with_collection_sampling_options_enforces_epsilon_floor(self) -> None:
+        from pokezero.collection import _split_policy_spec_options, policy_factory_from_spec
+        from pokezero.neural_selfplay import _with_collection_sampling_options
+
+        self.assertEqual(
+            _with_collection_sampling_options(
+                "simple-legal",
+                temperature=1.0,
+                exploration_epsilon=0.01,
+            ),
+            "simple-legal",
+        )
+        spec = _with_collection_sampling_options(
+            "neural:/tmp/m.pt?Deterministic=true&epsilon=0.0",
+            temperature=1.0,
+            exploration_epsilon=0.01,
+        )
+        _, options = _split_policy_spec_options(spec)
+        self.assertNotIn("deterministic", options)
+        self.assertEqual(options["sample"], "true")
+        self.assertEqual(float(options["epsilon"]), 0.01)
+        self.assertTrue(callable(policy_factory_from_spec(spec)))
+
+    def test_with_collection_sampling_options_preserves_higher_epsilon(self) -> None:
+        from pokezero.collection import _split_policy_spec_options
+        from pokezero.neural_selfplay import _with_collection_sampling_options
+
+        spec = _with_collection_sampling_options(
+            "neural:/tmp/m.pt?epsilon=0.25",
+            temperature=1.5,
+            exploration_epsilon=0.01,
+        )
+        _, options = _split_policy_spec_options(spec)
+        self.assertEqual(options["sample"], "true")
+        self.assertEqual(float(options["temperature"]), 1.5)
+        self.assertEqual(float(options["epsilon"]), 0.25)
+
     def test_collection_temperature_keeps_canonical_spec_clean_in_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_dir = Path(temp_dir) / "run"
@@ -1872,6 +1916,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
         manifest = result.iterations[0].to_manifest_dict()
         self.assertNotIn("temperature", manifest["current_policy_spec"])
         self.assertNotIn("temperature", manifest["next_current_policy_spec"])
+        self.assertNotIn("epsilon", manifest["current_policy_spec"])
+        self.assertNotIn("epsilon", manifest["next_current_policy_spec"])
 
     def test_collection_temperature_applies_to_collector_spec(self) -> None:
         collected: list = []
@@ -1892,6 +1938,48 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 )
         # The collector spec passed to collection carries the exploration temperature.
         self.assertIn("temperature=1.5", collected[0]["current_policy_spec"])
+        self.assertIn("epsilon=0.01", collected[0]["current_policy_spec"])
+
+    def test_collection_epsilon_defaults_to_collector_spec(self) -> None:
+        collected: list = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "run"
+            with patched_neural_selfplay_dependencies(collected=collected):
+                result = run_neural_selfplay_iterations(
+                    run_dir=run_dir,
+                    iterations=1,
+                    games_per_iteration=2,
+                    env_factory=lambda: None,  # type: ignore[return-value]
+                    rollout_config=RolloutConfig(max_decision_rounds=5),
+                    model_config=_entity_test_model_config(),
+                    training_config=TransformerTrainingConfig(window_size=1, epochs=1, batch_size=2),
+                    initial_policy_spec="neural:/tmp/bootstrap.pt",
+                    fixed_opponent_policy_specs=("simple-legal",),
+                )
+
+        self.assertIn(
+            f"epsilon={DEFAULT_COLLECTION_EXPLORATION_EPSILON}",
+            collected[0]["current_policy_spec"],
+        )
+        self.assertEqual(
+            result.invocation_config["collection_exploration_epsilon"],
+            DEFAULT_COLLECTION_EXPLORATION_EPSILON,
+        )
+
+    def test_collection_epsilon_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patched_neural_selfplay_dependencies():
+                with self.assertRaisesRegex(ValueError, "collection_exploration_epsilon"):
+                    run_neural_selfplay_iterations(
+                        run_dir=Path(temp_dir) / "run",
+                        iterations=1,
+                        games_per_iteration=2,
+                        env_factory=lambda: None,  # type: ignore[return-value]
+                        rollout_config=RolloutConfig(max_decision_rounds=5),
+                        model_config=_entity_test_model_config(),
+                        training_config=TransformerTrainingConfig(window_size=1, epochs=1, batch_size=2),
+                        collection_exploration_epsilon=0.0,
+                    )
 
     def test_collection_temperature_must_be_positive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1927,7 +2015,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
                 )
         # Iteration 1 collection includes the current policy as an opponent (mirror match),
         # so self-play happens from the start rather than only after a promotion.
-        self.assertIn("neural:/tmp/bootstrap.pt", collected[0]["opponent_policy_specs"])
+        self.assertTrue(
+            any(spec.startswith("neural:/tmp/bootstrap.pt?") for spec in collected[0]["opponent_policy_specs"])
+        )
+        self.assertTrue(
+            any("epsilon=0.01" in spec for spec in collected[0]["opponent_policy_specs"])
+        )
 
     def test_mirror_match_allows_no_fixed_training_opponents(self) -> None:
         collected: list = []
@@ -1947,8 +2040,12 @@ class NeuralSelfPlayTest(unittest.TestCase):
                     mirror_match=True,
                 )
 
-        self.assertEqual(collected[0]["opponent_policy_specs"], ("neural:/tmp/bootstrap.pt",))
-        self.assertEqual(result.iterations[0].opponent_policy_specs, ("neural:/tmp/bootstrap.pt",))
+        self.assertTrue(collected[0]["opponent_policy_specs"][0].startswith("neural:/tmp/bootstrap.pt?"))
+        self.assertIn("epsilon=0.01", collected[0]["opponent_policy_specs"][0])
+        self.assertEqual(
+            result.iterations[0].opponent_policy_specs,
+            ("neural:/tmp/bootstrap.pt?sample=true&epsilon=0.01",),
+        )
 
     def test_no_fixed_training_opponents_requires_mirror_match(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1992,9 +2089,13 @@ class NeuralSelfPlayTest(unittest.TestCase):
             fifth_checkpoint = f"neural:{run_dir / 'iteration-0005' / 'transformer-policy.pt'}"
             self.assertEqual(
                 collected[5]["opponent_policy_specs"],
-                ("simple-legal", first_checkpoint, fourth_checkpoint),
+                (
+                    "simple-legal",
+                    f"{first_checkpoint}?sample=true&epsilon=0.01",
+                    f"{fourth_checkpoint}?sample=true&epsilon=0.01",
+                ),
             )
-            self.assertNotIn(fifth_checkpoint, collected[5]["opponent_policy_specs"])
+            self.assertNotIn(f"{fifth_checkpoint}?sample=true&epsilon=0.01", collected[5]["opponent_policy_specs"])
             self.assertEqual(iteration_manifest["opponent_pool_config"]["historical_opponent_selection"], "spread")
 
     def test_tensorboard_scalars_flattens_training_and_benchmark(self) -> None:
@@ -2161,7 +2262,7 @@ class NeuralSelfPlayTest(unittest.TestCase):
 
         self.assertEqual(
             [call["current_policy_spec"] for call in collected],
-            ["random-legal", first_manifest["checkpoint_policy_spec"]],
+            ["random-legal", f"{first_manifest['checkpoint_policy_spec']}?sample=true&epsilon=0.01"],
         )
         self.assertTrue(first_manifest["advancement"]["advance_collector"])
         self.assertEqual(first_manifest["advancement"]["reason"], "collector_advancement_mode_always")
@@ -2346,8 +2447,8 @@ class NeuralSelfPlayTest(unittest.TestCase):
             [call["current_policy_spec"] for call in collected],
             [
                 "random-legal",
-                first_manifest["checkpoint_policy_spec"],
-                first_manifest["checkpoint_policy_spec"],
+                f"{first_manifest['checkpoint_policy_spec']}?sample=true&epsilon=0.01",
+                f"{first_manifest['checkpoint_policy_spec']}?sample=true&epsilon=0.01",
             ],
         )
         self.assertTrue(first_manifest["advancement"]["advance_collector"])
@@ -2704,7 +2805,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(collected[1]["seed_start"], 22)
         self.assertEqual(captured_benchmarks[0]["seed_start"], 100)
         self.assertEqual(captured_benchmarks[1]["seed_start"], 102)
-        self.assertEqual(collected[1]["current_policy_spec"], f"neural:{run_dir / 'iteration-0001' / 'transformer-policy.pt'}")
+        self.assertEqual(
+            collected[1]["current_policy_spec"],
+            f"neural:{run_dir / 'iteration-0001' / 'transformer-policy.pt'}?sample=true&epsilon=0.01",
+        )
         self.assertEqual(second_manifest["training_rollout_paths"], [
             str(run_dir / "iteration-0001" / "training-rollouts.jsonl"),
             str(run_dir / "iteration-0002" / "training-rollouts.jsonl"),
@@ -2956,7 +3060,10 @@ class NeuralSelfPlayTest(unittest.TestCase):
         self.assertEqual(first_manifest["advancement"]["reason"], "promotion_recorded")
         self.assertEqual(first_manifest["next_current_policy_spec"], first_selection_spec)
         self.assertEqual(second_manifest["current_policy_spec"], first_selection_spec)
-        self.assertEqual(collected[1]["current_policy_spec"], first_selection_spec)
+        self.assertEqual(
+            collected[1]["current_policy_spec"],
+            f"{first_selection_spec}?sample=true&epsilon=0.01",
+        )
 
     def test_promoted_checkpoint_specs_verify_registry_before_neural_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

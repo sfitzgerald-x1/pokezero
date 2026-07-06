@@ -180,6 +180,47 @@ class RunAuditTest(unittest.TestCase):
         self.assertTrue(check.passed)
         self.assertEqual(check.observed, 1.0)
 
+    def test_audit_excludes_wrapped_fixed_learned_opponent_from_promoted_requirement(self) -> None:
+        fixed_learned = "linear:runs/fixed/linear-policy.json"
+        config = invocation_config(required_pool_size=2, promoted_checkpoint_count=2)
+        config["opponent_pool"]["fixed_opponent_policy_specs"] = [
+            "random-legal",
+            "simple-legal",
+            fixed_learned,
+        ]
+        manifest = selfplay_manifest(
+            iterations=(
+                selfplay_iteration(
+                    iteration=1,
+                    wins=14,
+                    losses=6,
+                    capped_games=0,
+                    opponent_policy_specs=(
+                        "random-legal",
+                        f"{fixed_learned}?sample=true&epsilon=0.01",
+                        "linear:runs/promoted-1/linear-policy.json?sample=true&epsilon=0.01",
+                    ),
+                ),
+            ),
+            invocation_configs=(config,),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            write_manifest(manifest_path, manifest)
+
+            result = audit_run(
+                manifest_path,
+                config=RunAuditConfig(
+                    min_latest_benchmark_win_rate=0.60,
+                    min_latest_benchmark_games=20,
+                ),
+            )
+
+        check = next(check for check in result.checks if check.name == "promoted_opponent_pool_requirement")
+        self.assertFalse(result.passed)
+        self.assertFalse(check.passed)
+        self.assertIn("iteration_1:selected=1,required=2", check.message)
+
     def test_audit_fails_recorded_undersized_promoted_opponent_pool_requirement(self) -> None:
         manifest = selfplay_manifest(
             iterations=(
