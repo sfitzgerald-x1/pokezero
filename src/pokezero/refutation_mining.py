@@ -639,6 +639,8 @@ def reproduce_refutation_archive(
         )
     if evaluator.value_head_used:
         raise ValueError("refutation reproduction cannot use a value-head-backed evaluator.")
+    if evaluator.reseed_scope != "simulator_rng":
+        raise ValueError("refutation reproduction requires simulator-RNG-reseeded terminal evaluation.")
     if max_rows is not None and max_rows <= 0:
         raise ValueError("max_rows must be positive when set.")
 
@@ -683,6 +685,10 @@ def reproduce_refutation_archive(
             terminal_results=terminal_results,
         )
         min_flip_rate = _float_value(certification.get("min_flip_rate"))
+        archive_reseed_scope_passes = (
+            certification.get("reseed_scope") == "simulator_rng"
+            and certification.get("simulator_rng_reseeded") is True
+        )
         summary_matches_archive = (
             _int_value(certification.get("deviation_wins")) == expected_summary["deviation_wins"]
             and _int_value(certification.get("champion_wins")) == expected_summary["champion_wins"]
@@ -701,6 +707,7 @@ def reproduce_refutation_archive(
             and reproduced_summary_matches
             and seed_protocol["passed"]
             and threshold_passes
+            and archive_reseed_scope_passes
         )
         if not row_passed:
             mismatch_count += 1
@@ -714,6 +721,7 @@ def reproduce_refutation_archive(
                 "summary_matches_archive": summary_matches_archive,
                 "seed_protocol": seed_protocol,
                 "threshold_passes": threshold_passes,
+                "archive_reseed_scope_passes": archive_reseed_scope_passes,
                 "terminal_mismatch_count": len(mismatches),
                 "terminal_mismatches": mismatches[:5],
             }
@@ -721,7 +729,7 @@ def reproduce_refutation_archive(
 
     return {
         "schema_version": "pokezero.refutation_reproduction.v1",
-        "passed": mismatch_count == 0,
+        "passed": len(rows) > 0 and mismatch_count == 0,
         "row_count": len(rows),
         "mismatch_count": mismatch_count,
         "evaluation_source": evaluator.evaluation_source,
@@ -1172,6 +1180,16 @@ def _require_candidate_matches_record(
         mismatches.append(f"seed record={record.seed!r} candidate={candidate.seed!r}")
     if record.format_id != candidate.format_id:
         mismatches.append(f"format_id record={record.format_id!r} candidate={candidate.format_id!r}")
+    if record.terminal.winner != candidate.champion_player_id:
+        mismatches.append(
+            f"winner record={record.terminal.winner!r} candidate_champion={candidate.champion_player_id!r}"
+        )
+    if candidate.loser_player_id == candidate.champion_player_id:
+        mismatches.append("loser_player_id matches champion_player_id")
+    if candidate.champion_player_id not in record.policy_ids:
+        mismatches.append(f"champion_player_id {candidate.champion_player_id!r} is absent from record policy ids")
+    if candidate.loser_player_id not in record.policy_ids:
+        mismatches.append(f"loser_player_id {candidate.loser_player_id!r} is absent from record policy ids")
     if mismatches:
         raise ValueError(
             f"fragile row {row_index} source record does not match candidate replay coordinates: "
