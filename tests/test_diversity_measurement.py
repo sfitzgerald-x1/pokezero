@@ -121,6 +121,26 @@ class HazardTrajectoryTest(unittest.TestCase):
         self.assertEqual(payload["valid_points"], 0)
         self.assertFalse(payload["gate_pass"])
 
+    def test_zero_game_milestone_sorts_before_later_points(self) -> None:
+        payload = aggregate_hazard_rows(
+            [
+                {
+                    "milestone_games": 50_000,
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -0.04,
+                    "value_opp_hazard_response": 0.04,
+                },
+                {
+                    "milestone_games": 0,
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -0.02,
+                    "value_opp_hazard_response": 0.02,
+                },
+            ]
+        )
+
+        self.assertEqual([point["milestone_games"] for point in payload["points"]], [0, 50_000])
+
     def test_milestone_parser_handles_decimal_millions_and_rejects_dates(self) -> None:
         self.assertEqual(parse_milestone_games_text("pokezero-belief-gen3-1-5m"), 1_500_000)
         self.assertEqual(parse_milestone_games_text("1.25M"), 1_250_000)

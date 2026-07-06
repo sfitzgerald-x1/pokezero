@@ -7,8 +7,8 @@ from docs/diversity_tier_design.md:
 
 and reports whether the current trajectory satisfies the measurement-only gate:
 positive pricing at the configured level for the last two valid milestones,
-non-decreasing trend across at least five valid milestones, and non-zero Rapid
-Spin response as behavioral corroboration when that signal is available.
+a positive slope trend across at least five valid milestones, and non-zero Rapid
+Spin response in the same last-two milestone window as behavioral corroboration.
 """
 
 from __future__ import annotations

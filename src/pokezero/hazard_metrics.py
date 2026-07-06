@@ -101,7 +101,13 @@ def aggregate_hazard_rows(
             "spin_corrob": bool(spin_response is not None and abs(spin_response) > 0),
         }
         points.append(point)
-    points.sort(key=lambda point: (point["milestone_games"] is None, point["milestone_games"] or point["index"], point["index"]))
+    points.sort(
+        key=lambda point: (
+            point["milestone_games"] is None,
+            point["milestone_games"] if point["milestone_games"] is not None else point["index"],
+            point["index"],
+        )
+    )
     valid = [point for point in points if point["correct_pricing"] is not None]
     pricing_values = [float(point["correct_pricing"]) for point in valid]
     slope = _linear_slope(pricing_values)
