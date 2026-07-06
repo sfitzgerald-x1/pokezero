@@ -21,6 +21,7 @@ from pokezero.refutation_curriculum import (
 from pokezero.refutation_mining import (
     BranchTerminalResult,
     FRAGILE_STATE_SCHEMA_VERSION,
+    RefutationCandidate,
     RefutationMiningConfig,
     ReplayTerminalBranchEvaluator,
     candidate_count_for_records,
@@ -111,6 +112,7 @@ def _refutation_report_payload(
             "max_wins": sampled_win_count,
             "max_decision_points_per_game": 1,
             "max_deviations_per_state": 1,
+            "max_line_depth": 1,
             "certification_seed_count": 20,
             "min_flip_rate": 0.6,
             "mode": mode,
@@ -120,7 +122,10 @@ def _refutation_report_payload(
         "scanned_decision_count": sampled_win_count,
         "candidate_deviation_count": sampled_win_count,
         "evaluated_deviation_count": sampled_win_count,
+        "skipped_candidate_error_count": 0,
+        "candidate_error_examples": [],
         "certified_refutation_count": certified,
+        "distinct_certified_root_count": certified,
         "refuted_game_count": refuted_game_count,
         "refutation_rate": refuted_game_count / sampled_win_count,
         "certified_refutations_per_sampled_win": certified / sampled_win_count,
@@ -134,16 +139,36 @@ class FakeTerminalEvaluator:
     value_head_used = False
     reseed_scope = "simulator_rng"
 
-    def __init__(self, *, loser_winning_actions: set[int], loser_win_count: int) -> None:
+    def __init__(
+        self,
+        *,
+        loser_winning_actions: set[int],
+        loser_win_count: int,
+        loser_winning_depths: set[int] | None = None,
+    ) -> None:
         self.loser_winning_actions = loser_winning_actions
         self.loser_win_count = loser_win_count
+        self.loser_winning_depths = loser_winning_depths
         self.calls = []
 
     def evaluate(self, *, record, candidate, certification_seed: int) -> BranchTerminalResult:
-        self.calls.append((record.battle_id, candidate.deviation_action_index, certification_seed, dict(candidate.branch_actions)))
-        count_for_candidate = sum(1 for _, action, _, _ in self.calls if action == candidate.deviation_action_index)
+        self.calls.append(
+            (
+                record.battle_id,
+                candidate.deviation_action_index,
+                candidate.line_depth,
+                certification_seed,
+                dict(candidate.branch_actions),
+            )
+        )
+        count_for_candidate = sum(
+            1
+            for _, action, depth, _, _ in self.calls
+            if action == candidate.deviation_action_index and depth == candidate.line_depth
+        )
         loser_wins = (
             candidate.deviation_action_index in self.loser_winning_actions
+            and (self.loser_winning_depths is None or candidate.line_depth in self.loser_winning_depths)
             and count_for_candidate <= self.loser_win_count
         )
         return BranchTerminalResult(
@@ -258,6 +283,19 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(counts["scanned_decision_count"], 2)
         self.assertEqual(counts["candidate_deviation_count"], 3)
 
+    def test_plan_counts_requested_depth_ladder_candidates(self) -> None:
+        config = RefutationMiningConfig(champion_policy_id="champion", max_wins=10, max_line_depth=2)
+
+        counts = candidate_count_for_records(records=(_record(),), config=config)
+
+        self.assertEqual(counts["sampled_win_count"], 1)
+        self.assertEqual(counts["scanned_decision_count"], 2)
+        self.assertEqual(counts["candidate_deviation_count"], 5)
+
+    def test_config_rejects_line_depth_above_r0_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_line_depth"):
+            RefutationMiningConfig(champion_policy_id="champion", max_line_depth=4)
+
     def test_miner_certifies_only_terminal_rollout_flips_above_threshold(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
@@ -297,6 +335,82 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(archive_rows[0]["schema_version"], FRAGILE_STATE_SCHEMA_VERSION)
             self.assertEqual(archive_rows[0]["candidate"]["deviation_action_index"], 2)
             self.assertEqual(archive_rows[0]["certification"]["seed_count"], 20)
+
+    def test_miner_can_certify_recorded_continuation_line_depth(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            max_line_depth=2,
+        )
+        evaluator = FakeTerminalEvaluator(
+            loser_winning_actions={2},
+            loser_winning_depths={2},
+            loser_win_count=13,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+
+            self.assertEqual(report.candidate_deviation_count, 2)
+            self.assertEqual(report.evaluated_deviation_count, 2)
+            self.assertEqual(len(report.certified_refutations), 1)
+            refutation = report.certified_refutations[0]
+            self.assertEqual(refutation.candidate.line_depth, 2)
+            self.assertEqual(refutation.search_stats["depth"], 2)
+            self.assertEqual(refutation.search_stats["max_line_depth"], 2)
+            self.assertEqual(
+                refutation.candidate.branch_action_sequence,
+                ({"p1": 0, "p2": 2}, {"p1": 0, "p2": 4}),
+            )
+
+            archive_row = next(iter_fragile_states(archive_path))
+            self.assertEqual(archive_row["candidate"]["line_depth"], 2)
+            self.assertEqual(
+                archive_row["candidate"]["branch_action_sequence"],
+                [{"p1": 0, "p2": 2}, {"p1": 0, "p2": 4}],
+            )
+
+    def test_depth_variants_do_not_inflate_distinct_certified_roots(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            max_line_depth=2,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=40)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+            validation = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=tuple(iter_fragile_states(archive_path)),
+                min_sampled_wins=1,
+                min_certified_refutations=2,
+            )
+
+        self.assertEqual(len(report.certified_refutations), 2)
+        self.assertEqual(report.distinct_certified_root_count, 1)
+        self.assertEqual(report.to_dict()["distinct_certified_root_count"], 1)
+        failed = {check["name"] for check in validation["checks"] if not check["passed"]}
+        self.assertIn("distinct_certified_root_count", failed)
 
     def test_miner_rejects_rng_luck_at_or_below_threshold(self) -> None:
         config = RefutationMiningConfig(
@@ -384,6 +498,63 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(env.step_calls[1], {"p1": 0})
         self.assertEqual(evaluator.value_head_used, False)
         self.assertEqual(evaluator.reseed_scope, "continuation_policy_rng")
+
+    def test_replay_terminal_evaluator_can_force_bounded_branch_line_before_rollout(self) -> None:
+        record = _record()
+        env = BranchReplayEnv()
+        evaluator = ReplayTerminalBranchEvaluator(
+            env_factory=lambda: env,
+            policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+        )
+        candidate = RefutationCandidate(
+            battle_id=record.battle_id,
+            source_record_index=0,
+            seed=record.seed,
+            format_id=record.format_id,
+            champion_player_id="p1",
+            loser_player_id="p2",
+            decision_round_index=0,
+            step_index=1,
+            recorded_action_index=1,
+            deviation_action_index=2,
+            branch_actions={"p1": 0, "p2": 2},
+            branch_action_sequence=({"p1": 0, "p2": 2}, {"p1": 0}),
+        )
+
+        result = evaluator.evaluate(record=record, candidate=candidate, certification_seed=777)
+
+        self.assertEqual(result.winner, "p2")
+        self.assertEqual(env.step_calls, [{"p1": 0, "p2": 2}, {"p1": 0}])
+
+    def test_miner_skips_infeasible_depth_line_without_aborting_run(self) -> None:
+        record = _record()
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            max_line_depth=2,
+        )
+        evaluator = ReplayTerminalBranchEvaluator(
+            env_factory=BranchReplayEnv,
+            policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(record,),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        self.assertEqual(report.candidate_deviation_count, 2)
+        self.assertEqual(report.evaluated_deviation_count, 2)
+        self.assertEqual(report.skipped_candidate_error_count, 1)
+        self.assertEqual(len(report.candidate_error_examples), 1)
+        self.assertIn("does not match environment request", report.candidate_error_examples[0]["error"])
+        self.assertEqual(len(report.certified_refutations), 1)
 
     def test_cli_plan_reads_rollout_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -558,7 +729,7 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertFalse(payload["passed"])
         failed = {check["name"] for check in payload["checks"] if not check["passed"]}
         self.assertIn("sampled_win_count", failed)
-        self.assertIn("certified_refutation_count", failed)
+        self.assertIn("distinct_certified_root_count", failed)
 
     def test_cli_validate_passes_with_explicit_smoke_thresholds(self) -> None:
         config = RefutationMiningConfig(

@@ -275,6 +275,15 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Optional cap on legal loser deviations evaluated per decision point.",
     )
     parser.add_argument(
+        "--max-line-depth",
+        type=int,
+        default=1,
+        help=(
+            "Maximum loser-deviation line depth to evaluate, from 1 to 3. "
+            "Depths above 1 force recorded continuation rounds before terminal rollout."
+        ),
+    )
+    parser.add_argument(
         "--certification-seeds",
         type=int,
         default=20,
@@ -301,6 +310,7 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
         max_wins=args.max_wins,
         max_decision_points_per_game=args.max_decision_points_per_game,
         max_deviations_per_state=args.max_deviations_per_state,
+        max_line_depth=args.max_line_depth,
         certification_seed_count=args.certification_seeds,
         min_flip_rate=args.min_flip_rate,
         mode=args.mode,
