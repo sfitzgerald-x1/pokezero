@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.behavior_metrics import classify_move, move_class_summary
+from pokezero.hazard_metrics import aggregate_hazard_rows, correct_pricing, parse_milestone_games_text
 
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "hazard_trajectory.py"
@@ -60,7 +61,7 @@ class HazardTrajectoryTest(unittest.TestCase):
             "value_opp_hazard_response": 0.10,
         }
 
-        self.assertEqual(hazard_trajectory.correct_pricing(row), 0.3)
+        self.assertEqual(correct_pricing(row), 0.3)
 
     def test_aggregates_gate_from_milestone_rows(self) -> None:
         rows = []
@@ -71,22 +72,41 @@ class HazardTrajectoryTest(unittest.TestCase):
                     "value_spread": 1.0,
                     "value_self_hazard_response": -pricing / 2,
                     "value_opp_hazard_response": pricing / 2,
-                    "spin_hazard_response": 0.0 if index < 5 else 0.01,
+                    "spin_hazard_response": 0.0 if index < 4 else 0.01,
                 }
             )
 
-        payload = hazard_trajectory.aggregate_hazard_rows(rows, threshold=0.10)
+        payload = aggregate_hazard_rows(rows, threshold=0.10)
 
         self.assertEqual(payload["valid_points"], 5)
-        self.assertTrue(payload["monotone_non_decreasing"])
+        self.assertTrue(payload["trend_pass"])
         self.assertTrue(payload["last_two_level_pass"])
         self.assertTrue(payload["last_two_correctly_signed"])
+        self.assertTrue(payload["last_two_spin_corrob"])
         self.assertTrue(payload["spin_corrob"])
         self.assertTrue(payload["gate_pass"])
         self.assertEqual([point["milestone_games"] for point in payload["points"]], [50_000, 100_000, 150_000, 200_000, 250_000])
 
+    def test_gate_requires_spin_corroboration_in_flip_window(self) -> None:
+        rows = []
+        for index, pricing in enumerate((0.05, 0.08, 0.11, 0.14, 0.18), start=1):
+            rows.append(
+                {
+                    "milestone_games": index * 50_000,
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -pricing / 2,
+                    "value_opp_hazard_response": pricing / 2,
+                    "spin_hazard_response": 0.01 if index == 1 else 0.0,
+                }
+            )
+
+        payload = aggregate_hazard_rows(rows, threshold=0.10)
+
+        self.assertFalse(payload["last_two_spin_corrob"])
+        self.assertFalse(payload["gate_pass"])
+
     def test_gate_fails_without_valid_spread(self) -> None:
-        payload = hazard_trajectory.aggregate_hazard_rows(
+        payload = aggregate_hazard_rows(
             [
                 {
                     "label": "50k",
@@ -99,6 +119,31 @@ class HazardTrajectoryTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["valid_points"], 0)
+        self.assertFalse(payload["gate_pass"])
+
+    def test_milestone_parser_handles_decimal_millions_and_rejects_dates(self) -> None:
+        self.assertEqual(parse_milestone_games_text("pokezero-belief-gen3-1-5m"), 1_500_000)
+        self.assertEqual(parse_milestone_games_text("1.25M"), 1_250_000)
+        self.assertEqual(parse_milestone_games_text("250k"), 250_000)
+        self.assertIsNone(parse_milestone_games_text("20260705"))
+
+    def test_gate_fails_when_valid_points_lack_ordering(self) -> None:
+        rows = []
+        for index, pricing in enumerate((0.05, 0.08, 0.11, 0.14, 0.18), start=1):
+            rows.append(
+                {
+                    "label": f"checkpoint-{index}",
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -pricing / 2,
+                    "value_opp_hazard_response": pricing / 2,
+                    "spin_hazard_response": 0.01,
+                }
+            )
+
+        payload = aggregate_hazard_rows(rows, threshold=0.10)
+
+        self.assertFalse(payload["ordering_complete"])
+        self.assertEqual(payload["missing_milestone_point_indexes"], [0, 1, 2, 3, 4])
         self.assertFalse(payload["gate_pass"])
 
 

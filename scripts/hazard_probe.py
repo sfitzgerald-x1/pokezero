@@ -48,6 +48,7 @@ from pathlib import Path
 
 from pokezero.actions import MOVE_ACTION_COUNT
 from pokezero.checkpoint_factors import build_corpus, choice_label, with_opp_spikes, with_self_spikes
+from pokezero.hazard_metrics import parse_milestone_games
 from pokezero.neural_policy import (
     evaluate_transformer_action_priors,
     evaluate_transformer_observation_value,
@@ -217,6 +218,9 @@ def main() -> int:
         label = label or Path(path).stem
         print(f"[hazard] probing {label}…", file=sys.stderr)
         row = probe_checkpoint(label, path, args.showdown_root, corpus, value_states=args.value_states)
+        milestone_games = parse_milestone_games(row)
+        if milestone_games is not None:
+            row["milestone_games"] = milestone_games
         rows.append(row)
         print(f"  spikes: n={row['spikes_legal_states']} argmax={row['spikes_argmax_rate']} "
               f"early_tilt={row['spikes_early_tilt']} layer_sens={row['spikes_layer_sensitivity']}", file=sys.stderr)
