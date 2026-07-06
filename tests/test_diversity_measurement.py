@@ -10,7 +10,12 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.behavior_metrics import classify_move, move_class_summary
-from pokezero.diversity_population import behavior_embedding_summary, diversity_population_dashboard, payoff_effective_rank
+from pokezero.diversity_population import (
+    behavior_embedding_summary,
+    diversity_population_dashboard,
+    payoff_effective_rank,
+    policy_js_divergence_summary,
+)
 from pokezero.hazard_metrics import aggregate_hazard_rows, correct_pricing, parse_milestone_games_text
 
 
@@ -209,10 +214,53 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual(reversed_payload["cluster_count"], 1)
         self.assertEqual(forward["clusters"], reversed_payload["clusters"])
 
+    def test_policy_js_divergence_summarizes_shared_fixed_corpus_states(self) -> None:
+        rows = [
+            {
+                "label": "same-a",
+                "states": [
+                    {"state_id": "s1", "action_probabilities": [1.0, 0.0]},
+                    {"state_id": "s2", "action_probabilities": [0.5, 0.5]},
+                ],
+            },
+            {
+                "label": "same-b",
+                "states": [
+                    {"state_id": "s1", "action_probabilities": [1.0, 0.0]},
+                    {"state_id": "s2", "action_probabilities": [0.5, 0.5]},
+                ],
+            },
+            {
+                "label": "different",
+                "states": [
+                    {"state_id": "s1", "action_probabilities": [0.0, 1.0]},
+                    {"state_id": "s3", "action_probabilities": [0.5, 0.5]},
+                ],
+            },
+            {"label": "empty", "states": []},
+        ]
+
+        payload = policy_js_divergence_summary(rows)
+
+        self.assertEqual(payload["divergence"], "jensen_shannon_nats")
+        self.assertEqual(payload["policy_count"], 3)
+        self.assertEqual(payload["skipped_labels"], ["empty"])
+        self.assertEqual(payload["state_count"], 3)
+        pairwise = {
+            (entry["left"], entry["right"]): entry
+            for entry in payload["pairwise"]
+        }
+        self.assertEqual(pairwise[("same-a", "same-b")]["shared_state_count"], 2)
+        self.assertEqual(pairwise[("same-a", "same-b")]["js_divergence_mean"], 0.0)
+        self.assertEqual(pairwise[("different", "same-a")]["shared_state_count"], 1)
+        self.assertAlmostEqual(pairwise[("different", "same-a")]["js_divergence_mean"], 0.693147)
+        self.assertEqual(payload["max_pairwise_js_divergence"], 0.693147)
+
     def test_population_dashboard_cli_reads_behavior_and_pool_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             behavior = root / "behavior.json"
+            policy_priors = root / "policy-priors.json"
             ledger = root / "ledger.json"
             out = root / "dashboard.json"
             behavior.write_text(
@@ -240,6 +288,29 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            policy_priors.write_text(
+                json.dumps(
+                    {
+                        "policies": [
+                            {
+                                "label": "a",
+                                "states": [
+                                    {"state_id": "s1", "action_probabilities": [0.8, 0.2]},
+                                    {"state_id": "s2", "action_probabilities": [0.5, 0.5]},
+                                ],
+                            },
+                            {
+                                "label": "b",
+                                "states": [
+                                    {"state_id": "s1", "action_probabilities": [0.2, 0.8]},
+                                    {"state_id": "s2", "action_probabilities": [0.5, 0.5]},
+                                ],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
             ledger.write_text(
                 json.dumps(
                     {
@@ -259,6 +330,8 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
                         str(behavior),
                         "--pool-ledger",
                         str(ledger),
+                        "--policy-priors",
+                        str(policy_priors),
                         "--threshold-behavior-cluster-distance",
                         "0.05",
                         "--out",
@@ -272,6 +345,9 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertTrue(payload["behavior"]["axes"]["hazard_cycle"]["live_spread"])
         self.assertEqual(payload["behavior_embedding"]["distance_threshold"], 0.05)
         self.assertEqual(payload["behavior_embedding"]["cluster_count"], 2)
+        self.assertEqual(payload["policy_js_divergence"]["policy_count"], 2)
+        self.assertEqual(payload["policy_js_divergence"]["pair_count"], 1)
+        self.assertGreater(payload["policy_js_divergence"]["mean_pairwise_js_divergence"], 0.0)
         self.assertEqual(payload["payoff_rank"]["member_count"], 2)
 
 

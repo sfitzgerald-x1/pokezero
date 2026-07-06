@@ -39,6 +39,25 @@ def _load_behavior_rows(paths: list[Path]) -> list[dict[str, Any]]:
     return rows
 
 
+def _policy_rows_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [dict(row) for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("policies", "checkpoints", "rows", "agents"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return [dict(row) for row in rows if isinstance(row, dict)]
+        return [dict(payload)]
+    raise ValueError("policy-priors input must be a JSON object or list")
+
+
+def _load_policy_rows(paths: list[Path] | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in paths or ():
+        rows.extend(_policy_rows_from_payload(_read_json(path)))
+    return rows
+
+
 def _load_payoff_vectors(path: Path | None) -> dict[str, dict[str, Any]]:
     if path is None:
         return {}
@@ -58,6 +77,12 @@ def _load_payoff_vectors(path: Path | None) -> dict[str, dict[str, Any]]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--behavior", type=Path, action="append", required=True, help="behavior_probe JSON output; repeatable")
+    parser.add_argument(
+        "--policy-priors",
+        type=Path,
+        action="append",
+        help="optional policy_js_divergence_probe JSON output; repeatable",
+    )
     parser.add_argument("--pool-ledger", type=Path, help="optional diversity_pool.py ledger containing payoff_vectors")
     parser.add_argument("--out", type=Path, help="write dashboard JSON here instead of stdout")
     parser.add_argument("--threshold-move-rate", type=float, default=0.05)
@@ -77,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = diversity_population_dashboard(
         _load_behavior_rows(args.behavior),
         payoff_vectors=_load_payoff_vectors(args.pool_ledger),
+        policy_prior_rows=_load_policy_rows(args.policy_priors),
         thresholds=thresholds,
     )
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
