@@ -302,8 +302,12 @@ calendar time.
    champion wins, persist artifacts, and gate later R1/R2 use on certified
    examples. The old G2 arm automation remains available only as fallback
    plumbing under the revival condition above.
-4. **Dashboard population view** + per-agent behavior axes on the probe cron.
-5. Rides the pipelined controller (deploy PR #41) once merged.
+4. **Collection ε-floor**: neural iterate and standalone training-cache
+   collection keep a nonzero random legal-action floor on learned policies while
+   benchmark/advancement specs stay deterministic. This is a completeness
+   invariant, not a diversity reward.
+5. **Dashboard population view** + per-agent behavior axes on the probe cron.
+6. Rides the pipelined controller (deploy PR #41) once merged.
 
 ## Rollout
 

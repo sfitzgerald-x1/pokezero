@@ -1258,6 +1258,47 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(collect.call_args.kwargs["current_policy_spec"], "simple-legal")
         self.assertEqual(collect.call_args.kwargs["opponent_policy_specs"], ("simple-legal",))
 
+    def test_rollout_cli_collect_selfplay_training_cache_applies_collection_epsilon_to_learned_specs(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=1,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=0,
+            ties=0,
+            capped_games=0,
+        )
+        with (
+            patch("pokezero.rollout_cli.collect_selfplay_rollouts", return_value=fake_metrics) as collect,
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            exit_code = rollout_cli_main(
+                [
+                    "collect-selfplay-training-cache",
+                    "--games",
+                    "1",
+                    "--out",
+                    "runs/cache",
+                    "--current-policy",
+                    "linear:/tmp/current.json",
+                    "--opponent-policy",
+                    "linear:/tmp/opponent.json",
+                    "--collection-epsilon",
+                    "0.05",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            collect.call_args.kwargs["current_policy_spec"],
+            "linear:/tmp/current.json?sample=true&epsilon=0.05",
+        )
+        self.assertEqual(
+            collect.call_args.kwargs["opponent_policy_specs"],
+            ("linear:/tmp/opponent.json?sample=true&epsilon=0.05",),
+        )
+
     def test_rollout_cli_collect_selfplay_training_cache_loads_opponent_pool_manifest(self) -> None:
         fake_metrics = CollectionMetrics(
             games=2,
@@ -1314,6 +1355,66 @@ class CollectionTest(unittest.TestCase):
         self.assertIn(f"opponent_pool: {manifest_path}", stdout.getvalue())
         self.assertIn("opponent_pool_members: 2", stdout.getvalue())
         self.assertIn("opponent_pool_self_play_share: 0.5", stdout.getvalue())
+
+    def test_rollout_cli_collect_selfplay_training_cache_applies_collection_epsilon_to_pool_entries(self) -> None:
+        fake_metrics = CollectionMetrics(
+            games=2,
+            elapsed_seconds=2.0,
+            total_decision_rounds=4,
+            total_simulator_turns=3,
+            p1_wins=1,
+            p2_wins=1,
+            ties=0,
+            capped_games=0,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "opponents.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "opponents": [
+                            {"policy_spec": "linear:/tmp/pool.json", "weight": 2.0, "member_id": "learned"},
+                            {"policy_spec": "simple-legal", "weight": 1.0, "member_id": "simple"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch("pokezero.rollout_cli.collect_selfplay_rollouts", return_value=fake_metrics) as collect,
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                exit_code = rollout_cli_main(
+                    [
+                        "collect-selfplay-training-cache",
+                        "--games",
+                        "2",
+                        "--out",
+                        str(Path(temp_dir) / "cache"),
+                        "--current-policy",
+                        "simple-legal",
+                        "--opponent-pool",
+                        str(manifest_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        kwargs = collect.call_args.kwargs
+        self.assertEqual(
+            kwargs["opponent_policy_specs"],
+            ("linear:/tmp/pool.json?sample=true&epsilon=0.01", "simple-legal"),
+        )
+        self.assertEqual(
+            kwargs["opponent_pool_entries"],
+            (
+                OpponentPoolEntry(
+                    policy_spec="linear:/tmp/pool.json?sample=true&epsilon=0.01",
+                    weight=2.0,
+                    member_id="learned",
+                ),
+                OpponentPoolEntry(policy_spec="simple-legal", weight=1.0, member_id="simple"),
+            ),
+        )
 
     def test_rollout_cli_collect_selfplay_training_cache_rejects_pool_with_opponent_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

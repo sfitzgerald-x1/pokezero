@@ -71,6 +71,7 @@ if TYPE_CHECKING:
 
 NEURAL_SELFPLAY_RUN_SCHEMA_VERSION = "pokezero.neural_selfplay_run.v1"
 COLLECTOR_ADVANCEMENT_MODES = ("incumbent-gate", "always", "yardstick-gate")
+DEFAULT_COLLECTION_EXPLORATION_EPSILON = 0.01
 ACCEPTED_ADVANCEMENT_REASONS = frozenset(
     {
         "beat_incumbent",
@@ -383,6 +384,7 @@ def run_neural_selfplay_iterations(
     benchmark_reference_policy_specs: Iterable[str] = (),
     mirror_match: bool = False,
     collection_temperature: float = 1.0,
+    collection_exploration_epsilon: float = DEFAULT_COLLECTION_EXPLORATION_EPSILON,
     max_historical_opponents: int = 3,
     historical_opponent_selection: str = "recent",
     evaluation_games: int = 0,
@@ -429,6 +431,8 @@ def run_neural_selfplay_iterations(
         raise ValueError("worker_count must be positive.")
     if collection_temperature <= 0.0:
         raise ValueError("collection_temperature must be positive.")
+    if not 0.0 < collection_exploration_epsilon <= 1.0:
+        raise ValueError("collection_exploration_epsilon must be greater than 0 and at most 1.")
     if post_iteration_audit_failure_mode not in POST_ITERATION_AUDIT_FAILURE_MODES:
         choices = ", ".join(POST_ITERATION_AUDIT_FAILURE_MODES)
         raise ValueError(f"post_iteration_audit_failure_mode must be one of: {choices}.")
@@ -595,6 +599,7 @@ def run_neural_selfplay_iterations(
         "benchmark_reference_policy_specs": list(benchmark_references),
         "mirror_match": mirror_match,
         "collection_temperature": collection_temperature,
+        "collection_exploration_epsilon": collection_exploration_epsilon,
         "collector_advancement_mode": collector_advancement_mode,
         "experiment_preset": experiment_preset,
         "training_config": training_config.to_dict(),
@@ -638,19 +643,31 @@ def run_neural_selfplay_iterations(
             checkpoint_path = iteration_dir / "transformer-policy.pt"
             iteration_manifest_path = iteration_dir / "manifest.json"
             iteration_seed_start = next_seed_start + (offset * games_per_iteration)
-            # Higher-temperature spec used only for collection so the collector explores; the
-            # canonical current_policy_spec stays clean for benchmark/advancement/manifest. The
-            # mirror opponent (built from this spec) inherits the same exploration temperature.
-            collection_current_policy_spec = _with_collection_temperature(
-                current_policy_spec, collection_temperature
+            # Sampling options used only for collection so every legal action retains a nonzero
+            # probability floor. Canonical specs stay clean for benchmark/advancement/manifest.
+            collection_current_policy_spec = _with_collection_sampling_options(
+                current_policy_spec,
+                temperature=collection_temperature,
+                exploration_epsilon=collection_exploration_epsilon,
             )
-            opponent_policy_specs = _opponent_pool(
-                fixed_policy_specs=fixed_opponents,
-                checkpoint_history=promoted_checkpoint_specs if promotion_pool_registry_path is not None else checkpoint_history,
-                current_policy_spec=collection_current_policy_spec,
-                max_historical_opponents=max_historical_opponents,
-                historical_opponent_selection=historical_opponent_selection,
-                include_current_policy=mirror_match,
+            opponent_policy_specs = tuple(
+                _with_collection_sampling_options(
+                    spec,
+                    temperature=collection_temperature,
+                    exploration_epsilon=collection_exploration_epsilon,
+                )
+                for spec in _opponent_pool(
+                    fixed_policy_specs=fixed_opponents,
+                    checkpoint_history=(
+                        promoted_checkpoint_specs
+                        if promotion_pool_registry_path is not None
+                        else checkpoint_history
+                    ),
+                    current_policy_spec=collection_current_policy_spec,
+                    max_historical_opponents=max_historical_opponents,
+                    historical_opponent_selection=historical_opponent_selection,
+                    include_current_policy=mirror_match,
+                )
             )
             iteration_training_paths: tuple[Path, ...]
             training_cache_paths: tuple[Path, ...] = ()
@@ -1723,6 +1740,40 @@ def _with_collection_temperature(policy_spec: str, temperature: float) -> str:
     options.pop("deterministic", None)  # sampling is required for temperature to have any effect
     options["sample"] = "true"
     options["temperature"] = repr(float(temperature))
+    return f"{body}?{urlencode(options)}"
+
+
+def _with_collection_sampling_options(
+    policy_spec: str,
+    *,
+    temperature: float,
+    exploration_epsilon: float,
+) -> str:
+    """Return the collection-only spec with sampling and a legal-action epsilon floor.
+
+    The epsilon floor is a collection invariant: learned policies must keep every legal action
+    reachable during rollout collection. Non-learned policies such as scripted baselines are left
+    unchanged because they do not parse neural/linear sampling options.
+    """
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive.")
+    if not 0.0 < exploration_epsilon <= 1.0:
+        raise ValueError("exploration_epsilon must be greater than 0 and at most 1.")
+
+    from urllib.parse import urlencode
+
+    body, options = _split_policy_spec_options(policy_spec)
+    lowered = body.strip().lower()
+    if not (lowered.startswith("neural:") or lowered.startswith("linear:")):
+        return policy_spec
+    options = dict(options)
+    options.pop("deterministic", None)
+    options["sample"] = "true"
+    if temperature != 1.0:
+        options["temperature"] = repr(float(temperature))
+    existing_epsilon = options.get("epsilon")
+    if existing_epsilon is None or float(existing_epsilon) < exploration_epsilon:
+        options["epsilon"] = repr(float(exploration_epsilon))
     return f"{body}?{urlencode(options)}"
 
 
