@@ -114,10 +114,20 @@ class OnlineBattleAgent:
 
     def choose(self, room_lines: list[str], room_id: str) -> Optional[str]:
         """Return the choice body (e.g. ``"move 1"``) for the latest request, or None to wait."""
+        # A v2.2 (turn-merged) spec's encode requires the state's turn_merged_tokens; without
+        # this the encoder raises "requires ... turn_merged_tokens" on the first move and the
+        # bot dies mid-battle (foul-play then wins every game by forfeit and the probe hangs).
+        # This mirrors the local self-play path (local_showdown.observe/normalize) and pairs
+        # with the vocab's include_turn_merged latch already set in build_agent below.
+        turn_merged = self.spec.schema_version == OBSERVATION_SCHEMA_VERSION_V2_2
         try:
             replay = parse_showdown_replay(room_lines, battle_id=room_id)
             state = normalize_for_player(
-                replay, player_id="bot", player_name=self.our_name, set_source=self.set_source
+                replay,
+                player_id="bot",
+                player_name=self.our_name,
+                set_source=self.set_source,
+                include_turn_merged=turn_merged,
             )
         except ValueError:
             return None  # our seat / request not resolvable yet

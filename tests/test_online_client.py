@@ -94,6 +94,63 @@ class OnlineBattleAgentTest(unittest.TestCase):
         self.assertIsNone(_agent("Nobody").choose(_fixture_lines("p2_seat_replay.txt"), "battle-x"))
 
 
+class TurnMergedNormalizeThreadingTest(unittest.TestCase):
+    """A v2.2 (turn-merged) agent must normalize with include_turn_merged=True.
+
+    Regression for the foul-play probe hang: a v2.2-spec bot called
+    normalize_for_player WITHOUT include_turn_merged, so the state had no
+    turn_merged_tokens and observation_from_player_state raised on the first
+    move (outside choose()'s try/except) — the bot died and foul-play won every
+    game by forfeit, hanging the probe. choose() must thread the flag by schema.
+    """
+
+    def _v2_2_agent(self):
+        from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2_2
+        from pokezero.showdown import V2_2_REPLAY_OBSERVATION_SPEC
+
+        self.assertEqual(
+            V2_2_REPLAY_OBSERVATION_SPEC.schema_version, OBSERVATION_SCHEMA_VERSION_V2_2
+        )
+        vocab = build_category_vocabulary(["species:Charizard"], oov_buckets=16)
+        return OnlineBattleAgent(
+            policy=_FirstLegalPolicy(),
+            vocab=vocab,
+            dex=None,
+            our_name="PokeZeroBot",
+            spec=V2_2_REPLAY_OBSERVATION_SPEC,
+        )
+
+    def test_v2_2_agent_passes_include_turn_merged_true(self) -> None:
+        captured: dict = {}
+
+        def fake_normalize(*args, **kwargs):
+            captured.update(kwargs)
+            raise ValueError("stop after capture")  # short-circuit; choose() catches this
+
+        agent = self._v2_2_agent()
+        with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
+            self.assertIsNone(agent.choose(["|player|p1|PokeZeroBot|1"], "room"))
+        self.assertTrue(
+            captured.get("include_turn_merged"),
+            "v2.2 agent must call normalize_for_player(include_turn_merged=True)",
+        )
+
+    def test_default_schema_agent_does_not_request_turn_merged(self) -> None:
+        # A default (non-v2.2) spec must not force turn-merged normalization.
+        captured: dict = {}
+
+        def fake_normalize(*args, **kwargs):
+            captured.update(kwargs)
+            raise ValueError("stop after capture")
+
+        with patch("pokezero.online_client.normalize_for_player", side_effect=fake_normalize):
+            self.assertIsNone(_agent().choose(["|player|p1|PokeZeroBot|1"], "room"))
+        self.assertFalse(
+            captured.get("include_turn_merged", False),
+            "default-schema agent must not request turn-merged tokens",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 
