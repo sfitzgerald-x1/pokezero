@@ -21,6 +21,7 @@ from .refutation_curriculum import (
 )
 from .refutation_mining import (
     DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
+    DEFAULT_R0_MIN_FLIP_RATE,
     DEFAULT_R0_MIN_SAMPLED_WINS,
     RefutationMiningConfig,
     ReplayTerminalBranchEvaluator,
@@ -117,6 +118,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=20,
         help="Minimum terminal-rollout reseeds per certified example (default 20).",
+    )
+    validate.add_argument(
+        "--min-flip-rate",
+        type=float,
+        default=DEFAULT_R0_MIN_FLIP_RATE,
+        help=f"Minimum observed refutation flip rate required for R0 acceptance (default {DEFAULT_R0_MIN_FLIP_RATE}).",
+    )
+    validate.add_argument(
+        "--allow-continuation-only-reseeds",
+        action="store_true",
+        help=(
+            "Treat continuation-policy-only reseeding as acceptable. This is for exploratory/dev "
+            "reports only; R0 acceptance requires simulator-RNG reseeding."
+        ),
     )
     validate.set_defaults(func=_validate)
 
@@ -384,9 +399,13 @@ def _validate(args: argparse.Namespace) -> int:
         min_sampled_wins=args.min_sampled_wins,
         min_certified_refutations=args.min_certified_refutations,
         min_certification_seed_count=args.min_certification_seeds,
+        min_flip_rate=args.min_flip_rate,
+        require_simulator_rng_reseed=not args.allow_continuation_only_reseeds,
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
-    return 0 if payload["passed"] else 2
+    if payload["r0_acceptance_eligible"]:
+        return 0
+    return 3 if payload["passed"] else 2
 
 
 def _training_cache(args: argparse.Namespace) -> int:
