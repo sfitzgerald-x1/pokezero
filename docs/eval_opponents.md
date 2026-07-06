@@ -25,6 +25,20 @@ it isn't re-litigated (below).
 | **foul-play @ search-time-ms** | external search bot (poke-engine, MCTS) | **mid → SOTA, tunable** | `third_party/foul-play` pinned submodule + local patches; `--search-time-ms` sets strength |
 | historical self checkpoints | frozen nets | matched | `opponents.py` pools; curated milestones at `/shared` + `checkpoints/curated/` |
 
+`random-legal` and `simple-legal` are plumbing checks only. They saturated by
+the 1M no-belief family (~99% and ~95%), so they should not be used as strength
+gradients or advancement evidence. Strength reads should use meaningful
+opponents: max-damage, foul-play rungs, and frozen v2+ checkpoint pools.
+
+Historical checkpoint opponents should also stay on the current comparison
+family. In this registry, **v2+** means current-family checkpoints encoded with
+observation-schema v2 or newer, not older no-belief/pre-v2 families and not
+pool-version labels such as `pool-self-v1`. For new wave strength evaluation,
+use v2+ checkpoints/frozen pools and matched milestones. Legacy-family
+checkpoints at any milestone are historical context, not opponents to evaluate
+against. Calibration pools can still be used for value/diagnostic reads when
+their role is stated explicitly.
+
 ### foul-play as a graded ladder (the randbats-native rung system)
 
 foul-play's `--search-time-ms` knob turns one integrated opponent into a
