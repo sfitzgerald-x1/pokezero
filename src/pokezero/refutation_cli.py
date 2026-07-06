@@ -373,6 +373,7 @@ def _mine(args: argparse.Namespace) -> int:
         },
         rollout_config=rollout_config,
         check_prefix_observations=args.check_prefix_observations,
+        reseed_simulator_rng=True,
     )
     report = mine_refutations(
         records=records,

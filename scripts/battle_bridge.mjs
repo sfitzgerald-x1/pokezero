@@ -246,6 +246,16 @@ function restoreBattle(command) {
   });
 }
 
+async function reseedBattle(command) {
+  const battle = requireBattle(command);
+  const seed = command.seed;
+  if (typeof seed !== "string" || !seed.trim()) {
+    throw new Error("Reseed requires a non-empty seed string.");
+  }
+  await battle.streams.omniscient.write(`>reseed ${seed}`);
+  emit({ type: "reseeded", battleId: battle.battleId, seed });
+}
+
 // Player options accept either the legacy string form (just a name, used by random battles) or an
 // object carrying { name, team }. A custom packed team string is passed straight through to
 // Pokemon Showdown's player options; omitting it preserves random-battle behavior.
@@ -339,6 +349,9 @@ async function handleCommand(command) {
       break;
     case "restore":
       restoreBattle(command);
+      break;
+    case "reseed":
+      await reseedBattle(command);
       break;
     case "end":
       await endBattle(command);
