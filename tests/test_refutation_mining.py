@@ -29,7 +29,11 @@ from pokezero.refutation_mining import (
     validate_refutation_report_payload,
     write_refutation_report,
 )
-from pokezero.refutation_training import RefutationTrainingConfig, refutation_training_examples
+from pokezero.refutation_training import (
+    RefutationTrainingConfig,
+    refutation_training_examples,
+    write_refutation_training_cache,
+)
 from pokezero.rollout import RolloutConfig
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
@@ -611,6 +615,180 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertAlmostEqual(examples[0].return_value, 0.3)
         self.assertAlmostEqual(examples[0].ppo_value_target, 0.3)
         self.assertIsNone(examples[0].action_probability)
+
+    def test_refutation_training_policy_distribution_mode_emits_weighted_action_targets(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        row["search_policy_distribution"] = {"2": 3.0, "3": 1.0}
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(row,),
+            config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+        )
+
+        self.assertEqual([example.action_index for example in examples], [2, 3])
+        self.assertAlmostEqual(examples[0].training_weight, 0.75)
+        self.assertAlmostEqual(examples[1].training_weight, 0.25)
+        self.assertAlmostEqual(
+            examples[0].step_metadata["refutation_training"]["policy_target_probability"],
+            0.75,
+        )
+        self.assertAlmostEqual(examples[0].return_value, 0.3)
+        self.assertIsNone(examples[0].action_probability)
+
+    def test_refutation_training_policy_distribution_mode_accepts_sequence_targets(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        distribution = [0.0] * ACTION_COUNT
+        distribution[2] = 3.0
+        distribution[3] = 1.0
+        row["search_policy_distribution"] = distribution
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(row,),
+            config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+        )
+
+        self.assertEqual([example.action_index for example in examples], [2, 3])
+        self.assertAlmostEqual(examples[0].training_weight, 0.75)
+        self.assertAlmostEqual(examples[1].training_weight, 0.25)
+
+    def test_refutation_training_policy_distribution_mode_requires_distribution(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+
+        with self.assertRaisesRegex(ValueError, "requires search_policy_distribution"):
+            refutation_training_examples(
+                records=(_record(),),
+                fragile_states=(row,),
+                config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+            )
+
+    def test_refutation_training_policy_distribution_mode_rejects_illegal_action_mass(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        row["search_policy_distribution"] = {"4": 1.0}
+
+        with self.assertRaisesRegex(ValueError, "illegal action 4"):
+            refutation_training_examples(
+                records=(_record(),),
+                fragile_states=(row,),
+                config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+            )
+
+    def test_refutation_training_policy_distribution_mode_caps_without_partial_rows(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        two_target_row = report.certified_refutations[0].to_dict()
+        two_target_row["search_policy_distribution"] = {"2": 3.0, "3": 1.0}
+        one_target_row = report.certified_refutations[0].to_dict()
+        one_target_row["search_policy_distribution"] = {"2": 1.0}
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(two_target_row, one_target_row),
+            config=RefutationTrainingConfig(target_mode="policy-distribution-value", max_examples=1),
+        )
+
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(examples[0].action_index, 2)
+        self.assertAlmostEqual(examples[0].training_weight, 1.0)
+
+    def test_refutation_training_policy_distribution_summary_counts_rows_not_targets(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=root / "fragile.jsonl",
+            )
+            row = report.certified_refutations[0].to_dict()
+            row["search_policy_distribution"] = {"2": 3.0, "3": 1.0}
+
+            summary = write_refutation_training_cache(
+                records=(_record(),),
+                fragile_states=(row,),
+                output_path=root / "refutation-cache",
+                config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+            )
+
+        self.assertEqual(summary.fragile_state_count, 1)
+        self.assertEqual(summary.example_count, 2)
+        self.assertEqual(summary.skipped_count, 0)
 
     def test_refutation_training_prioritizes_higher_surprise_weights_before_cap(self) -> None:
         config = RefutationMiningConfig(

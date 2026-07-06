@@ -125,15 +125,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     training_cache.add_argument("--out", type=Path, required=True, help="Output training-cache directory.")
     training_cache.add_argument(
         "--target-mode",
-        choices=("value", "policy-value"),
+        choices=("value", "policy-value", "policy-distribution-value"),
         default="policy-value",
         help=(
             "value: retarget value only and keep the recorded loser action; "
             "use only with PPO/value-only consumers, not BC/RWR. "
-            "policy-value: also replace the action target with the certified deviation."
+            "policy-value: also replace the action target with the certified deviation. "
+            "policy-distribution-value: use row.search_policy_distribution as weighted policy targets."
         ),
     )
-    training_cache.add_argument("--max-examples", type=int, default=None, help="Optional cap on fragile examples emitted.")
+    training_cache.add_argument(
+        "--max-examples",
+        type=int,
+        default=None,
+        help="Optional cap on emitted target examples; multi-target distribution rows are kept or dropped as a unit.",
+    )
     training_cache.add_argument(
         "--surprise-weight-scale",
         type=float,

@@ -167,12 +167,17 @@ R0 readout.
 validated fragile-state archive plus the source rollout records into a separate
 cache of corrected loser-perspective examples: value targets are retargeted to
 the certified terminal-rollout value, and `policy-value` mode also replaces the
-action target with the certified deviation. This cache is deliberately separate
-from the main rollout cache so deployment can mix it behind explicit flags and
-enforce the ≤10–20% fragile-example cap. `value` mode is a value-target cache
-only and should be consumed by PPO/value-only paths, not behavior cloning or
-reward-weighted objectives, because it intentionally leaves the recorded loser
-action untouched.
+action target with the certified deviation. `policy-distribution-value` mode is
+the R1(b) distillation path: when fragile rows carry
+`search_policy_distribution`, it emits weighted policy targets for the searched
+action distribution rather than a single argmax action. This cache is
+deliberately separate from the main rollout cache so deployment can mix it
+behind explicit flags and enforce the ≤10–20% fragile-example cap. Distribution
+rows are kept or dropped as a unit when capped so the searched policy target is
+never silently truncated into an argmax-like partial distribution. `value` mode is
+a value-target cache only and should be consumed by PPO/value-only paths, not
+behavior cloning or reward-weighted objectives, because it intentionally leaves
+the recorded loser action untouched.
 
 The cache builder can also persist optional per-example `training_weights` for
 R1 surprise weighting. The first source is certification strength: rows whose

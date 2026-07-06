@@ -365,11 +365,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     train.add_argument(
         "--refutation-target-mode",
-        choices=("policy-value", "value"),
+        choices=("policy-value", "policy-distribution-value", "value"),
         default="policy-value",
         help=(
             "Target mode used to build the refutation cache. value mode is accepted "
-            "only with objective=ppo or objective=value-only."
+            "only with objective=ppo or objective=value-only; policy-distribution-value "
+            "requires caches built from search_policy_distribution rows."
         ),
     )
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
