@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--threshold-pivot-rate", type=float, default=0.05)
     parser.add_argument("--threshold-avg-turns", type=float, default=5.0)
     parser.add_argument("--threshold-distinct-moves", type=float, default=3.0)
+    parser.add_argument("--threshold-behavior-cluster-distance", type=float, default=0.20)
     args = parser.parse_args(argv)
 
     thresholds = {
@@ -71,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         "pivot_rate": args.threshold_pivot_rate,
         "avg_turns": args.threshold_avg_turns,
         "distinct_moves": args.threshold_distinct_moves,
+        "behavior_cluster_distance": args.threshold_behavior_cluster_distance,
     }
     payload = diversity_population_dashboard(
         _load_behavior_rows(args.behavior),
@@ -89,4 +91,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
