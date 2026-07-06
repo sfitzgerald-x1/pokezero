@@ -583,6 +583,7 @@ def collect_selfplay_rollouts(
     current_policy_spec: str,
     opponent_policy_specs: Iterable[str],
     opponent_pool_entries: Iterable[OpponentPoolEntry] | None = None,
+    opponent_pool_self_play_share: float = 0.0,
     worker_count: int = 1,
     policy_factory_overrides: Mapping[str, Callable[[], Any]] | None = None,
 ) -> CollectionMetrics:
@@ -600,12 +601,21 @@ def collect_selfplay_rollouts(
     )
     if weighted_opponent_pool is not None:
         _validate_weighted_opponent_pool(weighted_opponent_pool, opponent_specs=opponent_specs)
+        weighted_opponent_pool = _opponent_pool_with_self_play_share(
+            weighted_opponent_pool,
+            current_policy_spec=current_policy_spec,
+            share=opponent_pool_self_play_share,
+        )
     if training_cache_chunk_games is not None and training_cache_chunk_games <= 0:
         raise ValueError("training_cache_chunk_games must be positive when set.")
     collection_peak_rss_mb_by_phase: dict[str, float | None] = {}
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "collection_start")
     policy_factories = _policy_factories_for_specs(
-        (current_policy_spec, *opponent_specs),
+        (
+            current_policy_spec,
+            *opponent_specs,
+            *((entry.policy_spec for entry in weighted_opponent_pool) if weighted_opponent_pool else ()),
+        ),
         overrides=policy_factory_overrides,
     )
     _record_process_peak_rss(collection_peak_rss_mb_by_phase, "after_policy_factories")
@@ -937,6 +947,31 @@ def _validate_weighted_opponent_pool(
             "opponent pool contains specs absent from opponent_policy_specs: "
             f"{sorted(missing_specs)}"
         )
+
+
+def _opponent_pool_with_self_play_share(
+    entries: tuple[OpponentPoolEntry, ...],
+    *,
+    current_policy_spec: str,
+    share: float,
+) -> tuple[OpponentPoolEntry, ...]:
+    share = float(share)
+    if not math.isfinite(share) or not 0.0 <= share < 1.0:
+        raise ValueError("opponent_pool_self_play_share must be finite and in [0, 1).")
+    if share == 0.0:
+        return entries
+    pool_weight = sum(entry.weight for entry in entries)
+    if pool_weight <= 0.0 or not math.isfinite(pool_weight):
+        raise ValueError("opponent pool total weight must be finite and positive.")
+    self_weight = pool_weight * share / (1.0 - share)
+    return (
+        OpponentPoolEntry(
+            policy_spec=current_policy_spec,
+            weight=self_weight,
+            member_id="current-policy",
+        ),
+        *entries,
+    )
 
 
 def _weighted_opponent_entry_for_seed(

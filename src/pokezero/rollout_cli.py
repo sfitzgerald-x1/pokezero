@@ -130,6 +130,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "weight, and optional member_id/id/name. Cannot be combined with --opponent-policy."
         ),
     )
+    collect_selfplay_cache.add_argument(
+        "--opponent-pool-self-play-share",
+        type=float,
+        default=0.5,
+        help=(
+            "When --opponent-pool is used, reserve this opponent-sampling share for a mirror "
+            "match against --current-policy before drawing from the pool weights (default: 0.5)."
+        ),
+    )
     # Ablation-arm feature masks for the checkpoint-less iteration-0 case (the cluster
     # controller collects with current-policy=random-legal before any checkpoint exists).
     # When a neural: policy IS given, masks adopt from the checkpoint and explicit flags
@@ -442,6 +451,9 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         current_policy_spec=current_policy,
         opponent_policy_specs=opponent_policies,
         opponent_pool_entries=opponent_pool_entries,
+        opponent_pool_self_play_share=(
+            args.opponent_pool_self_play_share if opponent_pool_entries is not None else 0.0
+        ),
         worker_count=args.workers,
         training_cache_feature_masks=env_config.feature_masks,
         training_cache_observation_schema=env_config.observation_spec.schema_version,
@@ -450,6 +462,7 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
     if opponent_pool_entries is not None:
         print(f"opponent_pool: {args.opponent_pool}")
         print(f"opponent_pool_members: {len(opponent_pool_entries)}")
+        print(f"opponent_pool_self_play_share: {args.opponent_pool_self_play_share:g}")
     for cache_path in cache_paths:
         print(f"training_cache: {cache_path}")
     print(f"training_cache_count: {len(cache_paths)}")

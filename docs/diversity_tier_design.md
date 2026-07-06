@@ -246,7 +246,9 @@ cap binds on aggregate compute, not calendar time.
 
 1. **Collector opponent-sampling PR** (pokezero): `--opponent-pool <manifest>` on
    `collect-selfplay-training-cache`; manifest = JSON list of (checkpoint path,
-   weight, schema handled by latch). The one real code change.
+   weight, schema handled by latch). The public CLI keeps the design's current-policy
+   mirror share via `--opponent-pool-self-play-share` (default `0.5`) and draws the
+   remaining share from pool weights. The one real code change.
 2. **Pool manifest + admission harness** (deploy repo): the gauntlet runner,
    payoff-matrix ledger, eviction logic — orchestration scripts in the mold of the
    milestone-probe suite.
