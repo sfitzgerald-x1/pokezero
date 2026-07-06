@@ -29,6 +29,10 @@ DEFAULT_R0_MIN_SAMPLED_WINS = 200
 DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS = 10
 
 
+class InfeasibleRefutationLineError(ValueError):
+    """A bounded-depth recorded continuation line is impossible after branching."""
+
+
 @dataclass(frozen=True)
 class RefutationMiningConfig:
     """Configuration for R0 bounded-depth refutation mining."""
@@ -218,7 +222,13 @@ class ReplayTerminalBranchEvaluator:
                     requested_players=env.requested_players(),
                     turn_index=candidate.decision_round_index + offset,
                 )
-                step_result = env.step(branch_actions)
+                try:
+                    step_result = env.step(branch_actions)
+                except RuntimeError as exc:
+                    raise InfeasibleRefutationLineError(
+                        f"branch action sequence round {candidate.decision_round_index + offset} "
+                        f"failed during forced continuation: {exc}"
+                    ) from exc
                 forced_round_count += 1
             terminal = step_result.terminal or env.terminal()
             if terminal is not None:
@@ -416,9 +426,7 @@ def mine_refutations(
                             config=config,
                             evaluator=evaluator,
                         )
-                    except ValueError as exc:
-                        if evaluator.evaluation_source != TERMINAL_ROLLOUT_EVALUATION_SOURCE or evaluator.value_head_used:
-                            raise
+                    except InfeasibleRefutationLineError as exc:
                         skipped_candidate_error_count += 1
                         if len(candidate_error_examples) < 10:
                             candidate_error_examples.append(
@@ -952,7 +960,7 @@ def _require_branch_requested_players(
     supplied = set(actions)
     if supplied == requested:
         return
-    raise ValueError(
+    raise InfeasibleRefutationLineError(
         f"branch action sequence round {turn_index} does not match environment request: "
         f"requested={sorted(requested)} supplied={sorted(supplied)}"
     )
