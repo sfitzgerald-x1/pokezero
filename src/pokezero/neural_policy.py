@@ -1223,7 +1223,9 @@ def load_transformer_policy(
     )
 
 
-def _file_sha256(path: Path) -> str:
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
