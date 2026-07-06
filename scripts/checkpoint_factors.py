@@ -2,8 +2,8 @@
 shared, fixed corpus of real decision states. Re-run on each new checkpoint; watch the factors.
 
   python scripts/checkpoint_factors.py \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
+      --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
+      --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       --num-games 60 --out runs/probes/factors-<date>.json
 
@@ -24,6 +24,7 @@ from pokezero.checkpoint_factors import (
     build_corpus,
     evaluate_checkpoint,
 )
+from pokezero.opponents import require_current_family_checkpoint_paths
 
 
 def main() -> int:
@@ -35,12 +36,25 @@ def main() -> int:
     parser.add_argument("--max-states", type=int, default=800)
     parser.add_argument("--setup-moves", default=",".join(DEFAULT_SETUP_MOVES))
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
 
     specs = []
     for raw in args.checkpoint:
         path, _, label = raw.partition("=")
         specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="checkpoint-factors probe",
+        )
 
     setup_moves = tuple(s.strip() for s in args.setup_moves.split(",") if s.strip())
     print(f"[corpus] generating from {args.num_games} games (seed {args.seed_start}+), fixed heuristic drivers…")

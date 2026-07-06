@@ -110,9 +110,9 @@ Eval-target constraint: new strength reads use current-family v2+ checkpoints
 and matched milestones only, where v2+ means observation-schema v2 or newer
 rather than older no-belief/pre-v2 families. Random/simple remain plumbing
 checks, not strength gradients. Legacy-family checkpoints at any milestone are
-historical context rather than opponents to evaluate against, including longer
-historical runs beyond 500k games. Calibration pools can still be used for
-value/diagnostic reads when labeled as such.
+historical context rather than opponents to evaluate against; legacy
+continuations past 500k games must not enter new opponent pools. Calibration
+pools can still be used for value/diagnostic reads when labeled as such.
 
 | slot | arm | tests |
 |---|---|---|

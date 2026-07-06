@@ -193,6 +193,24 @@ def current_family_checkpoint_policy_specs(
     return tuple(selected)
 
 
+def require_current_family_checkpoint_paths(
+    checkpoint_paths: Iterable[str | Path],
+    *,
+    context: str = "checkpoint eval",
+) -> tuple[str, ...]:
+    """Require raw checkpoint paths to be current-family neural policy specs."""
+    specs = tuple(f"neural:{Path(path).expanduser()}" for path in checkpoint_paths)
+    try:
+        return current_family_checkpoint_policy_specs(specs, legacy_mode="reject")
+    except ValueError as exc:
+        raise ValueError(
+            f"{context} requires current-family v2+ checkpoints. Legacy no-belief/pre-v2 "
+            "checkpoints are historical baselines, not current eval targets. Pass "
+            "--allow-legacy-checkpoints only when intentionally reproducing archived "
+            f"historical diagnostics. Details: {exc}"
+        ) from exc
+
+
 def current_family_historical_opponent_policy_specs(
     checkpoint_history: Iterable[str],
     *,

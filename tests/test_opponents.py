@@ -13,6 +13,7 @@ from pokezero.opponents import (
     historical_opponent_policy_specs,
     is_current_family_checkpoint_policy_spec,
     opponent_pool_policy_specs,
+    require_current_family_checkpoint_paths,
 )
 
 
@@ -135,6 +136,16 @@ class OpponentPoolTest(unittest.TestCase):
         for call in load_config.call_args_list:
             self.assertEqual(call.args, (Path("/runs/current-family.pt"),))
 
+    def test_current_family_path_guard_rejects_no_belief_1m(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            checkpoint = Path(temp_dir) / "pokezero-no-belief-gen3-1m.pt"
+            checkpoint.write_bytes(b"not a real torch checkpoint")
+            config = SimpleNamespace(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2)
+
+            with patch("pokezero.neural_policy.load_transformer_model_config", return_value=config):
+                with self.assertRaisesRegex(ValueError, "requires current-family v2\\+"):
+                    require_current_family_checkpoint_paths((checkpoint,), context="probe")
+
     def test_current_family_filter_rejects_legacy_checkpoint_by_default(self) -> None:
         with TemporaryDirectory() as temp_dir:
             legacy = _write_checkpoint_stub(Path(temp_dir) / "legacy.json", "pokezero.observation.v1")
@@ -146,7 +157,7 @@ class OpponentPoolTest(unittest.TestCase):
     def test_current_family_filter_rejects_v2_no_belief_path(self) -> None:
         with TemporaryDirectory() as temp_dir:
             checkpoint = _write_checkpoint_stub(
-                Path(temp_dir) / "pokezero-no-belief-gen3-2m.json",
+                Path(temp_dir) / "pokezero-no-belief-gen3-1m.json",
                 OBSERVATION_SCHEMA_VERSION_V2,
             )
             spec = f"linear:{checkpoint}"

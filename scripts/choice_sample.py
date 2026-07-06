@@ -7,8 +7,8 @@ new checkpoints are added). For every state it records, per checkpoint, the prob
 policy assigns to each legal choice (labeled: move:Surf, switch:Blissey, ...).
 
   python scripts/choice_sample.py \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
+      --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
+      --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       --out evals/turn10_choice_sample.json
 """
@@ -30,6 +30,7 @@ from pokezero.checkpoint_factors import (
 )
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
+from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
 
 
@@ -114,12 +115,25 @@ def main() -> int:
     parser.add_argument("--player", default="p1")
     parser.add_argument("--seed-start", type=int, default=1)
     parser.add_argument("--out", default="evals/turn10_choice_sample.json")
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
 
     specs = []
     for raw in args.checkpoint:
         path, _, label = raw.partition("=")
         specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="choice-sample probe",
+        )
 
     print(f"[sample] collecting turn-{args.turn} {args.player} states from {args.num_games} unique games…")
     states = sample_states_at_turn(

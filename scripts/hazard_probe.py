@@ -54,6 +54,7 @@ from pokezero.neural_policy import (
     evaluate_transformer_observation_value,
 )
 from pokezero.online_client import build_agent
+from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
 
 
@@ -206,16 +207,32 @@ def main() -> int:
         help="corpus states sampled for the dV hazard-injection value probe (9 value evals each)",
     )
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "allow no-belief/pre-v2 checkpoints for explicit historical reproduction; "
+            "do not use for current longitudinal evals"
+        ),
+    )
     args = parser.parse_args()
+
+    specs = []
+    for spec in args.checkpoint:
+        path, _, label = spec.partition("=")
+        specs.append((label or Path(path).stem, path))
+    if not args.allow_legacy_checkpoints:
+        require_current_family_checkpoint_paths(
+            (path for _, path in specs),
+            context="hazard probe",
+        )
 
     print(f"[hazard] building corpus ({args.games} games)…", file=sys.stderr)
     corpus = build_corpus(args.showdown_root, num_games=args.games, max_states=args.max_states)
     print(f"[hazard] corpus: {len(corpus)} states", file=sys.stderr)
 
     rows = []
-    for spec in args.checkpoint:
-        path, _, label = spec.partition("=")
-        label = label or Path(path).stem
+    for label, path in specs:
         print(f"[hazard] probing {label}…", file=sys.stderr)
         row = probe_checkpoint(label, path, args.showdown_root, corpus, value_states=args.value_states)
         milestone_games = parse_milestone_games(row)
