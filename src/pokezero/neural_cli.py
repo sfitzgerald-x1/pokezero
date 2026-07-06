@@ -113,6 +113,7 @@ from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
 from .eval_cli import _add_gate_arguments, _gate_config_from_args
+from .refutation_training import REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES
 from .source_metadata import collect_source_metadata
 
 
@@ -342,6 +343,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL or training caches.")
     train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files or training cache directories.")
+    train.add_argument(
+        "--refutation-cache",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional certified G4 refutation training-cache directories to mix into "
+            "training as capped auxiliary examples. These caches are never deleted by "
+            "--delete-cache-after-read."
+        ),
+    )
+    train.add_argument(
+        "--refutation-max-fraction",
+        type=float,
+        default=0.1,
+        help=(
+            "Maximum refutation examples as a fraction of emitted training examples. "
+            "When --refutation-cache is used, this must be >0 and <=0.2."
+        ),
+    )
+    train.add_argument(
+        "--refutation-target-mode",
+        choices=("policy-value", "value"),
+        default="policy-value",
+        help=(
+            "Target mode used to build the refutation cache. value mode is accepted "
+            "only with objective=ppo or objective=value-only."
+        ),
+    )
     train.add_argument("--out", type=Path, required=True, help="Checkpoint output path.")
     train.add_argument(
         "--summary-out",
@@ -2107,8 +2137,14 @@ def _train(args: argparse.Namespace) -> int:
         raise ValueError("--value-calibration-out requires --value-calibration-data.")
     if args.value_selection_out is not None and not args.value_selection_data:
         raise ValueError("--value-selection-out requires --value-selection-data.")
+    refutation_cache_paths = _validate_refutation_cache_args(args)
     cache_lifecycle = _training_cache_lifecycle(args)
     input_data_bytes = _input_data_paths_byte_size(args.data) if args.summary_out is not None else None
+    refutation_cache_bytes = (
+        _input_data_paths_byte_size(refutation_cache_paths)
+        if args.summary_out is not None and refutation_cache_paths
+        else None
+    )
     initial_model = None
     initial_training_result = None
     if args.initial_checkpoint is not None:
@@ -2231,9 +2267,10 @@ def _train(args: argparse.Namespace) -> int:
         )
     if training_config.window_size != model_config.window_size:
         raise ValueError("--window-size must match the model config window_size.")
-    _require_cache_masks_match_model_config(args.data, model_config)
-    _require_cache_observation_schema_matches(args.data, model_config)
-    _require_cache_shaping_matches_training_config(args.data, shaping_weights_json)
+    training_data_paths = tuple(args.data) + refutation_cache_paths
+    _require_cache_masks_match_model_config(training_data_paths, model_config)
+    _require_cache_observation_schema_matches(training_data_paths, model_config)
+    _require_cache_shaping_matches_training_config(training_data_paths, shaping_weights_json)
     if args.value_selection_data and training_config.objective != "value-only":
         print(
             "warning: --value-selection-data selects by held-out value calibration, not policy quality; "
@@ -2253,11 +2290,16 @@ def _train(args: argparse.Namespace) -> int:
             batch_size=args.value_calibration_batch_size,
             bins=args.value_calibration_bins,
             consumed_cache_callback=cache_lifecycle.consumed_cache_callback,
+            auxiliary_paths=refutation_cache_paths or None,
+            auxiliary_max_fraction=args.refutation_max_fraction if refutation_cache_paths else 0.0,
         )
     else:
         train_kwargs: dict[str, object] = {}
         if cache_lifecycle.consumed_cache_callback is not None:
             train_kwargs["consumed_cache_callback"] = cache_lifecycle.consumed_cache_callback
+        if refutation_cache_paths:
+            train_kwargs["auxiliary_paths"] = refutation_cache_paths
+            train_kwargs["auxiliary_max_fraction"] = args.refutation_max_fraction
         model, result = train_transformer_policy(
             args.data,
             model_config=model_config,
@@ -2266,7 +2308,7 @@ def _train(args: argparse.Namespace) -> int:
             **train_kwargs,
         )
     train_elapsed_seconds = time.perf_counter() - train_started
-    provenance_hashes = distinct_belief_set_source_hashes(args.data)
+    provenance_hashes = distinct_belief_set_source_hashes(training_data_paths)
     if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
         result = replace(result, belief_set_source_hash=provenance_hashes[0])
     elif len(provenance_hashes) > 1:
@@ -2340,6 +2382,7 @@ def _train(args: argparse.Namespace) -> int:
             elapsed_seconds=time.perf_counter() - command_started,
             train_elapsed_seconds=train_elapsed_seconds,
             input_data_bytes=input_data_bytes,
+            refutation_cache_bytes=refutation_cache_bytes,
             value_selection_payload=value_selection_payload,
         )
         _write_json(args.summary_out, payload)
@@ -2358,6 +2401,7 @@ def _train_summary_payload(
     elapsed_seconds: float,
     train_elapsed_seconds: float,
     input_data_bytes: int | None,
+    refutation_cache_bytes: int | None,
     value_selection_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     checkpoint_bytes = args.out.stat().st_size if args.out.exists() else None
@@ -2371,6 +2415,7 @@ def _train_summary_payload(
         "train_elapsed_seconds": train_elapsed_seconds,
         "data_paths": [str(path) for path in args.data],
         "input_data_bytes": input_data_bytes,
+        "refutation_cache_bytes": refutation_cache_bytes,
         "checkpoint_path": str(args.out),
         "checkpoint_bytes": checkpoint_bytes,
         "model": {
@@ -2389,6 +2434,12 @@ def _train_summary_payload(
         "epochs": [metrics.to_dict() for metrics in result.epochs],
         "final_metrics": final_metrics.to_dict(),
         "value_selection": value_selection_payload,
+        "refutation_training": {
+            "enabled": bool(args.refutation_cache),
+            "paths": [str(path) for path in (args.refutation_cache or ())],
+            "max_fraction": args.refutation_max_fraction if args.refutation_cache else None,
+            "target_mode": args.refutation_target_mode if args.refutation_cache else None,
+        },
         "training_cache": cache_lifecycle.to_summary(),
     }
 
@@ -2495,6 +2546,61 @@ def _training_cache_lifecycle(args: argparse.Namespace) -> _TrainingCacheLifecyc
 
 def _training_cache_lifecycle_callback(args: argparse.Namespace) -> Callable[[Path], None] | None:
     return _training_cache_lifecycle(args).consumed_cache_callback
+
+
+def _validate_refutation_cache_args(args: argparse.Namespace) -> tuple[Path, ...]:
+    paths = tuple(Path(path) for path in (getattr(args, "refutation_cache", None) or ()))
+    if not paths:
+        return ()
+    max_fraction = float(getattr(args, "refutation_max_fraction", 0.0))
+    if not 0.0 < max_fraction <= 0.2:
+        raise ValueError("--refutation-max-fraction must be greater than 0 and at most 0.2.")
+    target_mode = getattr(args, "refutation_target_mode", "policy-value")
+    objective = getattr(args, "objective", "behavior-cloning")
+    for path in paths:
+        if not is_training_cache_path(path):
+            raise ValueError(f"--refutation-cache path is not a training-cache directory: {path}")
+        if any(_paths_overlap(path, primary_path) for primary_path in getattr(args, "data", ())):
+            raise ValueError("--refutation-cache paths must not overlap --data paths.")
+        cache_target_mode, compatible_objectives = _refutation_cache_training_contract(path)
+        if cache_target_mode != target_mode:
+            raise ValueError(
+                f"--refutation-cache {path} was built with target_mode={cache_target_mode!r} "
+                f"but --refutation-target-mode is {target_mode!r}."
+            )
+        if objective not in compatible_objectives:
+            raise ValueError(
+                f"--refutation-cache {path} target_mode={cache_target_mode!r} is compatible with "
+                f"{', '.join(compatible_objectives)}, not --objective {objective!r}."
+            )
+    if len({path.expanduser().resolve(strict=False) for path in paths}) != len(paths):
+        raise ValueError("--refutation-cache contains duplicate paths.")
+    return paths
+
+
+def _refutation_cache_training_contract(path: Path) -> tuple[str, tuple[str, ...]]:
+    metadata_path = path / "metadata.json"
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"--refutation-cache {path} has unreadable metadata.json.") from exc
+    refutation_training = payload.get("refutation_training")
+    if not isinstance(refutation_training, dict):
+        raise ValueError(f"--refutation-cache {path} is missing refutation_training metadata.")
+    target_mode = refutation_training.get("target_mode")
+    if target_mode not in REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES:
+        raise ValueError(f"--refutation-cache {path} records unsupported target_mode {target_mode!r}.")
+    compatible = refutation_training.get("compatible_objectives")
+    if not isinstance(compatible, list):
+        raise ValueError(f"--refutation-cache {path} records invalid compatible_objectives.")
+    compatible_objectives = tuple(str(value) for value in compatible)
+    expected_compatible_objectives = REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[str(target_mode)]
+    if compatible_objectives != expected_compatible_objectives:
+        raise ValueError(
+            f"--refutation-cache {path} records compatible_objectives {compatible_objectives!r} "
+            f"but target_mode={target_mode!r} requires {expected_compatible_objectives!r}."
+        )
+    return str(target_mode), expected_compatible_objectives
 
 
 def _cache_gb_to_bytes(value: float | None) -> int:
@@ -2605,6 +2711,8 @@ def _train_with_value_selection(
     batch_size: int,
     bins: int,
     consumed_cache_callback: Callable[[Path], None] | None = None,
+    auxiliary_paths: Sequence[Path] | None = None,
+    auxiliary_max_fraction: float = 0.0,
 ) -> tuple[object, object, dict[str, object]]:
     if batch_size <= 0:
         raise ValueError("value selection batch_size must be positive.")
@@ -2661,6 +2769,9 @@ def _train_with_value_selection(
     train_kwargs: dict[str, object] = {}
     if consumed_cache_callback is not None:
         train_kwargs["consumed_cache_callback"] = consumed_cache_callback
+    if auxiliary_paths is not None:
+        train_kwargs["auxiliary_paths"] = auxiliary_paths
+        train_kwargs["auxiliary_max_fraction"] = auxiliary_max_fraction
     model, full_result = train_transformer_policy(
         paths,
         model_config=model_config,

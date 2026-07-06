@@ -687,6 +687,71 @@ def iter_training_batches(
     )
 
 
+def iter_training_batches_with_capped_auxiliary(
+    primary_paths: PathInput | Iterable[PathInput],
+    *,
+    auxiliary_paths: PathInput | Iterable[PathInput],
+    auxiliary_max_fraction: float,
+    batch_size: int,
+    config: TrajectoryDatasetConfig | None = None,
+    consumed_cache_callback: Callable[[Path], None] | None = None,
+    defer_cache_window_expansion: bool = False,
+) -> Iterator[TrainingBatch]:
+    """Stream primary batches plus a capped auxiliary-example mix.
+
+    ``auxiliary_max_fraction`` bounds auxiliary examples as a fraction of the
+    emitted total, i.e. auxiliary / (primary + auxiliary). This is intended for
+    sparse corrective caches such as certified refutation examples, where the
+    caller wants the data to influence training without dominating an epoch.
+    """
+
+    if not 0.0 < auxiliary_max_fraction < 1.0:
+        raise ValueError("auxiliary_max_fraction must be greater than 0 and less than 1.")
+    primary_seen = 0
+    auxiliary_seen = 0
+    auxiliary_ratio = auxiliary_max_fraction / (1.0 - auxiliary_max_fraction)
+    auxiliary_iterator = iter_training_batches(
+        auxiliary_paths,
+        batch_size=batch_size,
+        config=config,
+        consumed_cache_callback=None,
+        defer_cache_window_expansion=defer_cache_window_expansion,
+    )
+    pending_auxiliary: TrainingBatch | None = None
+    auxiliary_exhausted = False
+
+    for primary_batch in iter_training_batches(
+        primary_paths,
+        batch_size=batch_size,
+        config=config,
+        consumed_cache_callback=consumed_cache_callback,
+        defer_cache_window_expansion=defer_cache_window_expansion,
+    ):
+        yield primary_batch
+        primary_seen += primary_batch.batch_size
+        allowed_auxiliary = int(primary_seen * auxiliary_ratio) - auxiliary_seen
+        while allowed_auxiliary > 0 and not auxiliary_exhausted:
+            if pending_auxiliary is None:
+                try:
+                    pending_auxiliary = next(auxiliary_iterator)
+                except StopIteration:
+                    auxiliary_exhausted = True
+                    break
+            emit_count = min(allowed_auxiliary, pending_auxiliary.batch_size)
+            emitted = _slice_training_batch(pending_auxiliary, 0, emit_count)
+            yield emitted
+            auxiliary_seen += emit_count
+            allowed_auxiliary -= emit_count
+            if emit_count == pending_auxiliary.batch_size:
+                pending_auxiliary = None
+            else:
+                pending_auxiliary = _slice_training_batch(
+                    pending_auxiliary,
+                    emit_count,
+                    pending_auxiliary.batch_size,
+                )
+
+
 def write_training_cache_from_rollouts(
     paths: PathInput | Iterable[PathInput],
     output_path: PathInput,

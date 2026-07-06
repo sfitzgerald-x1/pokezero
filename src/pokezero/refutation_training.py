@@ -8,6 +8,7 @@ materializes corrected examples for certified loser-seat deviations.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -28,6 +29,7 @@ REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES = {
     "value": ("ppo", "value-only"),
     "policy-value": ("behavior-cloning", "ppo", "reward-weighted"),
 }
+REFUTATION_TRAINING_CACHE_SCHEMA_VERSION = "pokezero.refutation_training_cache.v1"
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,11 @@ def write_refutation_training_cache(
         config=dataset_config,
         overwrite=overwrite,
     )
+    _stamp_refutation_cache_metadata(
+        cache.path,
+        target_mode=resolved_config.target_mode,
+        compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
+    )
     return RefutationTrainingSummary(
         source_record_count=len(records),
         fragile_state_count=len(fragile_rows),
@@ -133,6 +140,25 @@ def write_refutation_training_cache(
         target_mode=resolved_config.target_mode,
         compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
         cache=cache,
+    )
+
+
+def _stamp_refutation_cache_metadata(
+    cache_path: Path,
+    *,
+    target_mode: str,
+    compatible_objectives: Sequence[str],
+) -> None:
+    metadata_path = cache_path / "metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["refutation_training"] = {
+        "schema_version": REFUTATION_TRAINING_CACHE_SCHEMA_VERSION,
+        "target_mode": target_mode,
+        "compatible_objectives": list(compatible_objectives),
+    }
+    metadata_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
 
 

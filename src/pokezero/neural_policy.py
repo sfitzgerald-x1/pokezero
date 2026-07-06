@@ -19,7 +19,12 @@ import random
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
-from .dataset import TrajectoryDatasetConfig, TrainingBatch, iter_training_batches
+from .dataset import (
+    TrajectoryDatasetConfig,
+    TrainingBatch,
+    iter_training_batches,
+    iter_training_batches_with_capped_auxiliary,
+)
 from .observation import (
     LEGACY_OBSERVATION_SCHEMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
@@ -1241,6 +1246,8 @@ def train_transformer_policy(
     initial_model: Any | None = None,
     epoch_callback: Callable[[Any, TransformerTrainingResult], None] | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
+    auxiliary_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
+    auxiliary_max_fraction: float = 0.0,
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
@@ -1249,6 +1256,10 @@ def train_transformer_policy(
     resolved_model_config = model_config
     if resolved_training_config.window_size != resolved_model_config.window_size:
         raise ValueError("training_config.window_size must match model_config.window_size.")
+    if auxiliary_paths is None and auxiliary_max_fraction:
+        raise ValueError("auxiliary_max_fraction requires auxiliary_paths.")
+    if auxiliary_paths is not None and not 0.0 < auxiliary_max_fraction < 1.0:
+        raise ValueError("auxiliary_max_fraction must be greater than 0 and less than 1.")
     device = resolve_torch_device(resolved_training_config.device)
     if initial_model is None:
         model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
@@ -1290,16 +1301,25 @@ def train_transformer_policy(
             if consumed_cache_callback is not None and epoch == resolved_training_config.epochs
             else None
         )
-        for batch_index, batch in enumerate(
-            iter_training_batches(
+        if auxiliary_paths is None:
+            training_batches = iter_training_batches(
                 paths,
                 batch_size=resolved_training_config.batch_size,
                 config=dataset_config,
                 consumed_cache_callback=cache_callback_for_epoch,
                 defer_cache_window_expansion=True,
-            ),
-            start=1,
-        ):
+            )
+        else:
+            training_batches = iter_training_batches_with_capped_auxiliary(
+                paths,
+                auxiliary_paths=auxiliary_paths,
+                auxiliary_max_fraction=auxiliary_max_fraction,
+                batch_size=resolved_training_config.batch_size,
+                config=dataset_config,
+                consumed_cache_callback=cache_callback_for_epoch,
+                defer_cache_window_expansion=True,
+            )
+        for batch_index, batch in enumerate(training_batches, start=1):
             tensors = training_batch_to_torch(batch, device=device)
             output = model_forward_from_training_tensors(model, tensors)
             loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
