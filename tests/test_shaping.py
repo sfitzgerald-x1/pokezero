@@ -13,6 +13,9 @@ from pokezero.shaping import (
     ShapingConfig,
     SideSnapshot,
     annotate_record_with_shaping,
+    action_class_components_by_step_index,
+    action_class_names,
+    action_class_shaping_rewards_by_step_index,
     component_names,
     components_from_sides,
     ground_truth_components_by_step_index,
@@ -21,6 +24,7 @@ from pokezero.shaping import (
     potential_shaping_rewards_by_step_index,
     potentials_by_step_index,
     resolve_shaping_config,
+    shaping_rewards_by_step_index,
     shaping_terms,
     side_snapshot_from_observation_metadata,
 )
@@ -31,14 +35,14 @@ MASK = (True, False, False, False, False, False, False, False, False)
 WSE = SHAPING_PRESETS["wse-arm1"]
 
 
-def observation(metadata: dict | None = None) -> PokeZeroObservationV0:
+def observation(metadata: dict | None = None, legal_action_mask: tuple[bool, ...] = MASK) -> PokeZeroObservationV0:
     spec = ObservationSpec(categorical_feature_count=1, numeric_feature_count=1)
     return PokeZeroObservationV0(
         categorical_ids=tuple((0,) for _ in range(spec.token_count)),
         numeric_features=tuple((0.0,) for _ in range(spec.token_count)),
         token_type_ids=tuple(0 for _ in range(spec.token_count)),
         attention_mask=tuple(True for _ in range(spec.token_count)),
-        legal_action_mask=MASK,
+        legal_action_mask=legal_action_mask,
         metadata=metadata or {},
     )
 
@@ -54,13 +58,20 @@ def mon(hp: float = 1.0, status: str | None = None, fainted: bool = False) -> di
     return {"hp_fraction": hp, "status": status, "fainted": fainted}
 
 
-def step(player_id: str, turn_index: int, metadata: dict, shaping_reward: float | None = None) -> TrajectoryStep:
+def step(
+    player_id: str,
+    turn_index: int,
+    metadata: dict,
+    shaping_reward: float | None = None,
+    action_index: int = 0,
+    legal_action_mask: tuple[bool, ...] = MASK,
+) -> TrajectoryStep:
     return TrajectoryStep(
         player_id=player_id,
         turn_index=turn_index,
-        observation=observation(metadata),
-        legal_action_mask=MASK,
-        action_index=0,
+        observation=observation(metadata, legal_action_mask=legal_action_mask),
+        legal_action_mask=legal_action_mask,
+        action_index=action_index,
         reward=0.0,
         shaping_reward=shaping_reward,
     )
@@ -108,11 +119,19 @@ class ShapingConfigTest(unittest.TestCase):
             parse_shaping_spec("not-a-preset")
 
     def test_config_round_trip_and_canonical_json(self) -> None:
-        config = ShapingConfig(hp_weight=0.3, faint_weight=0.7, status_weights=(("par", 0.1), ("brn", 0.2)))
+        config = ShapingConfig(
+            hp_weight=0.3,
+            faint_weight=0.7,
+            status_weights=(("par", 0.1), ("brn", 0.2)),
+            damage_dealt_weight=0.4,
+            switch_made_weight=-0.2,
+        )
         self.assertEqual(ShapingConfig.from_dict(config.to_dict()), config)
         self.assertEqual(ShapingConfig.from_json(config.canonical_json()), config)
         # Canonical: sorted status keys regardless of construction order.
         self.assertEqual(config.status_weights, (("brn", 0.2), ("par", 0.1)))
+        self.assertEqual(config.action_class_weights()["damage_dealt"], 0.4)
+        self.assertEqual(config.action_class_weights()["switch_made"], -0.2)
         self.assertEqual(resolve_shaping_config(config.to_dict()), config)
         self.assertEqual(resolve_shaping_config(config), config)
         self.assertIsNone(resolve_shaping_config(None))
@@ -133,6 +152,13 @@ class ShapingConfigTest(unittest.TestCase):
         self.assertTrue(ShapingConfig().is_zero())
         self.assertTrue(ShapingConfig(status_weights=(("par", 0.0),)).is_zero())
         self.assertFalse(ShapingConfig(hazard_weight=0.1).is_zero())
+        self.assertFalse(ShapingConfig(boost_used_weight=0.1).is_zero())
+
+    def test_action_class_component_names(self) -> None:
+        self.assertEqual(
+            action_class_names(),
+            ("damage_dealt", "damage_taken", "switch_made", "boost_used", "heal_used", "ko"),
+        )
 
 
 class PotentialTest(unittest.TestCase):
@@ -278,6 +304,87 @@ class RecordShapingTest(unittest.TestCase):
         # Foe (p2) side gained 2 spikes layers between p1's decisions: +0.3 * 2/3.
         self.assertAlmostEqual(rewards[0], 0.3 * 2 / 3)
 
+    def test_action_class_components_and_rewards(self) -> None:
+        switch_mask = (False, False, False, False, True, False, False, False, False)
+        move_metadata = {
+            "action_candidates": [
+                {"action_index": 0, "kind": "move", "move_id": "swordsdance", "move_name": "Swords Dance"},
+            ],
+        }
+        heal_metadata = {
+            "action_candidates": [
+                {"action_index": 0, "kind": "move", "move_id": "recover", "move_name": "Recover"},
+            ],
+        }
+        switch_metadata = {
+            "action_candidates": [
+                {"action_index": 4, "kind": "switch", "pokemon": {"species": "Starmie"}},
+            ],
+        }
+        record = record_from_steps(
+            [
+                step("p1", 0, {**team_metadata(mon(1.0), mon(1.0)), **move_metadata}),
+                step("p2", 0, {**team_metadata(mon(1.0), mon(1.0)), **heal_metadata}),
+                step(
+                    "p1",
+                    1,
+                    {**team_metadata(mon(1.0), mon(0.5)), **switch_metadata},
+                    action_index=4,
+                    legal_action_mask=switch_mask,
+                ),
+                step("p2", 1, team_metadata(mon(0.0, fainted=True), mon(1.0))),
+            ],
+            winner="p1",
+        )
+
+        components = action_class_components_by_step_index(record)
+        self.assertEqual(components[0]["boost_used"], 1.0)
+        self.assertAlmostEqual(components[0]["damage_dealt"], 1 / 6)
+        self.assertAlmostEqual(components[0]["damage_taken"], 0.5 / 6)
+        self.assertAlmostEqual(components[0]["ko"], 1 / 6)
+        self.assertEqual(components[1]["heal_used"], 1.0)
+        self.assertEqual(components[2]["switch_made"], 1.0)
+
+        config = ShapingConfig(
+            damage_dealt_weight=6.0,
+            damage_taken_weight=-6.0,
+            ko_weight=6.0,
+            boost_used_weight=0.25,
+            heal_used_weight=0.5,
+            switch_made_weight=-0.75,
+        )
+        rewards = action_class_shaping_rewards_by_step_index(record, config=config)
+        self.assertAlmostEqual(rewards[0], 1.0 - 0.5 + 1.0 + 0.25)
+        self.assertAlmostEqual(rewards[1], 0.5 - 1.0 + 0.5)
+        self.assertAlmostEqual(rewards[2], -0.75)
+
+    def test_full_shaping_combines_potential_and_action_class_terms(self) -> None:
+        config = ShapingConfig(hazard_weight=0.3, switch_made_weight=0.4)
+        switch_mask = (False, False, False, False, True, False, False, False, False)
+        record = record_from_steps(
+            [
+                step(
+                    "p1",
+                    0,
+                    {
+                        **team_metadata(mon(1.0)),
+                        "action_candidates": [{"action_index": 4, "kind": "switch"}],
+                    },
+                    action_index=4,
+                    legal_action_mask=switch_mask,
+                ),
+                step("p2", 0, team_metadata(mon(1.0))),
+                step("p1", 1, team_metadata(mon(1.0))),
+                step("p2", 1, team_metadata(mon(1.0), spikes=2)),
+            ],
+            winner="p1",
+        )
+
+        potential_rewards = potential_shaping_rewards_by_step_index(record, config=config, gamma=1.0)
+        full_rewards = shaping_rewards_by_step_index(record, config=config, gamma=1.0)
+        self.assertAlmostEqual(potential_rewards[0], 0.3 * 2 / 3)
+        self.assertAlmostEqual(full_rewards[0], potential_rewards[0] + 0.4)
+
     def test_annotate_record_round_trips_and_preserves_raw_reward(self) -> None:
         record = self.two_player_record()
         annotated = annotate_record_with_shaping(record, config=WSE, gamma=0.9999)
@@ -288,6 +395,31 @@ class RecordShapingTest(unittest.TestCase):
         payload = rollout_record_to_dict(annotated)
         restored = rollout_record_from_dict(json.loads(json.dumps(payload)))
         self.assertAlmostEqual(restored.trajectory.steps[0].shaping_reward, expected[0])
+
+    def test_annotate_record_includes_action_class_terms(self) -> None:
+        switch_mask = (False, False, False, False, True, False, False, False, False)
+        record = record_from_steps(
+            [
+                step(
+                    "p1",
+                    0,
+                    {
+                        **team_metadata(mon(1.0)),
+                        "action_candidates": [{"action_index": 4, "kind": "switch"}],
+                    },
+                    action_index=4,
+                    legal_action_mask=switch_mask,
+                )
+            ],
+            winner="p1",
+        )
+
+        annotated = annotate_record_with_shaping(
+            record,
+            config=ShapingConfig(switch_made_weight=0.2),
+            gamma=1.0,
+        )
+        self.assertAlmostEqual(annotated.trajectory.steps[0].shaping_reward, 0.2)
 
     def test_unshaped_records_serialize_without_the_field(self) -> None:
         record = self.two_player_record()

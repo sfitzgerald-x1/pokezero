@@ -46,6 +46,8 @@ import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
+from .actions import MOVE_ACTION_COUNT
+
 if TYPE_CHECKING:
     from .collection import RolloutRecord
 
@@ -60,6 +62,45 @@ HAZARD_COMPONENT = "hazard"
 STATUS_COMPONENT_PREFIX = "status:"
 
 TERMINAL_MODES = ("zero", "carry")
+ACTION_CLASS_COMPONENTS = (
+    "damage_dealt",
+    "damage_taken",
+    "switch_made",
+    "boost_used",
+    "heal_used",
+    "ko",
+)
+BOOST_MOVE_IDS = frozenset(
+    {
+        "acidarmor",
+        "agility",
+        "bellydrum",
+        "bulkup",
+        "calmmind",
+        "curse",
+        "dragondance",
+        "growth",
+        "howl",
+        "irondefense",
+        "meditate",
+        "swordsdance",
+        "tailglow",
+    }
+)
+HEAL_MOVE_IDS = frozenset(
+    {
+        "milkdrink",
+        "moonlight",
+        "morningsun",
+        "painsplit",
+        "recover",
+        "rest",
+        "slackoff",
+        "softboiled",
+        "synthesis",
+        "wish",
+    }
+)
 
 
 def component_names() -> tuple[str, ...]:
@@ -72,9 +113,14 @@ def component_names() -> tuple[str, ...]:
     )
 
 
+def action_class_names() -> tuple[str, ...]:
+    """Canonical ordering of direct action-class shaping components."""
+    return ACTION_CLASS_COMPONENTS
+
+
 @dataclass(frozen=True)
 class ShapingConfig:
-    """Weights for the potential function plus the terminal-potential convention.
+    """Weights for potential-based and direct action-class dense shaping.
 
     ``status_weights`` maps each non-volatile status to its own weight (sorted tuple of
     pairs so the frozen config stays hashable and serialization is canonical). Negative
@@ -87,6 +133,12 @@ class ShapingConfig:
     status_weights: tuple[tuple[str, float], ...] = ()
     hazard_weight: float = 0.0
     terminal_mode: str = "zero"
+    damage_dealt_weight: float = 0.0
+    damage_taken_weight: float = 0.0
+    switch_made_weight: float = 0.0
+    boost_used_weight: float = 0.0
+    heal_used_weight: float = 0.0
+    ko_weight: float = 0.0
 
     def __post_init__(self) -> None:
         normalized: dict[str, float] = {}
@@ -104,7 +156,17 @@ class ShapingConfig:
             "status_weights",
             tuple(sorted((status, weight) for status, weight in normalized.items())),
         )
-        for name in ("hp_weight", "faint_weight", "hazard_weight"):
+        for name in (
+            "hp_weight",
+            "faint_weight",
+            "hazard_weight",
+            "damage_dealt_weight",
+            "damage_taken_weight",
+            "switch_made_weight",
+            "boost_used_weight",
+            "heal_used_weight",
+            "ko_weight",
+        ):
             if not math.isfinite(float(getattr(self, name))):
                 raise ValueError(f"{name} must be finite.")
         if any(not math.isfinite(weight) for _, weight in self.status_weights):
@@ -119,11 +181,20 @@ class ShapingConfig:
         return 0.0
 
     def is_zero(self) -> bool:
+        return not self.has_potential_weights() and not self.has_action_class_weights()
+
+    def has_potential_weights(self) -> bool:
         return (
-            self.hp_weight == 0.0
-            and self.faint_weight == 0.0
-            and self.hazard_weight == 0.0
-            and all(weight == 0.0 for _, weight in self.status_weights)
+            self.hp_weight != 0.0
+            or self.faint_weight != 0.0
+            or self.hazard_weight != 0.0
+            or any(weight != 0.0 for _, weight in self.status_weights)
+        )
+
+    def has_action_class_weights(self) -> bool:
+        return any(
+            getattr(self, f"{name}_weight") != 0.0
+            for name in ACTION_CLASS_COMPONENTS
         )
 
     def component_weights(self) -> dict[str, float]:
@@ -136,6 +207,12 @@ class ShapingConfig:
             weights[f"{STATUS_COMPONENT_PREFIX}{status}"] = self.status_weight(status)
         return weights
 
+    def action_class_weights(self) -> dict[str, float]:
+        return {
+            name: getattr(self, f"{name}_weight")
+            for name in ACTION_CLASS_COMPONENTS
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "hp_weight": self.hp_weight,
@@ -143,6 +220,12 @@ class ShapingConfig:
             "status_weights": {status: weight for status, weight in self.status_weights},
             "hazard_weight": self.hazard_weight,
             "terminal_mode": self.terminal_mode,
+            "damage_dealt_weight": self.damage_dealt_weight,
+            "damage_taken_weight": self.damage_taken_weight,
+            "switch_made_weight": self.switch_made_weight,
+            "boost_used_weight": self.boost_used_weight,
+            "heal_used_weight": self.heal_used_weight,
+            "ko_weight": self.ko_weight,
         }
 
     def canonical_json(self) -> str:
@@ -152,7 +235,20 @@ class ShapingConfig:
     def from_dict(cls, payload: Mapping[str, Any]) -> "ShapingConfig":
         if not isinstance(payload, Mapping):
             raise ValueError("shaping config must be a JSON object.")
-        known = {"hp_weight", "faint_weight", "status_weights", "status_weight", "hazard_weight", "terminal_mode"}
+        known = {
+            "hp_weight",
+            "faint_weight",
+            "status_weights",
+            "status_weight",
+            "hazard_weight",
+            "terminal_mode",
+            "damage_dealt_weight",
+            "damage_taken_weight",
+            "switch_made_weight",
+            "boost_used_weight",
+            "heal_used_weight",
+            "ko_weight",
+        }
         unknown = sorted(set(payload) - known)
         if unknown:
             raise ValueError(f"unknown shaping config key(s): {', '.join(unknown)}.")
@@ -173,6 +269,12 @@ class ShapingConfig:
             status_weights=status_weights,
             hazard_weight=float(payload.get("hazard_weight", 0.0)),
             terminal_mode=str(payload.get("terminal_mode", "zero")),
+            damage_dealt_weight=float(payload.get("damage_dealt_weight", 0.0)),
+            damage_taken_weight=float(payload.get("damage_taken_weight", 0.0)),
+            switch_made_weight=float(payload.get("switch_made_weight", 0.0)),
+            boost_used_weight=float(payload.get("boost_used_weight", 0.0)),
+            heal_used_weight=float(payload.get("heal_used_weight", 0.0)),
+            ko_weight=float(payload.get("ko_weight", 0.0)),
         )
 
     @classmethod
@@ -245,6 +347,14 @@ class SideSnapshot:
 
 
 EMPTY_SIDE = SideSnapshot()
+
+
+@dataclass(frozen=True)
+class PlayerRelativeSides:
+    """Ground-truth own/foe side snapshots for one player-relative decision."""
+
+    own: SideSnapshot
+    foe: SideSnapshot
 
 
 def side_snapshot_from_observation_metadata(metadata: Mapping[str, Any] | None) -> SideSnapshot:
@@ -326,8 +436,8 @@ def potential_from_sides(own: SideSnapshot, foe: SideSnapshot, config: ShapingCo
 # ---------------------------------------------------------------------------
 
 
-def ground_truth_components_by_step_index(record: "RolloutRecord") -> dict[int, dict[str, float]]:
-    """Per-step player-relative component vectors from a record's ground-truth views.
+def ground_truth_sides_by_step_index(record: "RolloutRecord") -> dict[int, PlayerRelativeSides]:
+    """Per-step player-relative own/foe side snapshots from ground-truth views.
 
     For a step by player p at turn t: own side = p's ``self_team`` view at that step
     (exact); foe side = the opponent's most recent ``self_team`` view at turn <= t (both
@@ -345,7 +455,7 @@ def ground_truth_components_by_step_index(record: "RolloutRecord") -> dict[int, 
         snapshots.append(snapshot)
         views_by_player.setdefault(step.player_id, []).append((step.turn_index, snapshot))
 
-    components_by_step: dict[int, dict[str, float]] = {}
+    sides_by_step: dict[int, PlayerRelativeSides] = {}
     for step_index, step in enumerate(steps):
         own = snapshots[step_index]
         foe = EMPTY_SIDE
@@ -358,8 +468,84 @@ def ground_truth_components_by_step_index(record: "RolloutRecord") -> dict[int, 
                     break
                 foe = snapshot
             break
-        components_by_step[step_index] = components_from_sides(own, foe)
+        sides_by_step[step_index] = PlayerRelativeSides(own=own, foe=foe)
+    return sides_by_step
+
+
+def ground_truth_components_by_step_index(record: "RolloutRecord") -> dict[int, dict[str, float]]:
+    """Per-step player-relative component vectors from a record's ground-truth views."""
+    return {
+        step_index: components_from_sides(sides.own, sides.foe)
+        for step_index, sides in ground_truth_sides_by_step_index(record).items()
+    }
+
+
+def action_class_components_by_step_index(record: "RolloutRecord") -> dict[int, dict[str, float]]:
+    """Per-step direct action-class components.
+
+    These are not potential-based terms. They are deterministic, player-relative facts
+    from each recorded decision: selected switch/setup/heal action plus state deltas to
+    that player's next decision when available. Final decisions without a following
+    player-relative observation get only action-identity terms; the terminal game outcome
+    remains the source of terminal credit. Unlike potential terms, stale opponent self
+    views can shift direct damage/KO credit timing and magnitude; these terms are
+    diversity-arm heuristics, not policy-invariant PBRS.
+    """
+    sides_by_step = ground_truth_sides_by_step_index(record)
+    step_indices_by_player: dict[str, list[int]] = {}
+    for step_index, step in enumerate(record.trajectory.steps):
+        step_indices_by_player.setdefault(step.player_id, []).append(step_index)
+
+    components_by_step: dict[int, dict[str, float]] = {}
+    for step_indices in step_indices_by_player.values():
+        for position, step_index in enumerate(step_indices):
+            step = record.trajectory.steps[step_index]
+            components = {name: 0.0 for name in ACTION_CLASS_COMPONENTS}
+            if _is_switch_action_step(step):
+                components["switch_made"] = 1.0
+            move_id = _selected_move_id(step)
+            if move_id in BOOST_MOVE_IDS:
+                components["boost_used"] = 1.0
+            if move_id in HEAL_MOVE_IDS:
+                components["heal_used"] = 1.0
+            if position + 1 < len(step_indices):
+                current = sides_by_step[step_index]
+                next_sides = sides_by_step[step_indices[position + 1]]
+                components["damage_dealt"] = max(0.0, current.foe.hp_total - next_sides.foe.hp_total) / TEAM_SIZE
+                components["damage_taken"] = max(0.0, current.own.hp_total - next_sides.own.hp_total) / TEAM_SIZE
+                components["ko"] = max(0.0, current.foe.alive - next_sides.foe.alive) / TEAM_SIZE
+            components_by_step[step_index] = components
     return components_by_step
+
+
+def _is_switch_action_step(step: Any) -> bool:
+    candidate = _selected_action_candidate(step)
+    if candidate is not None and candidate.get("kind") == "switch":
+        return True
+    return int(step.action_index) >= MOVE_ACTION_COUNT
+
+
+def _selected_move_id(step: Any) -> str:
+    candidate = _selected_action_candidate(step)
+    if candidate is None or candidate.get("kind") != "move":
+        return ""
+    return str(candidate.get("move_id") or "").strip().lower()
+
+
+def _selected_action_candidate(step: Any) -> Mapping[str, Any] | None:
+    candidates = step.observation.metadata.get("action_candidates")
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes, bytearray)):
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        try:
+            action_index = int(candidate.get("action_index"))
+        except (TypeError, ValueError):
+            continue
+        if action_index == int(step.action_index):
+            return candidate
+    return None
 
 
 def potentials_by_step_index(record: "RolloutRecord", *, config: ShapingConfig) -> dict[int, float]:
@@ -400,7 +586,7 @@ def potential_shaping_rewards_by_step_index(
     attached to that step index. Terminal potential is 0 (``terminal_mode='zero'``) or
     the final observed potential (``terminal_mode='carry'``).
     """
-    if config.is_zero():
+    if not config.has_potential_weights():
         return {index: 0.0 for index, _ in enumerate(record.trajectory.steps)}
     potentials = potentials_by_step_index(record, config=config)
     step_indices_by_player: dict[str, list[int]] = {}
@@ -417,6 +603,41 @@ def potential_shaping_rewards_by_step_index(
     return rewards
 
 
+def action_class_shaping_rewards_by_step_index(
+    record: "RolloutRecord",
+    *,
+    config: ShapingConfig,
+) -> dict[int, float]:
+    """Per-step direct action-class shaping rewards over a full record."""
+    if not config.has_action_class_weights():
+        return {index: 0.0 for index, _ in enumerate(record.trajectory.steps)}
+    weights = config.action_class_weights()
+    return {
+        step_index: sum(weights[name] * components.get(name, 0.0) for name in ACTION_CLASS_COMPONENTS)
+        for step_index, components in action_class_components_by_step_index(record).items()
+    }
+
+
+def shaping_rewards_by_step_index(
+    record: "RolloutRecord",
+    *,
+    config: ShapingConfig,
+    gamma: float,
+) -> dict[int, float]:
+    """Per-step full dense shaping rewards over a full record.
+
+    Potential-based terms use ``gamma * Phi(next) - Phi(current)``; action-class
+    terms are direct per-decision components. The sum is the shaping component used
+    by dataset target construction and optional record annotation.
+    """
+    potential_rewards = potential_shaping_rewards_by_step_index(record, config=config, gamma=gamma)
+    action_rewards = action_class_shaping_rewards_by_step_index(record, config=config)
+    return {
+        index: potential_rewards.get(index, 0.0) + action_rewards.get(index, 0.0)
+        for index, _ in enumerate(record.trajectory.steps)
+    }
+
+
 def annotate_record_with_shaping(
     record: "RolloutRecord",
     *,
@@ -428,7 +649,7 @@ def annotate_record_with_shaping(
 
     from .trajectory import BattleTrajectory
 
-    rewards = potential_shaping_rewards_by_step_index(record, config=config, gamma=gamma)
+    rewards = shaping_rewards_by_step_index(record, config=config, gamma=gamma)
     trajectory = record.trajectory
     annotated = BattleTrajectory(
         battle_id=trajectory.battle_id,

@@ -251,7 +251,10 @@ cap binds on aggregate compute, not calendar time.
    payoff-matrix ledger, eviction logic — orchestration scripts in the mold of the
    milestone-probe suite.
 3. **G2 arm automation**: the mc22 launch pattern already does 90% (random `w`
-   generation + `--shaping-weights @file` passthrough exist).
+   generation + `--shaping-weights @file` passthrough exist). Public
+   `ShapingConfig` now accepts both potential components and the generic
+   action-class terms; the deploy planner is responsible for sampling the full
+   basis and writing per-arm configs.
 4. **Dashboard population view** + per-agent behavior axes on the probe cron.
 5. Rides the pipelined controller (deploy PR #41) once merged.
 
