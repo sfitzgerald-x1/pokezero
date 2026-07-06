@@ -79,6 +79,10 @@ from .dataset import (
     write_training_cache_from_examples,
     write_training_cache_from_rollouts,
 )
+from .diversity_population import (
+    COVERAGE_RATE_SCHEMA_VERSION,
+    diversity_coverage_rate_report,
+)
 from .env import (
     AsyncPokeZeroEnv,
     BattleStartOverride,
@@ -351,6 +355,7 @@ __all__ = [
     "CandidateSetSummary",
     "CollectionMetrics",
     "ContextAwarePolicy",
+    "COVERAGE_RATE_SCHEMA_VERSION",
     "DEFAULT_AUDIT_CALIBRATION_MARGIN",
     "DEFAULT_BASELINE_OPPONENT_POLICY_SPECS",
     "DEFAULT_BATTLE_START_OVERRIDE_FORMAT",
@@ -525,6 +530,7 @@ __all__ = [
     "current_family_checkpoint_policy_specs",
     "current_family_historical_opponent_policy_specs",
     "historical_opponent_policy_specs",
+    "diversity_coverage_rate_report",
     "is_current_family_checkpoint_policy_spec",
     "is_move_action",
     "is_switch_action",

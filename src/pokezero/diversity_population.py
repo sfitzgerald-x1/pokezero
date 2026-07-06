@@ -6,6 +6,7 @@ import math
 from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = "pokezero.diversity_population_dashboard.v1"
+COVERAGE_RATE_SCHEMA_VERSION = "pokezero.diversity_coverage_rate.v1"
 
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
@@ -532,3 +533,146 @@ def diversity_population_dashboard(
         "policy_js_divergence": policy_js_divergence_summary(policy_prior_rows or ()),
         "payoff_rank": payoff_rank,
     }
+
+
+def diversity_coverage_rate_report(
+    milestones: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build per-100k-game coverage-rate metrics from dashboard snapshots.
+
+    This is a read-only trend artifact for the diversity-tier dashboard.  It
+    does not feed admission, training, rewards, or matchmaking.
+    """
+    points = [_coverage_point(row, index) for index, row in enumerate(milestones)]
+    points.sort(key=lambda point: point["games"])
+    _validate_coverage_points(points)
+    intervals = [
+        _coverage_interval(previous, current)
+        for previous, current in zip(points, points[1:])
+    ]
+    return {
+        "schema_version": COVERAGE_RATE_SCHEMA_VERSION,
+        "units": "delta_per_100k_games",
+        "point_count": len(points),
+        "interval_count": len(intervals),
+        "metrics": [
+            "payoff_effective_rank",
+            "behavior_live_axis_count",
+            "behavior_cluster_count",
+            "policy_mean_pairwise_js_divergence",
+            "policy_max_pairwise_js_divergence",
+        ],
+        "points": points,
+        "intervals": intervals,
+        "latest_interval": intervals[-1] if intervals else None,
+    }
+
+
+def _coverage_point(row: Mapping[str, Any], index: int) -> dict[str, Any]:
+    games = _coverage_games(row)
+    dashboard = row.get("dashboard", row)
+    if not isinstance(dashboard, Mapping):
+        raise ValueError("coverage milestone dashboard must be a JSON object")
+    return {
+        "label": str(row.get("label") or dashboard.get("label") or f"milestone-{index}"),
+        "games": games,
+        "metrics": _coverage_metrics(dashboard),
+    }
+
+
+def _coverage_games(row: Mapping[str, Any]) -> int:
+    for key in ("games", "completed_games", "milestone_games"):
+        value = row.get(key)
+        if value is None:
+            continue
+        parsed = number_or_none(value)
+        if parsed is None or parsed < 0 or int(parsed) != parsed:
+            raise ValueError(f"coverage milestone {key} must be a non-negative integer")
+        return int(parsed)
+    raise ValueError("coverage milestone is missing games/completed_games/milestone_games")
+
+
+def _coverage_metrics(dashboard: Mapping[str, Any]) -> dict[str, float | int | None]:
+    payoff_rank = dashboard.get("payoff_rank")
+    behavior = dashboard.get("behavior")
+    behavior_embedding = dashboard.get("behavior_embedding")
+    policy_js = dashboard.get("policy_js_divergence")
+    if not isinstance(payoff_rank, Mapping):
+        payoff_rank = {}
+    if not isinstance(behavior, Mapping):
+        behavior = {}
+    if not isinstance(behavior_embedding, Mapping):
+        behavior_embedding = {}
+    if not isinstance(policy_js, Mapping):
+        policy_js = {}
+    return {
+        "payoff_effective_rank": _round_optional(number_or_none(payoff_rank.get("effective_rank"))),
+        "behavior_live_axis_count": _int_or_none(behavior.get("live_axis_count")),
+        "behavior_cluster_count": _int_or_none(behavior_embedding.get("cluster_count")),
+        "policy_mean_pairwise_js_divergence": _round_optional(
+            number_or_none(policy_js.get("mean_pairwise_js_divergence"))
+        ),
+        "policy_max_pairwise_js_divergence": _round_optional(
+            number_or_none(policy_js.get("max_pairwise_js_divergence"))
+        ),
+    }
+
+
+def _validate_coverage_points(points: Sequence[Mapping[str, Any]]) -> None:
+    seen: set[int] = set()
+    for point in points:
+        games = int(point["games"])
+        if games in seen:
+            raise ValueError(f"duplicate coverage milestone games: {games}")
+        seen.add(games)
+
+
+def _coverage_interval(previous: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
+    previous_games = int(previous["games"])
+    current_games = int(current["games"])
+    game_delta = current_games - previous_games
+    if game_delta <= 0:
+        raise ValueError("coverage milestones must be strictly increasing")
+    scale = 100_000.0 / game_delta
+    previous_metrics = previous["metrics"]
+    current_metrics = current["metrics"]
+    if not isinstance(previous_metrics, Mapping) or not isinstance(current_metrics, Mapping):
+        raise ValueError("coverage point metrics must be JSON objects")
+    rates: dict[str, float | None] = {}
+    deltas: dict[str, float | None] = {}
+    for metric in (
+        "payoff_effective_rank",
+        "behavior_live_axis_count",
+        "behavior_cluster_count",
+        "policy_mean_pairwise_js_divergence",
+        "policy_max_pairwise_js_divergence",
+    ):
+        previous_value = number_or_none(previous_metrics.get(metric))
+        current_value = number_or_none(current_metrics.get(metric))
+        if previous_value is None or current_value is None:
+            deltas[metric] = None
+            rates[metric] = None
+            continue
+        delta = current_value - previous_value
+        deltas[metric] = round(delta, 6)
+        rates[metric] = round(delta * scale, 6)
+    return {
+        "from_games": previous_games,
+        "to_games": current_games,
+        "game_delta": game_delta,
+        "from_label": previous.get("label"),
+        "to_label": current.get("label"),
+        "deltas": deltas,
+        "rates_per_100k_games": rates,
+    }
+
+
+def _int_or_none(value: Any) -> int | None:
+    parsed = number_or_none(value)
+    if parsed is None or int(parsed) != parsed:
+        return None
+    return int(parsed)
+
+
+def _round_optional(value: float | None) -> float | None:
+    return round(value, 6) if value is not None else None
