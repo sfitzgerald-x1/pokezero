@@ -6,17 +6,20 @@ from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.collection import RolloutRecord, write_rollout_record
-from pokezero.env import TerminalState
+from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
+from pokezero.policy import PolicyDecision
 from pokezero.refutation_cli import main as refutation_cli_main
 from pokezero.refutation_mining import (
     BranchTerminalResult,
     FRAGILE_STATE_SCHEMA_VERSION,
     RefutationMiningConfig,
+    ReplayTerminalBranchEvaluator,
     candidate_count_for_records,
     iter_fragile_states,
     mine_refutations,
 )
+from pokezero.rollout import RolloutConfig
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -69,6 +72,8 @@ def _record(
 
 class FakeTerminalEvaluator:
     evaluation_source = "terminal_rollout"
+    value_head_used = False
+    reseed_scope = "simulator_rng"
 
     def __init__(self, *, loser_winning_actions: set[int], loser_win_count: int) -> None:
         self.loser_winning_actions = loser_winning_actions
@@ -88,6 +93,68 @@ class FakeTerminalEvaluator:
             capped=False,
             turn_count=3,
         )
+
+
+class ValueHeadEvaluator(FakeTerminalEvaluator):
+    value_head_used = True
+
+
+class NonTerminalEvaluator(FakeTerminalEvaluator):
+    evaluation_source = "value_head"
+
+
+class FirstLegalPolicy:
+    policy_id = "first-legal"
+
+    def select_action(self, observation, *, rng) -> PolicyDecision:
+        action_index = next(index for index, legal in enumerate(observation.legal_action_mask) if legal)
+        return PolicyDecision(action_index=action_index, policy_id=self.policy_id)
+
+
+class BranchReplayEnv:
+    def __init__(self) -> None:
+        self.reset_calls = []
+        self.step_calls = []
+        self.round_index = 0
+        self._terminal = None
+
+    def reset(self, *, seed: int, format_id: str = "gen3randombattle") -> None:
+        self.reset_calls.append((seed, format_id))
+        self.step_calls.clear()
+        self.round_index = 0
+        self._terminal = None
+
+    def requested_players(self):
+        if self._terminal is not None:
+            return ()
+        return (("p1", "p2"), ("p1",))[min(self.round_index, 1)]
+
+    def observe(self, player):
+        return _observation((0,))
+
+    def terminal(self):
+        return self._terminal
+
+    def step(self, actions):
+        self.step_calls.append(dict(actions))
+        self.round_index += 1
+        if len(self.step_calls) == 1:
+            return StepResult(
+                observations={"p1": _observation((0,))},
+                rewards={"p1": 0.0, "p2": 0.0},
+                terminal=None,
+                requested_players=("p1",),
+            )
+        self._terminal = TerminalState(winner="p2", turn_count=2, capped=False)
+        return StepResult(
+            observations={},
+            rewards={"p1": -1.0, "p2": 1.0},
+            terminal=self._terminal,
+            requested_players=(),
+        )
+
+    def close(self):
+        self.closed = True
 
 
 class RefutationMiningTest(unittest.TestCase):
@@ -134,8 +201,12 @@ class RefutationMiningTest(unittest.TestCase):
             refutation = report.certified_refutations[0]
             self.assertEqual(refutation.evaluation_source, "terminal_rollout")
             self.assertEqual(refutation.search_stats["value_head_used"], False)
+            self.assertEqual(refutation.search_stats["reseed_scope"], "simulator_rng")
+            self.assertEqual(refutation.search_stats["simulator_rng_reseeded"], True)
             self.assertEqual(refutation.flip_rate, 13 / 20)
             self.assertEqual(refutation.candidate.branch_actions, {"p1": 0, "p2": 2})
+            self.assertEqual(report.refutation_rate, 1.0)
+            self.assertEqual(report.certified_refutations_per_sampled_win, 1.0)
 
             archive_rows = tuple(iter_fragile_states(archive_path))
             self.assertEqual(len(archive_rows), 1)
@@ -161,6 +232,74 @@ class RefutationMiningTest(unittest.TestCase):
             )
 
             self.assertEqual(len(report.certified_refutations), 0)
+
+    def test_certification_rejects_value_head_evaluator(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = ValueHeadEvaluator(loser_winning_actions={2}, loser_win_count=20)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "value-head"):
+                mine_refutations(
+                    records=(_record(),),
+                    config=config,
+                    evaluator=evaluator,
+                    archive_path=Path(temp_dir) / "fragile.jsonl",
+                )
+
+    def test_certification_rejects_non_terminal_evaluator(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = NonTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "terminal-rollout"):
+                mine_refutations(
+                    records=(_record(),),
+                    config=config,
+                    evaluator=evaluator,
+                    archive_path=Path(temp_dir) / "fragile.jsonl",
+                )
+
+    def test_replay_terminal_evaluator_branches_then_continues_to_terminal(self) -> None:
+        record = _record()
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        env = BranchReplayEnv()
+        evaluator = ReplayTerminalBranchEvaluator(
+            env_factory=lambda: env,
+            policies={"p1": FirstLegalPolicy(), "p2": FirstLegalPolicy()},
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = next(
+                ref.candidate
+                for ref in mine_refutations(
+                    records=(record,),
+                    config=config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                    archive_path=Path(temp_dir) / "fragile.jsonl",
+                ).certified_refutations
+            )
+
+        result = evaluator.evaluate(record=record, candidate=candidate, certification_seed=777)
+
+        self.assertEqual(result.winner, "p2")
+        self.assertEqual(env.reset_calls, [(100, "gen3randombattle")])
+        self.assertEqual(env.step_calls[0], {"p1": 0, "p2": 2})
+        self.assertEqual(env.step_calls[1], {"p1": 0})
+        self.assertEqual(evaluator.value_head_used, False)
+        self.assertEqual(evaluator.reseed_scope, "continuation_policy_rng")
 
     def test_cli_plan_reads_rollout_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

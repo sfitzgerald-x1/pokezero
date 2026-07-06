@@ -130,6 +130,8 @@ class TerminalBranchEvaluator(Protocol):
     """Evaluates a branch by playing to terminal, never by querying a value head."""
 
     evaluation_source: str
+    value_head_used: bool
+    reseed_scope: str
 
     def evaluate(
         self,
@@ -157,6 +159,7 @@ class ReplayTerminalBranchEvaluator:
     reset_policies: bool = True
     check_prefix_observations: bool = False
     evaluation_source: str = TERMINAL_ROLLOUT_EVALUATION_SOURCE
+    value_head_used: bool = False
     reseed_scope: str = "continuation_policy_rng"
 
     def evaluate(
@@ -209,6 +212,8 @@ class CertifiedRefutation:
     ties_or_caps: int
     flip_rate: float
     terminal_results: tuple[BranchTerminalResult, ...]
+    reseed_scope: str
+    simulator_rng_reseeded: bool
     search_stats: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -225,6 +230,14 @@ class CertifiedRefutation:
                 "ties_or_caps": self.ties_or_caps,
                 "flip_rate": self.flip_rate,
                 "passed": self.flip_rate > self.min_flip_rate,
+                "reseed_scope": self.reseed_scope,
+                "simulator_rng_reseeded": self.simulator_rng_reseeded,
+                "limitation": (
+                    "certification varied continuation policy RNG only; true simulator-RNG "
+                    "reseeding requires a snapshot/restore backend"
+                    if not self.simulator_rng_reseeded
+                    else None
+                ),
             },
             "terminal_results": [result.to_dict() for result in self.terminal_results],
             "search_stats": dict(self.search_stats),
@@ -244,6 +257,19 @@ class RefutationMiningReport:
 
     @property
     def refutation_rate(self) -> float:
+        return self.refuted_game_count / self.sampled_win_count if self.sampled_win_count else 0.0
+
+    @property
+    def refuted_game_count(self) -> int:
+        return len(
+            {
+                refutation.candidate.source_record_index
+                for refutation in self.certified_refutations
+            }
+        )
+
+    @property
+    def certified_refutations_per_sampled_win(self) -> float:
         return len(self.certified_refutations) / self.sampled_win_count if self.sampled_win_count else 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -265,7 +291,9 @@ class RefutationMiningReport:
             "candidate_deviation_count": self.candidate_deviation_count,
             "evaluated_deviation_count": self.evaluated_deviation_count,
             "certified_refutation_count": len(self.certified_refutations),
+            "refuted_game_count": self.refuted_game_count,
             "refutation_rate": self.refutation_rate,
+            "certified_refutations_per_sampled_win": self.certified_refutations_per_sampled_win,
             "archive_path": str(self.archive_path),
             "examples": [refutation.to_dict() for refutation in self.certified_refutations[:10]],
         }
@@ -337,6 +365,15 @@ def certify_candidate(
     config: RefutationMiningConfig,
     evaluator: TerminalBranchEvaluator,
 ) -> CertifiedRefutation | None:
+    if evaluator.evaluation_source != TERMINAL_ROLLOUT_EVALUATION_SOURCE:
+        raise ValueError(
+            "refutation certification requires terminal-rollout evaluation; "
+            f"got {evaluator.evaluation_source!r}."
+        )
+    if evaluator.value_head_used:
+        raise ValueError("refutation certification cannot use a value-head-backed evaluator.")
+    reseed_scope = evaluator.reseed_scope
+    simulator_rng_reseeded = reseed_scope == "simulator_rng"
     terminal_results = tuple(
         evaluator.evaluate(
             record=record,
@@ -362,11 +399,14 @@ def certify_candidate(
         ties_or_caps=ties_or_caps,
         flip_rate=flip_rate,
         terminal_results=terminal_results,
+        reseed_scope=reseed_scope,
+        simulator_rng_reseeded=simulator_rng_reseeded,
         search_stats={
             "search_method": "enumerate_single_turn_legal_deviations",
             "depth": 1,
-            "value_head_used": False,
-            "reseed_scope": str(getattr(evaluator, "reseed_scope", "terminal_rollout")),
+            "value_head_used": evaluator.value_head_used,
+            "reseed_scope": reseed_scope,
+            "simulator_rng_reseeded": simulator_rng_reseeded,
         },
     )
 
