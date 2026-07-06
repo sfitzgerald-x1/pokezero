@@ -125,21 +125,36 @@ class HazardTrajectoryTest(unittest.TestCase):
         payload = aggregate_hazard_rows(
             [
                 {
-                    "milestone_games": 50_000,
+                    "milestone_games": 0,
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -0.01,
+                    "value_opp_hazard_response": 0.01,
+                },
+                {
+                    "milestone_games": 30_000,
                     "value_spread": 1.0,
                     "value_self_hazard_response": -0.04,
                     "value_opp_hazard_response": 0.04,
                 },
                 {
+                    # This second zero milestone would be misordered by
+                    # `milestone_games or index` because its row index is
+                    # greater than the later one-game milestone.
                     "milestone_games": 0,
                     "value_spread": 1.0,
                     "value_self_hazard_response": -0.02,
                     "value_opp_hazard_response": 0.02,
                 },
+                {
+                    "milestone_games": 1,
+                    "value_spread": 1.0,
+                    "value_self_hazard_response": -0.03,
+                    "value_opp_hazard_response": 0.03,
+                },
             ]
         )
 
-        self.assertEqual([point["milestone_games"] for point in payload["points"]], [0, 50_000])
+        self.assertEqual([point["milestone_games"] for point in payload["points"]], [0, 0, 1, 30_000])
 
     def test_milestone_parser_handles_decimal_millions_and_rejects_dates(self) -> None:
         self.assertEqual(parse_milestone_games_text("pokezero-belief-gen3-1-5m"), 1_500_000)
