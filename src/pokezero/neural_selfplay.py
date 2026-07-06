@@ -47,6 +47,7 @@ from .dataset import (
 )
 from .opponents import (
     HISTORICAL_OPPONENT_SELECTION_MODES,
+    current_family_checkpoint_policy_specs,
     opponent_pool_policy_specs,
     require_historical_opponent_pool_size,
 )
@@ -951,7 +952,12 @@ def run_neural_selfplay_iterations(
                 results[-1] = result
                 _write_json(iteration_manifest_path, result.to_manifest_dict())
                 if promotion.recorded and promotion_pool_registry_path == auto_promotion_config.registry_path:
-                    promoted_checkpoint_specs = list(promotion.registry.selection_checkpoint_policy_specs())
+                    promoted_checkpoint_specs = list(
+                        current_family_checkpoint_policy_specs(
+                            promotion.registry.selection_checkpoint_policy_specs(),
+                            legacy_mode="drop",
+                        )
+                    )
             if advancement.advance_collector:
                 next_policy_spec = result.to_manifest_dict()["next_current_policy_spec"]
                 checkpoint_history.append(str(next_policy_spec))
@@ -1374,7 +1380,10 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
-    return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
+    return current_family_checkpoint_policy_specs(
+        load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs(),
+        legacy_mode="drop",
+    )
 
 
 def _require_promoted_opponent_pool(

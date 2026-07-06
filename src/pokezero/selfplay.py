@@ -48,7 +48,11 @@ from .linear_policy import (
     save_linear_model,
     train_linear_policy,
 )
-from .opponents import opponent_pool_policy_specs, require_historical_opponent_pool_size
+from .opponents import (
+    current_family_checkpoint_policy_specs,
+    opponent_pool_policy_specs,
+    require_historical_opponent_pool_size,
+)
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
@@ -1074,7 +1078,10 @@ def _promoted_checkpoint_specs(promotion_registry_path: Path | None) -> tuple[st
         failed = ", ".join(check.name for check in verification.checks if not check.passed)
         raise ValueError(f"promotion registry verification failed before selection: {failed}")
 
-    return load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs()
+    return current_family_checkpoint_policy_specs(
+        load_promotion_registry(promotion_registry_path).selection_checkpoint_policy_specs(),
+        legacy_mode="drop",
+    )
 
 
 def _next_current_policy_spec(result: SelfPlayIterationResult) -> str:

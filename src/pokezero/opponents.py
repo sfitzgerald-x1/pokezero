@@ -13,6 +13,7 @@ DEFAULT_MAX_HISTORICAL_OPPONENTS = 3
 CHECKPOINT_POLICY_SPEC_PREFIXES = ("linear:", "neural:")
 HISTORICAL_OPPONENT_SELECTION_MODES = ("recent", "spread")
 LEGACY_CHECKPOINT_FILTER_MODES = ("reject", "drop")
+LEGACY_CHECKPOINT_FAMILY_MARKERS = ("no-belief", "no_belief", "pre-v2", "pre_v2")
 
 
 def policy_spec_identity(policy_spec: str | None) -> tuple[str, str] | None:
@@ -53,14 +54,100 @@ def checkpoint_policy_spec_observation_schema(policy_spec: str) -> str:
     raise ValueError(f"policy spec is not a checkpoint policy spec: {policy_spec!r}")
 
 
+def _checkpoint_path_from_policy_spec(policy_spec: str) -> Path | None:
+    body = str(policy_spec).strip().partition("?")[0].strip()
+    lowered = body.lower()
+    for prefix in CHECKPOINT_POLICY_SPEC_PREFIXES:
+        if lowered.startswith(prefix):
+            return Path(body[len(prefix) :].strip()).expanduser()
+    return None
+
+
+def _checkpoint_policy_spec_metadata(policy_spec: str, checkpoint_path: Path) -> dict[str, object] | None:
+    body = str(policy_spec).strip().partition("?")[0].strip()
+    lowered = body.lower()
+    if lowered.startswith("linear:") and checkpoint_path.suffix.lower() == ".json":
+        try:
+            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    for sidecar_path in _checkpoint_metadata_sidecar_paths(checkpoint_path):
+        try:
+            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _checkpoint_metadata_sidecar_paths(checkpoint_path: Path) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    if checkpoint_path.suffix:
+        paths.append(checkpoint_path.with_suffix(".json"))
+    paths.append(Path(f"{checkpoint_path}.json"))
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            unique.append(path)
+            seen.add(key)
+    return tuple(unique)
+
+
+def _legacy_marker_reason(value: object, *, source: str) -> str | None:
+    if value is None:
+        return None
+    lowered = str(value).lower()
+    for marker in LEGACY_CHECKPOINT_FAMILY_MARKERS:
+        if marker in lowered:
+            return f"{source} contains {marker!r}"
+    return None
+
+
 def is_current_family_checkpoint_policy_spec(policy_spec: str) -> bool:
     """Return whether a checkpoint spec belongs to the supported v2+ family."""
+    family_disqualifier = checkpoint_policy_spec_family_disqualifier(policy_spec)
+    if family_disqualifier is not None:
+        raise ValueError(
+            f"checkpoint opponent {policy_spec!r} belongs to a legacy comparison family: "
+            f"{family_disqualifier}"
+        )
     schema_version = checkpoint_policy_spec_observation_schema(policy_spec)
     require_current_observation_schema(
         schema_version,
         context=f"checkpoint opponent {policy_spec!r}",
     )
     return True
+
+
+def checkpoint_policy_spec_family_disqualifier(policy_spec: str) -> str | None:
+    """Return a legacy-family reason for otherwise-readable checkpoint specs.
+
+    Observation-schema v2+ is necessary but not sufficient for current strength
+    eval pools: old no-belief/pre-v2 lineages are retained as historical
+    baselines, not as frozen opponents for new runs. Prefer adjacent checkpoint
+    metadata when present, and fall back to path/name markers so managed
+    artifacts without sidecars still fail loudly.
+    """
+    checkpoint_path = _checkpoint_path_from_policy_spec(policy_spec)
+    if checkpoint_path is None:
+        return None
+    path_reason = _legacy_marker_reason(checkpoint_path.name, source="filename")
+    if path_reason is not None:
+        return path_reason
+    metadata = _checkpoint_policy_spec_metadata(policy_spec, checkpoint_path)
+    if metadata is None:
+        return None
+    for key in ("input_family", "name", "parent", "continued_from", "lineage", "run_id"):
+        value = metadata.get(key)
+        reason = _legacy_marker_reason(value, source=f"metadata.{key}")
+        if reason is not None:
+            return reason
+    return None
 
 
 def current_family_checkpoint_policy_specs(
@@ -83,7 +170,16 @@ def current_family_checkpoint_policy_specs(
     for spec in checkpoint_history:
         try:
             is_current_family_checkpoint_policy_spec(spec)
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
+            if legacy_mode == "reject":
+                rejected.append((str(spec), str(exc)))
+            else:
+                # Keep unknown/missing non-legacy specs visible so registry
+                # verification can report the broken artifact instead of
+                # silently shrinking the opponent pool.
+                selected.append(str(spec))
+            continue
+        except ValueError as exc:
             if legacy_mode == "reject":
                 rejected.append((str(spec), str(exc)))
             continue

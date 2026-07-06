@@ -143,6 +143,46 @@ class OpponentPoolTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "legacy or unreadable checkpoint opponents"):
                 current_family_checkpoint_policy_specs((spec,))
 
+    def test_current_family_filter_rejects_v2_no_belief_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            checkpoint = _write_checkpoint_stub(
+                Path(temp_dir) / "pokezero-no-belief-gen3-2m.json",
+                OBSERVATION_SCHEMA_VERSION_V2,
+            )
+            spec = f"linear:{checkpoint}"
+
+            with self.assertRaisesRegex(ValueError, "legacy comparison family"):
+                current_family_checkpoint_policy_specs((spec,))
+
+    def test_current_family_filter_allows_no_belief_parent_directory_for_current_filename(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "belief-vs-no-belief-ablation"
+            checkpoint_dir.mkdir()
+            checkpoint = _write_checkpoint_stub(checkpoint_dir / "belief-v2-500k.json", OBSERVATION_SCHEMA_VERSION_V2)
+            spec = f"linear:{checkpoint}"
+
+            self.assertEqual(current_family_checkpoint_policy_specs((spec,)), (spec,))
+
+    def test_current_family_filter_rejects_v2_no_belief_sidecar_metadata(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            checkpoint = Path(temp_dir) / "current-family.pt"
+            checkpoint.write_bytes(b"not a real torch checkpoint")
+            checkpoint.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "name": "pokezero-no-belief-gen3-2m",
+                        "input_family": "no-belief",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            spec = f"neural:{checkpoint}?sample=true"
+            config = SimpleNamespace(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2)
+
+            with patch("pokezero.neural_policy.load_transformer_model_config", return_value=config):
+                with self.assertRaisesRegex(ValueError, "legacy comparison family"):
+                    current_family_checkpoint_policy_specs((spec,))
+
     def test_current_family_filter_can_drop_legacy_checkpoint_from_mixed_history(self) -> None:
         with TemporaryDirectory() as temp_dir:
             current = _write_checkpoint_stub(Path(temp_dir) / "current.json", OBSERVATION_SCHEMA_VERSION_V2)
