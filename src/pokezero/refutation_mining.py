@@ -623,6 +623,123 @@ def iter_fragile_states(path: Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
+def reproduce_refutation_archive(
+    *,
+    records: Sequence[RolloutRecord],
+    fragile_states: Iterable[Mapping[str, Any]],
+    evaluator: TerminalBranchEvaluator,
+    max_rows: int | None = None,
+) -> dict[str, Any]:
+    """Rerun archived fragile rows from replay coordinates and compare outcomes."""
+
+    if evaluator.evaluation_source != TERMINAL_ROLLOUT_EVALUATION_SOURCE:
+        raise ValueError(
+            "refutation reproduction requires terminal-rollout evaluation; "
+            f"got {evaluator.evaluation_source!r}."
+        )
+    if evaluator.value_head_used:
+        raise ValueError("refutation reproduction cannot use a value-head-backed evaluator.")
+    if evaluator.reseed_scope != "simulator_rng":
+        raise ValueError("refutation reproduction requires simulator-RNG-reseeded terminal evaluation.")
+    if max_rows is not None and max_rows <= 0:
+        raise ValueError("max_rows must be positive when set.")
+
+    rows = tuple(dict(row) for row in fragile_states)
+    if max_rows is not None:
+        rows = rows[:max_rows]
+    reproduced_rows: list[dict[str, Any]] = []
+    mismatch_count = 0
+    for row_index, row in enumerate(rows):
+        candidate = _candidate_from_archive_row(row)
+        if candidate.source_record_index < 0 or candidate.source_record_index >= len(records):
+            raise ValueError(
+                f"fragile row {row_index} source_record_index {candidate.source_record_index} "
+                f"is outside the source records."
+            )
+        record = records[candidate.source_record_index]
+        _require_candidate_matches_record(candidate, record=record, row_index=row_index)
+        terminal_results = _terminal_results_from_archive_row(row)
+        reproduced = tuple(
+            evaluator.evaluate(
+                record=record,
+                candidate=candidate,
+                certification_seed=result.certification_seed,
+            )
+            for result in terminal_results
+        )
+        mismatches = [
+            {
+                "certification_seed": expected.certification_seed,
+                "expected": expected.to_dict(),
+                "observed": observed.to_dict(),
+            }
+            for expected, observed in zip(terminal_results, reproduced)
+            if not _terminal_results_match(expected, observed)
+        ]
+        expected_summary = _certification_summary_from_results(candidate, terminal_results)
+        observed_summary = _certification_summary_from_results(candidate, reproduced)
+        certification = _mapping_or_empty(row.get("certification"))
+        seed_protocol = _certification_seed_protocol(
+            record=record,
+            certification=certification,
+            terminal_results=terminal_results,
+        )
+        min_flip_rate = _float_value(certification.get("min_flip_rate"))
+        archive_reseed_scope_passes = (
+            certification.get("reseed_scope") == "simulator_rng"
+            and certification.get("simulator_rng_reseeded") is True
+        )
+        summary_matches_archive = (
+            _int_value(certification.get("deviation_wins")) == expected_summary["deviation_wins"]
+            and _int_value(certification.get("champion_wins")) == expected_summary["champion_wins"]
+            and _int_value(certification.get("ties_or_caps")) == expected_summary["ties_or_caps"]
+            and _float_equal(_float_value(certification.get("flip_rate")), expected_summary["flip_rate"])
+        )
+        threshold_passes = (
+            min_flip_rate is not None
+            and expected_summary["flip_rate"] > min_flip_rate
+            and certification.get("passed") is True
+        )
+        reproduced_summary_matches = expected_summary == observed_summary
+        row_passed = (
+            not mismatches
+            and summary_matches_archive
+            and reproduced_summary_matches
+            and seed_protocol["passed"]
+            and threshold_passes
+            and archive_reseed_scope_passes
+        )
+        if not row_passed:
+            mismatch_count += 1
+        reproduced_rows.append(
+            {
+                "row_index": row_index,
+                "passed": row_passed,
+                "candidate": candidate.to_dict(),
+                "expected_summary": expected_summary,
+                "observed_summary": observed_summary,
+                "summary_matches_archive": summary_matches_archive,
+                "seed_protocol": seed_protocol,
+                "threshold_passes": threshold_passes,
+                "archive_reseed_scope_passes": archive_reseed_scope_passes,
+                "terminal_mismatch_count": len(mismatches),
+                "terminal_mismatches": mismatches[:5],
+            }
+        )
+
+    return {
+        "schema_version": "pokezero.refutation_reproduction.v1",
+        "passed": len(rows) > 0 and mismatch_count == 0,
+        "row_count": len(rows),
+        "mismatch_count": mismatch_count,
+        "evaluation_source": evaluator.evaluation_source,
+        "value_head_used": evaluator.value_head_used,
+        "reseed_scope": evaluator.reseed_scope,
+        "simulator_rng_reseeded": evaluator.reseed_scope == "simulator_rng",
+        "rows": reproduced_rows,
+    }
+
+
 def validate_refutation_report_payload(
     *,
     report: Mapping[str, Any],
@@ -1024,6 +1141,128 @@ def _write_fragile_state(handle: TextIO, refutation: CertifiedRefutation) -> Non
     handle.write(json.dumps(refutation.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False))
     handle.write("\n")
     handle.flush()
+
+
+def _candidate_from_archive_row(row: Mapping[str, Any]) -> RefutationCandidate:
+    candidate = _mapping_or_empty(row.get("candidate"))
+    sequence = candidate.get("branch_action_sequence")
+    branch_action_sequence = (
+        tuple(_normalize_action_map(round_actions) for round_actions in sequence)
+        if isinstance(sequence, list)
+        else ()
+    )
+    return RefutationCandidate(
+        battle_id=str(candidate.get("battle_id")),
+        source_record_index=int(candidate.get("source_record_index")),
+        seed=int(candidate.get("seed")),
+        format_id=str(candidate.get("format_id")),
+        champion_player_id=str(candidate.get("champion_player_id")),
+        loser_player_id=str(candidate.get("loser_player_id")),
+        decision_round_index=int(candidate.get("decision_round_index")),
+        step_index=int(candidate.get("step_index")),
+        recorded_action_index=int(candidate.get("recorded_action_index")),
+        deviation_action_index=int(candidate.get("deviation_action_index")),
+        branch_actions=_normalize_action_map(_mapping_or_empty(candidate.get("branch_actions"))),
+        branch_action_sequence=branch_action_sequence,
+    )
+
+
+def _require_candidate_matches_record(
+    candidate: RefutationCandidate,
+    *,
+    record: RolloutRecord,
+    row_index: int,
+) -> None:
+    mismatches: list[str] = []
+    if record.battle_id != candidate.battle_id:
+        mismatches.append(f"battle_id record={record.battle_id!r} candidate={candidate.battle_id!r}")
+    if record.seed != candidate.seed:
+        mismatches.append(f"seed record={record.seed!r} candidate={candidate.seed!r}")
+    if record.format_id != candidate.format_id:
+        mismatches.append(f"format_id record={record.format_id!r} candidate={candidate.format_id!r}")
+    if record.terminal.winner != candidate.champion_player_id:
+        mismatches.append(
+            f"winner record={record.terminal.winner!r} candidate_champion={candidate.champion_player_id!r}"
+        )
+    if candidate.loser_player_id == candidate.champion_player_id:
+        mismatches.append("loser_player_id matches champion_player_id")
+    if candidate.champion_player_id not in record.policy_ids:
+        mismatches.append(f"champion_player_id {candidate.champion_player_id!r} is absent from record policy ids")
+    if candidate.loser_player_id not in record.policy_ids:
+        mismatches.append(f"loser_player_id {candidate.loser_player_id!r} is absent from record policy ids")
+    if mismatches:
+        raise ValueError(
+            f"fragile row {row_index} source record does not match candidate replay coordinates: "
+            + "; ".join(mismatches)
+        )
+
+
+def _terminal_results_from_archive_row(row: Mapping[str, Any]) -> tuple[BranchTerminalResult, ...]:
+    terminal_results = row.get("terminal_results")
+    if not isinstance(terminal_results, list) or not terminal_results:
+        raise ValueError("fragile row must include non-empty terminal_results.")
+    results: list[BranchTerminalResult] = []
+    for result in terminal_results:
+        payload = _mapping_or_empty(result)
+        certification_seed = _int_value(payload.get("certification_seed"))
+        if certification_seed is None:
+            raise ValueError("terminal result is missing certification_seed.")
+        turn_count = _int_value(payload.get("turn_count"))
+        results.append(
+            BranchTerminalResult(
+                certification_seed=certification_seed,
+                winner=(str(payload["winner"]) if payload.get("winner") is not None else None),
+                capped=payload.get("capped") is True,
+                turn_count=turn_count,
+            )
+        )
+    return tuple(results)
+
+
+def _certification_seed_protocol(
+    *,
+    record: RolloutRecord,
+    certification: Mapping[str, Any],
+    terminal_results: Sequence[BranchTerminalResult],
+) -> dict[str, Any]:
+    seed_count = _int_value(certification.get("seed_count"))
+    observed = [result.certification_seed for result in terminal_results]
+    expected = (
+        [record.seed + offset + 1 for offset in range(seed_count)]
+        if seed_count is not None
+        else []
+    )
+    return {
+        "passed": seed_count is not None and observed == expected,
+        "seed_count": seed_count,
+        "expected": expected,
+        "observed": observed,
+    }
+
+
+def _terminal_results_match(expected: BranchTerminalResult, observed: BranchTerminalResult) -> bool:
+    return (
+        expected.certification_seed == observed.certification_seed
+        and expected.winner == observed.winner
+        and expected.capped == observed.capped
+        and expected.turn_count == observed.turn_count
+    )
+
+
+def _certification_summary_from_results(
+    candidate: RefutationCandidate,
+    terminal_results: Sequence[BranchTerminalResult],
+) -> dict[str, Any]:
+    deviation_wins = sum(1 for result in terminal_results if result.winner == candidate.loser_player_id)
+    champion_wins = sum(1 for result in terminal_results if result.winner == candidate.champion_player_id)
+    ties_or_caps = len(terminal_results) - deviation_wins - champion_wins
+    return {
+        "seed_count": len(terminal_results),
+        "deviation_wins": deviation_wins,
+        "champion_wins": champion_wins,
+        "ties_or_caps": ties_or_caps,
+        "flip_rate": deviation_wins / len(terminal_results) if terminal_results else 0.0,
+    }
 
 
 def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
