@@ -164,6 +164,13 @@ from .neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
+from .refutation_curriculum import (
+    RefutationCurriculumConfig,
+    RefutationCurriculumSummary,
+    collect_refutation_curriculum_rollouts,
+    refutation_curriculum_start_count,
+    write_refutation_curriculum_summary,
+)
 from .refutation_training import (
     RefutationTrainingConfig,
     RefutationTrainingSummary,
@@ -540,8 +547,12 @@ __all__ = [
     "iter_training_cache_batches",
     "training_cache_root_byte_size",
     "read_rollout_records",
+    "collect_refutation_curriculum_rollouts",
+    "refutation_curriculum_start_count",
     "refutation_training_examples",
     "record_promotion",
+    "RefutationCurriculumConfig",
+    "RefutationCurriculumSummary",
     "RefutationTrainingConfig",
     "RefutationTrainingSummary",
     "action_rounds_from_trajectory",
@@ -551,6 +562,7 @@ __all__ = [
     "require_torch",
     "write_training_cache_from_rollouts",
     "write_training_cache_from_examples",
+    "write_refutation_curriculum_summary",
     "write_refutation_training_cache",
     "replay_action_rounds",
     "replay_trajectory_branch",

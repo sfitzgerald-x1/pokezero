@@ -14,6 +14,11 @@ from .collection import (
 )
 from .dataset import TrajectoryDatasetConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
+from .refutation_curriculum import (
+    RefutationCurriculumConfig,
+    collect_refutation_curriculum_rollouts,
+    write_refutation_curriculum_summary,
+)
 from .refutation_mining import (
     DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
     DEFAULT_R0_MIN_SAMPLED_WINS,
@@ -155,6 +160,47 @@ def build_arg_parser() -> argparse.ArgumentParser:
     training_cache.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda for source materialization when --ppo-target-mode=gae.")
     training_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
     training_cache.set_defaults(func=_training_cache)
+
+    curriculum = subparsers.add_parser(
+        "curriculum",
+        help="Collect rollout JSONL from certified fragile states for the R1(d) curriculum slice.",
+    )
+    curriculum.add_argument(
+        "--records",
+        action="append",
+        required=True,
+        type=Path,
+        help="Source rollout-record JSONL from the mining run, in the same order used by the archive. May repeat.",
+    )
+    curriculum.add_argument("--archive", type=Path, required=True, help="Certified fragile-state JSONL archive.")
+    curriculum.add_argument("--out", type=Path, required=True, help="Output curriculum rollout-record JSONL.")
+    curriculum.add_argument(
+        "--summary",
+        type=Path,
+        default=None,
+        help="Optional summary JSON path. Defaults to <out>.summary.json.",
+    )
+    curriculum.add_argument("--p1-policy", required=True, help="Continuation policy spec for p1.")
+    curriculum.add_argument("--p2-policy", required=True, help="Continuation policy spec for p2.")
+    curriculum.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    curriculum.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    curriculum.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    curriculum.add_argument("--max-decision-rounds", type=int, default=250, help="Continuation decision-round cap.")
+    curriculum.add_argument(
+        "--total-games",
+        type=int,
+        required=True,
+        help="Total collection games in the parent run; multiplied by --curriculum-fraction.",
+    )
+    curriculum.add_argument(
+        "--curriculum-fraction",
+        type=float,
+        required=True,
+        help="Fraction of parent collection games to start from fragile states.",
+    )
+    curriculum.add_argument("--seed-start", type=int, default=1, help="First continuation-policy RNG seed.")
+    curriculum.add_argument("--max-starts", type=int, default=None, help="Optional hard cap on curriculum starts.")
+    curriculum.set_defaults(func=_curriculum)
     return parser
 
 
@@ -300,6 +346,47 @@ def _training_cache(args: argparse.Namespace) -> int:
         ),
         overwrite=args.overwrite,
     )
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _curriculum(args: argparse.Namespace) -> int:
+    records = _load_records(args.records)
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    p1_spec = policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)
+    p2_spec = policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)
+    env_config = env_config_with_policy_spec_masks(
+        env_config,
+        (p1_spec, p2_spec),
+        context="refutation curriculum",
+    )
+    rollout_config = RolloutConfig(
+        max_decision_rounds=args.max_decision_rounds,
+        format_id=args.format_id,
+    )
+    summary = collect_refutation_curriculum_rollouts(
+        records=records,
+        fragile_states=tuple(iter_fragile_states(args.archive)),
+        env_factory=lambda: LocalShowdownEnv(env_config),
+        policies={
+            "p1": policy_from_spec(p1_spec),
+            "p2": policy_from_spec(p2_spec),
+        },
+        rollout_config=rollout_config,
+        output_path=args.out,
+        config=RefutationCurriculumConfig(
+            total_games=args.total_games,
+            curriculum_fraction=args.curriculum_fraction,
+            seed_start=args.seed_start,
+            max_starts=args.max_starts,
+        ),
+    )
+    summary_path = args.summary or args.out.with_suffix(args.out.suffix + ".summary.json")
+    write_refutation_curriculum_summary(summary_path, summary)
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
     return 0
 

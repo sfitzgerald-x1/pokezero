@@ -188,6 +188,15 @@ schema/mask/shaping checks as primary training data, and leaves auxiliary caches
 out of the primary cache-deletion lifecycle. This is ingestion plumbing only; no
 R1 A/B result has landed yet.
 
+`pokezero-refutation curriculum` is the R1(d) primitive. Given the same source
+rollout records and fragile-state archive, it emits a separate rollout-record
+JSONL slice whose games start from certified fragile decision boundaries instead
+of turn 0. The `--total-games × --curriculum-fraction` product determines the
+epsilon-sized slice count; deployment can concatenate or otherwise mix that
+slice with normal collection records while keeping the default collection path
+unchanged. These records are stamped with `trajectory.metadata.refutation_curriculum`
+so later reports can separate curriculum-started games from ordinary self-play.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection
@@ -335,10 +344,11 @@ calendar time.
    fragile-state JSONL archive; deploy orchestration should run it over recent
    champion wins, persist artifacts, and gate later R1/R2 use on certified
    examples. Public code can now also build a separate refutation training cache
-   from those certified examples and mix it into standalone neural training
-   behind capped flags; deploy orchestration still owns the A/B run setup. The
-   old G2 arm automation remains available only as fallback plumbing under the
-   revival condition above.
+   from those certified examples, mix it into standalone neural training behind
+   capped flags, and emit an epsilon-sized curriculum rollout slice from fragile
+   starts; deploy orchestration still owns the A/B run setup. The old G2 arm
+   automation remains available only as fallback plumbing under the revival
+   condition above.
 4. **Collection ε-floor**: neural iterate and standalone training-cache
    collection keep a nonzero random legal-action floor on learned policies while
    benchmark/advancement specs stay deterministic. This is a completeness
@@ -369,10 +379,11 @@ calendar time.
 - **D2**: G4 refutation mining on. First deliverable: R0 miner + report on a
   flagship checkpoint with a fragile-state JSONL archive and ≥10 certified,
   reproducible examples. Watch refutation rate and archive quality before
-  feeding examples back into training. The feed-back primitive is now a separate
-  refutation training cache plus capped `pokezero-neural train
-  --refutation-cache` ingestion, including default-off certification-strength
-  surprise weights; it is not yet evidence that R1 improves value calibration or
+  feeding examples back into training. The feed-back primitives are now a
+  separate refutation training cache plus capped `pokezero-neural train
+  --refutation-cache` ingestion, default-off certification-strength surprise
+  weights, and explicit `pokezero-refutation curriculum` rollout slices from
+  fragile starts; they are not yet evidence that R1 improves value calibration or
   strength.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
