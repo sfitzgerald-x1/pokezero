@@ -28,6 +28,7 @@ from .refutation_mining import (
     candidate_count_for_records,
     iter_fragile_states,
     mine_refutations,
+    reproduce_refutation_archive,
     validate_refutation_report_payload,
     write_refutation_report,
 )
@@ -134,6 +135,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     validate.set_defaults(func=_validate)
+
+    reproduce = subparsers.add_parser(
+        "reproduce",
+        help="Rerun fragile-state terminal results from replay coordinates and compare to the archive.",
+    )
+    reproduce.add_argument(
+        "--records",
+        action="append",
+        required=True,
+        type=Path,
+        help="Source rollout-record JSONL from the mining run, in the same order used by the archive. May repeat.",
+    )
+    reproduce.add_argument("--archive", type=Path, required=True, help="Certified fragile-state JSONL archive.")
+    reproduce.add_argument("--p1-policy", required=True, help="Continuation policy spec for p1.")
+    reproduce.add_argument("--p2-policy", required=True, help="Continuation policy spec for p2.")
+    reproduce.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
+    reproduce.add_argument("--node-binary", default="node", help="Node executable used for the BattleStream bridge.")
+    reproduce.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
+    reproduce.add_argument("--max-decision-rounds", type=int, default=250, help="Continuation decision-round cap.")
+    reproduce.add_argument("--max-rows", type=int, default=None, help="Optional cap on reproduced archive rows.")
+    reproduce.set_defaults(func=_reproduce)
 
     training_cache = subparsers.add_parser(
         "training-cache",
@@ -407,6 +429,41 @@ def _validate(args: argparse.Namespace) -> int:
     if payload["r0_acceptance_eligible"]:
         return 0
     return 3 if payload["passed"] else 2
+
+
+def _reproduce(args: argparse.Namespace) -> int:
+    records = _load_records(args.records)
+    env_config = LocalShowdownConfig(
+        showdown_root=args.showdown_root,
+        node_binary=args.node_binary,
+    )
+    policy_showdown_root = env_config.resolved_showdown_root()
+    p1_spec = policy_spec_with_showdown_root(args.p1_policy, policy_showdown_root)
+    p2_spec = policy_spec_with_showdown_root(args.p2_policy, policy_showdown_root)
+    env_config = env_config_with_policy_spec_masks(
+        env_config,
+        (p1_spec, p2_spec),
+        context="refutation reproduction",
+    )
+    payload = reproduce_refutation_archive(
+        records=records,
+        fragile_states=tuple(iter_fragile_states(args.archive)),
+        evaluator=ReplayTerminalBranchEvaluator(
+            env_factory=lambda: LocalShowdownEnv(env_config),
+            policies={
+                "p1": policy_from_spec(p1_spec),
+                "p2": policy_from_spec(p2_spec),
+            },
+            rollout_config=RolloutConfig(
+                max_decision_rounds=args.max_decision_rounds,
+                format_id=args.format_id,
+            ),
+            reseed_simulator_rng=True,
+        ),
+        max_rows=args.max_rows,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["passed"] else 2
 
 
 def _training_cache(args: argparse.Namespace) -> int:

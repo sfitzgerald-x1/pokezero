@@ -175,6 +175,17 @@ shape checks but remain non-R0-eligible. The CLI returns exit `0` only for
 R0-eligible reports, exit `3` for exploratory/dev passes, and exit `2` for
 validation failures.
 
+`pokezero-refutation reproduce` is the rerun gate for the "reproducible from
+artifacts alone" R0 requirement. Given the source rollout-record JSONL, the
+fragile-state archive, and the same frozen continuation policy specs used for
+mining, it rebuilds each archived `RefutationCandidate` from replay coordinates,
+reruns the stored certification seeds through the simulator-RNG-reseeded terminal
+rollout evaluator, and compares terminal winners/caps/turn counts plus the
+archive's flip-rate summary. It exits `0` only when every reproduced row matches
+the archive and `2` on mismatch. The intended flagship R0 readout should pass
+both `validate` and `reproduce`; validation proves the artifact shape and
+thresholds, reproduction proves the archived examples can be regenerated.
+
 `pokezero-refutation cycle-report` is the cross-cycle G4 readout. It aggregates
 one or more `refutation-report.json` files into per-mode refutation-rate trends,
 including the "is the champion becoming less refutable?" decline signal, and it
@@ -384,12 +395,12 @@ calendar time.
 3. **G4 refutation miner automation**: public code emits a report plus
    fragile-state JSONL archive; deploy orchestration should run it over recent
    champion wins, persist artifacts, and gate later R1/R2 use on certified
-   examples. Public code can now also build a separate refutation training cache
-   from those certified examples, mix it into standalone neural training behind
-   capped flags, and emit an epsilon-sized curriculum rollout slice from fragile
-   starts; deploy orchestration still owns the A/B run setup. The old G2 arm
-   automation remains available only as fallback plumbing under the revival
-   condition above.
+   examples that pass both artifact validation and reproduction. Public code can
+   now also build a separate refutation training cache from those certified
+   examples, mix it into standalone neural training behind capped flags, and
+   emit an epsilon-sized curriculum rollout slice from fragile starts; deploy
+   orchestration still owns the A/B run setup. The old G2 arm automation remains
+   available only as fallback plumbing under the revival condition above.
 4. **Collection ε-floor**: neural iterate and standalone training-cache
    collection keep a nonzero random legal-action floor on learned policies while
    benchmark/advancement specs stay deterministic. This is a completeness
@@ -422,13 +433,14 @@ calendar time.
   ΔV probe at +50k games vs the vanilla trajectory.
 - **D2**: G4 refutation mining on. First deliverable: R0 miner + report on a
   flagship checkpoint with a fragile-state JSONL archive and ≥10 certified,
-  reproducible examples. Watch refutation rate and archive quality before
-  feeding examples back into training. The feed-back primitives are now a
-  separate refutation training cache plus capped `pokezero-neural train
-  --refutation-cache` ingestion, default-off certification-strength surprise
-  weights, and explicit `pokezero-refutation curriculum` rollout slices from
-  fragile starts; they are not yet evidence that R1 improves value calibration or
-  strength.
+  reproducible examples; "reproducible" means `pokezero-refutation reproduce`
+  reruns the archived terminal results from source records and replay
+  coordinates. Watch refutation rate and archive quality before feeding examples
+  back into training. The feed-back primitives are now a separate refutation
+  training cache plus capped `pokezero-neural train --refutation-cache`
+  ingestion, default-off certification-strength surprise weights, and explicit
+  `pokezero-refutation curriculum` rollout slices from fragile starts; they are
+  not yet evidence that R1 improves value calibration or strength.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
   unsupervised skill discovery (DIAYN-class, *learned* z with no semantic axes;

@@ -28,6 +28,7 @@ from pokezero.refutation_mining import (
     candidate_count_for_records,
     iter_fragile_states,
     mine_refutations,
+    reproduce_refutation_archive,
     validate_refutation_report_payload,
     write_refutation_report,
 )
@@ -656,6 +657,105 @@ class RefutationMiningTest(unittest.TestCase):
                         str(temp_path / "out"),
                         "--champion-policy-id",
                         "champion",
+                        "--p1-policy",
+                        "random-legal",
+                        "--p2-policy",
+                        "random-legal",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(captured["evaluator"].reseed_simulator_rng)
+        self.assertEqual(captured["evaluator"].reseed_scope, "simulator_rng")
+
+    def test_reproduce_refutation_archive_reruns_terminal_results(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            payload = reproduce_refutation_archive(
+                records=(_record(),),
+                fragile_states=tuple(iter_fragile_states(archive_path)),
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+            )
+
+        self.assertEqual(len(report.certified_refutations), 1)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["row_count"], 1)
+        self.assertEqual(payload["mismatch_count"], 0)
+        self.assertEqual(payload["rows"][0]["observed_summary"]["flip_rate"], 1.0)
+
+    def test_reproduce_refutation_archive_reports_mismatch(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            payload = reproduce_refutation_archive(
+                records=(_record(),),
+                fragile_states=tuple(iter_fragile_states(archive_path)),
+                evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+            )
+
+        self.assertFalse(payload["passed"])
+        self.assertEqual(payload["mismatch_count"], 1)
+        self.assertEqual(payload["rows"][0]["terminal_mismatch_count"], 20)
+
+    def test_cli_reproduce_uses_simulator_rng_reseeded_evaluator(self) -> None:
+        captured = {}
+
+        def fake_reproduce_refutation_archive(**kwargs):
+            captured["evaluator"] = kwargs["evaluator"]
+            return {
+                "schema_version": "pokezero.refutation_reproduction.v1",
+                "passed": True,
+                "row_count": 1,
+                "mismatch_count": 0,
+                "rows": [],
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            records_path = temp_path / "records.jsonl"
+            archive_path = temp_path / "fragile.jsonl"
+            with records_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record())
+            archive_path.write_text("{}\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with (
+                patch("pokezero.refutation_cli.env_config_with_policy_spec_masks", side_effect=lambda config, *_args, **_kwargs: config),
+                patch("pokezero.refutation_cli.policy_spec_with_showdown_root", side_effect=lambda spec, _root: spec),
+                patch("pokezero.refutation_cli.policy_from_spec", return_value=FirstLegalPolicy()),
+                patch("pokezero.refutation_cli.reproduce_refutation_archive", side_effect=fake_reproduce_refutation_archive),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = refutation_cli_main(
+                    [
+                        "reproduce",
+                        "--records",
+                        str(records_path),
+                        "--archive",
+                        str(archive_path),
                         "--p1-policy",
                         "random-legal",
                         "--p2-policy",
