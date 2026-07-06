@@ -1,9 +1,26 @@
 # Diversity tier — prior-free strategy generation
 
-Status: design for review, 2026-07-05. Companion to
+Status: design for review, updated 2026-07-06 for the G4 pivot. Companion to
 [`next_train_readiness_plan.md`](next_train_readiness_plan.md) (Horizon H2),
 [`wse_shaping_and_coverage_design.md`](wse_shaping_and_coverage_design.md),
 [`research_synthesis.md`](research_synthesis.md).
+
+## 2026-07-06 pivot: G2 paused, G4 replaces D2
+
+The named-axis G2 random-objective arm plan is no longer the active primary
+diversity engine. Keep the reward-plumbing, gauntlet, payoff-ledger, and
+dashboard work, but do not scale one-shot action-class axis arms to a 24-arm
+wave. The current read is that marginal action-class rewards create play-style
+caricatures rather than conditional strategy, and stronger curated variants
+already failed to move the hazard/value probes.
+
+The active D2 path is now **G4 refutation mining**: replay games the champion
+won, search the loser seat for single-turn and then short-line deviations that
+flip the outcome, certify those deviations with terminal rollouts over repeated
+seeds, and archive the fragile states as ground-truth credit-assignment data.
+This keeps generation game-supplied and prior-free while targeting the specific
+self-play failure mode: unpunished mistakes in won games receive positive credit
+unless a post-mortem finds the punishment.
 
 ## The three design axioms (fixed, from the project owner)
 
@@ -81,15 +98,15 @@ policy plus frozen checkpoints spanning runs, generations, and architectures.
   their own latch). Estimate ≤0.2× overhead.
 
 G1 alone breaks the monoculture's perfect mirror, but a pool of *near-clones*
-converges back to one — G2/G3 keep filling it with genuinely new members.
+converges back to one — G4/G3 keep filling it with genuinely new members.
 
-### G2 — Random objective search (the novelty engine)
+### G2 — Random objective search (paused; gated fallback)
 
-The direct implementation of "randomly generates novel strategies": short
-micro-arms trained under **randomly sampled reward perturbations**, following the
-reward-randomization line (RPG — Tang et al., arXiv:2103.04564: random search in
-reward space discovers strategic equilibria that plain self-play never visits,
-with no strategy-specific priors).
+This was the direct implementation of "randomly generates novel strategies":
+short micro-arms trained under **randomly sampled reward perturbations**,
+following the reward-randomization line (RPG — Tang et al., arXiv:2103.04564).
+It is now paused as the primary novelty engine. If revived, the accepted
+invariant remains: its basis must stay behavioral, not tool-specific.
 
 - Sample `w ~ random` over a **generic behavior-class basis**: damage
   dealt/taken, switch made, boost used, heal used, and KO. The basis must stay
@@ -114,6 +131,31 @@ Axiom-1 audit of G2: the only human content is the generic *behavior-class basis
 and the *bounds* (scale hygiene). No sampled direction is chosen, weighted, or
 filtered by what strategy we hope appears.
 
+Revival condition: only reconsider G2 after G4 stalls for two full cycles, and
+only as persistent lineage evolution over random-feature rewards, not one-shot
+named-axis arms.
+
+### G4 — Refutation mining (active D2)
+
+G4 mines novelty and credit assignment from the champion's own wins:
+
+1. Sample recent games the champion won.
+2. Replay to each loser decision point.
+3. Search the loser seat for a deviation, starting with single-turn legal
+   deviations and extending later to short lines.
+4. Score branches by **terminal rollouts**, never by the champion value head.
+5. Certify only if the deviation wins over repeated reseeds, defaulting to at
+   least 20 terminal rollouts and a >60% flip-rate threshold.
+6. Emit a fragile-state archive containing replay coordinates, deviation action,
+   flip rate, oracle/fair mode, and search statistics.
+
+The R0 implementation is deliberately single-turn first. This is enough to
+catch many unpunished mistakes, gives a reproducible archive format, and avoids
+prematurely depending on a multi-ply tree while replay-from-root is still the
+forking backend. Later phases feed certified states back through value
+retargeting, policy distillation at mined states, surprise weighting, and
+curriculum starts.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection
@@ -127,13 +169,14 @@ available (AlphaStar's main-exploiter role, minus the human-data seeding).
   (whatever it found, the main agent must now answer it). One that fails is
   discarded — also information (main is locally robust).
 - Risk (local search): a gradient-trained exploiter may only find nearby answers
-  (e.g., speed-tier abuse) rather than deep strategy shifts. This is why G2 and G3
-  coexist: G2 jumps to far basins at random; G3 digs sharply near the current
-  meta. Neither alone suffices; together they are breadth + depth.
+  (e.g., speed-tier abuse) rather than deep strategy shifts. This is why G4 and
+  G3 coexist: G4 mines concrete missed punishments from the champion's own wins;
+  G3 digs sharply near the current meta.
 
 ### Selection: prior-free gatekeeping into the pool
 
-Candidates (G2 survivors, G3 winners, new main checkpoints) enter the pool by
+Candidates (G4-derived policies, G3 winners, new main checkpoints, and any
+future gated G2 survivors) enter the pool by
 **game-theoretic novelty**, never by intuition metrics:
 
 1. Play the candidate against the current pool (cheap: few hundred games).
@@ -213,16 +256,16 @@ s/iter ≈ 12 h):
 |---|---|
 | main run (unchanged) | 1.0× |
 | G1 pool-collection overhead | ≤0.2× |
-| G2: ~24 random-objective micro-arms (13k games, 128d) | ~0.5× |
+| G4: refutation mining + short terminal-rollout certification | ~0.05–0.1× |
 | G3: 2–3 exploiters × 50k games (256d) | ~0.3–0.45× |
 | selection gauntlets + dashboard sampling (inference only) | ≤0.1× |
-| **total** | **≈ 2.1–2.3× < 3× cap** |
+| **total** | **≈ 1.75–1.85× < 3× cap** |
 
 Two funding notes: the pipelining rework (deploy PR #41, measured target ~1.7×)
 applies to every component, so the *wall-clock* of the full tier lands near
-1.2–1.4× of today's sequential single run; and G2/G3 arms are embarrassingly
-parallel across the cluster's idle CPU/GPU (648 GPUs, one in use today), so the
-cap binds on aggregate compute, not calendar time.
+1.2–1.4× of today's sequential single run; and G4/G3 work is embarrassingly
+parallel across available workers, so the cap binds on aggregate compute, not
+calendar time.
 
 ## Pool mechanics (the details that bite)
 
@@ -254,12 +297,11 @@ cap binds on aggregate compute, not calendar time.
 2. **Pool manifest + admission harness** (deploy repo): the gauntlet runner,
    payoff-matrix ledger, eviction logic — orchestration scripts in the mold of the
    milestone-probe suite.
-3. **G2 arm automation**: the mc22 launch pattern already does 90% (random `w`
-   generation + `--shaping-weights @file` passthrough exist). Public
-   `ShapingConfig` accepts both PBRS potential components and generic
-   action-class terms, but the G2 deploy planner samples only the action-class
-   behavior basis and leaves tool-specific potential terms inactive under
-   `terminal_mode="zero"`.
+3. **G4 refutation miner automation**: public code emits a report plus
+   fragile-state JSONL archive; deploy orchestration should run it over recent
+   champion wins, persist artifacts, and gate later R1/R2 use on certified
+   examples. The old G2 arm automation remains available only as fallback
+   plumbing under the revival condition above.
 4. **Dashboard population view** + per-agent behavior axes on the probe cron.
 5. Rides the pipelined controller (deploy PR #41) once merged.
 
@@ -283,8 +325,10 @@ cap binds on aggregate compute, not calendar time.
 - **D1**: collector pool-sampling PR; populate the pool with existing checkpoints
   + anchors; continue the current main-agent line on pool collection. First read:
   ΔV probe at +50k games vs the vanilla trajectory.
-- **D2**: G2 generator on (rolling random-objective micro-arms + admission
-  gauntlet). Watch the payoff rank climb.
+- **D2**: G4 refutation mining on. First deliverable: R0 miner + report on a
+  flagship checkpoint with a fragile-state JSONL archive and ≥10 certified,
+  reproducible examples. Watch refutation rate and archive quality before
+  feeding examples back into training.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
   unsupervised skill discovery (DIAYN-class, *learned* z with no semantic axes;
@@ -298,13 +342,13 @@ cap binds on aggregate compute, not calendar time.
   silently reconstituting the monoculture inside the augmented pool. The
   structural answer is that this tier's pool is *generative, not static*: if the
   main finds a narrow counter, that counter is now the exploitable meta, and the
-  next G2/G3 admission is whatever beats *it* — the arms race keeps moving where a
+  next G4/G3 admission is whatever beats *it* — the arms race keeps moving where a
   single hand-seeded specialist would freeze. The measurement answer is the
   primary-gate conjunction below (ΔV flip **and** behavioral corroboration on the
   main agent — spin/pivot movement — so a tempo-only answer cannot pass).
 - **Convergence-to-clones**: pool fills with near-copies → payoff-rank admission
   is the guard; watch rank, not head-count.
-- **Weak-opponent pollution**: too many sacrificial G2 arms make training too easy
+- **Weak-opponent pollution**: too many weak generated candidates make training too easy
   → cap the pool share of any single class of member; non-regression gate.
 - **Cycling/forgetting**: rock-paper-scissors churn instead of accumulation →
   anchors never evict; fictitious-play share of past selves.
