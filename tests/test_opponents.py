@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2
 from pokezero.opponents import (
@@ -120,6 +122,18 @@ class OpponentPoolTest(unittest.TestCase):
             self.assertEqual(checkpoint_policy_spec_observation_schema(spec), OBSERVATION_SCHEMA_VERSION_V2)
             self.assertTrue(is_current_family_checkpoint_policy_spec(spec))
             self.assertEqual(current_family_checkpoint_policy_specs((spec,)), (spec,))
+
+    def test_current_family_filter_accepts_supported_neural_checkpoint_metadata(self) -> None:
+        spec = "neural:/runs/current-family.pt?sample=true"
+        config = SimpleNamespace(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2)
+
+        with patch("pokezero.neural_policy.load_transformer_model_config", return_value=config) as load_config:
+            self.assertEqual(checkpoint_policy_spec_observation_schema(spec), OBSERVATION_SCHEMA_VERSION_V2)
+            self.assertTrue(is_current_family_checkpoint_policy_spec(spec))
+
+        self.assertEqual(load_config.call_count, 2)
+        for call in load_config.call_args_list:
+            self.assertEqual(call.args, (Path("/runs/current-family.pt"),))
 
     def test_current_family_filter_rejects_legacy_checkpoint_by_default(self) -> None:
         with TemporaryDirectory() as temp_dir:

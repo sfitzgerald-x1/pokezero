@@ -23,7 +23,7 @@ it isn't re-litigated (below).
 | `max-damage` | scripted | low-mid | greedy damage estimate (needs Showdown dex) |
 | `scripted-teacher` | scripted | mid | curated branch logic incl. hazards/Rapid-Spin (`policy.py`) |
 | **foul-play @ search-time-ms** | external search bot (poke-engine, MCTS) | **mid → SOTA, tunable** | `third_party/foul-play` pinned submodule + local patches; `--search-time-ms` sets strength |
-| historical self checkpoints | frozen nets | matched | v2+ current-family only via `opponents.py` pools; curated milestones at `/shared` + `checkpoints/curated/` |
+| historical self checkpoints | frozen nets | matched | v2+ current-family only; enforce with `opponents.py` `current_family_*` helpers; curated milestones at `/shared` + `checkpoints/curated/` |
 
 `random-legal` and `simple-legal` are plumbing checks only. They saturated by
 the 1M no-belief family (~99% and ~95%), so they should not be used as strength
