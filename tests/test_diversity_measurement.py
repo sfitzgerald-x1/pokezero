@@ -333,6 +333,54 @@ class HazardTrajectoryTest(unittest.TestCase):
         self.assertEqual(payload["missing_milestone_point_indexes"], [0, 1, 2, 3, 4])
         self.assertFalse(payload["gate_pass"])
 
+    def test_hazard_trajectory_cli_infers_milestones_from_sweep_filenames(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            hazards = []
+            for index, pricing in enumerate((0.05, 0.08, 0.11, 0.14, 0.18), start=1):
+                path = root / f"hazard-{index * 50_000}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "checkpoints": [
+                                {
+                                    # milestone_probes.sh labels rows as
+                                    # <run>-i<iteration>, so filename is the
+                                    # only durable milestone source.
+                                    "label": f"cycle-a-main-i{index}",
+                                    "value_spread": 1.0,
+                                    "value_self_hazard_response": -pricing / 2,
+                                    "value_opp_hazard_response": pricing / 2,
+                                    "spin_hazard_response": 0.0 if index < 4 else 0.01,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                hazards.append(path)
+            out = root / "trajectory.json"
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = hazard_trajectory.main(
+                    [
+                        *(arg for hazard in hazards for arg in ("--hazard", str(hazard))),
+                        "--out",
+                        str(out),
+                    ]
+                )
+            payload = json.loads(out.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("[hazard-trajectory] wrote", stderr.getvalue())
+        self.assertTrue(payload["ordering_complete"])
+        self.assertTrue(payload["gate_pass"])
+        self.assertEqual(
+            [point["milestone_games"] for point in payload["points"]],
+            [50_000, 100_000, 150_000, 200_000, 250_000],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,11 +15,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from pokezero.hazard_metrics import aggregate_hazard_rows
+from pokezero.hazard_metrics import aggregate_hazard_rows, parse_milestone_games
+
+
+_HAZARD_MILESTONE_RE = re.compile(r"^hazard-(\d+)\.json$")
+
+
+def _milestone_games_from_path(path: Path) -> int | None:
+    match = _HAZARD_MILESTONE_RE.match(path.name)
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 def _load_rows(path: Path) -> list[Mapping[str, Any]]:
@@ -30,7 +41,15 @@ def _load_rows(path: Path) -> list[Mapping[str, Any]]:
         rows = payload
     else:
         raise ValueError(f"{path} must be a hazard_probe JSON object with checkpoints or a list of rows")
-    return [row for row in rows if isinstance(row, Mapping)]
+    milestone_games = _milestone_games_from_path(path)
+    loaded: list[Mapping[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if milestone_games is not None and parse_milestone_games(row) is None:
+            row = {**row, "milestone_games": milestone_games}
+        loaded.append(row)
+    return loaded
 
 
 def main(argv: Sequence[str] | None = None) -> int:
