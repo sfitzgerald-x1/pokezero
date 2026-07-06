@@ -905,6 +905,7 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "opponent_action_mask": tensor(batch.opponent_action_mask, dtype=torch_module.bool, device=device),
         "action_probabilities": tensor(batch.action_probabilities, dtype=torch_module.float32, device=device),
         "action_probability_mask": tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
+        "training_weights": tensor(batch.training_weights, dtype=torch_module.float32, device=device),
     }
     if batch.window_row_indices is not None:
         tensors.update(
@@ -1710,11 +1711,13 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
     value_targets = _value_targets(tensors)
+    training_weights = _training_sample_weights(tensors)
     value_loss, ppo_value_clip_eligible_examples, ppo_value_clip_count = _value_loss_terms(
         output.value,
         value_targets,
         tensors,
         config,
+        training_weights=training_weights,
     )
     value_ranking_loss, value_ranking_loss_value, value_ranking_pairs = _value_ranking_loss_terms(
         output.value,
@@ -1745,22 +1748,23 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         # Only examples with a recorded, strictly-positive behavior probability are valid for
         # importance sampling; a zero/missing behavior prob has an undefined ratio, so exclude it.
         mask = (tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)).float()
+        objective_weights = mask * training_weights
         behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
-        denom = mask.sum().clamp(min=1.0)
+        denom = objective_weights.sum().clamp(min=1.0)
         raw_advantage = _ppo_advantages(output, tensors)
         advantage = raw_advantage
-        if config.normalize_advantage and float(denom.item()) > 1.0:
-            masked_mean = (advantage * mask).sum() / denom
-            masked_var = (((advantage - masked_mean) ** 2) * mask).sum() / denom
+        if config.normalize_advantage and int(mask.sum().item()) > 1:
+            masked_mean = (advantage * objective_weights).sum() / denom
+            masked_var = (((advantage - masked_mean) ** 2) * objective_weights).sum() / denom
             advantage = (advantage - masked_mean) / (masked_var.sqrt() + 1e-8)
         ratio = (chosen_log_prob - behavior_log_prob).exp()
         surrogate = torch_module.min(
             ratio * advantage,
             ratio.clamp(1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantage,
         )
-        policy_loss = -(surrogate * mask).sum() / denom
+        policy_loss = -(surrogate * objective_weights).sum() / denom
         entropy = -(log_probs.exp() * log_probs).sum(dim=1)
-        entropy_mean = (entropy * mask).sum() / denom
+        entropy_mean = (entropy * objective_weights).sum() / denom
         valid_mask = mask.bool()
         ppo_valid_examples = int(valid_mask.sum().item())
         if ppo_valid_examples:
@@ -1788,7 +1792,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
             tensors["action_indices"],
             reduction="none",
         )
-        weights = tensors["returns"].clamp(min=0.0) * _action_family_loss_weights(tensors, config)
+        weights = tensors["returns"].clamp(min=0.0) * _action_family_loss_weights(tensors, config) * training_weights
         denom = weights.sum().clamp(min=1.0)
         policy_loss = (per_example_policy_loss * weights).sum() / denom
         loss = (
@@ -1802,7 +1806,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
             tensors["action_indices"],
             reduction="none",
         )
-        weights = _action_family_loss_weights(tensors, config)
+        weights = _action_family_loss_weights(tensors, config) * training_weights
         policy_loss = (per_example_policy_loss * weights).sum() / weights.sum().clamp(min=1.0)
         loss = (
             policy_loss
@@ -1864,21 +1868,24 @@ def _value_loss_terms(
     targets: Any,
     tensors: Mapping[str, Any],
     config: TransformerTrainingConfig,
+    *,
+    training_weights: Any,
 ) -> tuple[Any, int, int]:
     torch_module = require_torch()
     functional = torch_module.nn.functional
     unclipped_loss = functional.mse_loss(values, targets, reduction="none")
+    weight_denom = training_weights.sum().clamp(min=1.0)
     if config.objective != "ppo" or config.value_clip_range is None:
-        return unclipped_loss.mean(), 0, 0
+        return (unclipped_loss * training_weights).sum() / weight_denom, 0, 0
     if "value_estimates" not in tensors or "value_estimate_mask" not in tensors:
-        return unclipped_loss.mean(), 0, 0
+        return (unclipped_loss * training_weights).sum() / weight_denom, 0, 0
     # PPO value clipping assumes rollout V_old, current V_new, and value targets are all
     # in the raw value-head space. Do not feed calibrated values into this path.
     old_values = tensors["value_estimates"]
     old_value_mask = tensors["value_estimate_mask"]
     eligible_examples = int(old_value_mask.sum().detach().item())
     if not eligible_examples:
-        return unclipped_loss.mean(), 0, 0
+        return (unclipped_loss * training_weights).sum() / weight_denom, 0, 0
     clipped_values = old_values + (values - old_values).clamp(
         -float(config.value_clip_range),
         float(config.value_clip_range),
@@ -1895,7 +1902,14 @@ def _value_loss_terms(
         torch_module.maximum(unclipped_loss, clipped_loss),
         unclipped_loss,
     )
-    return per_example_loss.mean(), eligible_examples, value_clip_count
+    return (per_example_loss * training_weights).sum() / weight_denom, eligible_examples, value_clip_count
+
+
+def _training_sample_weights(tensors: Mapping[str, Any]):
+    torch_module = require_torch()
+    if "training_weights" not in tensors:
+        return torch_module.ones_like(tensors["returns"])
+    return tensors["training_weights"].clamp(min=0.0)
 
 
 def _value_ranking_loss_terms(values: Any, targets: Any, config: TransformerTrainingConfig) -> tuple[Any, float, int]:

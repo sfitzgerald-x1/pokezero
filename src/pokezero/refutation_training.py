@@ -38,6 +38,8 @@ class RefutationTrainingConfig:
 
     target_mode: str = "policy-value"
     max_examples: int | None = None
+    surprise_weight_scale: float = 0.0
+    surprise_weight_max: float = 4.0
 
     def __post_init__(self) -> None:
         if self.target_mode not in REFUTATION_TRAINING_TARGET_MODES:
@@ -47,6 +49,10 @@ class RefutationTrainingConfig:
             )
         if self.max_examples is not None and self.max_examples <= 0:
             raise ValueError("max_examples must be positive when set.")
+        if self.surprise_weight_scale < 0.0:
+            raise ValueError("surprise_weight_scale must be non-negative.")
+        if self.surprise_weight_max < 1.0:
+            raise ValueError("surprise_weight_max must be at least 1.0.")
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,10 @@ class RefutationTrainingSummary:
     skipped_count: int
     target_mode: str
     compatible_objectives: tuple[str, ...]
+    surprise_weighting: Mapping[str, Any]
+    training_weight_min: float | None
+    training_weight_max: float | None
+    training_weight_mean: float | None
     cache: TrainingCacheSummary
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,6 +77,10 @@ class RefutationTrainingSummary:
             "skipped_count": self.skipped_count,
             "target_mode": self.target_mode,
             "compatible_objectives": list(self.compatible_objectives),
+            "surprise_weighting": dict(self.surprise_weighting),
+            "training_weight_min": self.training_weight_min,
+            "training_weight_max": self.training_weight_max,
+            "training_weight_mean": self.training_weight_mean,
             "cache": self.cache.to_dict(),
         }
 
@@ -91,8 +105,6 @@ def refutation_training_examples(
     source_records = tuple(records)
     examples: list[TrajectoryExample] = []
     for row in fragile_states:
-        if resolved_config.max_examples is not None and len(examples) >= resolved_config.max_examples:
-            break
         maybe = _example_from_fragile_state(
             records=source_records,
             row=row,
@@ -101,6 +113,9 @@ def refutation_training_examples(
         )
         if maybe is not None:
             examples.append(maybe)
+    examples.sort(key=lambda example: float(example.training_weight), reverse=True)
+    if resolved_config.max_examples is not None:
+        examples = examples[: resolved_config.max_examples]
     return tuple(examples)
 
 
@@ -131,7 +146,10 @@ def write_refutation_training_cache(
         cache.path,
         target_mode=resolved_config.target_mode,
         compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
+        surprise_weighting=_surprise_weighting_payload(resolved_config),
+        training_weight_stats=_training_weight_stats(examples),
     )
+    weight_stats = _training_weight_stats(examples)
     return RefutationTrainingSummary(
         source_record_count=len(records),
         fragile_state_count=len(fragile_rows),
@@ -139,6 +157,10 @@ def write_refutation_training_cache(
         skipped_count=len(fragile_rows) - len(examples),
         target_mode=resolved_config.target_mode,
         compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
+        surprise_weighting=_surprise_weighting_payload(resolved_config),
+        training_weight_min=weight_stats["min"],
+        training_weight_max=weight_stats["max"],
+        training_weight_mean=weight_stats["mean"],
         cache=cache,
     )
 
@@ -148,6 +170,8 @@ def _stamp_refutation_cache_metadata(
     *,
     target_mode: str,
     compatible_objectives: Sequence[str],
+    surprise_weighting: Mapping[str, Any],
+    training_weight_stats: Mapping[str, float | None],
 ) -> None:
     metadata_path = cache_path / "metadata.json"
     payload = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -155,6 +179,8 @@ def _stamp_refutation_cache_metadata(
         "schema_version": REFUTATION_TRAINING_CACHE_SCHEMA_VERSION,
         "target_mode": target_mode,
         "compatible_objectives": list(compatible_objectives),
+        "surprise_weighting": dict(surprise_weighting),
+        "training_weight_stats": dict(training_weight_stats),
     }
     metadata_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -207,6 +233,7 @@ def _example_from_fragile_state(
         "deviation_action_index": candidate.get("deviation_action_index"),
         "certified_value": certified_value,
         "flip_rate": certification.get("flip_rate"),
+        "training_weight": _surprise_training_weight(certification, config=config),
         "target_mode": config.target_mode,
         "mode": row.get("mode"),
     }
@@ -226,7 +253,46 @@ def _example_from_fragile_state(
         # a proper behavior probability.
         action_probability=None,
         step_metadata=metadata,
+        training_weight=_surprise_training_weight(certification, config=config),
     )
+
+
+def _surprise_training_weight(
+    certification: Mapping[str, Any],
+    *,
+    config: RefutationTrainingConfig,
+) -> float:
+    if config.surprise_weight_scale <= 0.0:
+        return 1.0
+    flip_rate = float(certification.get("flip_rate", 0.0))
+    min_flip_rate = float(certification.get("min_flip_rate", 0.60))
+    denominator = max(1e-9, 1.0 - min_flip_rate)
+    normalized_surprise = max(0.0, (flip_rate - min_flip_rate) / denominator)
+    return min(
+        float(config.surprise_weight_max),
+        1.0 + (float(config.surprise_weight_scale) * normalized_surprise),
+    )
+
+
+def _surprise_weighting_payload(config: RefutationTrainingConfig) -> dict[str, Any]:
+    mode = "certification-flip-rate" if config.surprise_weight_scale > 0.0 else "none"
+    return {
+        "mode": mode,
+        "scale": float(config.surprise_weight_scale),
+        "max": float(config.surprise_weight_max),
+        "field": "training_weights",
+    }
+
+
+def _training_weight_stats(examples: Sequence[TrajectoryExample]) -> dict[str, float | None]:
+    if not examples:
+        return {"min": None, "max": None, "mean": None}
+    weights = tuple(float(example.training_weight) for example in examples)
+    return {
+        "min": min(weights),
+        "max": max(weights),
+        "mean": sum(weights) / len(weights),
+    }
 
 
 def _certified_loser_value(

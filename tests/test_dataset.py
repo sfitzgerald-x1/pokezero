@@ -567,6 +567,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(batch.opponent_action_mask, (True, False))
         self.assertEqual(batch.action_probabilities, (0.5, 0.0))
         self.assertEqual(batch.action_probability_mask, (True, False))
+        self.assertEqual(batch.training_weights, (1.0, 1.0))
         self.assertEqual(batch.value_estimates, (0.125, 0.0))
         self.assertEqual(batch.value_estimate_mask, (True, False))
         self.assertEqual(batch.ppo_advantages, (0.0, 0.0))
@@ -759,6 +760,26 @@ class DatasetTest(unittest.TestCase):
 
         self.assertEqual(_tolist(batches[0].value_estimates), [0.0, 0.0])
         self.assertEqual(_tolist(batches[0].value_estimate_mask), [False, False])
+
+    def test_training_cache_round_trips_training_weights_and_defaults_legacy_missing_array(self) -> None:
+        self._require_numpy()
+        examples = tuple(examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=1)))
+        weighted_examples = (
+            replace(examples[0], training_weight=2.5),
+            replace(examples[1], training_weight=1.25),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            weighted_cache = Path(temp_dir) / "weighted-cache"
+            legacy_cache = Path(temp_dir) / "legacy-cache"
+            write_training_cache_from_examples(weighted_examples, weighted_cache, config=TrajectoryDatasetConfig(window_size=1))
+            (weighted_batch,) = tuple(iter_training_cache_batches(weighted_cache, batch_size=10))
+
+            write_training_cache_from_examples(weighted_examples, legacy_cache, config=TrajectoryDatasetConfig(window_size=1))
+            (legacy_cache / "training_weights.npy").unlink()
+            (legacy_batch,) = tuple(iter_training_cache_batches(legacy_cache, batch_size=10))
+
+        self.assertEqual(_tolist(weighted_batch.training_weights), [2.5, 1.25])
+        self.assertEqual(_tolist(legacy_batch.training_weights), [1.0, 1.0])
 
     def test_training_cache_reader_reports_missing_required_array(self) -> None:
         self._require_numpy()
@@ -1083,6 +1104,7 @@ def _batch_payload(batches) -> list[dict]:
             "opponent_action_mask": _tolist(batch.opponent_action_mask),
             "action_probabilities": _tolist(batch.action_probabilities),
             "action_probability_mask": _tolist(batch.action_probability_mask),
+            "training_weights": _tolist(batch.training_weights),
             "seeds": _tolist(batch.seeds),
             "turn_indices": _tolist(batch.turn_indices),
             "terminal_capped": _tolist(batch.terminal_capped),
