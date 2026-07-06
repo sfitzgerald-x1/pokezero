@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import json
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 
 from pokezero.behavior_metrics import classify_move, move_class_summary
+from pokezero.diversity_population import diversity_population_dashboard, payoff_effective_rank
 from pokezero.hazard_metrics import aggregate_hazard_rows, correct_pricing, parse_milestone_games_text
 
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "hazard_trajectory.py"
+ROOT = Path(__file__).resolve().parents[1]
+_SCRIPT = ROOT / "scripts" / "hazard_trajectory.py"
 _SPEC = importlib.util.spec_from_file_location("hazard_trajectory", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 hazard_trajectory = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(hazard_trajectory)
+
+_POP_SCRIPT = ROOT / "scripts" / "diversity_population_dashboard.py"
+_POP_SPEC = importlib.util.spec_from_file_location("diversity_population_dashboard", _POP_SCRIPT)
+assert _POP_SPEC is not None and _POP_SPEC.loader is not None
+diversity_population_dashboard_script = importlib.util.module_from_spec(_POP_SPEC)
+_POP_SPEC.loader.exec_module(diversity_population_dashboard_script)
 
 
 class _FakeDex:
@@ -51,6 +63,146 @@ class BehaviorMetricTest(unittest.TestCase):
         self.assertEqual(summary["clear"], {"count": 1, "rate": 0.2})
         self.assertEqual(summary["attack"], {"count": 1, "rate": 0.2})
         self.assertEqual(summary["other"], {"count": 1, "rate": 0.2})
+
+
+class DiversityPopulationDashboardTest(unittest.TestCase):
+    def test_behavior_dashboard_counts_live_strategy_axes(self) -> None:
+        rows = [
+            {
+                "label": "hazard-agent",
+                "move_class_usage": {
+                    "hazard": {"count": 20, "rate": 0.25},
+                    "clear": {"count": 0, "rate": 0.0},
+                    "setup": {"count": 1, "rate": 0.0125},
+                    "status": {"count": 4, "rate": 0.05},
+                    "heal": {"count": 2, "rate": 0.025},
+                    "phaze": {"count": 0, "rate": 0.0},
+                    "attack": {"count": 53, "rate": 0.6625},
+                    "other": {"count": 0, "rate": 0.0},
+                },
+                "pivot_rate": 0.2,
+                "avg_turns": 68.0,
+                "distinct_moves": 19,
+            },
+            {
+                "label": "tempo-agent",
+                "move_class_usage": {
+                    "hazard": {"count": 0, "rate": 0.0},
+                    "clear": {"count": 0, "rate": 0.0},
+                    "setup": {"count": 8, "rate": 0.08},
+                    "status": {"count": 0, "rate": 0.0},
+                    "heal": {"count": 0, "rate": 0.0},
+                    "phaze": {"count": 4, "rate": 0.04},
+                    "attack": {"count": 88, "rate": 0.88},
+                    "other": {"count": 0, "rate": 0.0},
+                },
+                "pivot_rate": 0.02,
+                "avg_turns": 42.0,
+                "distinct_moves": 11,
+            },
+        ]
+
+        payload = diversity_population_dashboard(rows)
+
+        self.assertEqual(payload["schema_version"], "pokezero.diversity_population_dashboard.v1")
+        self.assertGreaterEqual(payload["behavior"]["live_axis_count"], 4)
+        self.assertTrue(payload["behavior"]["axes"]["hazard_cycle"]["live_spread"])
+        self.assertTrue(payload["behavior"]["axes"]["tempo"]["live_spread"])
+        self.assertTrue(payload["behavior"]["axes"]["aggression_structure"]["live_spread"])
+        self.assertTrue(payload["behavior"]["axes"]["interaction"]["live_spread"])
+        hazard_metric = payload["behavior"]["axes"]["hazard_cycle"]["metrics"]["move_class_rate:hazard"]
+        self.assertEqual(hazard_metric["min_label"], "tempo-agent")
+        self.assertEqual(hazard_metric["max_label"], "hazard-agent")
+        self.assertEqual(hazard_metric["spread"], 0.25)
+
+    def test_payoff_effective_rank_distinguishes_duplicate_and_independent_vectors(self) -> None:
+        duplicate = payoff_effective_rank(
+            {
+                "a": {"x": 0.8, "y": 0.5},
+                "b": {"x": 0.8, "y": 0.5},
+            }
+        )
+        independent = payoff_effective_rank(
+            {
+                "a": {"x": 0.8, "y": 0.5},
+                "b": {"x": 0.5, "y": 0.8},
+            }
+        )
+
+        self.assertEqual(duplicate["linear_rank"], 1)
+        self.assertEqual(duplicate["effective_rank"], 1.0)
+        self.assertEqual(independent["linear_rank"], 2)
+        self.assertEqual(independent["effective_rank"], 2.0)
+
+    def test_payoff_effective_rank_treats_bad_values_as_neutral(self) -> None:
+        payload = payoff_effective_rank(
+            {
+                "a": {"x": "bad", "y": 0.8},
+                "b": {"x": 0.8, "y": 0.5},
+            }
+        )
+
+        self.assertEqual(payload["member_count"], 2)
+        self.assertGreaterEqual(payload["linear_rank"], 1)
+
+    def test_population_dashboard_cli_reads_behavior_and_pool_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            behavior = root / "behavior.json"
+            ledger = root / "ledger.json"
+            out = root / "dashboard.json"
+            behavior.write_text(
+                json.dumps(
+                    {
+                        "checkpoints": [
+                            {
+                                "label": "a",
+                                "move_class_usage": {"hazard": {"rate": 0.2}, "attack": {"rate": 0.6}},
+                                "pivot_rate": 0.2,
+                                "avg_turns": 60,
+                                "distinct_moves": 12,
+                            },
+                            {
+                                "label": "b",
+                                "move_class_usage": {"hazard": {"rate": 0.0}, "attack": {"rate": 0.9}},
+                                "pivot_rate": 0.01,
+                                "avg_turns": 40,
+                                "distinct_moves": 8,
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ledger.write_text(
+                json.dumps(
+                    {
+                        "payoff_vectors": {
+                            "a": {"b": 0.8},
+                            "b": {"a": 0.8},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = diversity_population_dashboard_script.main(
+                    [
+                        "--behavior",
+                        str(behavior),
+                        "--pool-ledger",
+                        str(ledger),
+                        "--out",
+                        str(out),
+                    ]
+                )
+            payload = json.loads(out.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("[diversity-population] wrote", stderr.getvalue())
+        self.assertTrue(payload["behavior"]["axes"]["hazard_cycle"]["live_spread"])
+        self.assertEqual(payload["payoff_rank"]["member_count"], 2)
 
 
 class HazardTrajectoryTest(unittest.TestCase):
