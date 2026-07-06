@@ -15,11 +15,13 @@ from pokezero.dataset import (
     examples_from_record,
     is_training_cache_path,
     iter_training_cache_batches,
+    iter_training_batches_with_capped_auxiliary,
     iter_training_batches,
     iter_training_examples,
     training_cache_root_byte_size,
     training_cache_paths_byte_size,
     training_batch_from_examples,
+    write_training_cache_from_examples,
     write_training_cache_from_rollouts,
 )
 from pokezero.env import TerminalState
@@ -645,6 +647,44 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual([batch.battle_ids for batch in cached_batches], [("", "", "", ""), ("", "", "", ""), ("",)])
         self.assertEqual([batch.step_metadata for batch in cached_batches], [({}, {}, {}, {}), ({}, {}, {}, {}), ({},)])
         self.assertEqual(consumed, list(cache_paths))
+
+    def test_iter_training_batches_with_capped_auxiliary_limits_auxiliary_fraction(self) -> None:
+        self._require_numpy()
+        config = TrajectoryDatasetConfig(window_size=1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            primary_jsonl_paths = tuple(temp_path / f"primary-{index}.jsonl" for index in range(2))
+            primary_cache_paths = tuple(temp_path / f"primary-cache-{index}" for index in range(2))
+            for path in primary_jsonl_paths:
+                with path.open("w", encoding="utf-8") as handle:
+                    write_rollout_record(handle, rollout_record())
+            for jsonl_path, cache_path in zip(primary_jsonl_paths, primary_cache_paths, strict=True):
+                write_training_cache_from_rollouts(jsonl_path, cache_path, config=config)
+
+            auxiliary_examples = [
+                replace(example, action_index=2)
+                for example in examples_from_record(rollout_record(), config=config)
+            ]
+            auxiliary_cache = temp_path / "auxiliary-cache"
+            write_training_cache_from_examples(auxiliary_examples, auxiliary_cache, config=config)
+
+            consumed: list[Path] = []
+            batches = list(
+                iter_training_batches_with_capped_auxiliary(
+                    primary_cache_paths,
+                    auxiliary_paths=auxiliary_cache,
+                    auxiliary_max_fraction=0.2,
+                    batch_size=4,
+                    config=config,
+                    consumed_cache_callback=consumed.append,
+                )
+            )
+
+        actions = [action for batch in batches for action in batch.action_indices]
+        self.assertEqual(actions.count(0), 6)
+        self.assertEqual(actions.count(2), 1)
+        self.assertLessEqual(actions.count(2) / len(actions), 0.2)
+        self.assertEqual(consumed, list(primary_cache_paths))
 
     def test_deferred_training_cache_batches_trim_sliced_row_tables(self) -> None:
         self._require_numpy()

@@ -16,12 +16,19 @@ from unittest.mock import patch
 
 from pokezero import neural_policy as neural_policy_module
 from pokezero.collection import RolloutRecord, write_rollout_record
-from pokezero.dataset import TrajectoryDatasetConfig, write_training_cache_from_rollouts
+from pokezero.dataset import (
+    TrajectoryDatasetConfig,
+    examples_from_record,
+    write_training_cache_from_examples,
+    write_training_cache_from_rollouts,
+)
 from pokezero.env import TerminalState
 from pokezero.neural_cli import (
     _PolicyIdAlias,
     _input_data_paths_byte_size,
+    _refutation_cache_training_contract,
     _training_cache_lifecycle,
+    _validate_refutation_cache_args,
     build_arg_parser as build_neural_arg_parser,
     main as neural_cli_main,
 )
@@ -1687,6 +1694,142 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(kwargs["max_cache_root_bytes"], 50 * 1024 * 1024 * 1024)
         self.assertEqual(kwargs["cache_root"], Path("."))
         self.assertIn("training_cache_examples: 8", stdout.getvalue())
+
+    def test_neural_cli_refutation_cache_validation_accepts_capped_policy_value_cache(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("refutation-cache")],
+            refutation_max_fraction=0.1,
+            refutation_target_mode="policy-value",
+            objective="ppo",
+        )
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch(
+                "pokezero.neural_cli._refutation_cache_training_contract",
+                return_value=("policy-value", ("behavior-cloning", "ppo", "reward-weighted")),
+            ),
+        ):
+            paths = _validate_refutation_cache_args(args)
+
+        self.assertEqual(paths, (Path("refutation-cache"),))
+
+    def test_neural_cli_refutation_cache_validation_rejects_fraction_above_cap(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("refutation-cache")],
+            refutation_max_fraction=0.25,
+            refutation_target_mode="policy-value",
+            objective="ppo",
+        )
+
+        with self.assertRaisesRegex(ValueError, "at most 0.2"):
+            _validate_refutation_cache_args(args)
+
+    def test_neural_cli_refutation_cache_validation_rejects_value_mode_for_bc(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("refutation-cache")],
+            refutation_max_fraction=0.1,
+            refutation_target_mode="value",
+            objective="behavior-cloning",
+        )
+
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch(
+                "pokezero.neural_cli._refutation_cache_training_contract",
+                return_value=("value", ("ppo", "value-only")),
+            ),
+            self.assertRaisesRegex(ValueError, "compatible with ppo, value-only"),
+        ):
+            _validate_refutation_cache_args(args)
+
+    def test_neural_cli_refutation_cache_validation_rejects_target_mode_mismatch(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("refutation-cache")],
+            refutation_max_fraction=0.1,
+            refutation_target_mode="policy-value",
+            objective="ppo",
+        )
+
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch(
+                "pokezero.neural_cli._refutation_cache_training_contract",
+                return_value=("value", ("ppo", "value-only")),
+            ),
+            self.assertRaisesRegex(ValueError, "was built with target_mode='value'"),
+        ):
+            _validate_refutation_cache_args(args)
+
+    def test_neural_cli_refutation_cache_validation_requires_cache_directory(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("rollouts.jsonl")],
+            refutation_max_fraction=0.1,
+            refutation_target_mode="policy-value",
+            objective="ppo",
+        )
+        with patch("pokezero.neural_cli.is_training_cache_path", return_value=False):
+            with self.assertRaisesRegex(ValueError, "not a training-cache directory"):
+                _validate_refutation_cache_args(args)
+
+    def test_neural_cli_refutation_cache_contract_requires_stamped_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            cache_path.mkdir()
+            (cache_path / "metadata.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing refutation_training metadata"):
+                _refutation_cache_training_contract(cache_path)
+
+    def test_neural_cli_refutation_cache_contract_rejects_tampered_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            cache_path.mkdir()
+            (cache_path / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "refutation_training": {
+                            "target_mode": "value",
+                            "compatible_objectives": ["behavior-cloning"],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "requires \\('ppo', 'value-only'\\)"):
+                _refutation_cache_training_contract(cache_path)
+
+    def test_neural_cli_refutation_cache_validation_reads_stamped_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "refutation-cache"
+            cache_path.mkdir()
+            (cache_path / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "refutation_training": {
+                            "target_mode": "value",
+                            "compatible_objectives": ["ppo", "value-only"],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                data=[Path(temp_dir) / "primary-cache"],
+                refutation_cache=[cache_path],
+                refutation_max_fraction=0.1,
+                refutation_target_mode="value",
+                objective="ppo",
+            )
+
+            paths = _validate_refutation_cache_args(args)
+
+        self.assertEqual(paths, (cache_path,))
 
     def test_neural_cli_training_cache_lifecycle_rejects_oversized_active_cache(self) -> None:
         args = SimpleNamespace(
@@ -5294,6 +5437,53 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(result.final_metrics.examples, 2)
         self.assertEqual(observed_row_indexed_batches, [True])
+
+    def test_train_transformer_policy_mixes_capped_auxiliary_batches(self) -> None:
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            data_path = temp_path / "rollouts.jsonl"
+            auxiliary_cache = temp_path / "auxiliary-cache"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            auxiliary_examples = [
+                replace(example, action_index=1)
+                for example in examples_from_record(rollout_record(), config=TrajectoryDatasetConfig(window_size=1))
+            ]
+            write_training_cache_from_examples(
+                auxiliary_examples,
+                auxiliary_cache,
+                config=TrajectoryDatasetConfig(window_size=1),
+            )
+
+            _, result = train_transformer_policy(
+                data_path,
+                model_config=TransformerPolicyConfig.compact_category(
+                    category_vocab=tuple(range(1, 17)),
+                    category_oov_buckets=4,
+                    policy_id="auxiliary-train",
+                    window_size=1,
+                    token_type_vocab_size=8,
+                    categorical_feature_count=1,
+                    numeric_feature_count=1,
+                    embedding_dim=16,
+                    transformer_layers=1,
+                    attention_heads=4,
+                    feedforward_dim=32,
+                    dropout=0.0,
+                ),
+                training_config=TransformerTrainingConfig(
+                    batch_size=4,
+                    epochs=1,
+                    window_size=1,
+                    device="cpu",
+                ),
+                auxiliary_paths=auxiliary_cache,
+                auxiliary_max_fraction=0.2,
+            )
+
+        self.assertEqual(result.final_metrics.examples, 5)
 
     def test_checkpoint_round_trips_belief_provenance(self) -> None:
         # Regression guard for the provenance chain's only durable link: if the save payload key

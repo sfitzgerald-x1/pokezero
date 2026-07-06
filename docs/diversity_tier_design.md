@@ -172,7 +172,14 @@ from the main rollout cache so deployment can mix it behind explicit flags and
 enforce the ≤10–20% fragile-example cap. `value` mode is a value-target cache
 only and should be consumed by PPO/value-only paths, not behavior cloning or
 reward-weighted objectives, because it intentionally leaves the recorded loser
-action untouched. No R1 A/B result has landed yet.
+action untouched.
+
+`pokezero-neural train --refutation-cache ...` is the opt-in ingestion path: it
+streams certified refutation caches as capped auxiliary examples, hard-limits the
+mix to at most 20% of emitted training examples, applies the same cache
+schema/mask/shaping checks as primary training data, and leaves auxiliary caches
+out of the primary cache-deletion lifecycle. This is ingestion plumbing only; no
+R1 A/B result has landed yet.
 
 ### G3 — Exploiters (the adversarial engine)
 
@@ -321,9 +328,10 @@ calendar time.
    fragile-state JSONL archive; deploy orchestration should run it over recent
    champion wins, persist artifacts, and gate later R1/R2 use on certified
    examples. Public code can now also build a separate refutation training cache
-   from those certified examples; deploy orchestration still owns the explicit
-   mix cap and A/B run setup. The old G2 arm automation remains available only
-   as fallback plumbing under the revival condition above.
+   from those certified examples and mix it into standalone neural training
+   behind capped flags; deploy orchestration still owns the A/B run setup. The
+   old G2 arm automation remains available only as fallback plumbing under the
+   revival condition above.
 4. **Collection ε-floor**: neural iterate and standalone training-cache
    collection keep a nonzero random legal-action floor on learned policies while
    benchmark/advancement specs stay deterministic. This is a completeness
@@ -354,9 +362,10 @@ calendar time.
 - **D2**: G4 refutation mining on. First deliverable: R0 miner + report on a
   flagship checkpoint with a fragile-state JSONL archive and ≥10 certified,
   reproducible examples. Watch refutation rate and archive quality before
-  feeding examples back into training. The first feed-back primitive is a
-  separate refutation training cache; it is not yet evidence that R1 improves
-  value calibration or strength.
+  feeding examples back into training. The feed-back primitive is now a separate
+  refutation training cache plus capped `pokezero-neural train
+  --refutation-cache` ingestion; it is not yet evidence that R1 improves value
+  calibration or strength.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
   unsupervised skill discovery (DIAYN-class, *learned* z with no semantic axes;

@@ -648,6 +648,11 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(payload["example_count"], 1)
         self.assertEqual(payload["compatible_objectives"], ["behavior-cloning", "ppo", "reward-weighted"])
         self.assertEqual(metadata["example_count"], 1)
+        self.assertEqual(metadata["refutation_training"]["target_mode"], "policy-value")
+        self.assertEqual(
+            metadata["refutation_training"]["compatible_objectives"],
+            ["behavior-cloning", "ppo", "reward-weighted"],
+        )
         self.assertEqual(batch.action_indices, (2,))
         self.assertAlmostEqual(batch.returns[0], 0.3, places=6)
         self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
