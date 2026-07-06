@@ -149,10 +149,14 @@ G4 mines novelty and credit assignment from the champion's own wins:
 6. Emit a fragile-state archive containing replay coordinates, deviation action,
    flip rate, oracle/fair mode, and search statistics.
 
-The R0 implementation is deliberately single-turn first. This is enough to
-catch many unpunished mistakes, gives a reproducible archive format, and avoids
-prematurely depending on a multi-ply tree while replay-from-root is still the
-forking backend. Later phases feed certified states back through value
+The R0 implementation is deliberately single-turn by default, with an explicit
+bounded depth ladder up to three decision rounds. Under the current
+replay-from-root backend, depth >1 forces the recorded continuation action
+rounds after the first loser deviation before terminal rollout; it is a
+certifiable short-line artifact, not a full post-deviation tree. That is enough
+to catch many unpunished mistakes, gives a reproducible archive format, and
+avoids prematurely depending on multi-ply tree search while replay-from-root is
+still the forking backend. Later phases feed certified states back through value
 retargeting, policy distillation at mined states, surprise weighting, and
 curriculum starts.
 

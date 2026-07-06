@@ -1,8 +1,8 @@
 """G4 refutation-mining primitives.
 
 The miner post-mortems games a champion won, searches the loser's legal
-single-turn deviations, and certifies a deviation only from terminal rollout
-outcomes.  It deliberately has no value-head dependency: callers inject an
+bounded-depth deviations, and certifies a deviation only from terminal rollout
+outcomes. It deliberately has no value-head dependency: callers inject an
 evaluator that returns terminal winners for branch/reseed pairs.
 """
 
@@ -31,13 +31,14 @@ DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS = 10
 
 @dataclass(frozen=True)
 class RefutationMiningConfig:
-    """Configuration for R0 single-turn refutation mining."""
+    """Configuration for R0 bounded-depth refutation mining."""
 
     champion_policy_id: str | None = None
     champion_player_id: str | None = None
     max_wins: int = 200
     max_decision_points_per_game: int | None = None
     max_deviations_per_state: int | None = None
+    max_line_depth: int = 1
     certification_seed_count: int = 20
     min_flip_rate: float = 0.60
     mode: str = "oracle"
@@ -51,6 +52,8 @@ class RefutationMiningConfig:
             raise ValueError("max_decision_points_per_game must be positive when set.")
         if self.max_deviations_per_state is not None and self.max_deviations_per_state <= 0:
             raise ValueError("max_deviations_per_state must be positive when set.")
+        if self.max_line_depth <= 0 or self.max_line_depth > 3:
+            raise ValueError("max_line_depth must be between 1 and 3.")
         if self.certification_seed_count < 20:
             raise ValueError("certification_seed_count must be at least 20.")
         if not 0.0 < self.min_flip_rate < 1.0:
@@ -61,7 +64,7 @@ class RefutationMiningConfig:
 
 @dataclass(frozen=True)
 class RefutationCandidate:
-    """A loser-seat single-turn deviation at a recorded decision point."""
+    """A loser-seat deviation line at a recorded decision point."""
 
     battle_id: str
     source_record_index: int
@@ -74,6 +77,7 @@ class RefutationCandidate:
     recorded_action_index: int
     deviation_action_index: int
     branch_actions: Mapping[str, int]
+    branch_action_sequence: tuple[Mapping[str, int], ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         for name, action_index in (
@@ -84,6 +88,21 @@ class RefutationCandidate:
                 raise ValueError(f"{name} must be between 0 and {ACTION_COUNT - 1}.")
         if self.recorded_action_index == self.deviation_action_index:
             raise ValueError("deviation_action_index must differ from recorded_action_index.")
+        branch_actions = _normalize_action_map(self.branch_actions)
+        sequence = self.branch_action_sequence or (branch_actions,)
+        normalized_sequence = tuple(_normalize_action_map(round_actions) for round_actions in sequence)
+        if not normalized_sequence:
+            raise ValueError("branch_action_sequence must be non-empty.")
+        if len(normalized_sequence) > 3:
+            raise ValueError("branch_action_sequence cannot exceed 3 rounds.")
+        if normalized_sequence[0] != branch_actions:
+            raise ValueError("branch_action_sequence first round must match branch_actions.")
+        object.__setattr__(self, "branch_actions", branch_actions)
+        object.__setattr__(self, "branch_action_sequence", normalized_sequence)
+
+    @property
+    def line_depth(self) -> int:
+        return len(self.branch_action_sequence)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +117,11 @@ class RefutationCandidate:
             "recorded_action_index": self.recorded_action_index,
             "deviation_action_index": self.deviation_action_index,
             "branch_actions": dict(sorted(self.branch_actions.items())),
+            "branch_action_sequence": [
+                dict(sorted(round_actions.items()))
+                for round_actions in self.branch_action_sequence
+            ],
+            "line_depth": self.line_depth,
         }
 
 
@@ -180,14 +204,39 @@ class ReplayTerminalBranchEvaluator:
                 branch_actions=candidate.branch_actions,
                 check_prefix_observations=self.check_prefix_observations,
             )
+            step_result = branch.step_result
+            forced_round_count = 1
+            for offset, branch_actions in enumerate(candidate.branch_action_sequence[1:], start=1):
+                terminal = step_result.terminal or env.terminal()
+                if terminal is not None:
+                    return BranchTerminalResult.from_terminal(
+                        certification_seed=certification_seed,
+                        terminal=terminal,
+                    )
+                _require_branch_requested_players(
+                    branch_actions,
+                    requested_players=env.requested_players(),
+                    turn_index=candidate.decision_round_index + offset,
+                )
+                step_result = env.step(branch_actions)
+                forced_round_count += 1
+            terminal = step_result.terminal or env.terminal()
+            if terminal is not None:
+                return BranchTerminalResult.from_terminal(
+                    certification_seed=certification_seed,
+                    terminal=terminal,
+                )
             continuation = continue_rollout_from_current_state(
                 env=env,
                 policies=self.policies,
                 config=self.rollout_config,
                 seed=certification_seed,
-                battle_id=f"refutation-{record.battle_id}-{candidate.decision_round_index}-{certification_seed}",
-                starting_decision_round_index=candidate.decision_round_index + 1,
-                available_observations=branch.step_result.observations,
+                battle_id=(
+                    f"refutation-{record.battle_id}-{candidate.decision_round_index}-"
+                    f"d{candidate.line_depth}-{certification_seed}"
+                ),
+                starting_decision_round_index=candidate.decision_round_index + forced_round_count,
+                available_observations=step_result.observations,
                 reset_policies=self.reset_policies,
             )
             return BranchTerminalResult.from_terminal(
@@ -283,6 +332,7 @@ class RefutationMiningReport:
                 "max_wins": self.config.max_wins,
                 "max_decision_points_per_game": self.config.max_decision_points_per_game,
                 "max_deviations_per_state": self.config.max_deviations_per_state,
+                "max_line_depth": self.config.max_line_depth,
                 "certification_seed_count": self.config.certification_seed_count,
                 "min_flip_rate": self.config.min_flip_rate,
                 "mode": self.config.mode,
@@ -333,6 +383,7 @@ def mine_refutations(
                     step_index=step_index,
                     step=step,
                     max_deviations=config.max_deviations_per_state,
+                    max_line_depth=config.max_line_depth,
                 )
                 candidate_deviation_count += len(candidates)
                 for candidate in candidates:
@@ -404,8 +455,9 @@ def certify_candidate(
         reseed_scope=reseed_scope,
         simulator_rng_reseeded=simulator_rng_reseeded,
         search_stats={
-            "search_method": "enumerate_single_turn_legal_deviations",
-            "depth": 1,
+            "search_method": "enumerate_recorded_continuation_deviation_lines",
+            "depth": candidate.line_depth,
+            "max_line_depth": config.max_line_depth,
             "value_head_used": evaluator.value_head_used,
             "reseed_scope": reseed_scope,
             "simulator_rng_reseeded": simulator_rng_reseeded,
@@ -440,6 +492,7 @@ def candidate_count_for_records(
                     step_index=step_index,
                     step=step,
                     max_deviations=config.max_deviations_per_state,
+                    max_line_depth=config.max_line_depth,
                 )
             )
     return {
@@ -737,12 +790,15 @@ def _deviation_candidates(
     step_index: int,
     step: TrajectoryStep,
     max_deviations: int | None,
+    max_line_depth: int = 1,
 ) -> tuple[RefutationCandidate, ...]:
     rounds = action_rounds_from_trajectory(
         record.trajectory,
         decision_round_count=step.turn_index + 1,
     )
     recorded_round = rounds[step.turn_index]
+    all_rounds = action_rounds_from_trajectory(record.trajectory)
+    continuation_rounds = all_rounds[step.turn_index + 1 : step.turn_index + max_line_depth]
     legal = tuple(action for action in legal_action_indices(step.legal_action_mask) if action != step.action_index)
     if max_deviations is not None:
         legal = legal[:max_deviations]
@@ -750,21 +806,31 @@ def _deviation_candidates(
     for deviation_action_index in legal:
         branch_actions = dict(recorded_round.actions)
         branch_actions[loser_player_id] = deviation_action_index
-        candidates.append(
-            RefutationCandidate(
-                battle_id=record.battle_id,
-                source_record_index=source_record_index,
-                seed=record.seed,
-                format_id=record.format_id,
-                champion_player_id=champion_player_id,
-                loser_player_id=loser_player_id,
-                decision_round_index=step.turn_index,
-                step_index=step_index,
-                recorded_action_index=step.action_index,
-                deviation_action_index=deviation_action_index,
-                branch_actions=branch_actions,
+        branch_action_sequences = [(branch_actions,)]
+        for depth in range(2, max_line_depth + 1):
+            continuation = continuation_rounds[: depth - 1]
+            if len(continuation) != depth - 1:
+                break
+            branch_action_sequences.append(
+                (branch_actions, *tuple(dict(round_actions.actions) for round_actions in continuation))
             )
-        )
+        for branch_action_sequence in branch_action_sequences:
+            candidates.append(
+                RefutationCandidate(
+                    battle_id=record.battle_id,
+                    source_record_index=source_record_index,
+                    seed=record.seed,
+                    format_id=record.format_id,
+                    champion_player_id=champion_player_id,
+                    loser_player_id=loser_player_id,
+                    decision_round_index=step.turn_index,
+                    step_index=step_index,
+                    recorded_action_index=step.action_index,
+                    deviation_action_index=deviation_action_index,
+                    branch_actions=branch_actions,
+                    branch_action_sequence=branch_action_sequence,
+                )
+            )
     return tuple(candidates)
 
 
@@ -809,5 +875,41 @@ def _candidate_has_replay_coordinates(candidate: Mapping[str, Any]) -> bool:
         "recorded_action_index",
         "deviation_action_index",
         "branch_actions",
+        "branch_action_sequence",
+        "line_depth",
     )
-    return all(key in candidate for key in required) and isinstance(candidate.get("branch_actions"), Mapping)
+    return (
+        all(key in candidate for key in required)
+        and isinstance(candidate.get("branch_actions"), Mapping)
+        and isinstance(candidate.get("branch_action_sequence"), list)
+        and _int_value(candidate.get("line_depth")) is not None
+    )
+
+
+def _normalize_action_map(actions: Mapping[str, int]) -> dict[str, int]:
+    if not actions:
+        raise ValueError("branch action rounds must be non-empty.")
+    normalized = {
+        str(player_id): int(action_index)
+        for player_id, action_index in sorted(actions.items(), key=lambda item: str(item[0]))
+    }
+    for action_index in normalized.values():
+        if action_index < 0 or action_index >= ACTION_COUNT:
+            raise ValueError(f"branch action indices must be between 0 and {ACTION_COUNT - 1}.")
+    return normalized
+
+
+def _require_branch_requested_players(
+    actions: Mapping[str, int],
+    *,
+    requested_players: tuple[str, ...],
+    turn_index: int,
+) -> None:
+    requested = set(requested_players)
+    supplied = set(actions)
+    if supplied == requested:
+        return
+    raise ValueError(
+        f"branch action sequence round {turn_index} does not match environment request: "
+        f"requested={sorted(requested)} supplied={sorted(supplied)}"
+    )
