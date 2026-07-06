@@ -13,7 +13,7 @@ longitudinal comparisons.
 
 Factors (v1):
   - switch_propensity  — mean P(switch) over states where a switch is legal, plus the rate the
-    switch is the argmax. A raw behavioral fingerprint (rose ~5x from 500k to 1M).
+    switch is the argmax. A raw behavioral fingerprint for current-family longitudinal reads.
   - toxic_switch       — counterfactual lift: engineer badly-poisoned toxic onto HEALTHY,
     poison-SUSCEPTIBLE active mons and measure how much P(switch) rises vs the untouched state.
     ~0 => the policy ignores toxic when deciding whether to bail. (Never applied to Poison/Steel

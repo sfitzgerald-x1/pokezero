@@ -3,8 +3,8 @@ responds to a single controlled feature, and track that response across checkpoi
 
 The idea: hold a real mid-game battle state fixed, vary ONE thing (here: the badly-poisoned
 "toxic" counter on our own active mon, swept from healthy -> deepening ramp), and read how
-the policy's probability of SWITCHING OUT moves. Run it on 500k vs 1M (and future
-checkpoints) to watch a tactic emerge: a model that has learned toxic management should
+the policy's probability of SWITCHING OUT moves. Run it on matched current-family v2+
+milestones to watch a tactic emerge: a model that has learned toxic management should
 shift probability toward switching as the ramp deepens; one that hasn't will be flat.
 
 This is a *behavioral* probe, not a win-rate eval. Absolute numbers matter less than
@@ -21,8 +21,8 @@ Caveats (documented so the numbers aren't over-read):
 
 Usage:
   python scripts/policy_probe.py \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
-      --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
+      --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
+      --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
       --showdown-root /Users/scott/workspace/pokerena/vendor/pokemon-showdown \
       [--capture-seed 7] [--out runs/probes/toxic-<date>.json]
 """

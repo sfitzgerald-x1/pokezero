@@ -146,7 +146,7 @@ class OpponentPoolTest(unittest.TestCase):
     def test_current_family_filter_rejects_v2_no_belief_path(self) -> None:
         with TemporaryDirectory() as temp_dir:
             checkpoint = _write_checkpoint_stub(
-                Path(temp_dir) / "pokezero-no-belief-gen3-2m.json",
+                Path(temp_dir) / "pokezero-no-belief-gen3-1m.json",
                 OBSERVATION_SCHEMA_VERSION_V2,
             )
             spec = f"linear:{checkpoint}"

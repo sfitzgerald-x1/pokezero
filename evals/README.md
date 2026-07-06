@@ -17,14 +17,18 @@ lands, append it and eyeball how the distributions moved. Regenerate with:
 
 ```sh
 python scripts/choice_sample.py \
-  --checkpoint checkpoints/pokezero-no-belief-gen3-500k.pt=500k \
-  --checkpoint checkpoints/pokezero-no-belief-gen3-1m.pt=1M \
+  --checkpoint checkpoints/curated/current-v2-500k.pt=v2-500k \
+  --checkpoint checkpoints/curated/current-v2-600k.pt=v2-600k \
   --showdown-root <path-to-pokemon-showdown> \
   --out evals/turn10_choice_sample.json
 ```
 
 The state set is deterministic in (seed_start, num_games, turn, driver ensemble), so re-running
 reproduces the same states and only the checkpoint list changes.
+
+Use current-family v2+ checkpoints for new longitudinal evals. The
+`pokezero-no-belief-*` milestones remain historical baselines, but no-belief
+continuations past 500k should not be added as new comparison targets.
 
 Render it as a grouped bar chart (one panel per state, one bar per checkpoint per choice):
 
