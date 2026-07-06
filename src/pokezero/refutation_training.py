@@ -7,11 +7,14 @@ materializes corrected examples for certified loser-seat deviations.
 
 from __future__ import annotations
 
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, replace
 import json
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .actions import ACTION_COUNT
 from .collection import RolloutRecord
 from .dataset import (
     TrajectoryDatasetConfig,
@@ -23,11 +26,13 @@ from .dataset import (
 from .refutation_mining import FRAGILE_STATE_SCHEMA_VERSION
 
 
-REFUTATION_TRAINING_TARGET_MODES = frozenset(("value", "policy-value"))
+POLICY_DISTRIBUTION_TARGET_MODE = "policy-distribution-value"
+REFUTATION_TRAINING_TARGET_MODES = frozenset(("value", "policy-value", POLICY_DISTRIBUTION_TARGET_MODE))
 
 REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES = {
     "value": ("ppo", "value-only"),
     "policy-value": ("behavior-cloning", "ppo", "reward-weighted"),
+    POLICY_DISTRIBUTION_TARGET_MODE: ("behavior-cloning", "ppo", "reward-weighted"),
 }
 REFUTATION_TRAINING_CACHE_SCHEMA_VERSION = "pokezero.refutation_training_cache.v1"
 
@@ -97,26 +102,20 @@ def refutation_training_examples(
     The emitted examples are from the loser perspective at the recorded decision
     point.  Their value target is the terminal-rollout expected value of the
     certified deviation, with ties/caps contributing 0. In ``policy-value`` mode
-    the action target is also replaced with the certified deviation.
+    the action target is also replaced with the certified deviation. In
+    ``policy-distribution-value`` mode, the row must carry
+    ``search_policy_distribution`` and one weighted example is emitted per
+    non-zero action probability. When ``max_examples`` is set, rows are kept or
+    dropped as a unit so distribution rows are never partially truncated.
     """
 
-    resolved_dataset_config = dataset_config or TrajectoryDatasetConfig()
-    resolved_config = config or RefutationTrainingConfig()
-    source_records = tuple(records)
-    examples: list[TrajectoryExample] = []
-    for row in fragile_states:
-        maybe = _example_from_fragile_state(
-            records=source_records,
-            row=row,
-            dataset_config=resolved_dataset_config,
-            config=resolved_config,
-        )
-        if maybe is not None:
-            examples.append(maybe)
-    examples.sort(key=lambda example: float(example.training_weight), reverse=True)
-    if resolved_config.max_examples is not None:
-        examples = examples[: resolved_config.max_examples]
-    return tuple(examples)
+    examples, _ = _refutation_training_examples_and_skipped(
+        records=records,
+        fragile_states=fragile_states,
+        dataset_config=dataset_config,
+        config=config,
+    )
+    return examples
 
 
 def write_refutation_training_cache(
@@ -130,7 +129,7 @@ def write_refutation_training_cache(
 ) -> RefutationTrainingSummary:
     fragile_rows = tuple(fragile_states)
     resolved_config = config or RefutationTrainingConfig()
-    examples = refutation_training_examples(
+    examples, skipped_count = _refutation_training_examples_and_skipped(
         records=records,
         fragile_states=fragile_rows,
         dataset_config=dataset_config,
@@ -154,7 +153,7 @@ def write_refutation_training_cache(
         source_record_count=len(records),
         fragile_state_count=len(fragile_rows),
         example_count=len(examples),
-        skipped_count=len(fragile_rows) - len(examples),
+        skipped_count=skipped_count,
         target_mode=resolved_config.target_mode,
         compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
         surprise_weighting=_surprise_weighting_payload(resolved_config),
@@ -163,6 +162,42 @@ def write_refutation_training_cache(
         training_weight_mean=weight_stats["mean"],
         cache=cache,
     )
+
+
+def _refutation_training_examples_and_skipped(
+    *,
+    records: Sequence[RolloutRecord],
+    fragile_states: Iterable[Mapping[str, Any]],
+    dataset_config: TrajectoryDatasetConfig | None = None,
+    config: RefutationTrainingConfig | None = None,
+) -> tuple[tuple[TrajectoryExample, ...], int]:
+    resolved_dataset_config = dataset_config or TrajectoryDatasetConfig()
+    resolved_config = config or RefutationTrainingConfig()
+    source_records = tuple(records)
+    row_groups: list[tuple[float, int, tuple[TrajectoryExample, ...]]] = []
+    skipped_count = 0
+    for row_index, row in enumerate(fragile_states):
+        maybe = _examples_from_fragile_state(
+            records=source_records,
+            row=row,
+            dataset_config=resolved_dataset_config,
+            config=resolved_config,
+        )
+        if not maybe:
+            skipped_count += 1
+            continue
+        row_groups.append((sum(float(example.training_weight) for example in maybe), row_index, maybe))
+    examples: list[TrajectoryExample] = []
+    row_groups.sort(key=lambda item: (-item[0], item[1]))
+    for _, _, group in row_groups:
+        if (
+            resolved_config.max_examples is not None
+            and len(examples) + len(group) > resolved_config.max_examples
+        ):
+            skipped_count += 1
+            continue
+        examples.extend(group)
+    return tuple(examples), skipped_count
 
 
 def _stamp_refutation_cache_metadata(
@@ -188,19 +223,19 @@ def _stamp_refutation_cache_metadata(
     )
 
 
-def _example_from_fragile_state(
+def _examples_from_fragile_state(
     *,
     records: Sequence[RolloutRecord],
     row: Mapping[str, Any],
     dataset_config: TrajectoryDatasetConfig,
     config: RefutationTrainingConfig,
-) -> TrajectoryExample | None:
+) -> tuple[TrajectoryExample, ...]:
     if row.get("schema_version") != FRAGILE_STATE_SCHEMA_VERSION:
         raise ValueError(f"unsupported fragile-state schema: {row.get('schema_version')!r}")
     candidate = _mapping(row.get("candidate"), label="candidate")
     certification = _mapping(row.get("certification"), label="certification")
     if certification.get("passed") is not True:
-        return None
+        return ()
     source_record_index = _int(candidate.get("source_record_index"), label="candidate.source_record_index")
     if source_record_index < 0 or source_record_index >= len(records):
         raise ValueError("candidate.source_record_index is outside the supplied records")
@@ -217,44 +252,126 @@ def _example_from_fragile_state(
     base_examples = tuple(examples_from_record(record, config=dataset_config))
     base = base_examples[step_index]
     certified_value = _certified_loser_value(row, candidate=candidate, certification=certification)
-    action_index = (
-        _int(candidate.get("deviation_action_index"), label="candidate.deviation_action_index")
-        if config.target_mode == "policy-value"
-        else base.action_index
+    base_weight = _surprise_training_weight(certification, config=config)
+    action_targets = _action_targets_for_mode(
+        row=row,
+        base=base,
+        candidate=candidate,
+        config=config,
     )
-    metadata = dict(base.step_metadata or {})
-    # Training caches do not currently persist step_metadata; this provenance is
-    # available to direct callers and mirrors the source fragile-state archive.
-    metadata["refutation_training"] = {
-        "source_record_index": source_record_index,
-        "step_index": step_index,
-        "decision_round_index": candidate.get("decision_round_index"),
-        "recorded_action_index": candidate.get("recorded_action_index"),
-        "deviation_action_index": candidate.get("deviation_action_index"),
-        "certified_value": certified_value,
-        "flip_rate": certification.get("flip_rate"),
-        "training_weight": _surprise_training_weight(certification, config=config),
-        "target_mode": config.target_mode,
-        "mode": row.get("mode"),
-    }
-    return replace(
-        base,
-        action_index=action_index,
-        return_value=certified_value,
-        ppo_value_target=certified_value,
-        ppo_advantage=(
-            certified_value - float(base.value_estimate)
-            if base.value_estimate is not None
-            else None
-        ),
-        # The deviation was produced by search, not the rollout behavior policy.
-        # Leaving this missing prevents PPO from treating the branch action as an
-        # importance-sampled on-policy action unless a later R1 variant defines
-        # a proper behavior probability.
-        action_probability=None,
-        step_metadata=metadata,
-        training_weight=_surprise_training_weight(certification, config=config),
+    examples: list[TrajectoryExample] = []
+    for action_index, policy_target_probability in action_targets:
+        metadata = dict(base.step_metadata or {})
+        # Training caches do not currently persist step_metadata; this provenance is
+        # available to direct callers and mirrors the source fragile-state archive.
+        metadata["refutation_training"] = {
+            "source_record_index": source_record_index,
+            "step_index": step_index,
+            "decision_round_index": candidate.get("decision_round_index"),
+            "recorded_action_index": candidate.get("recorded_action_index"),
+            "deviation_action_index": candidate.get("deviation_action_index"),
+            "certified_value": certified_value,
+            "flip_rate": certification.get("flip_rate"),
+            "training_weight": base_weight * policy_target_probability,
+            "target_mode": config.target_mode,
+            "mode": row.get("mode"),
+            "policy_target_probability": policy_target_probability,
+        }
+        examples.append(
+            replace(
+                base,
+                action_index=action_index,
+                return_value=certified_value,
+                ppo_value_target=certified_value,
+                ppo_advantage=(
+                    certified_value - float(base.value_estimate)
+                    if base.value_estimate is not None
+                    else None
+                ),
+                # The deviation/search target was not produced by the rollout behavior policy.
+                # Leaving this missing prevents PPO from treating the target action as an
+                # importance-sampled on-policy action unless a later R1 variant defines
+                # a proper behavior probability.
+                action_probability=None,
+                step_metadata=metadata,
+                training_weight=base_weight * policy_target_probability,
+            )
+        )
+    return tuple(examples)
+
+
+def _action_targets_for_mode(
+    *,
+    row: Mapping[str, Any],
+    base: TrajectoryExample,
+    candidate: Mapping[str, Any],
+    config: RefutationTrainingConfig,
+) -> tuple[tuple[int, float], ...]:
+    if config.target_mode == "value":
+        return ((base.action_index, 1.0),)
+    if config.target_mode == "policy-value":
+        return ((_int(candidate.get("deviation_action_index"), label="candidate.deviation_action_index"), 1.0),)
+    if config.target_mode == POLICY_DISTRIBUTION_TARGET_MODE:
+        return _search_policy_distribution_targets(row, base=base)
+    raise ValueError(f"unsupported target mode: {config.target_mode!r}")
+
+
+def _search_policy_distribution_targets(
+    row: Mapping[str, Any],
+    *,
+    base: TrajectoryExample,
+) -> tuple[tuple[int, float], ...]:
+    raw_distribution = row.get("search_policy_distribution")
+    if raw_distribution is None:
+        raise ValueError("policy-distribution-value mode requires search_policy_distribution on each fragile row")
+    weights_by_action = [0.0] * ACTION_COUNT
+    if isinstance(raw_distribution, Mapping):
+        for raw_action, raw_weight in raw_distribution.items():
+            action_index = _int(raw_action, label="search_policy_distribution action")
+            if action_index < 0 or action_index >= ACTION_COUNT:
+                raise ValueError("search_policy_distribution action is outside the action space")
+            weights_by_action[action_index] += _nonnegative_finite_float(
+                raw_weight,
+                label=f"search_policy_distribution[{action_index}]",
+            )
+    else:
+        values = _sequence(raw_distribution, label="search_policy_distribution")
+        if len(values) != ACTION_COUNT:
+            raise ValueError(f"search_policy_distribution must contain {ACTION_COUNT} entries")
+        weights_by_action = [
+            _nonnegative_finite_float(value, label=f"search_policy_distribution[{index}]")
+            for index, value in enumerate(values)
+        ]
+    targets = []
+    for action_index, weight in enumerate(weights_by_action):
+        if weight <= 0.0:
+            continue
+        if not base.legal_action_mask[action_index]:
+            raise ValueError(f"search_policy_distribution assigns weight to illegal action {action_index}")
+        targets.append((action_index, weight))
+    total = sum(weight for _, weight in targets)
+    if total <= 0.0:
+        raise ValueError("search_policy_distribution must assign positive mass to at least one legal action")
+    return tuple(
+        (action_index, weight / total)
+        for action_index, weight in sorted(targets, key=lambda item: (-item[1], item[0]))
     )
+
+
+def _nonnegative_finite_float(value: Any, *, label: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite non-negative number") from exc
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError(f"{label} must be a finite non-negative number")
+    return result
+
+
+def _sequence(value: Any, *, label: str) -> Sequence[Any]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, SequenceABC):
+        raise ValueError(f"{label} must be a sequence")
+    return value
 
 
 def _surprise_training_weight(

@@ -1756,6 +1756,25 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
 
         self.assertEqual(paths, (Path("refutation-cache"),))
 
+    def test_neural_cli_refutation_cache_validation_accepts_policy_distribution_cache(self) -> None:
+        args = SimpleNamespace(
+            data=[Path("primary-cache")],
+            refutation_cache=[Path("refutation-cache")],
+            refutation_max_fraction=0.1,
+            refutation_target_mode="policy-distribution-value",
+            objective="behavior-cloning",
+        )
+        with (
+            patch("pokezero.neural_cli.is_training_cache_path", return_value=True),
+            patch(
+                "pokezero.neural_cli._refutation_cache_training_contract",
+                return_value=("policy-distribution-value", ("behavior-cloning", "ppo", "reward-weighted")),
+            ),
+        ):
+            paths = _validate_refutation_cache_args(args)
+
+        self.assertEqual(paths, (Path("refutation-cache"),))
+
     def test_neural_cli_refutation_cache_validation_rejects_fraction_above_cap(self) -> None:
         args = SimpleNamespace(
             data=[Path("primary-cache")],
