@@ -171,6 +171,13 @@ from .refutation_curriculum import (
     refutation_curriculum_start_count,
     write_refutation_curriculum_summary,
 )
+from .refutation_population import (
+    REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION,
+    RefutationBehaviorSeedConfig,
+    RefutationBehaviorSeedManifest,
+    build_refutation_behavior_seed_manifest,
+    write_refutation_behavior_seed_manifest,
+)
 from .refutation_training import (
     RefutationTrainingConfig,
     RefutationTrainingSummary,
@@ -548,11 +555,15 @@ __all__ = [
     "training_cache_root_byte_size",
     "read_rollout_records",
     "collect_refutation_curriculum_rollouts",
+    "build_refutation_behavior_seed_manifest",
     "refutation_curriculum_start_count",
     "refutation_training_examples",
     "record_promotion",
     "RefutationCurriculumConfig",
     "RefutationCurriculumSummary",
+    "REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION",
+    "RefutationBehaviorSeedConfig",
+    "RefutationBehaviorSeedManifest",
     "RefutationTrainingConfig",
     "RefutationTrainingSummary",
     "action_rounds_from_trajectory",
@@ -563,6 +574,7 @@ __all__ = [
     "write_training_cache_from_rollouts",
     "write_training_cache_from_examples",
     "write_refutation_curriculum_summary",
+    "write_refutation_behavior_seed_manifest",
     "write_refutation_training_cache",
     "replay_action_rounds",
     "replay_trajectory_branch",

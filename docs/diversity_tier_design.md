@@ -202,6 +202,20 @@ slice with normal collection records while keeping the default collection path
 unchanged. These records are stamped with `trajectory.metadata.refutation_curriculum`
 so later reports can separate curriculum-started games from ordinary self-play.
 
+`pokezero-refutation behavior-seeds` is the R2 bridge into population work. It
+turns certified fragile-state rows into a small manifest of replay coordinates,
+deviation actions, flip rates, and intended population uses such as candidate
+distillation, admission-gauntlet seeding, and held-out exploiter seeding. This
+artifact is metadata only: it does not run admission, does not shape rewards, and
+does not authorize legacy checkpoint strength evals. The manifest includes a
+source fragile-archive digest and only admits terminal-rollout, no-value-head
+rows whose certification counts match their terminal results. By default it can
+include both oracle and fair rows while stamping each seed's mode; consumers that
+need information-fair-only behavior should pass `--mode fair`. Population/eval
+consumers still use the active gauntlet policy: max-damage, foul-play rungs, and
+frozen current-family v2+ checkpoint pools rather than random/simple or legacy
+families.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection

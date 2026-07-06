@@ -30,6 +30,11 @@ from .refutation_mining import (
     validate_refutation_report_payload,
     write_refutation_report,
 )
+from .refutation_population import (
+    RefutationBehaviorSeedConfig,
+    build_refutation_behavior_seed_manifest,
+    write_refutation_behavior_seed_manifest,
+)
 from .refutation_training import RefutationTrainingConfig, write_refutation_training_cache
 from .rollout import RolloutConfig
 
@@ -207,6 +212,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     curriculum.add_argument("--seed-start", type=int, default=1, help="First continuation-policy RNG seed.")
     curriculum.add_argument("--max-starts", type=int, default=None, help="Optional hard cap on curriculum starts.")
     curriculum.set_defaults(func=_curriculum)
+
+    behavior_seeds = subparsers.add_parser(
+        "behavior-seeds",
+        help="Build an R2 behavior-seed manifest from certified fragile-state refutations.",
+    )
+    behavior_seeds.add_argument("--archive", type=Path, required=True, help="Certified fragile-state JSONL archive.")
+    behavior_seeds.add_argument("--out", type=Path, required=True, help="Output behavior-seed manifest JSON.")
+    behavior_seeds.add_argument("--max-seeds", type=int, default=None, help="Optional cap on emitted behavior seeds.")
+    behavior_seeds.add_argument(
+        "--min-flip-rate",
+        type=float,
+        default=0.0,
+        help="Minimum certified flip rate required for a row to become a behavior seed.",
+    )
+    behavior_seeds.add_argument(
+        "--mode",
+        choices=("oracle", "fair"),
+        default=None,
+        help="Optional refutation mode filter. Defaults to including both oracle and fair rows.",
+    )
+    behavior_seeds.set_defaults(func=_behavior_seeds)
     return parser
 
 
@@ -394,6 +420,20 @@ def _curriculum(args: argparse.Namespace) -> int:
     summary_path = args.summary or args.out.with_suffix(args.out.suffix + ".summary.json")
     write_refutation_curriculum_summary(summary_path, summary)
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _behavior_seeds(args: argparse.Namespace) -> int:
+    manifest = build_refutation_behavior_seed_manifest(
+        tuple(iter_fragile_states(args.archive)),
+        config=RefutationBehaviorSeedConfig(
+            max_seeds=args.max_seeds,
+            min_flip_rate=args.min_flip_rate,
+            mode=args.mode,
+        ),
+    )
+    write_refutation_behavior_seed_manifest(args.out, manifest)
+    print(json.dumps(manifest.to_dict(), indent=2, sort_keys=True))
     return 0
 
 
