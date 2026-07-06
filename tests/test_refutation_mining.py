@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,8 @@ from pokezero.refutation_mining import (
     candidate_count_for_records,
     iter_fragile_states,
     mine_refutations,
+    validate_refutation_report_payload,
+    write_refutation_report,
 )
 from pokezero.rollout import RolloutConfig
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -321,6 +324,198 @@ class RefutationMiningTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn('"candidate_deviation_count": 3', stdout.getvalue())
+
+    def test_validate_refutation_report_payload_accepts_complete_terminal_archive(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=tuple(iter_fragile_states(archive_path)),
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertTrue(payload["passed"])
+        self.assertTrue(all(check["passed"] for check in payload["checks"]))
+
+    def test_validate_refutation_report_payload_recomputes_certification_from_terminal_results(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            for result in rows[0]["terminal_results"]:
+                result["winner"] = rows[0]["candidate"]["champion_player_id"]
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("certification_consistency_rows", failed)
+        self.assertIn("flip_rate_rows", failed)
+
+    def test_validate_refutation_report_payload_requires_distinct_certification_seeds(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            for result in rows[0]["terminal_results"]:
+                result["certification_seed"] = 101
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("distinct_certification_seed_rows", failed)
+
+    def test_validate_refutation_report_payload_warns_on_continuation_only_reseeding(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["certification"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["certification"]["simulator_rng_reseeded"] = False
+            rows[0]["search_stats"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["search_stats"]["simulator_rng_reseeded"] = False
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["summary"]["simulator_rng_reseeded_count"], 0)
+        self.assertEqual(payload["summary"]["reseed_scope_counts"], {"continuation_policy_rng": 1})
+        self.assertEqual(payload["warnings"][0]["name"], "simulator_rng_not_fully_reseeded")
+
+    def test_cli_validate_enforces_default_r0_gate(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            archive_path = temp_path / "fragile.jsonl"
+            report_path = temp_path / "report.json"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            write_refutation_report(report_path, report)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "validate",
+                        "--report",
+                        str(report_path),
+                        "--archive",
+                        str(archive_path),
+                    ]
+                )
+
+        self.assertEqual(exit_code, 2)
+        payload = json.loads(stdout.getvalue())
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("sampled_win_count", failed)
+        self.assertIn("certified_refutation_count", failed)
+
+    def test_cli_validate_passes_with_explicit_smoke_thresholds(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            archive_path = temp_path / "fragile.jsonl"
+            report_path = temp_path / "report.json"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            write_refutation_report(report_path, report)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "validate",
+                        "--report",
+                        str(report_path),
+                        "--archive",
+                        str(archive_path),
+                        "--min-sampled-wins",
+                        "1",
+                        "--min-certified-refutations",
+                        "1",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(json.loads(stdout.getvalue())["passed"])
 
 
 if __name__ == "__main__":
