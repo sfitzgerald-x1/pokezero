@@ -220,6 +220,15 @@ class MetadataPolicy:
         )
 
 
+class AliasPolicy:
+    def __init__(self, policy, *, policy_id: str) -> None:
+        self.policy = policy
+        self.policy_id = policy_id
+
+    def select_action(self, observation: PokeZeroObservationV0, *, rng) -> PolicyDecision:
+        return PolicyDecision(action_index=0, policy_id=self.policy_id)
+
+
 def integration_config() -> LocalShowdownConfig | None:
     root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
     if not (root / "dist" / "sim" / "index.js").exists():
@@ -518,6 +527,41 @@ class CollectionTest(unittest.TestCase):
         )
         self.assertEqual(summary["random-legal"]["decisions"], 2)
         self.assertNotIn("root_puct_searches", summary["random-legal"])
+
+    def test_benchmark_rollouts_records_policy_checkpoint_provenance_per_seat(self) -> None:
+        checkpoint_policy = MetadataPolicy(policy_id="candidate-policy")
+        checkpoint_policy.checkpoint_path = "/tmp/candidate.pt"
+        checkpoint_policy.weights_sha256 = "abc123"
+        alias_policy = AliasPolicy(checkpoint_policy, policy_id="candidate-alias")
+
+        report = benchmark_rollouts(
+            games=1,
+            env_factory=OneTurnEnv,
+            rollout_config=RolloutConfig(max_decision_rounds=5),
+            matchups=(
+                BenchmarkMatchup(
+                    "candidate vs random",
+                    alias_policy,
+                    RandomLegalPolicy(),
+                ),
+            ),
+        )
+
+        payload = report.to_dict()
+        matchup = payload["matchups"][0]
+        self.assertEqual(matchup["p1_policy_id"], "candidate-alias")
+        self.assertEqual(matchup["p1_policy_provenance"]["policy_id"], "candidate-alias")
+        self.assertEqual(matchup["p1_policy_provenance"]["base_policy_id"], "candidate-policy")
+        self.assertEqual(matchup["p1_policy_provenance"]["checkpoint_path"], "/tmp/candidate.pt")
+        self.assertEqual(matchup["p1_policy_provenance"]["weights_sha256"], "abc123")
+        self.assertTrue(matchup["p1_policy_provenance"]["aliased"])
+        self.assertEqual(matchup["p2_policy_provenance"]["policy_id"], "random-legal")
+        self.assertIsNone(matchup["p2_policy_provenance"]["checkpoint_path"])
+        self.assertIsNone(matchup["p2_policy_provenance"]["weights_sha256"])
+        self.assertEqual(
+            payload["policy_provenance"]["candidate-alias"]["weights_sha256"],
+            "abc123",
+        )
 
     def test_benchmark_rollouts_summarizes_root_puct_fallback_metadata(self) -> None:
         report = benchmark_rollouts(
@@ -946,7 +990,10 @@ class CollectionTest(unittest.TestCase):
             window_size=1,
             policy_id="linear-test",
         )
-        with patch("pokezero.linear_policy.load_linear_model", return_value=model) as load:
+        with (
+            patch("pokezero.linear_policy.load_linear_model", return_value=model) as load,
+            patch("pokezero.collection._file_sha256", return_value="linear-sha256"),
+        ):
             factory = policy_factory_from_spec("linear:/tmp/linear.json?deterministic=true")
             first = factory()
             second = factory()
@@ -958,6 +1005,8 @@ class CollectionTest(unittest.TestCase):
         self.assertIs(second.model, model)
         self.assertIsNot(first, second)
         self.assertTrue(first.deterministic)
+        self.assertEqual(first.checkpoint_path, str(Path("/tmp/linear.json").resolve(strict=False)))
+        self.assertEqual(first.weights_sha256, "linear-sha256")
 
     def test_linear_policy_factory_from_model_spec_preserves_options_without_loading(self) -> None:
         model = LinearPolicyModel.initialized(

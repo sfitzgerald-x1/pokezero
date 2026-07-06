@@ -9,6 +9,7 @@ is available.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+import hashlib
 import json
 import math
 import os
@@ -1101,6 +1102,8 @@ class TransformerSoftmaxPolicy:
     family_gated_selection: bool = False
     device: str | Any | None = None
     policy_id: str | None = None
+    checkpoint_path: str | None = None
+    weights_sha256: str | None = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
 
     def __post_init__(self) -> None:
@@ -1205,7 +1208,8 @@ def load_transformer_policy(
     device: str | Any | None = None,
 ) -> TransformerSoftmaxPolicy:
     resolved_device = resolve_torch_device(device)
-    model, result = load_transformer_checkpoint(path, map_location=resolved_device)
+    checkpoint_path = Path(path)
+    model, result = load_transformer_checkpoint(checkpoint_path, map_location=resolved_device)
     return TransformerSoftmaxPolicy(
         model=model,
         result=result,
@@ -1214,7 +1218,19 @@ def load_transformer_policy(
         sampling_temperature=sampling_temperature,
         family_gated_selection=family_gated_selection,
         device=resolved_device,
+        checkpoint_path=str(checkpoint_path.resolve(strict=False)),
+        weights_sha256=_file_sha256(checkpoint_path),
     )
+
+
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def train_transformer_policy(
