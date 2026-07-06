@@ -106,6 +106,13 @@ completed width-wave curves at matched milestones (no GPU spent
 re-running A/A8; the spec's masked-config keeps within-wave ablation
 cheap). Candidate slots for ~4 concurrent arms:
 
+Eval-target constraint: new strength reads use current-family v2+ checkpoints
+and matched milestones only, where v2+ means observation-schema v2 or newer
+rather than older no-belief/pre-v2 families. Random/simple remain plumbing
+checks, not strength gradients. Legacy-family checkpoints at any milestone are
+historical context rather than opponents to evaluate against; calibration pools
+can still be used for value/diagnostic reads when labeled as such.
+
 | slot | arm | tests |
 |---|---|---|
 | 1 | **E-512d vanilla** (K=64, transition tokens + stats + exact-state) | compression at width vs historical 512d curve |
