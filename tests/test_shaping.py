@@ -104,6 +104,14 @@ class ShapingConfigTest(unittest.TestCase):
         self.assertTrue(all(weight == 0.25 for _, weight in WSE.status_weights))
         self.assertEqual(WSE.terminal_mode, "zero")
 
+    def test_action_class_basis_rewards_behaviors_not_tools(self) -> None:
+        self.assertEqual(
+            action_class_names(),
+            ("damage_dealt", "damage_taken", "switch_made", "boost_used", "heal_used", "ko"),
+        )
+        forbidden_tools = {"hazard", "status", "lay_hazard", "use_status", *component_names()}
+        self.assertTrue(forbidden_tools.isdisjoint(action_class_names()))
+
     def test_parse_spec_supports_preset_json_file_and_off(self) -> None:
         self.assertEqual(parse_shaping_spec("wse-arm1"), WSE)
         inline = parse_shaping_spec('{"hp_weight": 1.0, "status_weight": 0.5}')

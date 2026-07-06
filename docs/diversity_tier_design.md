@@ -91,13 +91,15 @@ reward-randomization line (RPG — Tang et al., arXiv:2103.04564: random search 
 reward space discovers strategic equilibria that plain self-play never visits,
 with no strategy-specific priors).
 
-- Sample `w ~ random` over a **spanning basis** of game-state deltas — the full
-  potential-component basis already in `shaping.py` (per-side hp, faints, every
-  status, hazard layers) *plus* generic action-class terms (damage dealt/taken,
-  switch made, boost used, heal used, KO). The basis must stay **spanning, not
-  curated**: hazards appear because *every* state channel appears; no channel is
-  privileged or omitted. Signs and magnitudes are random (bounded so |shaping| per
-  game stays below terminal scale — the rescore tool already measures this).
+- Sample `w ~ random` over a **generic behavior-class basis**: damage
+  dealt/taken, switch made, boost used, heal used, and KO. The basis must stay
+  **behavioral, not tool-specific**: no hazard-laying, status-clicking, or
+  strategy-label component is ever rewarded directly. Hazards/status remain
+  observable measurement axes and may exist as PBRS potential components in
+  `ShapingConfig`, but the G2 planner keeps `terminal_mode="zero"` and does not
+  use those potential terms as behavior-changing rewards. If hazard play emerges,
+  it must emerge instrumentally because it helps win the game by punishing
+  switching/healing, not because the reward asked for hazards.
 - Train a micro-arm per sample: 128d, ~13k games — the mc22 recipe, measured at
   ~40 min sequential, ~25 min pipelined. Most arms will be garbage or degenerate
   (a `w` that rewards taking damage produces a masochist). That is fine and
@@ -254,9 +256,10 @@ cap binds on aggregate compute, not calendar time.
    milestone-probe suite.
 3. **G2 arm automation**: the mc22 launch pattern already does 90% (random `w`
    generation + `--shaping-weights @file` passthrough exist). Public
-   `ShapingConfig` now accepts both potential components and the generic
-   action-class terms; the deploy planner is responsible for sampling the full
-   basis and writing per-arm configs.
+   `ShapingConfig` accepts both PBRS potential components and generic
+   action-class terms, but the G2 deploy planner samples only the action-class
+   behavior basis and leaves tool-specific potential terms inactive under
+   `terminal_mode="zero"`.
 4. **Dashboard population view** + per-agent behavior axes on the probe cron.
 5. Rides the pipelined controller (deploy PR #41) once merged.
 
