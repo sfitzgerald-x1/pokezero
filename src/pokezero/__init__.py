@@ -75,6 +75,7 @@ from .dataset import (
     training_cache_paths_byte_size,
     training_cache_root_byte_size,
     training_batch_from_examples,
+    write_training_cache_from_examples,
     write_training_cache_from_rollouts,
 )
 from .env import (
@@ -161,6 +162,12 @@ from .neural_selfplay import (
     NeuralSelfPlayRunResult,
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
+)
+from .refutation_training import (
+    RefutationTrainingConfig,
+    RefutationTrainingSummary,
+    refutation_training_examples,
+    write_refutation_training_cache,
 )
 from .observation import (
     OBSERVATION_SCHEMA_VERSION,
@@ -523,13 +530,18 @@ __all__ = [
     "iter_training_cache_batches",
     "training_cache_root_byte_size",
     "read_rollout_records",
+    "refutation_training_examples",
     "record_promotion",
+    "RefutationTrainingConfig",
+    "RefutationTrainingSummary",
     "action_rounds_from_trajectory",
     "benchmark_root_puct_counterfactual_rollouts",
     "benchmark_replay_prefixes",
     "benchmark_root_puct_search",
     "require_torch",
     "write_training_cache_from_rollouts",
+    "write_training_cache_from_examples",
+    "write_refutation_training_cache",
     "replay_action_rounds",
     "replay_trajectory_branch",
     "replay_trajectory_branch_rollout",

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.collection import RolloutRecord, write_rollout_record
+from pokezero.dataset import iter_training_cache_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
@@ -22,6 +23,7 @@ from pokezero.refutation_mining import (
     validate_refutation_report_payload,
     write_refutation_report,
 )
+from pokezero.refutation_training import RefutationTrainingConfig, refutation_training_examples
 from pokezero.rollout import RolloutConfig
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
@@ -29,10 +31,10 @@ from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 def _observation(legal_actions: tuple[int, ...]) -> PokeZeroObservationV0:
     legal_action_mask = tuple(index in legal_actions for index in range(ACTION_COUNT))
     return PokeZeroObservationV0(
-        categorical_ids=(),
-        numeric_features=(),
-        token_type_ids=(),
-        attention_mask=(),
+        categorical_ids=((0,),),
+        numeric_features=((0.0,),),
+        token_type_ids=(0,),
+        attention_mask=(True,),
         legal_action_mask=legal_action_mask,
     )
 
@@ -516,6 +518,141 @@ class RefutationMiningTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(json.loads(stdout.getvalue())["passed"])
+
+    def test_refutation_training_examples_retarget_loser_value_and_action(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(row,),
+            config=RefutationTrainingConfig(target_mode="policy-value"),
+        )
+
+        self.assertEqual(len(examples), 1)
+        example = examples[0]
+        self.assertEqual(example.player_id, "p2")
+        self.assertEqual(example.action_index, 2)
+        self.assertAlmostEqual(example.return_value, 0.3)
+        self.assertAlmostEqual(example.ppo_value_target, 0.3)
+        self.assertIsNone(example.action_probability)
+        self.assertEqual(example.step_metadata["refutation_training"]["deviation_action_index"], 2)
+
+    def test_refutation_training_value_mode_keeps_recorded_action(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(row,),
+            config=RefutationTrainingConfig(target_mode="value"),
+        )
+
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(examples[0].action_index, 1)
+        self.assertAlmostEqual(examples[0].return_value, 0.3)
+        self.assertAlmostEqual(examples[0].ppo_value_target, 0.3)
+        self.assertIsNone(examples[0].action_probability)
+
+    def test_refutation_training_skips_non_certified_rows(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+        row = report.certified_refutations[0].to_dict()
+        row["certification"]["passed"] = False
+
+        examples = refutation_training_examples(
+            records=(_record(),),
+            fragile_states=(row,),
+            config=RefutationTrainingConfig(target_mode="policy-value"),
+        )
+
+        self.assertEqual(examples, ())
+
+    def test_refutation_training_cache_cli_writes_corrected_cache(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            records_path = root / "records.jsonl"
+            archive_path = root / "fragile.jsonl"
+            cache_path = root / "refutation-cache"
+            with records_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record())
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "training-cache",
+                        "--records",
+                        str(records_path),
+                        "--archive",
+                        str(archive_path),
+                        "--out",
+                        str(cache_path),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+            (batch,) = tuple(iter_training_cache_batches(cache_path, batch_size=10))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["example_count"], 1)
+        self.assertEqual(payload["compatible_objectives"], ["behavior-cloning", "ppo", "reward-weighted"])
+        self.assertEqual(metadata["example_count"], 1)
+        self.assertEqual(batch.action_indices, (2,))
+        self.assertAlmostEqual(batch.returns[0], 0.3, places=6)
+        self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
+        self.assertEqual(batch.ppo_value_target_mask, (True,))
+        self.assertEqual(batch.action_probability_mask, (False,))
 
 
 if __name__ == "__main__":

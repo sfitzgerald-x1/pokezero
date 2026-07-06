@@ -12,6 +12,7 @@ from .collection import (
     policy_from_spec,
     policy_spec_with_showdown_root,
 )
+from .dataset import TrajectoryDatasetConfig
 from .local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from .refutation_mining import (
     DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
@@ -24,6 +25,7 @@ from .refutation_mining import (
     validate_refutation_report_payload,
     write_refutation_report,
 )
+from .refutation_training import RefutationTrainingConfig, write_refutation_training_cache
 from .rollout import RolloutConfig
 
 
@@ -102,6 +104,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Minimum terminal-rollout reseeds per certified example (default 20).",
     )
     validate.set_defaults(func=_validate)
+
+    training_cache = subparsers.add_parser(
+        "training-cache",
+        help="Build a separate training cache from certified fragile-state refutations.",
+    )
+    training_cache.add_argument(
+        "--records",
+        action="append",
+        required=True,
+        type=Path,
+        help="Source rollout-record JSONL from the mining run, in the same order used by the archive. May repeat.",
+    )
+    training_cache.add_argument("--archive", type=Path, required=True, help="Certified fragile-state JSONL archive.")
+    training_cache.add_argument("--out", type=Path, required=True, help="Output training-cache directory.")
+    training_cache.add_argument(
+        "--target-mode",
+        choices=("value", "policy-value"),
+        default="policy-value",
+        help=(
+            "value: retarget value only and keep the recorded loser action; "
+            "use only with PPO/value-only consumers, not BC/RWR. "
+            "policy-value: also replace the action target with the certified deviation."
+        ),
+    )
+    training_cache.add_argument("--max-examples", type=int, default=None, help="Optional cap on fragile examples emitted.")
+    training_cache.add_argument("--window-size", type=int, default=1, help="Training observation window size.")
+    training_cache.add_argument("--discount", type=float, default=1.0, help="Dataset discount used while materializing source windows before refutation targets are applied.")
+    training_cache.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="Dataset target mode used while materializing source windows before refutation targets are applied.",
+    )
+    training_cache.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda for source materialization when --ppo-target-mode=gae.")
+    training_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
+    training_cache.set_defaults(func=_training_cache)
     return parser
 
 
@@ -225,6 +263,28 @@ def _validate(args: argparse.Namespace) -> int:
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if payload["passed"] else 2
+
+
+def _training_cache(args: argparse.Namespace) -> int:
+    records = _load_records(args.records)
+    summary = write_refutation_training_cache(
+        records=records,
+        fragile_states=tuple(iter_fragile_states(args.archive)),
+        output_path=args.out,
+        dataset_config=TrajectoryDatasetConfig(
+            window_size=args.window_size,
+            discount=args.discount,
+            ppo_target_mode=args.ppo_target_mode,
+            gae_lambda=args.gae_lambda,
+        ),
+        config=RefutationTrainingConfig(
+            target_mode=args.target_mode,
+            max_examples=args.max_examples,
+        ),
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

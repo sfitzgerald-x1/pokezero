@@ -163,6 +163,17 @@ row, replay coordinates, and archive/report count consistency. It does not rerun
 the simulations; it verifies that a mined report is strong enough to treat as an
 R0 readout.
 
+`pokezero-refutation training-cache` is the first R1 primitive. It turns a
+validated fragile-state archive plus the source rollout records into a separate
+cache of corrected loser-perspective examples: value targets are retargeted to
+the certified terminal-rollout value, and `policy-value` mode also replaces the
+action target with the certified deviation. This cache is deliberately separate
+from the main rollout cache so deployment can mix it behind explicit flags and
+enforce the ≤10–20% fragile-example cap. `value` mode is a value-target cache
+only and should be consumed by PPO/value-only paths, not behavior cloning or
+reward-weighted objectives, because it intentionally leaves the recorded loser
+action untouched. No R1 A/B result has landed yet.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection
@@ -247,8 +258,10 @@ milestone-probe cron.
 - robustness: a fresh held-out exploiter (trained the G3 way, never pooled) gains
   less against the main agent than at tier start — the exploitability proxy
   (VGC-Bench: low-diversity agents are ~100% exploitable).
-- non-regression: main-agent matched-milestone strength (max-damage, foul-play)
-  does not fall below the current vanilla trajectory beyond noise.
+- non-regression: main-agent matched-milestone strength (max-damage,
+  foul-play, and frozen v2+ pool reads) does not fall below the current vanilla
+  trajectory beyond noise. Random-legal and simple-legal are saturated plumbing
+  checks, not strength-gradient gates.
 
 Kill criterion honesty: if after two main cycles the payoff rank grows but ΔV does
 not move, the thesis "diverse opponents ⇒ correct strategic valuation" is wrong in
@@ -307,8 +320,10 @@ calendar time.
 3. **G4 refutation miner automation**: public code emits a report plus
    fragile-state JSONL archive; deploy orchestration should run it over recent
    champion wins, persist artifacts, and gate later R1/R2 use on certified
-   examples. The old G2 arm automation remains available only as fallback
-   plumbing under the revival condition above.
+   examples. Public code can now also build a separate refutation training cache
+   from those certified examples; deploy orchestration still owns the explicit
+   mix cap and A/B run setup. The old G2 arm automation remains available only
+   as fallback plumbing under the revival condition above.
 4. **Collection ε-floor**: neural iterate and standalone training-cache
    collection keep a nonzero random legal-action floor on learned policies while
    benchmark/advancement specs stay deterministic. This is a completeness
@@ -339,7 +354,9 @@ calendar time.
 - **D2**: G4 refutation mining on. First deliverable: R0 miner + report on a
   flagship checkpoint with a fragile-state JSONL archive and ≥10 certified,
   reproducible examples. Watch refutation rate and archive quality before
-  feeding examples back into training.
+  feeding examples back into training. The first feed-back primitive is a
+  separate refutation training cache; it is not yet evidence that R1 improves
+  value calibration or strength.
 - **D3**: G3 exploiters at cycle cadence; held-out-exploiter robustness read.
 - **D4 (gated)**: only if D1–D3 plateau on the dashboard with ΔV unmoved —
   unsupervised skill discovery (DIAYN-class, *learned* z with no semantic axes;

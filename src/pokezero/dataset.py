@@ -397,6 +397,61 @@ class TrainingCacheBuilder:
         self._belief_set_source_hashes.add(record.belief_set_source_hash)
         self._record_count += 1
 
+    def add_example(self, example: TrajectoryExample) -> None:
+        """Add one already-materialized example to a cache.
+
+        Normal rollout ingestion stores one observation row per decision and
+        reconstructs windows from per-player history. Refutation examples are
+        sparse counterfactual targets, so their full observation window is
+        already materialized and must be written directly.
+        """
+
+        if example.window_size != self.config.window_size:
+            raise ValueError("example window_size must match the training cache config.")
+        window_indices: list[int] = []
+        for valid, categorical, numeric, token_type, attention in zip(
+            example.history_mask,
+            example.categorical_ids,
+            example.numeric_features,
+            example.token_type_ids,
+            example.attention_mask,
+            strict=True,
+        ):
+            if not valid:
+                window_indices.append(0)
+                continue
+            row_index = len(self._categorical_rows) + 1
+            self._categorical_rows.append(categorical)
+            self._numeric_rows.append(numeric)
+            self._token_type_rows.append(token_type)
+            self._attention_rows.append(attention)
+            window_indices.append(row_index)
+        self._window_indices.append(tuple(window_indices))
+        self._append_example_targets(example)
+        self._belief_set_source_hashes.add(None)
+        self._record_count += 1
+
+    def _append_example_targets(self, example: TrajectoryExample) -> None:
+        self._legal_action_masks.append(example.legal_action_mask)
+        self._action_indices.append(example.action_index)
+        self._rewards.append(example.reward)
+        self._returns.append(example.return_value)
+        self._value_estimates.append(_optional_float(example.value_estimate))
+        self._value_estimate_masks.append(example.value_estimate is not None)
+        self._ppo_advantages.append(_optional_float(example.ppo_advantage))
+        self._ppo_advantage_masks.append(example.ppo_advantage is not None)
+        self._ppo_value_targets.append(_optional_float(example.ppo_value_target))
+        self._ppo_value_target_masks.append(example.ppo_value_target is not None)
+        self._opponent_action_indices.append(_optional_action_index(example.opponent_action_index))
+        self._opponent_action_masks.append(example.opponent_action_index is not None)
+        self._action_probabilities.append(_optional_float(example.action_probability))
+        self._action_probability_masks.append(example.action_probability is not None)
+        self._seeds.append(example.seed)
+        self._turn_indices.append(example.turn_index)
+        self._terminal_capped.append(example.terminal_capped)
+        if self.config.potential_shaping is not None:
+            self._shaping_rewards.append(_optional_float(example.shaping_reward))
+
     def write(
         self,
         path: PathInput,
@@ -645,6 +700,26 @@ def write_training_cache_from_rollouts(
     for path in _normalize_paths(paths):
         for record in iter_rollout_records(path):
             builder.add_record(record)
+    return builder.write(
+        output_path,
+        overwrite=overwrite,
+        max_cache_root_bytes=max_cache_root_bytes,
+        cache_root=cache_root,
+    )
+
+
+def write_training_cache_from_examples(
+    examples: Iterable[TrajectoryExample],
+    output_path: PathInput,
+    *,
+    config: TrajectoryDatasetConfig | None = None,
+    overwrite: bool = False,
+    max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    cache_root: PathInput | None = None,
+) -> TrainingCacheSummary:
+    builder = TrainingCacheBuilder(config=config)
+    for example in examples:
+        builder.add_example(example)
     return builder.write(
         output_path,
         overwrite=overwrite,
