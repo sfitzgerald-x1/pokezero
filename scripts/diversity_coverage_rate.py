@@ -52,9 +52,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write coverage-rate JSON here instead of stdout")
     args = parser.parse_args(argv)
 
-    payload = diversity_coverage_rate_report(
-        [_parse_dashboard_arg(value) for value in args.dashboard]
-    )
+    try:
+        payload = diversity_coverage_rate_report(
+            [_parse_dashboard_arg(value) for value in args.dashboard]
+        )
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -467,6 +467,14 @@ class DiversityPopulationDashboardTest(unittest.TestCase):
         self.assertEqual([point["games"] for point in payload["points"]], [50_000, 150_000])
         self.assertEqual(payload["intervals"][0]["rates_per_100k_games"]["behavior_cluster_count"], 3.0)
 
+    def test_coverage_rate_cli_reports_bad_dashboard_arg_without_traceback(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            diversity_coverage_rate_script.main(["--dashboard", "not-a-milestone"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--dashboard must use GAMES=/path/to/dashboard.json", stderr.getvalue())
+
 
 def _coverage_dashboard(
     *,
