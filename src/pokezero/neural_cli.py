@@ -107,7 +107,7 @@ from .neural_selfplay import (
     run_neural_selfplay_iterations,
 )
 from .opponents import HISTORICAL_OPPONENT_SELECTION_MODES
-from .policy import Policy, RandomLegalPolicy, SimpleLegalPolicy
+from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, SimpleLegalPolicy
 from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
 from .rollout_cli import print_benchmark_report
@@ -650,6 +650,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     benchmark = subparsers.add_parser("benchmark", help="Benchmark a neural checkpoint against fixed baselines.")
     benchmark.add_argument("--checkpoint", type=Path, required=True, help="Neural checkpoint path.")
+    benchmark.add_argument("--policy-id", default=None, help="Optional benchmark policy id alias for the checkpoint.")
     benchmark.add_argument("--games", type=int, default=20, help="Number of games per matchup.")
     benchmark.add_argument("--showdown-root", type=Path, default=None, help="Built Pokemon Showdown checkout root.")
     benchmark.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
@@ -667,6 +668,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Additional eval-only or fixed reference policy spec benchmarked against the checkpoint "
             "in both seats, e.g. max-damage. May be repeated."
+        ),
+    )
+    benchmark.add_argument(
+        "--benchmark-reference-policy-id",
+        action="append",
+        default=None,
+        help=(
+            "Optional policy id alias for each --benchmark-reference-policy. When supplied, "
+            "the count must match the number of reference policies."
         ),
     )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
@@ -2687,8 +2697,17 @@ def _benchmark(args: argparse.Namespace) -> int:
         sampling_temperature=args.temperature,
         device=args.device,
     )
-    policy_id = checkpoint_policy.policy_id
+    policy_id = _policy_id_alias(args.policy_id, label="--policy-id") if args.policy_id else str(checkpoint_policy.policy_id)
+    if args.policy_id:
+        checkpoint_policy = _PolicyIdAlias(checkpoint_policy, policy_id=policy_id)
     policy_showdown_root = env_config.resolved_showdown_root()
+    reference_specs = tuple(args.benchmark_reference_policy or ())
+    reference_policy_ids = tuple(args.benchmark_reference_policy_id or ())
+    if reference_policy_ids and len(reference_policy_ids) != len(reference_specs):
+        raise ValueError(
+            "--benchmark-reference-policy-id must be supplied the same number of times as "
+            "--benchmark-reference-policy."
+        )
     matchups = [
         BenchmarkMatchup(
             f"{policy_id} vs random-legal",
@@ -2712,18 +2731,27 @@ def _benchmark(args: argparse.Namespace) -> int:
         ),
     ]
     covered_ids = {str(policy_id), "random-legal", "simple-legal"}
-    for reference_spec in tuple(args.benchmark_reference_policy or ()):
+    for index, reference_spec in enumerate(reference_specs):
         resolved_reference_spec = policy_spec_with_showdown_root(reference_spec, policy_showdown_root)
         reference_policy = _policy_from_spec_for_evaluation(resolved_reference_spec, device=args.device)
-        reference_id = str(reference_policy.policy_id)
+        reference_id = (
+            _policy_id_alias(reference_policy_ids[index], label="--benchmark-reference-policy-id")
+            if reference_policy_ids
+            else str(reference_policy.policy_id)
+        )
         if reference_id in covered_ids:
             continue
+        if reference_policy_ids:
+            reference_policy = _PolicyIdAlias(reference_policy, policy_id=reference_id)
         covered_ids.add(reference_id)
         matchups.append(BenchmarkMatchup(f"{policy_id} vs {reference_id}", checkpoint_policy, reference_policy))
+        reverse_reference_policy = _policy_from_spec_for_evaluation(resolved_reference_spec, device=args.device)
+        if reference_policy_ids:
+            reverse_reference_policy = _PolicyIdAlias(reverse_reference_policy, policy_id=reference_id)
         matchups.append(
             BenchmarkMatchup(
                 f"{reference_id} vs {policy_id}",
-                _policy_from_spec_for_evaluation(resolved_reference_spec, device=args.device),
+                reverse_reference_policy,
                 checkpoint_policy,
             )
         )
@@ -2744,6 +2772,48 @@ def _benchmark(args: argparse.Namespace) -> int:
     else:
         print_benchmark_report(report)
     return 0
+
+
+@dataclass
+class _PolicyIdAlias:
+    policy: Policy
+    policy_id: str
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.policy, name)
+
+    def reset(self) -> None:
+        reset = getattr(self.policy, "reset", None)
+        if callable(reset):
+            reset()
+
+    def select_action(
+        self,
+        observation,
+        *,
+        rng,
+    ) -> PolicyDecision:
+        return replace(self.policy.select_action(observation, rng=rng), policy_id=self.policy_id)
+
+    def select_action_with_context(
+        self,
+        context: PolicyContext,
+        *,
+        rng,
+    ) -> PolicyDecision:
+        contextual_selector = getattr(self.policy, "select_action_with_context", None)
+        if callable(contextual_selector):
+            decision = contextual_selector(context, rng=rng)
+        else:
+            decision = self.policy.select_action(context.observation, rng=rng)
+        return replace(decision, policy_id=self.policy_id)
+
+
+def _policy_id_alias(value: str, *, label: str) -> str:
+    alias = str(value).strip()
+    if not alias:
+        raise ValueError(f"{label} must be non-empty when supplied.")
+    return alias
 
 
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:

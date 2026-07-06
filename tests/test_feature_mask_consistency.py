@@ -276,10 +276,61 @@ class K32HarnessPathTest(unittest.TestCase):
                         "benchmark",
                         "--checkpoint",
                         str(checkpoint_path),
+                        "--policy-id",
+                        "candidate-k32",
                         "--games",
                         "1",
                         "--device",
                         "cpu",
+                    ]
+                )
+        self.assertEqual(exit_code, 0)
+        env = captured["env"]
+        self.assertEqual(env.config.feature_masks, K32_MASKS)
+
+    def test_neural_cli_benchmark_reference_alias_preserves_k32_mask_latch(self) -> None:
+        if not _torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_cli import main as neural_cli_main
+
+        class FakeCandidatePolicy:
+            policy_id = "candidate"
+
+        captured: dict[str, object] = {}
+
+        def fake_benchmark_rollouts(*, games, env_factory, rollout_config, seed_start, matchups):
+            captured["env"] = env_factory()
+
+            class _Report:
+                def to_dict(self):
+                    return {}
+
+            return _Report()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_path = Path(temp_dir) / "unused-candidate.pt"
+            reference_path = Path(temp_dir) / "k32-reference.pt"
+            _save_k32_checkpoint(reference_path)
+            with (
+                patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakeCandidatePolicy()),
+                patch("pokezero.neural_cli.benchmark_rollouts", fake_benchmark_rollouts),
+                patch("pokezero.neural_cli.print_benchmark_report"),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                exit_code = neural_cli_main(
+                    [
+                        "benchmark",
+                        "--checkpoint",
+                        str(checkpoint_path),
+                        "--games",
+                        "1",
+                        "--device",
+                        "cpu",
+                        "--benchmark-reference-policy",
+                        f"neural:{reference_path}",
+                        "--benchmark-reference-policy-id",
+                        "pool-k32",
                     ]
                 )
         self.assertEqual(exit_code, 0)
@@ -502,6 +553,8 @@ class V2CheckpointHarnessPathTest(unittest.TestCase):
                         "benchmark",
                         "--checkpoint",
                         str(checkpoint_path),
+                        "--policy-id",
+                        "candidate-v2",
                         "--games",
                         "1",
                         "--device",
