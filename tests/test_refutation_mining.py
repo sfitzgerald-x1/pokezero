@@ -720,6 +720,84 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(payload["mismatch_count"], 1)
         self.assertEqual(payload["rows"][0]["terminal_mismatch_count"], 20)
 
+    def test_reproduce_refutation_archive_rejects_wrong_source_record_identity(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(battle_id="battle-1"),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            with self.assertRaisesRegex(ValueError, "source record does not match"):
+                reproduce_refutation_archive(
+                    records=(_record(battle_id="battle-2"),),
+                    fragile_states=tuple(iter_fragile_states(archive_path)),
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                )
+
+    def test_reproduce_refutation_archive_requires_canonical_seed_protocol(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            for result in rows[0]["terminal_results"]:
+                result["certification_seed"] += 1000
+            payload = reproduce_refutation_archive(
+                records=(_record(),),
+                fragile_states=rows,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+            )
+
+        self.assertFalse(payload["passed"])
+        self.assertEqual(payload["mismatch_count"], 1)
+        self.assertFalse(payload["rows"][0]["seed_protocol"]["passed"])
+        self.assertEqual(payload["rows"][0]["terminal_mismatch_count"], 0)
+
+    def test_reproduce_refutation_archive_requires_archived_threshold_pass(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["certification"]["min_flip_rate"] = 1.0
+            payload = reproduce_refutation_archive(
+                records=(_record(),),
+                fragile_states=rows,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+            )
+
+        self.assertFalse(payload["passed"])
+        self.assertEqual(payload["mismatch_count"], 1)
+        self.assertFalse(payload["rows"][0]["threshold_passes"])
+
     def test_cli_reproduce_uses_simulator_rng_reseeded_evaluator(self) -> None:
         captured = {}
 

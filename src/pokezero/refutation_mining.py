@@ -655,6 +655,7 @@ def reproduce_refutation_archive(
                 f"is outside the source records."
             )
         record = records[candidate.source_record_index]
+        _require_candidate_matches_record(candidate, record=record, row_index=row_index)
         terminal_results = _terminal_results_from_archive_row(row)
         reproduced = tuple(
             evaluator.evaluate(
@@ -676,14 +677,31 @@ def reproduce_refutation_archive(
         expected_summary = _certification_summary_from_results(candidate, terminal_results)
         observed_summary = _certification_summary_from_results(candidate, reproduced)
         certification = _mapping_or_empty(row.get("certification"))
+        seed_protocol = _certification_seed_protocol(
+            record=record,
+            certification=certification,
+            terminal_results=terminal_results,
+        )
+        min_flip_rate = _float_value(certification.get("min_flip_rate"))
         summary_matches_archive = (
             _int_value(certification.get("deviation_wins")) == expected_summary["deviation_wins"]
             and _int_value(certification.get("champion_wins")) == expected_summary["champion_wins"]
             and _int_value(certification.get("ties_or_caps")) == expected_summary["ties_or_caps"]
             and _float_equal(_float_value(certification.get("flip_rate")), expected_summary["flip_rate"])
         )
+        threshold_passes = (
+            min_flip_rate is not None
+            and expected_summary["flip_rate"] > min_flip_rate
+            and certification.get("passed") is True
+        )
         reproduced_summary_matches = expected_summary == observed_summary
-        row_passed = not mismatches and summary_matches_archive and reproduced_summary_matches
+        row_passed = (
+            not mismatches
+            and summary_matches_archive
+            and reproduced_summary_matches
+            and seed_protocol["passed"]
+            and threshold_passes
+        )
         if not row_passed:
             mismatch_count += 1
         reproduced_rows.append(
@@ -694,6 +712,8 @@ def reproduce_refutation_archive(
                 "expected_summary": expected_summary,
                 "observed_summary": observed_summary,
                 "summary_matches_archive": summary_matches_archive,
+                "seed_protocol": seed_protocol,
+                "threshold_passes": threshold_passes,
                 "terminal_mismatch_count": len(mismatches),
                 "terminal_mismatches": mismatches[:5],
             }
@@ -1139,6 +1159,26 @@ def _candidate_from_archive_row(row: Mapping[str, Any]) -> RefutationCandidate:
     )
 
 
+def _require_candidate_matches_record(
+    candidate: RefutationCandidate,
+    *,
+    record: RolloutRecord,
+    row_index: int,
+) -> None:
+    mismatches: list[str] = []
+    if record.battle_id != candidate.battle_id:
+        mismatches.append(f"battle_id record={record.battle_id!r} candidate={candidate.battle_id!r}")
+    if record.seed != candidate.seed:
+        mismatches.append(f"seed record={record.seed!r} candidate={candidate.seed!r}")
+    if record.format_id != candidate.format_id:
+        mismatches.append(f"format_id record={record.format_id!r} candidate={candidate.format_id!r}")
+    if mismatches:
+        raise ValueError(
+            f"fragile row {row_index} source record does not match candidate replay coordinates: "
+            + "; ".join(mismatches)
+        )
+
+
 def _terminal_results_from_archive_row(row: Mapping[str, Any]) -> tuple[BranchTerminalResult, ...]:
     terminal_results = row.get("terminal_results")
     if not isinstance(terminal_results, list) or not terminal_results:
@@ -1159,6 +1199,27 @@ def _terminal_results_from_archive_row(row: Mapping[str, Any]) -> tuple[BranchTe
             )
         )
     return tuple(results)
+
+
+def _certification_seed_protocol(
+    *,
+    record: RolloutRecord,
+    certification: Mapping[str, Any],
+    terminal_results: Sequence[BranchTerminalResult],
+) -> dict[str, Any]:
+    seed_count = _int_value(certification.get("seed_count"))
+    observed = [result.certification_seed for result in terminal_results]
+    expected = (
+        [record.seed + offset + 1 for offset in range(seed_count)]
+        if seed_count is not None
+        else []
+    )
+    return {
+        "passed": seed_count is not None and observed == expected,
+        "seed_count": seed_count,
+        "expected": expected,
+        "observed": observed,
+    }
 
 
 def _terminal_results_match(expected: BranchTerminalResult, observed: BranchTerminalResult) -> bool:
