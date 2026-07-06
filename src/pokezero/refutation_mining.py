@@ -27,6 +27,7 @@ REFUTATION_REPORT_SCHEMA_VERSION = "pokezero.refutation_report.v1"
 TERMINAL_ROLLOUT_EVALUATION_SOURCE = "terminal_rollout"
 DEFAULT_R0_MIN_SAMPLED_WINS = 200
 DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS = 10
+DEFAULT_R0_MIN_FLIP_RATE = 0.60
 
 
 class InfeasibleRefutationLineError(ValueError):
@@ -566,6 +567,8 @@ def validate_refutation_report_payload(
     min_sampled_wins: int = DEFAULT_R0_MIN_SAMPLED_WINS,
     min_certified_refutations: int = DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS,
     min_certification_seed_count: int = 20,
+    min_flip_rate: float = DEFAULT_R0_MIN_FLIP_RATE,
+    require_simulator_rng_reseed: bool = True,
 ) -> dict[str, Any]:
     """Validate an R0 refutation report/archive against the artifact-level gate."""
 
@@ -575,6 +578,8 @@ def validate_refutation_report_payload(
         raise ValueError("min_certified_refutations must be positive.")
     if min_certification_seed_count < 20:
         raise ValueError("min_certification_seed_count must be at least 20.")
+    if not 0.0 < min_flip_rate < 1.0:
+        raise ValueError("min_flip_rate must be between 0 and 1.")
 
     rows = tuple(dict(row) for row in fragile_states)
     checks: list[dict[str, Any]] = []
@@ -637,13 +642,13 @@ def validate_refutation_report_payload(
     replay_coordinate_rows = 0
     terminal_result_rows = 0
     simulator_rng_reseeded_rows = 0
+    simulator_rng_scope_consistency_rows = 0
     reseed_scope_counts: dict[str, int] = {}
     for row in rows:
         certification = _mapping_or_empty(row.get("certification"))
         candidate = _mapping_or_empty(row.get("candidate"))
         search_stats = _mapping_or_empty(row.get("search_stats"))
         seed_count = _int_value(certification.get("seed_count"))
-        min_flip_rate = _float_value(certification.get("min_flip_rate"))
         terminal_results = row.get("terminal_results")
         result_rows = tuple(_mapping_or_empty(result) for result in terminal_results) if isinstance(terminal_results, list) else ()
         result_seeds = tuple(_int_value(result.get("certification_seed")) for result in result_rows)
@@ -653,8 +658,11 @@ def validate_refutation_report_payload(
         computed_champion_wins = sum(1 for result in result_rows if result.get("winner") == champion_player_id)
         computed_ties_or_caps = len(result_rows) - computed_deviation_wins - computed_champion_wins
         computed_flip_rate = computed_deviation_wins / len(result_rows) if result_rows else None
-        reseed_scope = certification.get("reseed_scope") or search_stats.get("reseed_scope") or "unknown"
+        certification_reseed_scope = certification.get("reseed_scope")
+        search_stats_reseed_scope = search_stats.get("reseed_scope")
+        reseed_scope = certification_reseed_scope or search_stats_reseed_scope or "unknown"
         reseed_scope_counts[str(reseed_scope)] = reseed_scope_counts.get(str(reseed_scope), 0) + 1
+        simulator_rng_reseeded = certification.get("simulator_rng_reseeded") is True
 
         if row.get("schema_version") == FRAGILE_STATE_SCHEMA_VERSION and row.get("evaluation_source") == TERMINAL_ROLLOUT_EVALUATION_SOURCE:
             terminal_rollout_rows += 1
@@ -676,7 +684,6 @@ def validate_refutation_report_payload(
             certification_consistency_rows += 1
         if (
             computed_flip_rate is not None
-            and min_flip_rate is not None
             and computed_flip_rate > min_flip_rate
             and certification.get("passed") is True
         ):
@@ -685,8 +692,16 @@ def validate_refutation_report_payload(
             replay_coordinate_rows += 1
         if isinstance(terminal_results, list) and seed_count is not None and len(result_rows) == seed_count:
             terminal_result_rows += 1
-        if certification.get("simulator_rng_reseeded") is True:
+        if simulator_rng_reseeded:
             simulator_rng_reseeded_rows += 1
+        if (
+            not simulator_rng_reseeded
+            or (
+                certification_reseed_scope == "simulator_rng"
+                and (search_stats_reseed_scope in {None, "simulator_rng"})
+            )
+        ):
+            simulator_rng_scope_consistency_rows += 1
 
     add_check(
         "terminal_rollout_rows",
@@ -728,7 +743,7 @@ def validate_refutation_report_payload(
         flip_rate_rows == len(rows),
         observed=flip_rate_rows,
         threshold=len(rows),
-        message="all archived refutations exceed their configured flip-rate threshold",
+        message=f"all archived refutations exceed the R0 flip-rate threshold ({min_flip_rate:.2f})",
     )
     add_check(
         "replay_coordinate_rows",
@@ -744,6 +759,24 @@ def validate_refutation_report_payload(
         threshold=len(rows),
         message="all archived refutations include one terminal result per certification seed",
     )
+    add_check(
+        "simulator_rng_reseeded_rows",
+        (not require_simulator_rng_reseed) or simulator_rng_reseeded_rows == len(rows),
+        observed=simulator_rng_reseeded_rows,
+        threshold=(len(rows) if require_simulator_rng_reseed else "not required"),
+        message=(
+            "all archived refutations resample simulator RNG during certification"
+            if require_simulator_rng_reseed
+            else "simulator-RNG reseeding waived for exploratory continuation-policy-only reports"
+        ),
+    )
+    add_check(
+        "simulator_rng_reseed_scope_consistency_rows",
+        simulator_rng_scope_consistency_rows == len(rows),
+        observed=simulator_rng_scope_consistency_rows,
+        threshold=len(rows),
+        message="rows marked as simulator-RNG reseeded report simulator_rng reseed scope consistently",
+    )
     if rows and simulator_rng_reseeded_rows < len(rows):
         warnings.append(
             {
@@ -758,9 +791,44 @@ def validate_refutation_report_payload(
         )
 
     passed = all(check["passed"] for check in checks)
+    waivers = []
+    simulator_rng_reseed_waived = (
+        not require_simulator_rng_reseed and len(rows) > 0 and simulator_rng_reseeded_rows < len(rows)
+    )
+    if simulator_rng_reseed_waived:
+        waivers.append(
+            {
+                "name": "continuation_only_reseeds",
+                "message": (
+                    "simulator-RNG reseeding was waived; this payload is exploratory/dev only "
+                    "and is not R0-acceptance eligible"
+                ),
+            }
+        )
+    relaxed_thresholds: dict[str, Any] = {}
+    if min_sampled_wins < DEFAULT_R0_MIN_SAMPLED_WINS:
+        relaxed_thresholds["min_sampled_wins"] = min_sampled_wins
+    if min_certified_refutations < DEFAULT_R0_MIN_CERTIFIED_REFUTATIONS:
+        relaxed_thresholds["min_certified_refutations"] = min_certified_refutations
+    if min_flip_rate < DEFAULT_R0_MIN_FLIP_RATE:
+        relaxed_thresholds["min_flip_rate"] = min_flip_rate
+    if relaxed_thresholds:
+        waivers.append(
+            {
+                "name": "relaxed_r0_thresholds",
+                "observed": relaxed_thresholds,
+                "message": (
+                    "one or more R0 validation thresholds were relaxed; this payload is "
+                    "a smoke/dev pass and is not R0-acceptance eligible"
+                ),
+            }
+        )
+    r0_acceptance_eligible = passed and not waivers
     return {
         "schema_version": "pokezero.refutation_report_validation.v1",
         "passed": passed,
+        "r0_acceptance_eligible": r0_acceptance_eligible,
+        "waivers": waivers,
         "checks": checks,
         "warnings": warnings,
         "summary": {
@@ -771,7 +839,11 @@ def validate_refutation_report_payload(
             "min_sampled_wins": min_sampled_wins,
             "min_certified_refutations": min_certified_refutations,
             "min_certification_seed_count": min_certification_seed_count,
+            "min_flip_rate": min_flip_rate,
             "simulator_rng_reseeded_count": simulator_rng_reseeded_rows,
+            "simulator_rng_reseed_required": require_simulator_rng_reseed,
+            "simulator_rng_reseed_waived": simulator_rng_reseed_waived,
+            "r0_thresholds_relaxed": bool(relaxed_thresholds),
             "reseed_scope_counts": dict(sorted(reseed_scope_counts.items())),
         },
     }

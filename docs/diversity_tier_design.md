@@ -144,8 +144,9 @@ G4 mines novelty and credit assignment from the champion's own wins:
 3. Search the loser seat for a deviation, starting with single-turn legal
    deviations and extending later to short lines.
 4. Score branches by **terminal rollouts**, never by the champion value head.
-5. Certify only if the deviation wins over repeated reseeds, defaulting to at
-   least 20 terminal rollouts and a >60% flip-rate threshold.
+5. Certify only if the deviation wins over repeated terminal-rollout reseeds,
+   defaulting to at least 20 rollouts and a >60% flip-rate threshold; R0
+   acceptance specifically requires those rows to use simulator-RNG reseeding.
 6. Emit a fragile-state archive containing replay coordinates, deviation action,
    flip rate, oracle/fair mode, and search statistics.
 
@@ -163,9 +164,16 @@ curriculum starts.
 `pokezero-refutation validate` is the artifact-level R0 gate: by default it
 requires at least 200 sampled champion wins, at least 10 certified fragile-state
 rows, terminal-rollout evaluation, no value-head use, ≥20 certification seeds per
-row, replay coordinates, and archive/report count consistency. It does not rerun
-the simulations; it verifies that a mined report is strong enough to treat as an
-R0 readout.
+row, simulator-RNG reseeding for every certified row, replay coordinates, and
+archive/report count consistency. It does not rerun the simulations; it verifies
+that a mined report is strong enough to treat as an R0 readout. Continuation
+policy RNG alone is only an exploratory/development artifact; the validator
+requires an explicit `--allow-continuation-only-reseeds` waiver before such a
+report can pass, and waived reports are marked `r0_acceptance_eligible: false`.
+Likewise, reports validated with relaxed smoke thresholds can pass validation
+shape checks but remain non-R0-eligible. The CLI returns exit `0` only for
+R0-eligible reports, exit `3` for exploratory/dev passes, and exit `2` for
+validation failures.
 
 `pokezero-refutation cycle-report` is the cross-cycle G4 readout. It aggregates
 one or more `refutation-report.json` files into per-mode refutation-rate trends,

@@ -661,7 +661,7 @@ class RefutationMiningTest(unittest.TestCase):
         failed = {check["name"] for check in payload["checks"] if not check["passed"]}
         self.assertIn("distinct_certification_seed_rows", failed)
 
-    def test_validate_refutation_report_payload_warns_on_continuation_only_reseeding(self) -> None:
+    def test_validate_refutation_report_payload_rejects_continuation_only_reseeding_by_default(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
             certification_seed_count=20,
@@ -688,10 +688,105 @@ class RefutationMiningTest(unittest.TestCase):
                 min_certified_refutations=1,
             )
 
-        self.assertTrue(payload["passed"])
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("simulator_rng_reseeded_rows", failed)
         self.assertEqual(payload["summary"]["simulator_rng_reseeded_count"], 0)
         self.assertEqual(payload["summary"]["reseed_scope_counts"], {"continuation_policy_rng": 1})
         self.assertEqual(payload["warnings"][0]["name"], "simulator_rng_not_fully_reseeded")
+
+    def test_validate_refutation_report_payload_can_waive_simulator_rng_for_exploratory_reports(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["certification"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["certification"]["simulator_rng_reseeded"] = False
+            rows[0]["search_stats"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["search_stats"]["simulator_rng_reseeded"] = False
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+                require_simulator_rng_reseed=False,
+            )
+
+        self.assertTrue(payload["passed"])
+        self.assertFalse(payload["r0_acceptance_eligible"])
+        self.assertEqual(payload["waivers"][0]["name"], "continuation_only_reseeds")
+        self.assertTrue(payload["summary"]["simulator_rng_reseed_waived"])
+        self.assertEqual(payload["summary"]["simulator_rng_reseeded_count"], 0)
+        self.assertEqual(payload["warnings"][0]["name"], "simulator_rng_not_fully_reseeded")
+
+    def test_validate_refutation_report_payload_rejects_inconsistent_simulator_rng_scope(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["certification"]["simulator_rng_reseeded"] = True
+            rows[0]["certification"]["reseed_scope"] = "continuation_policy_rng"
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("simulator_rng_reseed_scope_consistency_rows", failed)
+
+    def test_validate_refutation_report_payload_enforces_fixed_r0_flip_rate(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            min_flip_rate=0.05,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=12),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            payload = validate_refutation_report_payload(
+                report=report.to_dict(),
+                fragile_states=rows,
+                min_sampled_wins=1,
+                min_certified_refutations=1,
+            )
+
+        self.assertFalse(payload["passed"])
+        failed = {check["name"] for check in payload["checks"] if not check["passed"]}
+        self.assertIn("flip_rate_rows", failed)
+        self.assertEqual(payload["summary"]["min_flip_rate"], 0.60)
 
     def test_cli_validate_enforces_default_r0_gate(self) -> None:
         config = RefutationMiningConfig(
@@ -731,7 +826,7 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertIn("sampled_win_count", failed)
         self.assertIn("distinct_certified_root_count", failed)
 
-    def test_cli_validate_passes_with_explicit_smoke_thresholds(self) -> None:
+    def test_cli_validate_marks_smoke_thresholds_as_non_r0_eligible(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
             certification_seed_count=20,
@@ -766,8 +861,64 @@ class RefutationMiningTest(unittest.TestCase):
                     ]
                 )
 
-        self.assertEqual(exit_code, 0)
-        self.assertTrue(json.loads(stdout.getvalue())["passed"])
+        self.assertEqual(exit_code, 3)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["passed"])
+        self.assertFalse(payload["r0_acceptance_eligible"])
+        self.assertEqual(payload["waivers"][0]["name"], "relaxed_r0_thresholds")
+        self.assertTrue(payload["summary"]["r0_thresholds_relaxed"])
+
+    def test_cli_validate_can_waive_continuation_only_reseeds_for_dev_reports(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            archive_path = temp_path / "fragile.jsonl"
+            report_path = temp_path / "report.json"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["certification"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["certification"]["simulator_rng_reseeded"] = False
+            rows[0]["search_stats"]["reseed_scope"] = "continuation_policy_rng"
+            rows[0]["search_stats"]["simulator_rng_reseeded"] = False
+            archive_path.write_text(
+                "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            write_refutation_report(report_path, report)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "validate",
+                        "--report",
+                        str(report_path),
+                        "--archive",
+                        str(archive_path),
+                        "--min-sampled-wins",
+                        "1",
+                        "--min-certified-refutations",
+                        "1",
+                        "--allow-continuation-only-reseeds",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 3)
+        self.assertTrue(payload["passed"])
+        self.assertFalse(payload["r0_acceptance_eligible"])
+        self.assertEqual(payload["waivers"][0]["name"], "continuation_only_reseeds")
+        self.assertEqual(payload["summary"]["simulator_rng_reseeded_count"], 0)
 
     def test_refutation_training_examples_retarget_loser_value_and_action(self) -> None:
         config = RefutationMiningConfig(
