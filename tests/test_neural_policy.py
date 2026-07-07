@@ -60,7 +60,7 @@ from pokezero.neural_policy import (
     learning_rate_for_progress,
 )
 from pokezero.neural_selfplay import _require_promoted_opponent_pool as require_neural_promoted_opponent_pool
-from pokezero.observation import ObservationSpec, PokeZeroObservationV0
+from pokezero.observation import OBSERVATION_SCHEMA_VERSION_V2, ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import PolicyContext, PolicyDecision
 from pokezero.run_audit import RunAuditConfig, run_audit_config_payload
 from pokezero.showdown import ACTION_CANDIDATE_TOKEN_OFFSET, DEFAULT_REPLAY_OBSERVATION_SPEC
@@ -2026,6 +2026,91 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_benchmark_rejects_legacy_no_belief_candidate_by_default(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint") as load_checkpoint,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "pokezero-no-belief-gen3-1m.pt",
+                    "--games",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(load_checkpoint.call_count, 0)
+        self.assertIn("current-family v2+", stderr.getvalue())
+        self.assertIn("Legacy no-belief/pre-v2 checkpoints", stderr.getvalue())
+
+    def test_neural_cli_benchmark_rejects_legacy_no_belief_reference_by_default(self) -> None:
+        stderr = io.StringIO()
+        config = SimpleNamespace(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V2)
+
+        with (
+            patch("pokezero.neural_policy.load_transformer_model_config", return_value=config),
+            patch("pokezero.neural_cli._policy_from_checkpoint") as load_checkpoint,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "belief-current-family.pt",
+                    "--benchmark-reference-policy",
+                    "neural:/archive/pokezero-no-belief-gen3-1m.pt",
+                    "--benchmark-reference-policy-id",
+                    "legacy-no-belief",
+                    "--games",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(load_checkpoint.call_count, 0)
+        self.assertIn("references require current-family v2+ checkpoints", stderr.getvalue())
+        self.assertIn("--allow-legacy-checkpoints", stderr.getvalue())
+
+    def test_neural_cli_benchmark_allows_legacy_checkpoints_when_explicit(self) -> None:
+        class FakePolicy:
+            policy_id = "legacy-candidate"
+
+        class FakeReport:
+            def to_dict(self) -> dict:
+                return {"ok": True}
+
+        captured = {}
+
+        def fake_benchmark_rollouts(**kwargs):
+            captured.update(kwargs)
+            return FakeReport()
+
+        with (
+            patch("pokezero.neural_cli._policy_from_checkpoint", return_value=FakePolicy()) as load_checkpoint,
+            patch("pokezero.neural_cli.benchmark_rollouts", side_effect=fake_benchmark_rollouts),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "benchmark",
+                    "--checkpoint",
+                    "pokezero-no-belief-gen3-1m.pt",
+                    "--allow-legacy-checkpoints",
+                    "--games",
+                    "1",
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(load_checkpoint.call_count, 1)
+        self.assertEqual(len(captured["matchups"]), 4)
+
     def test_neural_cli_value_calibration_reports_missing_torch_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -2122,6 +2207,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "2",
                     "--seed-start",
@@ -2171,6 +2257,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--policy-id",
                     "candidate-member",
                     "--json",
@@ -2245,6 +2332,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "2",
                     "--showdown-root",
@@ -2304,6 +2392,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--benchmark-reference-policy",
                     "neural:/pool/member.pt",
                     "--benchmark-reference-policy-id",
@@ -2339,6 +2428,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--benchmark-reference-policy",
                     "max-damage",
                     "--benchmark-reference-policy-id",
@@ -2380,6 +2470,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--benchmark-reference-policy",
                     "random-legal",
                     "--json",
@@ -2417,6 +2508,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "benchmark",
                         "--checkpoint",
                         "checkpoint.pt",
+                        "--allow-legacy-checkpoints",
                         "--games",
                         "2",
                         "--summary-out",
@@ -2455,6 +2547,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "benchmark",
                         "--checkpoint",
                         "checkpoint.pt",
+                        "--allow-legacy-checkpoints",
                         "--games",
                         "2",
                         "--summary-out",
