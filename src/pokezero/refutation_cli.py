@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -26,6 +27,7 @@ from .refutation_mining import (
     DEFAULT_R0_MIN_FLIP_RATE,
     DEFAULT_R0_MIN_SAMPLED_WINS,
     RefutationMiningConfig,
+    RefutationMiningProgress,
     ReplayTerminalBranchEvaluator,
     candidate_count_for_records,
     iter_fragile_states,
@@ -434,6 +436,22 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
             "records. Intended for resumable bounded R0 mining runs."
         ),
     )
+    parser.add_argument(
+        "--progress-interval-evaluations",
+        type=_positive_int,
+        default=None,
+        help=(
+            "When set, mining emits JSON progress snapshots to stderr every N evaluated "
+            "deviations, plus start/certification/finish events."
+        ),
+    )
+
+
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
 
 
 def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
@@ -542,11 +560,17 @@ def _mine(args: argparse.Namespace) -> int:
         check_prefix_observations=args.check_prefix_observations,
         reseed_simulator_rng=True,
     )
+
+    def emit_progress(progress: RefutationMiningProgress) -> None:
+        print(json.dumps(progress.to_dict(), sort_keys=True), file=sys.stderr, flush=True)
+
     report = mine_refutations(
         records=records,
         config=config,
         evaluator=evaluator,
         archive_path=args.out_dir / args.archive_name,
+        progress_callback=emit_progress if args.progress_interval_evaluations is not None else None,
+        progress_interval_evaluations=args.progress_interval_evaluations,
     )
     write_refutation_report(args.out_dir / args.report_name, report)
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))

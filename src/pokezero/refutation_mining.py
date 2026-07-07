@@ -453,15 +453,54 @@ class RefutationMiningReport:
         }
 
 
+@dataclass(frozen=True)
+class RefutationMiningProgress:
+    """Point-in-time counters emitted while R0 mining is still running."""
+
+    event: str
+    resumed_refutation_count: int
+    new_certified_refutation_count: int
+    source_record_count: int
+    sampled_win_count: int
+    scanned_decision_count: int
+    candidate_deviation_count: int
+    evaluated_deviation_count: int
+    skipped_candidate_error_count: int
+    certified_refutation_count: int
+    refuted_game_count: int
+    archive_path: Path
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "pokezero.refutation_mining_progress.v1",
+            "event": self.event,
+            "resumed_refutation_count": self.resumed_refutation_count,
+            "new_certified_refutation_count": self.new_certified_refutation_count,
+            "source_record_count": self.source_record_count,
+            "sampled_win_count": self.sampled_win_count,
+            "scanned_decision_count": self.scanned_decision_count,
+            "candidate_deviation_count": self.candidate_deviation_count,
+            "evaluated_deviation_count": self.evaluated_deviation_count,
+            "skipped_candidate_error_count": self.skipped_candidate_error_count,
+            "certified_refutation_count": self.certified_refutation_count,
+            "refuted_game_count": self.refuted_game_count,
+            "archive_path": str(self.archive_path),
+        }
+
+
 def mine_refutations(
     *,
     records: Iterable[RolloutRecord],
     config: RefutationMiningConfig,
     evaluator: TerminalBranchEvaluator,
     archive_path: Path,
+    progress_callback: Callable[[RefutationMiningProgress], None] | None = None,
+    progress_interval_evaluations: int | None = None,
 ) -> RefutationMiningReport:
     """Mine and certify loser-seat deviations from champion wins."""
 
+    if progress_interval_evaluations is not None and progress_interval_evaluations <= 0:
+        raise ValueError("progress_interval_evaluations must be positive when set.")
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     sampled_win_count = 0
     source_record_count = 0
@@ -475,6 +514,7 @@ def mine_refutations(
         if config.resume_archive and archive_path.exists()
         else []
     )
+    resumed_refutation_count = len(certified)
     for refutation in certified:
         _require_archived_refutation_matches_config(refutation, config=config)
     already_refuted_by_record_index: dict[int, list[CertifiedRefutation]] = {}
@@ -484,7 +524,34 @@ def mine_refutations(
     validated_archived_record_indices: set[int] = set()
     archive_mode = "a" if config.resume_archive else "w"
 
+    def emit_progress(event: str) -> None:
+        if progress_callback is None:
+            return
+        refuted_game_count = len(
+            {
+                refutation.candidate.source_record_index
+                for refutation in certified
+            }
+        )
+        progress_callback(
+            RefutationMiningProgress(
+                event=event,
+                resumed_refutation_count=resumed_refutation_count,
+                new_certified_refutation_count=len(certified) - resumed_refutation_count,
+                source_record_count=source_record_count,
+                sampled_win_count=sampled_win_count,
+                scanned_decision_count=scanned_decision_count,
+                candidate_deviation_count=candidate_deviation_count,
+                evaluated_deviation_count=evaluated_deviation_count,
+                skipped_candidate_error_count=skipped_candidate_error_count,
+                certified_refutation_count=len(certified),
+                refuted_game_count=refuted_game_count,
+                archive_path=archive_path,
+            )
+        )
+
     with archive_path.open(archive_mode, encoding="utf-8") as handle:
+        emit_progress("started")
         for record_index, record in enumerate(records):
             source_record_count = record_index + 1
             existing_refutations = already_refuted_by_record_index.get(record_index, ())
@@ -510,6 +577,7 @@ def mine_refutations(
             if config.max_decision_points_per_game is not None:
                 decision_steps = decision_steps[: config.max_decision_points_per_game]
             scanned_decision_count += len(decision_steps)
+            emit_progress("sampled_win")
             if existing_refutations:
                 if sampled_win_count >= config.max_wins:
                     break
@@ -530,6 +598,11 @@ def mine_refutations(
                 candidate_deviation_count += len(candidates)
                 for candidate in candidates:
                     evaluated_deviation_count += 1
+                    if (
+                        progress_interval_evaluations is not None
+                        and evaluated_deviation_count % progress_interval_evaluations == 0
+                    ):
+                        emit_progress("evaluated_deviations")
                     try:
                         maybe = certify_candidate(
                             record=record,
@@ -552,6 +625,7 @@ def mine_refutations(
                     certified.append(maybe)
                     _write_fragile_state(handle, maybe)
                     game_refuted = True
+                    emit_progress("certified_refutation")
                     if config.stop_after_first_refutation_per_game:
                         break
             if sampled_win_count >= config.max_wins:
@@ -564,6 +638,7 @@ def mine_refutations(
             f"outside the current max_wins sample cap: {missing}"
         )
 
+    emit_progress("finished")
     return RefutationMiningReport(
         config=config,
         source_record_count=source_record_count,

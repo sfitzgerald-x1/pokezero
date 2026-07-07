@@ -395,6 +395,104 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(archive_rows[0]["candidate"]["deviation_action_index"], 2)
             self.assertEqual(archive_rows[0]["certification"]["seed_count"], 20)
 
+    def test_miner_emits_progress_snapshots_during_long_running_search(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13)
+        progress = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+                progress_callback=progress.append,
+                progress_interval_evaluations=1,
+            )
+
+        payloads = [snapshot.to_dict() for snapshot in progress]
+        self.assertEqual(payloads[0]["schema_version"], "pokezero.refutation_mining_progress.v1")
+        self.assertIn("started", [payload["event"] for payload in payloads])
+        self.assertIn("evaluated_deviations", [payload["event"] for payload in payloads])
+        self.assertIn("certified_refutation", [payload["event"] for payload in payloads])
+        self.assertEqual(payloads[-1]["event"], "finished")
+        self.assertEqual(payloads[-1]["sampled_win_count"], report.sampled_win_count)
+        self.assertEqual(payloads[-1]["evaluated_deviation_count"], report.evaluated_deviation_count)
+        self.assertEqual(payloads[-1]["certified_refutation_count"], len(report.certified_refutations))
+        self.assertEqual(payloads[-1]["resumed_refutation_count"], 0)
+        self.assertEqual(payloads[-1]["new_certified_refutation_count"], len(report.certified_refutations))
+        self.assertEqual(payloads[-1]["refuted_game_count"], report.refuted_game_count)
+
+    def test_miner_progress_separates_resumed_and_new_refutations(self) -> None:
+        initial_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=1,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=2,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(battle_id="battle-1"),),
+                config=initial_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            progress = []
+            report = mine_refutations(
+                records=(_record(battle_id="battle-1"), _record(battle_id="battle-2")),
+                config=resume_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+                progress_callback=progress.append,
+                progress_interval_evaluations=1,
+            )
+
+        payloads = [snapshot.to_dict() for snapshot in progress]
+        self.assertEqual(payloads[0]["event"], "started")
+        self.assertEqual(payloads[0]["resumed_refutation_count"], 1)
+        self.assertEqual(payloads[0]["new_certified_refutation_count"], 0)
+        self.assertIn("sampled_win", [payload["event"] for payload in payloads])
+        self.assertEqual(payloads[-1]["resumed_refutation_count"], 1)
+        self.assertEqual(payloads[-1]["new_certified_refutation_count"], 1)
+        self.assertEqual(payloads[-1]["certified_refutation_count"], len(report.certified_refutations))
+
+    def test_miner_rejects_non_positive_progress_interval(self) -> None:
+        config = RefutationMiningConfig(champion_policy_id="champion")
+        evaluator = FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "progress_interval_evaluations"):
+                mine_refutations(
+                    records=(_record(),),
+                    config=config,
+                    evaluator=evaluator,
+                    archive_path=Path(temp_dir) / "fragile.jsonl",
+                    progress_interval_evaluations=0,
+                )
+
+    def test_cli_progress_interval_requires_positive_integer(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(SystemExit, "2"):
+                refutation_cli_main(["mine", "--progress-interval-evaluations", "0"])
+
     def test_miner_streams_records_until_sample_cap(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
@@ -1031,7 +1129,7 @@ class RefutationMiningTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing archived source_record_index"):
                 refutation_cli._load_records_at_indices([path], {2})
 
-    def test_cli_mine_uses_simulator_rng_reseeded_evaluator(self) -> None:
+    def test_cli_mine_uses_simulator_rng_reseeded_evaluator_and_threads_progress(self) -> None:
         class FakeReport:
             def to_dict(self):
                 return {
@@ -1044,6 +1142,23 @@ class RefutationMiningTest(unittest.TestCase):
         def fake_mine_refutations(**kwargs):
             captured["evaluator"] = kwargs["evaluator"]
             captured["config"] = kwargs["config"]
+            captured["progress_interval_evaluations"] = kwargs["progress_interval_evaluations"]
+            kwargs["progress_callback"](
+                refutation_cli.RefutationMiningProgress(
+                    event="started",
+                    resumed_refutation_count=0,
+                    new_certified_refutation_count=0,
+                    source_record_count=0,
+                    sampled_win_count=0,
+                    scanned_decision_count=0,
+                    candidate_deviation_count=0,
+                    evaluated_deviation_count=0,
+                    skipped_candidate_error_count=0,
+                    certified_refutation_count=0,
+                    refuted_game_count=0,
+                    archive_path=Path("fragile-states.jsonl"),
+                )
+            )
             return FakeReport()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1053,12 +1168,14 @@ class RefutationMiningTest(unittest.TestCase):
                 write_rollout_record(handle, _record())
 
             stdout = io.StringIO()
+            stderr = io.StringIO()
             with (
                 patch("pokezero.refutation_cli.env_config_with_policy_spec_masks", side_effect=lambda config, *_args, **_kwargs: config),
                 patch("pokezero.refutation_cli.policy_spec_with_showdown_root", side_effect=lambda spec, _root: spec),
                 patch("pokezero.refutation_cli.policy_from_spec", return_value=FirstLegalPolicy()),
                 patch("pokezero.refutation_cli.mine_refutations", side_effect=fake_mine_refutations),
                 contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
             ):
                 exit_code = refutation_cli_main(
                     [
@@ -1075,6 +1192,8 @@ class RefutationMiningTest(unittest.TestCase):
                         "random-legal",
                         "--stop-after-first-refutation-per-game",
                         "--resume-archive",
+                        "--progress-interval-evaluations",
+                        "25",
                     ]
                 )
 
@@ -1082,6 +1201,11 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertTrue(captured["evaluator"].reseed_simulator_rng)
         self.assertEqual(captured["evaluator"].reseed_scope, "simulator_rng")
         self.assertTrue(captured["config"].resume_archive)
+        self.assertEqual(captured["progress_interval_evaluations"], 25)
+        progress_payload = json.loads(stderr.getvalue())
+        self.assertEqual(progress_payload["schema_version"], "pokezero.refutation_mining_progress.v1")
+        self.assertEqual(progress_payload["event"], "started")
+        self.assertEqual(progress_payload["resumed_refutation_count"], 0)
 
     def test_reproduce_refutation_archive_reruns_terminal_results(self) -> None:
         config = RefutationMiningConfig(
