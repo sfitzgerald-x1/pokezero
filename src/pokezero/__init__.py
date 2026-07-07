@@ -79,6 +79,13 @@ from .dataset import (
     write_training_cache_from_examples,
     write_training_cache_from_rollouts,
 )
+from .admission_guard import (
+    ADMISSION_GUARD_SCHEMA_VERSION,
+    AdmissionGuardCheck,
+    AdmissionGuardConfig,
+    AdmissionGuardResult,
+    validate_admission_guard,
+)
 from .diversity_population import (
     COVERAGE_RATE_SCHEMA_VERSION,
     diversity_coverage_rate_report,

@@ -287,6 +287,21 @@ The payoff matrix is maintained incrementally (each admission test contributes i
 column), giving the league an audit trail: at any time we can state the population
 dimensionality (matrix effective rank) — itself a prior-free diversity measure.
 
+Admission artifacts must also pass the public non-vacuity guard before they can
+be treated as admission evidence:
+
+```bash
+pokezero-refutation admission-guard --input admission-summary.json
+```
+
+The guard is intentionally minimal and schema-tolerant so private admission
+runners can use it without leaking deployment details. It fails if the artifact
+has no positive win-rate floor, no comparison vectors/pairwise novelty evidence,
+or no observed supported novelty distance (behavior-embedding distance or
+policy-prior JS distance) that clears an active vector-distance threshold. This
+closes the D0 smoke failure mode where a candidate could be admitted with
+`min_win_rate: 0.0` and zero comparison vectors.
+
 **The Goodhart invariant (axiom 2, formalized):** the intuition observables below
 are *read-only*. They may never appear in a reward function, an admission rule, an
 eviction rule, or a matchmaking weight. Enforced structurally: the measurement
