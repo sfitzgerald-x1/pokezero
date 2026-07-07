@@ -776,16 +776,241 @@ def write_training_cache_from_rollouts(
     max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     cache_root: PathInput | None = None,
 ) -> TrainingCacheSummary:
-    builder = TrainingCacheBuilder(config=config)
-    for path in _normalize_paths(paths):
-        for record in iter_rollout_records(path):
-            builder.add_record(record)
-    return builder.write(
+    return write_training_cache_streaming(
+        paths,
         output_path,
+        config=config,
         overwrite=overwrite,
         max_cache_root_bytes=max_cache_root_bytes,
         cache_root=cache_root,
     )
+
+
+def write_training_cache_streaming(
+    paths: PathInput | Iterable[PathInput],
+    output_path: PathInput,
+    *,
+    config: TrajectoryDatasetConfig | None = None,
+    overwrite: bool = False,
+    max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    cache_root: PathInput | None = None,
+    flush_rows: int = 20000,
+) -> TrainingCacheSummary:
+    """Stream rollout JSONL into a training cache with bounded memory.
+
+    The in-memory builder materialises every example's per-token rows before writing, which is
+    O(corpus) RAM and OOMs on large obsv2 corpora. This makes two passes over the rollouts:
+      pass 1 counts examples, captures row shapes + the global categorical compaction width, and
+             accumulates only the small per-example arrays (window indices, masks, scalars);
+      pass 2 fills the four big per-token arrays into on-disk .npy memmaps in fixed-size chunks.
+    Output is byte-identical to ``TrainingCacheBuilder.write`` (same array names, dtypes, zero-row
+    padding, and categorical compaction), so cache readers are unaffected. Peak memory is the small
+    arrays plus one ``flush_rows`` chunk, not the whole corpus.
+    """
+    numpy = _require_numpy()
+    cfg = config or TrajectoryDatasetConfig()
+    out = Path(output_path)
+    if out.exists() and not overwrite:
+        raise FileExistsError(f"training cache already exists: {out}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    normalized = list(_normalize_paths(paths))
+
+    uint16_max = int(numpy.iinfo(numpy.uint16).max)
+    uint8_max = int(numpy.iinfo(numpy.uint8).max)
+
+    # ---- pass 1: counts, shapes, compaction width, small arrays, window indices ----
+    n = 0
+    record_count = 0
+    token_count: int | None = None
+    cat_width: int | None = None
+    numeric_width: int | None = None
+    max_nonzero = 0
+    cat_max = 0
+    tt_max = 0
+    window_indices: list[tuple[int, ...]] = []
+    legal_masks: list[Any] = []
+    small: dict[str, list[Any]] = {k: [] for k in (
+        "action_indices", "rewards", "returns", "value_estimates", "value_estimate_mask",
+        "ppo_advantages", "ppo_advantage_mask", "ppo_value_targets", "ppo_value_target_mask",
+        "opponent_action_indices", "opponent_action_mask", "action_probabilities",
+        "action_probability_mask", "training_weights", "seeds", "turn_indices", "terminal_capped",
+    )}
+    shaping_rewards: list[Any] = []  # optional; populated only when potential_shaping is enabled
+    for path in normalized:
+        for record in iter_rollout_records(path):
+            history_by_player: dict[str, list[int]] = {}
+            for example in examples_from_record(record, config=cfg):
+                row_index = n + 1
+                history = history_by_player.setdefault(example.player_id, [])
+                history.append(row_index)
+                window = tuple(history[-cfg.window_size:])
+                padding_count = cfg.window_size - len(window)
+                window_indices.append(tuple(0 for _ in range(padding_count)) + window)
+                cat_row = numpy.asarray(example.categorical_ids[-1])
+                if token_count is None:
+                    token_count = int(cat_row.shape[0])
+                    cat_width = int(cat_row.shape[1])
+                    numeric_width = int(numpy.asarray(example.numeric_features[-1]).shape[1])
+                if cat_row.size:
+                    if int(cat_row.min()) < 0 or int(cat_row.max()) > uint16_max:
+                        raise ValueError("categorical ids exceed uint16 training-cache range.")
+                    cat_max = max(cat_max, int(cat_row.max()))
+                    max_nonzero = max(max_nonzero, int((cat_row != 0).sum(axis=1).max()))
+                tt_row = numpy.asarray(example.token_type_ids[-1])
+                if tt_row.size:
+                    if int(tt_row.min()) < 0 or int(tt_row.max()) > uint8_max:
+                        raise ValueError("token type ids exceed uint8 training-cache range.")
+                legal_masks.append(example.legal_action_mask)
+                small["action_indices"].append(example.action_index)
+                small["rewards"].append(example.reward)
+                small["returns"].append(example.return_value)
+                small["value_estimates"].append(_optional_float(example.value_estimate))
+                small["value_estimate_mask"].append(example.value_estimate is not None)
+                small["ppo_advantages"].append(_optional_float(example.ppo_advantage))
+                small["ppo_advantage_mask"].append(example.ppo_advantage is not None)
+                small["ppo_value_targets"].append(_optional_float(example.ppo_value_target))
+                small["ppo_value_target_mask"].append(example.ppo_value_target is not None)
+                small["opponent_action_indices"].append(_optional_action_index(example.opponent_action_index))
+                small["opponent_action_mask"].append(example.opponent_action_index is not None)
+                small["action_probabilities"].append(_optional_float(example.action_probability))
+                small["action_probability_mask"].append(example.action_probability is not None)
+                small["training_weights"].append(float(example.training_weight))
+                small["seeds"].append(example.seed)
+                small["turn_indices"].append(example.turn_index)
+                small["terminal_capped"].append(example.terminal_capped)
+                if cfg.potential_shaping is not None:
+                    shaping_rewards.append(_optional_float(example.shaping_reward))
+                n += 1
+            record_count += 1
+    if n == 0:
+        raise ValueError("training cache cannot be written with zero examples.")
+    assert token_count is not None and cat_width is not None and numeric_width is not None
+    # Stored categorical width = what _compact_categorical_rows would produce (full if no gain).
+    stored_cat_width = cat_width if cat_width <= 1 else min(max(1, max_nonzero), cat_width)
+    rows = n + 1
+
+    if max_cache_root_bytes is not None:
+        if max_cache_root_bytes <= 0:
+            raise ValueError("max_cache_root_bytes must be positive.")
+        root = Path(cache_root) if cache_root is not None else out.parent
+        current_bytes = _directory_byte_size(root) if root.exists() else 0
+        est = (
+            rows * token_count * stored_cat_width * 2   # categorical uint16
+            + rows * token_count * numeric_width * 2     # numeric float16
+            + rows * token_count                         # token_type uint8
+            + rows * token_count                         # attention bool
+            + n * cfg.window_size * 4                    # window uint32
+            + n * ACTION_COUNT                           # legal_action_mask bool
+            + n * 48                                     # ~scalar arrays (overestimate)
+        )
+        est += max(16 * 1024 * 1024, est // 100)
+        if current_bytes + est > max_cache_root_bytes:
+            raise ValueError(
+                f"training cache write would exceed storage cap: existing={current_bytes} bytes "
+                f"estimated_new={est} bytes limit={max_cache_root_bytes} bytes."
+            )
+
+    temp_path = Path(tempfile.mkdtemp(prefix=f".{out.name}.tmp-", dir=out.parent))
+    try:
+        cat_mm = numpy.lib.format.open_memmap(temp_path / "categorical_ids.npy", mode="w+", dtype=numpy.uint16, shape=(rows, token_count, stored_cat_width))
+        num_mm = numpy.lib.format.open_memmap(temp_path / "numeric_features.npy", mode="w+", dtype=numpy.float16, shape=(rows, token_count, numeric_width))
+        tt_mm = numpy.lib.format.open_memmap(temp_path / "token_type_ids.npy", mode="w+", dtype=numpy.uint8, shape=(rows, token_count))
+        att_mm = numpy.lib.format.open_memmap(temp_path / "attention_mask.npy", mode="w+", dtype=numpy.bool_, shape=(rows, token_count))
+        cat_mm[0] = 0
+        num_mm[0] = 0
+        tt_mm[0] = 0
+        att_mm[0] = False
+        buf_cat: list[Any] = []
+        buf_num: list[Any] = []
+        buf_tt: list[Any] = []
+        buf_att: list[Any] = []
+        pos = 1
+
+        def _flush() -> None:
+            nonlocal pos
+            if not buf_cat:
+                return
+            chunk = _compact_categorical_rows(numpy, numpy.asarray(buf_cat).astype(numpy.uint16, copy=False), stored_cat_width)
+            b = chunk.shape[0]
+            cat_mm[pos:pos + b] = chunk
+            num_mm[pos:pos + b] = numpy.asarray(buf_num, dtype=numpy.float16)
+            tt_mm[pos:pos + b] = numpy.asarray(buf_tt, dtype=numpy.uint8)
+            att_mm[pos:pos + b] = numpy.asarray(buf_att, dtype=numpy.bool_)
+            pos += b
+            buf_cat.clear(); buf_num.clear(); buf_tt.clear(); buf_att.clear()
+
+        for path in normalized:
+            for record in iter_rollout_records(path):
+                for example in examples_from_record(record, config=cfg):
+                    buf_cat.append(example.categorical_ids[-1])
+                    buf_num.append(example.numeric_features[-1])
+                    buf_tt.append(example.token_type_ids[-1])
+                    buf_att.append(example.attention_mask[-1])
+                    if len(buf_cat) >= flush_rows:
+                        _flush()
+        _flush()
+        for mm in (cat_mm, num_mm, tt_mm, att_mm):
+            mm.flush()
+        del cat_mm, num_mm, tt_mm, att_mm
+
+        numpy.save(temp_path / "window_indices.npy", numpy.asarray(window_indices, dtype=numpy.uint32))
+        numpy.save(temp_path / "legal_action_mask.npy", numpy.asarray(legal_masks, dtype=numpy.bool_))
+        _scalar_dtypes = {
+            "action_indices": numpy.int16, "rewards": numpy.float32, "returns": numpy.float32,
+            "value_estimates": numpy.float32, "value_estimate_mask": numpy.bool_,
+            "ppo_advantages": numpy.float32, "ppo_advantage_mask": numpy.bool_,
+            "ppo_value_targets": numpy.float32, "ppo_value_target_mask": numpy.bool_,
+            "opponent_action_indices": numpy.int16, "opponent_action_mask": numpy.bool_,
+            "action_probabilities": numpy.float32, "action_probability_mask": numpy.bool_,
+            "training_weights": numpy.float32,
+            "seeds": numpy.int64, "turn_indices": numpy.int32, "terminal_capped": numpy.bool_,
+        }
+        for name, dtype in _scalar_dtypes.items():
+            numpy.save(temp_path / f"{name}.npy", numpy.asarray(small[name], dtype=dtype))
+        # Optional shaping array: only for shaping-enabled caches (raw env reward stays in `rewards`).
+        if cfg.potential_shaping is not None:
+            numpy.save(temp_path / "shaping_rewards.npy", numpy.asarray(shaping_rewards, dtype=numpy.float32))
+
+        metadata = {
+            "schema_version": TRAINING_CACHE_SCHEMA_VERSION,
+            "dataset_config": cfg.to_dict(),
+            "record_count": record_count,
+            "example_count": n,
+            "observation_shapes": {
+                "categorical_ids": [token_count, stored_cat_width],
+                "numeric_features": [token_count, numeric_width],
+                "token_type_ids": [token_count],
+                "attention_mask": [token_count],
+                "legal_action_mask": [ACTION_COUNT],
+                "window_size": cfg.window_size,
+            },
+            "array_dtypes": {
+                "categorical_ids": "uint16", "numeric_features": "float16",
+                "token_type_ids": "uint8", "attention_mask": "bool",
+                "window_indices": "uint32", "legal_action_mask": "bool",
+                **{name: str(numpy.dtype(dtype)) for name, dtype in _scalar_dtypes.items()},
+                **({"shaping_rewards": "float32"} if cfg.potential_shaping is not None else {}),
+            },
+            "format": "directory-of-npy-arrays",
+            "padding_row": 0,
+            "categorical_storage": {
+                "mode": "compact-nonzero",
+                "original_feature_count": int(cat_width),
+                "stored_feature_count": int(stored_cat_width),
+                "semantic": "summed category embeddings are identical to dense zero-padded rows",
+            },
+        }
+        (temp_path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if out.exists():
+            if out.is_dir():
+                shutil.rmtree(out)
+            else:
+                out.unlink()
+        temp_path.rename(out)
+    except Exception:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        raise
+    return TrainingCacheSummary(path=out, record_count=record_count, example_count=n, byte_size=_directory_byte_size(out))
 
 
 def write_training_cache_from_examples(
@@ -1027,13 +1252,17 @@ def _slice_batch_field(value: Any, start: int, stop: int) -> Any:
     return value[start:stop]
 
 
-def _compact_categorical_rows(numpy: Any, categorical: Any) -> Any:
+def _compact_categorical_rows(numpy: Any, categorical: Any, compact_width: int | None = None) -> Any:
     """Drop per-token zero padding from cache categorical rows.
 
     The neural model sums category embeddings across the final categorical-feature dimension, so
     zero padding and feature order are not semantically meaningful. Keeping only nonzero category
     ids preserves the exact summed embedding while reducing both cache size and CPU embedding work
     during cache-backed training.
+
+    ``compact_width`` pins the packed width (used by the streaming writer, which computes the
+    global maximum nonzero count in a first pass so every chunk packs to the same width); when
+    ``None`` it is derived from ``categorical`` as before.
     """
 
     if len(categorical.shape) != 3:
@@ -1041,9 +1270,9 @@ def _compact_categorical_rows(numpy: Any, categorical: Any) -> Any:
     original_width = int(categorical.shape[2])
     if original_width <= 1:
         return categorical
-    nonzero_mask = categorical != 0
-    max_nonzero = int(nonzero_mask.sum(axis=2).max())
-    compact_width = max(1, max_nonzero)
+    if compact_width is None:
+        nonzero_mask = categorical != 0
+        compact_width = max(1, int(nonzero_mask.sum(axis=2).max()))
     if compact_width >= original_width:
         return categorical
 

@@ -6,7 +6,9 @@
   "seed_start": 1,
   "checkpoints": [
     "500k",
-    "1M"
+    "1M",
+    "1.5M",
+    "distill"
   ],
   "states": [
     {
@@ -181,6 +183,24 @@
           "switch:Sneasel": 0.0011,
           "switch:Registeel": 0.0005,
           "switch:Arbok": 0.0073
+        },
+        "1.5M": {
+          "move:Dragon Dance": 0.002,
+          "move:Earthquake": 0.0374,
+          "move:Hidden Power Flying 70": 0.0078,
+          "move:Fire Blast": 0.9433,
+          "switch:Sneasel": 0.0011,
+          "switch:Registeel": 0.0004,
+          "switch:Arbok": 0.0079
+        },
+        "distill": {
+          "move:Dragon Dance": 0.2883,
+          "move:Earthquake": 0.0964,
+          "move:Hidden Power Flying 70": 0.1098,
+          "move:Fire Blast": 0.5055,
+          "switch:Sneasel": 0.0,
+          "switch:Registeel": 0.0,
+          "switch:Arbok": 0.0
         }
       }
     },
@@ -369,6 +389,26 @@
           "switch:Persian": 0.0147,
           "switch:Gengar": 0.0205,
           "switch:Lanturn": 0.0119
+        },
+        "1.5M": {
+          "move:Shadow Ball": 0.2442,
+          "move:Hidden Power Fighting 70": 0.1135,
+          "move:Will-O-Wisp": 0.5025,
+          "move:Knock Off": 0.0105,
+          "switch:Deoxys-Speed": 0.0374,
+          "switch:Persian": 0.0268,
+          "switch:Gengar": 0.0601,
+          "switch:Lanturn": 0.005
+        },
+        "distill": {
+          "move:Shadow Ball": 0.5669,
+          "move:Hidden Power Fighting 70": 0.0824,
+          "move:Will-O-Wisp": 0.3016,
+          "move:Knock Off": 0.049,
+          "switch:Deoxys-Speed": 0.0,
+          "switch:Persian": 0.0,
+          "switch:Gengar": 0.0,
+          "switch:Lanturn": 0.0
         }
       }
     },
@@ -551,6 +591,28 @@
           "switch:Delcatty": 0.0133,
           "switch:Tauros": 0.0576,
           "switch:Ludicolo": 0.0153
+        },
+        "1.5M": {
+          "move:Earthquake": 0.0031,
+          "move:Fire Blast": 0.7305,
+          "move:Hidden Power Flying 70": 0.1029,
+          "move:Dragon Dance": 0.0541,
+          "switch:Skarmory": 0.0157,
+          "switch:Seviper": 0.0133,
+          "switch:Delcatty": 0.0186,
+          "switch:Tauros": 0.0556,
+          "switch:Ludicolo": 0.0063
+        },
+        "distill": {
+          "move:Earthquake": 0.0489,
+          "move:Fire Blast": 0.1438,
+          "move:Hidden Power Flying 70": 0.5924,
+          "move:Dragon Dance": 0.2149,
+          "switch:Skarmory": 0.0,
+          "switch:Seviper": 0.0,
+          "switch:Delcatty": 0.0,
+          "switch:Tauros": 0.0,
+          "switch:Ludicolo": 0.0
         }
       }
     },
@@ -738,6 +800,28 @@
           "switch:Forretress": 0.0187,
           "switch:Heracross": 0.0149,
           "switch:Girafarig": 0.0145
+        },
+        "1.5M": {
+          "move:Calm Mind": 0.2872,
+          "move:Fire Punch": 0.0512,
+          "move:Psychic": 0.3828,
+          "move:Recover": 0.0745,
+          "switch:Pidgeot": 0.0953,
+          "switch:Umbreon": 0.0131,
+          "switch:Forretress": 0.0268,
+          "switch:Heracross": 0.0407,
+          "switch:Girafarig": 0.0284
+        },
+        "distill": {
+          "move:Calm Mind": 0.5768,
+          "move:Fire Punch": 0.0002,
+          "move:Psychic": 0.4226,
+          "move:Recover": 0.0004,
+          "switch:Pidgeot": 0.0,
+          "switch:Umbreon": 0.0,
+          "switch:Forretress": 0.0,
+          "switch:Heracross": 0.0,
+          "switch:Girafarig": 0.0
         }
       }
     },
@@ -907,6 +991,22 @@
           "move:Hidden Power Ice 70": 0.1327,
           "switch:Smeargle": 0.0192,
           "switch:Sableye": 0.1116
+        },
+        "1.5M": {
+          "move:Sleep Talk": 0.0329,
+          "move:Rest": 0.2262,
+          "move:Thunderbolt": 0.1569,
+          "move:Hidden Power Ice 70": 0.0934,
+          "switch:Smeargle": 0.0293,
+          "switch:Sableye": 0.4613
+        },
+        "distill": {
+          "move:Sleep Talk": 0.0147,
+          "move:Rest": 0.2647,
+          "move:Thunderbolt": 0.6586,
+          "move:Hidden Power Ice 70": 0.0619,
+          "switch:Smeargle": 0.0,
+          "switch:Sableye": 0.0
         }
       }
     },
@@ -1110,6 +1210,28 @@
           "switch:Steelix": 0.0168,
           "switch:Gyarados": 0.003,
           "switch:Gorebyss": 0.0006
+        },
+        "1.5M": {
+          "move:Earthquake": 0.964,
+          "move:Fire Blast": 0.0147,
+          "move:Sleep Talk": 0.002,
+          "move:Rest": 0.004,
+          "switch:Beautifly": 0.0012,
+          "switch:Absol": 0.0033,
+          "switch:Steelix": 0.009,
+          "switch:Gyarados": 0.0012,
+          "switch:Gorebyss": 0.0005
+        },
+        "distill": {
+          "move:Earthquake": 0.6013,
+          "move:Fire Blast": 0.2581,
+          "move:Sleep Talk": 0.0052,
+          "move:Rest": 0.1354,
+          "switch:Beautifly": 0.0,
+          "switch:Absol": 0.0,
+          "switch:Steelix": 0.0,
+          "switch:Gyarados": 0.0,
+          "switch:Gorebyss": 0.0
         }
       }
     },
@@ -1294,6 +1416,28 @@
           "switch:Nidoqueen": 0.2046,
           "switch:Politoed": 0.0295,
           "switch:Heracross": 0.0245
+        },
+        "1.5M": {
+          "move:Fire Punch": 0.1555,
+          "move:Thunderbolt": 0.0525,
+          "move:Substitute": 0.1038,
+          "move:Ice Punch": 0.4018,
+          "switch:Houndoom": 0.0155,
+          "switch:Forretress": 0.0145,
+          "switch:Nidoqueen": 0.1554,
+          "switch:Politoed": 0.0216,
+          "switch:Heracross": 0.0794
+        },
+        "distill": {
+          "move:Fire Punch": 0.2003,
+          "move:Thunderbolt": 0.4815,
+          "move:Substitute": 0.0078,
+          "move:Ice Punch": 0.3104,
+          "switch:Houndoom": 0.0,
+          "switch:Forretress": 0.0,
+          "switch:Nidoqueen": 0.0,
+          "switch:Politoed": 0.0,
+          "switch:Heracross": 0.0
         }
       }
     },
@@ -1484,6 +1628,28 @@
           "switch:Groudon": 0.0706,
           "switch:Unown-Question": 0.0037,
           "switch:Dusclops": 0.0027
+        },
+        "1.5M": {
+          "move:Stun Spore": 0.19,
+          "move:Hidden Power Bug 70": 0.0379,
+          "move:Return 102": 0.5006,
+          "move:Spore": 0.1385,
+          "switch:Charizard": 0.007,
+          "switch:Aerodactyl": 0.0135,
+          "switch:Groudon": 0.102,
+          "switch:Unown-Question": 0.0054,
+          "switch:Dusclops": 0.0051
+        },
+        "distill": {
+          "move:Stun Spore": 0.0677,
+          "move:Hidden Power Bug 70": 0.0553,
+          "move:Return 102": 0.1827,
+          "move:Spore": 0.6943,
+          "switch:Charizard": 0.0,
+          "switch:Aerodactyl": 0.0,
+          "switch:Groudon": 0.0,
+          "switch:Unown-Question": 0.0,
+          "switch:Dusclops": 0.0
         }
       }
     },
@@ -1641,6 +1807,22 @@
           "move:Return 102": 0.5739,
           "switch:Mightyena": 0.0021,
           "switch:Nidoqueen": 0.0013
+        },
+        "1.5M": {
+          "move:Hyper Beam": 0.196,
+          "move:Shadow Ball": 0.0005,
+          "move:Earthquake": 0.0007,
+          "move:Return 102": 0.8022,
+          "switch:Mightyena": 0.0006,
+          "switch:Nidoqueen": 0.0001
+        },
+        "distill": {
+          "move:Hyper Beam": 0.4125,
+          "move:Shadow Ball": 0.0793,
+          "move:Earthquake": 0.2397,
+          "move:Return 102": 0.2684,
+          "switch:Mightyena": 0.0,
+          "switch:Nidoqueen": 0.0
         }
       }
     },
@@ -1809,6 +1991,24 @@
           "switch:Tropius": 0.0042,
           "switch:Whiscash": 0.0419,
           "switch:Jynx": 0.0027
+        },
+        "1.5M": {
+          "move:Hydro Pump": 0.3251,
+          "move:Ice Beam": 0.0568,
+          "move:Rapid Spin": 0.0246,
+          "move:Sludge Bomb": 0.5255,
+          "switch:Tropius": 0.0107,
+          "switch:Whiscash": 0.051,
+          "switch:Jynx": 0.0062
+        },
+        "distill": {
+          "move:Hydro Pump": 0.5822,
+          "move:Ice Beam": 0.0766,
+          "move:Rapid Spin": 0.0183,
+          "move:Sludge Bomb": 0.323,
+          "switch:Tropius": 0.0,
+          "switch:Whiscash": 0.0,
+          "switch:Jynx": 0.0
         }
       }
     },
@@ -1978,6 +2178,26 @@
           "switch:Muk": 0.0132,
           "switch:Crawdaunt": 0.0055,
           "switch:Victreebel": 0.1233
+        },
+        "1.5M": {
+          "move:Shadow Ball": 0.1891,
+          "move:Hidden Power Fighting 70": 0.1168,
+          "move:Double-Edge": 0.4599,
+          "move:Swords Dance": 0.0758,
+          "switch:Jirachi": 0.0151,
+          "switch:Muk": 0.0162,
+          "switch:Crawdaunt": 0.0045,
+          "switch:Victreebel": 0.1225
+        },
+        "distill": {
+          "move:Shadow Ball": 0.4734,
+          "move:Hidden Power Fighting 70": 0.0714,
+          "move:Double-Edge": 0.3381,
+          "move:Swords Dance": 0.1172,
+          "switch:Jirachi": 0.0,
+          "switch:Muk": 0.0,
+          "switch:Crawdaunt": 0.0,
+          "switch:Victreebel": 0.0
         }
       }
     },
@@ -2153,6 +2373,24 @@
           "switch:Relicanth": 0.0762,
           "switch:Sunflora": 0.0083,
           "switch:Tangela": 0.0035
+        },
+        "1.5M": {
+          "move:Fire Punch": 0.0405,
+          "move:Calm Mind": 0.2992,
+          "move:Psychic": 0.3513,
+          "move:Hypnosis": 0.1092,
+          "switch:Relicanth": 0.1693,
+          "switch:Sunflora": 0.0209,
+          "switch:Tangela": 0.0095
+        },
+        "distill": {
+          "move:Fire Punch": 0.0011,
+          "move:Calm Mind": 0.6948,
+          "move:Psychic": 0.0357,
+          "move:Hypnosis": 0.2684,
+          "switch:Relicanth": 0.0,
+          "switch:Sunflora": 0.0,
+          "switch:Tangela": 0.0
         }
       }
     },
@@ -2296,6 +2534,18 @@
           "switch:Nidoking": 0.2962,
           "switch:Groudon": 0.1069,
           "switch:Pinsir": 0.1385
+        },
+        "1.5M": {
+          "move:Shadow Ball": 0.4118,
+          "switch:Nidoking": 0.2491,
+          "switch:Groudon": 0.1087,
+          "switch:Pinsir": 0.2305
+        },
+        "distill": {
+          "move:Shadow Ball": 0.9987,
+          "switch:Nidoking": 0.0003,
+          "switch:Groudon": 0.0008,
+          "switch:Pinsir": 0.0002
         }
       }
     },
@@ -2492,6 +2742,28 @@
           "switch:Corsola": 0.038,
           "switch:Umbreon": 0.0058,
           "switch:Venusaur": 0.0292
+        },
+        "1.5M": {
+          "move:Crunch": 0.2917,
+          "move:Hidden Power Ice 70": 0.1117,
+          "move:Substitute": 0.0616,
+          "move:Thunderbolt": 0.2859,
+          "switch:Altaria": 0.0382,
+          "switch:Lickitung": 0.02,
+          "switch:Corsola": 0.0657,
+          "switch:Umbreon": 0.0231,
+          "switch:Venusaur": 0.1021
+        },
+        "distill": {
+          "move:Crunch": 0.6644,
+          "move:Hidden Power Ice 70": 0.0725,
+          "move:Substitute": 0.0623,
+          "move:Thunderbolt": 0.2009,
+          "switch:Altaria": 0.0,
+          "switch:Lickitung": 0.0,
+          "switch:Corsola": 0.0,
+          "switch:Umbreon": 0.0,
+          "switch:Venusaur": 0.0
         }
       }
     },
@@ -2672,6 +2944,28 @@
           "switch:Nidoking": 0.075,
           "switch:Aerodactyl": 0.0081,
           "switch:Luvdisc": 0.0153
+        },
+        "1.5M": {
+          "move:Explosion": 0.1026,
+          "move:Ice Beam": 0.2147,
+          "move:Toxic": 0.4226,
+          "move:Earthquake": 0.1091,
+          "switch:Metagross": 0.021,
+          "switch:Sableye": 0.0378,
+          "switch:Nidoking": 0.067,
+          "switch:Aerodactyl": 0.0147,
+          "switch:Luvdisc": 0.0103
+        },
+        "distill": {
+          "move:Explosion": 0.1223,
+          "move:Ice Beam": 0.6562,
+          "move:Toxic": 0.1954,
+          "move:Earthquake": 0.0261,
+          "switch:Metagross": 0.0,
+          "switch:Sableye": 0.0,
+          "switch:Nidoking": 0.0,
+          "switch:Aerodactyl": 0.0,
+          "switch:Luvdisc": 0.0
         }
       }
     },
@@ -2873,6 +3167,28 @@
           "switch:Murkrow": 0.0035,
           "switch:Linoone": 0.0017,
           "switch:Torkoal": 0.0079
+        },
+        "1.5M": {
+          "move:Hidden Power Ghost 70": 0.0442,
+          "move:Rock Slide": 0.1023,
+          "move:Cross Chop": 0.6409,
+          "move:Earthquake": 0.1485,
+          "switch:Golem": 0.016,
+          "switch:Golduck": 0.022,
+          "switch:Murkrow": 0.0072,
+          "switch:Linoone": 0.0061,
+          "switch:Torkoal": 0.0128
+        },
+        "distill": {
+          "move:Hidden Power Ghost 70": 0.0137,
+          "move:Rock Slide": 0.0195,
+          "move:Cross Chop": 0.9585,
+          "move:Earthquake": 0.0083,
+          "switch:Golem": 0.0,
+          "switch:Golduck": 0.0,
+          "switch:Murkrow": 0.0,
+          "switch:Linoone": 0.0,
+          "switch:Torkoal": 0.0
         }
       }
     },
@@ -3049,6 +3365,22 @@
           "move:Surf": 0.2716,
           "switch:Blastoise": 0.0074,
           "switch:Spinda": 0.0073
+        },
+        "1.5M": {
+          "move:Ice Beam": 0.0798,
+          "move:Recover": 0.0887,
+          "move:Toxic": 0.6021,
+          "move:Surf": 0.1982,
+          "switch:Blastoise": 0.0157,
+          "switch:Spinda": 0.0155
+        },
+        "distill": {
+          "move:Ice Beam": 0.0877,
+          "move:Recover": 0.0652,
+          "move:Toxic": 0.7419,
+          "move:Surf": 0.1052,
+          "switch:Blastoise": 0.0,
+          "switch:Spinda": 0.0
         }
       }
     },
@@ -3237,6 +3569,26 @@
           "switch:Metagross": 0.0259,
           "switch:Absol": 0.0224,
           "switch:Golem": 0.0081
+        },
+        "1.5M": {
+          "move:Will-O-Wisp": 0.1374,
+          "move:Shadow Ball": 0.1102,
+          "move:Hidden Power Fighting 70": 0.1077,
+          "move:Double-Edge": 0.5027,
+          "switch:Exeggutor": 0.0523,
+          "switch:Metagross": 0.0378,
+          "switch:Absol": 0.0353,
+          "switch:Golem": 0.0166
+        },
+        "distill": {
+          "move:Will-O-Wisp": 0.5523,
+          "move:Shadow Ball": 0.0792,
+          "move:Hidden Power Fighting 70": 0.3025,
+          "move:Double-Edge": 0.066,
+          "switch:Exeggutor": 0.0,
+          "switch:Metagross": 0.0,
+          "switch:Absol": 0.0,
+          "switch:Golem": 0.0
         }
       }
     },
@@ -3387,6 +3739,18 @@
           "move:Protect": 0.0348,
           "move:Earthquake": 0.046,
           "move:Wish": 0.021
+        },
+        "1.5M": {
+          "move:Return 102": 0.8877,
+          "move:Protect": 0.0315,
+          "move:Earthquake": 0.0607,
+          "move:Wish": 0.0201
+        },
+        "distill": {
+          "move:Return 102": 0.6805,
+          "move:Protect": 0.1306,
+          "move:Earthquake": 0.1019,
+          "move:Wish": 0.087
         }
       }
     },
@@ -3567,6 +3931,28 @@
           "switch:Lapras": 0.0113,
           "switch:Entei": 0.0058,
           "switch:Fearow": 0.016
+        },
+        "1.5M": {
+          "move:Surf": 0.4244,
+          "move:Sleep Talk": 0.0118,
+          "move:Rest": 0.0388,
+          "move:Calm Mind": 0.4217,
+          "switch:Blaziken": 0.0215,
+          "switch:Mawile": 0.014,
+          "switch:Lapras": 0.0271,
+          "switch:Entei": 0.0115,
+          "switch:Fearow": 0.0291
+        },
+        "distill": {
+          "move:Surf": 0.0089,
+          "move:Sleep Talk": 0.0002,
+          "move:Rest": 0.0009,
+          "move:Calm Mind": 0.99,
+          "switch:Blaziken": 0.0,
+          "switch:Mawile": 0.0,
+          "switch:Lapras": 0.0,
+          "switch:Entei": 0.0,
+          "switch:Fearow": 0.0
         }
       }
     },
@@ -3731,6 +4117,22 @@
           "move:Shadow Ball": 0.2184,
           "switch:Kabutops": 0.009,
           "switch:Rayquaza": 0.0094
+        },
+        "1.5M": {
+          "move:Crunch": 0.4891,
+          "move:Toxic": 0.1226,
+          "move:Hidden Power Fighting 70": 0.2494,
+          "move:Shadow Ball": 0.0891,
+          "switch:Kabutops": 0.0139,
+          "switch:Rayquaza": 0.0359
+        },
+        "distill": {
+          "move:Crunch": 0.3937,
+          "move:Toxic": 0.2004,
+          "move:Hidden Power Fighting 70": 0.153,
+          "move:Shadow Ball": 0.2528,
+          "switch:Kabutops": 0.0001,
+          "switch:Rayquaza": 0.0001
         }
       }
     },
@@ -3922,6 +4324,24 @@
           "switch:Ditto": 0.0015,
           "switch:Nidoking": 0.0252,
           "switch:Kingler": 0.0006
+        },
+        "1.5M": {
+          "move:Thunder Wave": 0.0568,
+          "move:Shadow Ball": 0.0822,
+          "move:Brick Break": 0.0501,
+          "move:Return 102": 0.7987,
+          "switch:Ditto": 0.0021,
+          "switch:Nidoking": 0.0097,
+          "switch:Kingler": 0.0004
+        },
+        "distill": {
+          "move:Thunder Wave": 0.1787,
+          "move:Shadow Ball": 0.4002,
+          "move:Brick Break": 0.0409,
+          "move:Return 102": 0.3802,
+          "switch:Ditto": 0.0,
+          "switch:Nidoking": 0.0,
+          "switch:Kingler": 0.0
         }
       }
     },
@@ -4071,6 +4491,20 @@
           "switch:Camerupt": 0.073,
           "switch:Luvdisc": 0.5395,
           "switch:Raikou": 0.1265
+        },
+        "1.5M": {
+          "move:Quick Attack": 0.0336,
+          "switch:Regirock": 0.1721,
+          "switch:Camerupt": 0.0606,
+          "switch:Luvdisc": 0.6598,
+          "switch:Raikou": 0.0738
+        },
+        "distill": {
+          "move:Quick Attack": 0.9966,
+          "switch:Regirock": 0.0002,
+          "switch:Camerupt": 0.0017,
+          "switch:Luvdisc": 0.0002,
+          "switch:Raikou": 0.0013
         }
       }
     },
@@ -4265,6 +4699,28 @@
           "switch:Skarmory": 0.0129,
           "switch:Regirock": 0.0137,
           "switch:Hitmontop": 0.0215
+        },
+        "1.5M": {
+          "move:Calm Mind": 0.4906,
+          "move:Ice Beam": 0.1373,
+          "move:Psychic": 0.2048,
+          "move:Substitute": 0.0461,
+          "switch:Blastoise": 0.0254,
+          "switch:Linoone": 0.0128,
+          "switch:Skarmory": 0.0104,
+          "switch:Regirock": 0.0343,
+          "switch:Hitmontop": 0.0385
+        },
+        "distill": {
+          "move:Calm Mind": 0.8288,
+          "move:Ice Beam": 0.1573,
+          "move:Psychic": 0.0006,
+          "move:Substitute": 0.0132,
+          "switch:Blastoise": 0.0,
+          "switch:Linoone": 0.0,
+          "switch:Skarmory": 0.0,
+          "switch:Regirock": 0.0,
+          "switch:Hitmontop": 0.0
         }
       }
     },
@@ -4434,6 +4890,22 @@
           "move:Will-O-Wisp": 0.0543,
           "switch:Ampharos": 0.0348,
           "switch:Nidoking": 0.1789
+        },
+        "1.5M": {
+          "move:Explosion": 0.1437,
+          "move:Thunderbolt": 0.6142,
+          "move:Ice Punch": 0.0434,
+          "move:Will-O-Wisp": 0.0319,
+          "switch:Ampharos": 0.0496,
+          "switch:Nidoking": 0.1171
+        },
+        "distill": {
+          "move:Explosion": 0.3225,
+          "move:Thunderbolt": 0.5356,
+          "move:Ice Punch": 0.0777,
+          "move:Will-O-Wisp": 0.064,
+          "switch:Ampharos": 0.0001,
+          "switch:Nidoking": 0.0001
         }
       }
     }
