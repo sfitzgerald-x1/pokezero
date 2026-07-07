@@ -1402,10 +1402,13 @@ class StreamingCacheParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             rollouts = tmp_path / "rollouts.jsonl"
-            # A handful of records so pass-2 chunking crosses a flush boundary.
+            # A handful of records so pass-2 chunking crosses a flush boundary; mixed
+            # belief-source hashes so the provenance metadata (belief_set_source_mixed,
+            # counts) is exercised and must match the in-memory builder.
+            hashes = ["hash-a", "hash-a", "hash-b", None, "hash-b", "hash-a", "hash-b"]
             with rollouts.open("w", encoding="utf-8") as handle:
-                for _ in range(7):
-                    write_rollout_record(handle, rollout_record())
+                for value in hashes:
+                    write_rollout_record(handle, replace(rollout_record(), belief_set_source_hash=value))
 
             in_memory = TrainingCacheBuilder(config=config)
             for record in _read_records(rollouts):
@@ -1426,11 +1429,12 @@ class StreamingCacheParityTest(unittest.TestCase):
                 self.assertEqual(a.shape, b.shape, name)
                 self.assertEqual(a.dtype, b.dtype, name)
                 self.assertTrue(numpy.array_equal(a, b), name)
+            # Full metadata parity — every key, including belief/opponent-pool provenance,
+            # feature_masks and observation_schema (regression guard: these were dropped once).
             meta_old = json.loads((old / "metadata.json").read_text())
             meta_new = json.loads((new / "metadata.json").read_text())
-            for key in ("observation_shapes", "categorical_storage", "example_count",
-                        "record_count", "array_dtypes", "schema_version"):
-                self.assertEqual(meta_old[key], meta_new[key], key)
+            self.assertEqual(meta_old, meta_new)
+            self.assertTrue(meta_new["belief_set_source_mixed"])
 
 
 def _read_records(path: Path):

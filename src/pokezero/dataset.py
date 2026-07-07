@@ -825,8 +825,6 @@ def write_training_cache_streaming(
     cat_width: int | None = None
     numeric_width: int | None = None
     max_nonzero = 0
-    cat_max = 0
-    tt_max = 0
     window_indices: list[tuple[int, ...]] = []
     legal_masks: list[Any] = []
     small: dict[str, list[Any]] = {k: [] for k in (
@@ -836,6 +834,8 @@ def write_training_cache_streaming(
         "action_probability_mask", "training_weights", "seeds", "turn_indices", "terminal_capped",
     )}
     shaping_rewards: list[Any] = []  # optional; populated only when potential_shaping is enabled
+    belief_set_source_hashes: set[str | None] = set()
+    opponent_pool_provenance: list[dict[str, Any]] = []
     for path in normalized:
         for record in iter_rollout_records(path):
             history_by_player: dict[str, list[int]] = {}
@@ -854,7 +854,6 @@ def write_training_cache_streaming(
                 if cat_row.size:
                     if int(cat_row.min()) < 0 or int(cat_row.max()) > uint16_max:
                         raise ValueError("categorical ids exceed uint16 training-cache range.")
-                    cat_max = max(cat_max, int(cat_row.max()))
                     max_nonzero = max(max_nonzero, int((cat_row != 0).sum(axis=1).max()))
                 tt_row = numpy.asarray(example.token_type_ids[-1])
                 if tt_row.size:
@@ -881,6 +880,10 @@ def write_training_cache_streaming(
                 if cfg.potential_shaping is not None:
                     shaping_rewards.append(_optional_float(example.shaping_reward))
                 n += 1
+            provenance = _opponent_pool_provenance_from_record(record)
+            if provenance is not None:
+                opponent_pool_provenance.append(provenance)
+            belief_set_source_hashes.add(record.belief_set_source_hash)
             record_count += 1
     if n == 0:
         raise ValueError("training cache cannot be written with zero examples.")
@@ -991,6 +994,20 @@ def write_training_cache_streaming(
                 **{name: str(numpy.dtype(dtype)) for name, dtype in _scalar_dtypes.items()},
                 **({"shaping_rewards": "float32"} if cfg.potential_shaping is not None else {}),
             },
+            "belief_set_source_hash": (
+                next(iter(belief_set_source_hashes))
+                if len(belief_set_source_hashes) == 1
+                else None
+            ),
+            "belief_set_source_mixed": len(belief_set_source_hashes) > 1,
+            "opponent_pool_provenance": opponent_pool_provenance,
+            "opponent_pool_provenance_count": len(opponent_pool_provenance),
+            "opponent_pool_provenance_mixed": 0 < len(opponent_pool_provenance) < record_count,
+            # feature_masks / observation_schema mirror the from-rollouts builder, which is
+            # constructed without them on this path (legacy None); a future caller threading
+            # them through should set them here identically.
+            "feature_masks": _feature_masks_payload(None),
+            "observation_schema": None,
             "format": "directory-of-npy-arrays",
             "padding_row": 0,
             "categorical_storage": {
