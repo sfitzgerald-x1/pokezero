@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any, Iterable, Mapping
 
 from .admission_guard import AdmissionGuardConfig, validate_admission_guard
 from .collection import (
@@ -431,22 +432,69 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
     )
 
 
-def _load_records(paths: list[Path]) -> tuple:
-    records = []
+def _iter_records(paths: list[Path]):
     for path in paths:
-        records.extend(iter_rollout_records(path))
+        yield from iter_rollout_records(path)
+
+
+def _load_records_at_indices(paths: list[Path], required_indices: Iterable[int]) -> tuple:
+    needed = set(required_indices)
+    if any(index < 0 for index in needed):
+        raise ValueError("source_record_index must be non-negative.")
+    if not needed:
+        return ()
+    max_index = max(needed)
+    records: list[Any] = [None] * (max_index + 1)
+    remaining = set(needed)
+    for record_index, record in enumerate(_iter_records(paths)):
+        if record_index in remaining:
+            records[record_index] = record
+            remaining.remove(record_index)
+            if not remaining:
+                break
+    if remaining:
+        missing = ", ".join(str(index) for index in sorted(remaining)[:10])
+        raise ValueError(f"source records missing archived source_record_index values: {missing}")
     return tuple(records)
 
 
+def _source_record_indices_from_fragile_rows(rows: Iterable[Mapping[str, Any]]) -> tuple[int, ...]:
+    indices = []
+    for row in rows:
+        candidate = row.get("candidate")
+        if not isinstance(candidate, Mapping):
+            continue
+        raw_index = candidate.get("source_record_index")
+        if raw_index is None:
+            continue
+        indices.append(int(raw_index))
+    return tuple(indices)
+
+
+def _source_record_indices_from_behavior_seed_manifest(manifest: Mapping[str, Any]) -> tuple[int, ...]:
+    seeds = manifest.get("seeds")
+    if not isinstance(seeds, list):
+        return ()
+    indices = []
+    for seed in seeds:
+        if not isinstance(seed, Mapping):
+            continue
+        raw_index = seed.get("source_record_index")
+        if raw_index is None:
+            continue
+        indices.append(int(raw_index))
+    return tuple(indices)
+
+
 def _plan(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    records = _iter_records(args.records)
     payload = candidate_count_for_records(records=records, config=_config_from_args(args))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
 def _mine(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    records = _iter_records(args.records)
     config = _config_from_args(args)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
@@ -509,7 +557,11 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _reproduce(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    fragile_states = tuple(iter_fragile_states(args.archive))
+    records = _load_records_at_indices(
+        args.records,
+        _source_record_indices_from_fragile_rows(fragile_states[: args.max_rows] if args.max_rows is not None else fragile_states),
+    )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -524,7 +576,7 @@ def _reproduce(args: argparse.Namespace) -> int:
     )
     payload = reproduce_refutation_archive(
         records=records,
-        fragile_states=tuple(iter_fragile_states(args.archive)),
+        fragile_states=fragile_states,
         evaluator=ReplayTerminalBranchEvaluator(
             env_factory=lambda: LocalShowdownEnv(env_config),
             policies={
@@ -544,10 +596,11 @@ def _reproduce(args: argparse.Namespace) -> int:
 
 
 def _training_cache(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    fragile_states = tuple(iter_fragile_states(args.archive))
+    records = _load_records_at_indices(args.records, _source_record_indices_from_fragile_rows(fragile_states))
     summary = write_refutation_training_cache(
         records=records,
-        fragile_states=tuple(iter_fragile_states(args.archive)),
+        fragile_states=fragile_states,
         output_path=args.out,
         dataset_config=TrajectoryDatasetConfig(
             window_size=args.window_size,
@@ -568,8 +621,8 @@ def _training_cache(args: argparse.Namespace) -> int:
 
 
 def _behavior_seed_cache(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
     manifest = json.loads(args.behavior_seeds.read_text(encoding="utf-8"))
+    records = _load_records_at_indices(args.records, _source_record_indices_from_behavior_seed_manifest(manifest))
     summary = write_refutation_behavior_seed_training_cache(
         records=records,
         behavior_seed_manifest=manifest,
@@ -593,7 +646,8 @@ def _behavior_seed_cache(args: argparse.Namespace) -> int:
 
 
 def _curriculum(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    fragile_states = tuple(iter_fragile_states(args.archive))
+    records = _load_records_at_indices(args.records, _source_record_indices_from_fragile_rows(fragile_states))
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -612,7 +666,7 @@ def _curriculum(args: argparse.Namespace) -> int:
     )
     summary = collect_refutation_curriculum_rollouts(
         records=records,
-        fragile_states=tuple(iter_fragile_states(args.archive)),
+        fragile_states=fragile_states,
         env_factory=lambda: LocalShowdownEnv(env_config),
         policies={
             "p1": policy_from_spec(p1_spec),

@@ -12,6 +12,7 @@ from pokezero.dataset import iter_training_cache_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero import refutation_cli
 from pokezero.refutation_cli import main as refutation_cli_main
 from pokezero.refutation_curriculum import (
     REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION,
@@ -307,6 +308,20 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(counts["scanned_decision_count"], 2)
         self.assertEqual(counts["candidate_deviation_count"], 5)
 
+    def test_plan_streams_records_until_sample_cap(self) -> None:
+        config = RefutationMiningConfig(champion_policy_id="champion", max_wins=1)
+
+        def records():
+            yield _record(battle_id="lost", winner="p2")
+            yield _record(battle_id="won", winner="p1")
+            raise AssertionError("candidate counting over-consumed source records")
+
+        counts = candidate_count_for_records(records=records(), config=config)
+
+        self.assertEqual(counts["source_record_count"], 2)
+        self.assertEqual(counts["sampled_win_count"], 1)
+        self.assertEqual(counts["candidate_deviation_count"], 3)
+
     def test_config_rejects_line_depth_above_r0_bound(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_line_depth"):
             RefutationMiningConfig(champion_policy_id="champion", max_line_depth=4)
@@ -350,6 +365,37 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(archive_rows[0]["schema_version"], FRAGILE_STATE_SCHEMA_VERSION)
             self.assertEqual(archive_rows[0]["candidate"]["deviation_action_index"], 2)
             self.assertEqual(archive_rows[0]["certification"]["seed_count"], 20)
+
+    def test_miner_streams_records_until_sample_cap(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=1,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0)
+
+        def records():
+            yield _record(battle_id="lost", winner="p2")
+            yield _record(battle_id="won", winner="p1")
+            raise AssertionError("refutation mining over-consumed source records")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+
+            report = mine_refutations(
+                records=records(),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+
+        self.assertEqual(report.source_record_count, 2)
+        self.assertEqual(report.sampled_win_count, 1)
+        self.assertEqual(report.candidate_deviation_count, 1)
+        self.assertEqual(report.evaluated_deviation_count, 1)
 
     def test_miner_can_certify_recorded_continuation_line_depth(self) -> None:
         config = RefutationMiningConfig(
@@ -625,6 +671,29 @@ class RefutationMiningTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn('"candidate_deviation_count": 3', stdout.getvalue())
+
+    def test_sparse_cli_record_loader_keeps_only_referenced_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record(battle_id="skip", winner="p2"))
+                write_rollout_record(handle, _record(battle_id="needed", winner="p1"))
+                handle.write("{not valid json and should not be consumed}\n")
+
+            records = refutation_cli._load_records_at_indices([path], {1})
+
+        self.assertEqual(len(records), 2)
+        self.assertIsNone(records[0])
+        self.assertEqual(records[1].battle_id, "needed")
+
+    def test_sparse_cli_record_loader_rejects_missing_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record(battle_id="only", winner="p1"))
+
+            with self.assertRaisesRegex(ValueError, "missing archived source_record_index"):
+                refutation_cli._load_records_at_indices([path], {2})
 
     def test_cli_mine_uses_simulator_rng_reseeded_evaluator(self) -> None:
         class FakeReport:
