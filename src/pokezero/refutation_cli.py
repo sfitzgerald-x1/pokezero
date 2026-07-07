@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .admission_guard import AdmissionGuardConfig, validate_admission_guard
 from .collection import (
     env_config_with_policy_spec_masks,
     iter_rollout_records,
@@ -291,6 +292,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     cycle_report.add_argument("--out", type=Path, default=None, help="Optional output JSON path.")
     cycle_report.set_defaults(func=_cycle_report)
+
+    admission_guard = subparsers.add_parser(
+        "admission-guard",
+        help="Validate that an admission artifact has non-vacuous strength and novelty evidence.",
+    )
+    admission_guard.add_argument("--input", type=Path, required=True, help="Admission/gauntlet summary JSON.")
+    admission_guard.add_argument("--out", type=Path, default=None, help="Optional guard result JSON path.")
+    admission_guard.add_argument(
+        "--min-win-rate-floor",
+        type=float,
+        default=0.0,
+        help="Required floor is strict: observed win-rate threshold must be greater than this value.",
+    )
+    admission_guard.add_argument(
+        "--min-comparison-vectors",
+        type=int,
+        default=1,
+        help="Minimum comparison vectors or pairwise novelty comparisons required.",
+    )
+    admission_guard.add_argument(
+        "--allow-missing-vector-distance",
+        action="store_true",
+        help="Only require comparison vectors, not a positive vector-distance threshold.",
+    )
+    admission_guard.set_defaults(func=_admission_guard)
     return parser
 
 
@@ -555,6 +581,42 @@ def _cycle_report(args: argparse.Namespace) -> int:
         write_refutation_cycle_report(args.out, report)
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     return 0
+
+
+def _admission_guard(args: argparse.Namespace) -> int:
+    try:
+        payload = json.loads(args.input.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return _admission_guard_input_error(args, str(exc))
+    if not isinstance(payload, dict):
+        return _admission_guard_input_error(args, "--input must be a JSON object.")
+    result = validate_admission_guard(
+        payload,
+        config=AdmissionGuardConfig(
+            min_win_rate_floor=args.min_win_rate_floor,
+            min_comparison_vectors=args.min_comparison_vectors,
+            require_vector_distance=not args.allow_missing_vector_distance,
+        ),
+    )
+    result_payload = result.to_dict()
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(result_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(result_payload, indent=2, sort_keys=True))
+    return 0 if result.passed else 2
+
+
+def _admission_guard_input_error(args: argparse.Namespace, message: str) -> int:
+    payload = {
+        "schema_version": "pokezero.admission_guard.input_error.v1",
+        "passed": False,
+        "error": message,
+    }
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
