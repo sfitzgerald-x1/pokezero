@@ -107,7 +107,12 @@ from .neural_selfplay import (
     load_neural_selfplay_run_manifest,
     run_neural_selfplay_iterations,
 )
-from .opponents import HISTORICAL_OPPONENT_SELECTION_MODES
+from .opponents import (
+    CHECKPOINT_POLICY_SPEC_PREFIXES,
+    HISTORICAL_OPPONENT_SELECTION_MODES,
+    current_family_checkpoint_policy_specs,
+    require_current_family_checkpoint_paths,
+)
 from .policy import Policy, PolicyContext, PolicyDecision, RandomLegalPolicy, SimpleLegalPolicy
 from .run_audit import RunAuditFailure
 from .rollout import RolloutConfig
@@ -710,6 +715,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Optional policy id alias for each --benchmark-reference-policy. When supplied, "
             "the count must match the number of reference policies."
+        ),
+    )
+    benchmark.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "Allow no-belief/pre-v2 checkpoint families in this benchmark. Use only for "
+            "archived historical diagnostics; current strength evals require v2+ current-family checkpoints."
         ),
     )
     benchmark.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
@@ -2813,6 +2826,13 @@ def _benchmark(args: argparse.Namespace) -> int:
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
     )
+    reference_specs = tuple(args.benchmark_reference_policy or ())
+    if not args.allow_legacy_checkpoints:
+        _require_current_family_benchmark_checkpoints(
+            args.checkpoint,
+            reference_specs=reference_specs,
+            context="neural benchmark",
+        )
     deterministic = not bool(args.sample)
     checkpoint_policy = _policy_from_checkpoint(
         args.checkpoint,
@@ -2825,7 +2845,6 @@ def _benchmark(args: argparse.Namespace) -> int:
     if args.policy_id:
         checkpoint_policy = _PolicyIdAlias(checkpoint_policy, policy_id=policy_id)
     policy_showdown_root = env_config.resolved_showdown_root()
-    reference_specs = tuple(args.benchmark_reference_policy or ())
     reference_policy_ids = tuple(args.benchmark_reference_policy_id or ())
     if reference_policy_ids and len(reference_policy_ids) != len(reference_specs):
         raise ValueError(
@@ -2896,6 +2915,33 @@ def _benchmark(args: argparse.Namespace) -> int:
     else:
         print_benchmark_report(report)
     return 0
+
+
+def _require_current_family_benchmark_checkpoints(
+    checkpoint_path: Path,
+    *,
+    reference_specs: Iterable[str],
+    context: str,
+) -> None:
+    require_current_family_checkpoint_paths((checkpoint_path,), context=context)
+    checkpoint_reference_specs = tuple(
+        spec for spec in reference_specs if _is_checkpoint_policy_spec(spec)
+    )
+    if checkpoint_reference_specs:
+        try:
+            current_family_checkpoint_policy_specs(checkpoint_reference_specs, legacy_mode="reject")
+        except ValueError as exc:
+            raise ValueError(
+                f"{context} references require current-family v2+ checkpoints. Legacy no-belief/pre-v2 "
+                "checkpoints are historical baselines, not current eval targets. Pass "
+                "--allow-legacy-checkpoints only when intentionally reproducing archived historical "
+                f"diagnostics. Details: {exc}"
+            ) from exc
+
+
+def _is_checkpoint_policy_spec(policy_spec: str) -> bool:
+    body = str(policy_spec).strip().partition("?")[0].strip().lower()
+    return any(body.startswith(prefix) for prefix in CHECKPOINT_POLICY_SPEC_PREFIXES)
 
 
 @dataclass
