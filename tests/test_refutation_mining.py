@@ -308,6 +308,31 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(counts["scanned_decision_count"], 2)
         self.assertEqual(counts["candidate_deviation_count"], 5)
 
+    def test_miner_evaluates_depth_ladder_single_turn_first(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_line_depth=2,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        evaluated_pairs = []
+        for _, action_index, line_depth, _, _ in evaluator.calls:
+            pair = (action_index, line_depth)
+            if pair not in evaluated_pairs:
+                evaluated_pairs.append(pair)
+        self.assertEqual(evaluated_pairs, [(2, 1), (3, 1), (2, 2), (3, 2)])
+
     def test_plan_streams_records_until_sample_cap(self) -> None:
         config = RefutationMiningConfig(champion_policy_id="champion", max_wins=1)
 
