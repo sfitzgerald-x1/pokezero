@@ -155,6 +155,7 @@ def _seed_from_row(
         "recorded_action_index": recorded_action_index,
         "deviation_action_index": deviation_action_index,
         "flip_rate": flip_rate,
+        "min_flip_rate": _float(certification.get("min_flip_rate"), label="certification.min_flip_rate"),
         "certification_seed_count": _int(
             certification.get("seed_count"),
             label="certification.seed_count",

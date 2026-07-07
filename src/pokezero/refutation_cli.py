@@ -43,7 +43,11 @@ from .refutation_progress import (
     load_refutation_cycle_report_input,
     write_refutation_cycle_report,
 )
-from .refutation_training import RefutationTrainingConfig, write_refutation_training_cache
+from .refutation_training import (
+    RefutationTrainingConfig,
+    write_refutation_behavior_seed_training_cache,
+    write_refutation_training_cache,
+)
 from .rollout import RolloutConfig
 
 
@@ -214,6 +218,53 @@ def build_arg_parser() -> argparse.ArgumentParser:
     training_cache.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda for source materialization when --ppo-target-mode=gae.")
     training_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
     training_cache.set_defaults(func=_training_cache)
+
+    behavior_seed_cache = subparsers.add_parser(
+        "behavior-seed-cache",
+        help="Build a refutation training cache from an R2 behavior-seed manifest.",
+    )
+    behavior_seed_cache.add_argument(
+        "--records",
+        action="append",
+        required=True,
+        type=Path,
+        help="Source rollout-record JSONL from the mining run, in the same order used by the behavior seeds. May repeat.",
+    )
+    behavior_seed_cache.add_argument("--behavior-seeds", type=Path, required=True, help="R2 behavior-seed manifest JSON.")
+    behavior_seed_cache.add_argument("--out", type=Path, required=True, help="Output training-cache directory.")
+    behavior_seed_cache.add_argument(
+        "--target-mode",
+        choices=("value", "policy-value"),
+        default="policy-value",
+        help=(
+            "value: retarget value only and keep the recorded loser action; "
+            "policy-value: also replace the action target with the certified deviation."
+        ),
+    )
+    behavior_seed_cache.add_argument("--max-examples", type=int, default=None, help="Optional cap on emitted target examples.")
+    behavior_seed_cache.add_argument(
+        "--surprise-weight-scale",
+        type=float,
+        default=0.0,
+        help="Optional certification-strength weighting scale. 0 leaves every behavior seed at neutral weight 1.0.",
+    )
+    behavior_seed_cache.add_argument(
+        "--surprise-weight-max",
+        type=float,
+        default=4.0,
+        help="Maximum per-example training weight when --surprise-weight-scale is enabled.",
+    )
+    behavior_seed_cache.add_argument("--window-size", type=int, default=1, help="Training observation window size.")
+    behavior_seed_cache.add_argument("--discount", type=float, default=1.0, help="Dataset discount used while materializing source windows before refutation targets are applied.")
+    behavior_seed_cache.add_argument(
+        "--ppo-target-mode",
+        choices=("returns", "gae"),
+        default="returns",
+        help="Dataset target mode used while materializing source windows before refutation targets are applied.",
+    )
+    behavior_seed_cache.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda for source materialization when --ppo-target-mode=gae.")
+    behavior_seed_cache.add_argument("--overwrite", action="store_true", help="Replace an existing output cache directory.")
+    behavior_seed_cache.set_defaults(func=_behavior_seed_cache)
 
     curriculum = subparsers.add_parser(
         "curriculum",
@@ -497,6 +548,31 @@ def _training_cache(args: argparse.Namespace) -> int:
     summary = write_refutation_training_cache(
         records=records,
         fragile_states=tuple(iter_fragile_states(args.archive)),
+        output_path=args.out,
+        dataset_config=TrajectoryDatasetConfig(
+            window_size=args.window_size,
+            discount=args.discount,
+            ppo_target_mode=args.ppo_target_mode,
+            gae_lambda=args.gae_lambda,
+        ),
+        config=RefutationTrainingConfig(
+            target_mode=args.target_mode,
+            max_examples=args.max_examples,
+            surprise_weight_scale=args.surprise_weight_scale,
+            surprise_weight_max=args.surprise_weight_max,
+        ),
+        overwrite=args.overwrite,
+    )
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _behavior_seed_cache(args: argparse.Namespace) -> int:
+    records = _load_records(args.records)
+    manifest = json.loads(args.behavior_seeds.read_text(encoding="utf-8"))
+    summary = write_refutation_behavior_seed_training_cache(
+        records=records,
+        behavior_seed_manifest=manifest,
         output_path=args.out,
         dataset_config=TrajectoryDatasetConfig(
             window_size=args.window_size,

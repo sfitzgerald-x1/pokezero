@@ -200,7 +200,9 @@ from .refutation_progress import (
 from .refutation_training import (
     RefutationTrainingConfig,
     RefutationTrainingSummary,
+    refutation_behavior_seed_training_examples,
     refutation_training_examples,
+    write_refutation_behavior_seed_training_cache,
     write_refutation_training_cache,
 )
 from .observation import (
@@ -580,6 +582,7 @@ __all__ = [
     "build_refutation_cycle_report",
     "load_refutation_cycle_report_input",
     "refutation_curriculum_start_count",
+    "refutation_behavior_seed_training_examples",
     "refutation_training_examples",
     "record_promotion",
     "RefutationCurriculumConfig",
@@ -601,6 +604,7 @@ __all__ = [
     "write_training_cache_from_examples",
     "write_refutation_curriculum_summary",
     "write_refutation_behavior_seed_manifest",
+    "write_refutation_behavior_seed_training_cache",
     "write_refutation_cycle_report",
     "write_refutation_training_cache",
     "replay_action_rounds",
