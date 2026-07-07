@@ -861,6 +861,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable fallback to the raw checkpoint action when root-PUCT branch search fails.",
     )
+    root_puct_play.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "Allow no-belief/pre-v2 checkpoint families in this root-PUCT benchmark. Use only "
+            "for archived historical diagnostics; current strength evals require v2+ current-family checkpoints."
+        ),
+    )
     root_puct_play.add_argument("--json", action="store_true", help="Print benchmark results as JSON.")
     root_puct_play.add_argument(
         "--summary-out",
@@ -893,6 +901,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
     root_puct.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
     root_puct.add_argument("--temperature", type=float, default=1.0, help="Policy-prior softmax temperature.")
+    root_puct.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "Allow no-belief/pre-v2 checkpoint families in this root-PUCT benchmark. Use only "
+            "for archived historical diagnostics; current strength evals require v2+ current-family checkpoints."
+        ),
+    )
     root_puct.add_argument("--json", action="store_true", help="Print search benchmark results as JSON.")
     root_puct.set_defaults(func=_root_puct_benchmark)
 
@@ -929,6 +945,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     root_puct_counterfactual.add_argument("--cpuct", type=float, default=1.25, help="PUCT exploration constant.")
     root_puct_counterfactual.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps.")
     root_puct_counterfactual.add_argument("--temperature", type=float, default=1.0, help="Policy-prior softmax temperature.")
+    root_puct_counterfactual.add_argument(
+        "--allow-legacy-checkpoints",
+        action="store_true",
+        help=(
+            "Allow no-belief/pre-v2 checkpoint families in this root-PUCT counterfactual. Use only "
+            "for archived historical diagnostics; current strength evals require v2+ current-family checkpoints."
+        ),
+    )
     root_puct_counterfactual.add_argument("--json", action="store_true", help="Print counterfactual search benchmark results as JSON.")
     root_puct_counterfactual.set_defaults(func=_root_puct_counterfactual)
 
@@ -2988,6 +3012,12 @@ def _policy_id_alias(value: str, *, label: str) -> str:
 
 def _root_puct_play_benchmark(args: argparse.Namespace) -> int:
     require_torch()
+    if not args.allow_legacy_checkpoints:
+        _require_current_family_benchmark_checkpoints(
+            args.checkpoint,
+            reference_specs=tuple(args.opponent_policy or ()),
+            context="root-puct play benchmark",
+        )
     if args.root_opponent_action_scenarios <= 0:
         raise ValueError("root opponent action scenarios must be positive.")
     root_opponent_action_candidate_scenarios = (
@@ -3328,6 +3358,12 @@ def _root_puct_leaf_rollout_rounds_values(args: argparse.Namespace) -> tuple[int
 
 def _root_puct_benchmark(args: argparse.Namespace) -> int:
     require_torch()
+    if not args.allow_legacy_checkpoints:
+        _require_current_family_benchmark_checkpoints(
+            args.checkpoint,
+            reference_specs=(args.p1_policy, args.p2_policy),
+            context="root-puct benchmark",
+        )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,
@@ -3388,6 +3424,17 @@ def _root_puct_benchmark(args: argparse.Namespace) -> int:
 
 def _root_puct_counterfactual(args: argparse.Namespace) -> int:
     require_torch()
+    if not args.allow_legacy_checkpoints:
+        _require_current_family_benchmark_checkpoints(
+            args.checkpoint,
+            reference_specs=(
+                args.p1_policy,
+                args.p2_policy,
+                args.continuation_p1_policy or args.p1_policy,
+                args.continuation_p2_policy or args.p2_policy,
+            ),
+            context="root-puct counterfactual",
+        )
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,
         node_binary=args.node_binary,

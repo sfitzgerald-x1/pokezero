@@ -2157,6 +2157,75 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn(NEURAL_INSTALL_MESSAGE, stderr.getvalue())
 
+    def test_neural_cli_root_puct_benchmark_rejects_legacy_no_belief_checkpoint_by_default(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.require_torch"),
+            patch("pokezero.neural_cli.load_transformer_checkpoint") as load_checkpoint,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-benchmark",
+                    "--checkpoint",
+                    "pokezero-no-belief-gen3-1m.pt",
+                    "--games",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(load_checkpoint.call_count, 0)
+        self.assertIn("current-family v2+", stderr.getvalue())
+        self.assertIn("root-puct benchmark", stderr.getvalue())
+
+    def test_neural_cli_root_puct_counterfactual_rejects_legacy_no_belief_checkpoint_by_default(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.require_torch"),
+            patch("pokezero.neural_cli.load_transformer_checkpoint") as load_checkpoint,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-counterfactual",
+                    "--checkpoint",
+                    "pokezero-no-belief-gen3-1m.pt",
+                    "--games",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(load_checkpoint.call_count, 0)
+        self.assertIn("current-family v2+", stderr.getvalue())
+        self.assertIn("root-puct counterfactual", stderr.getvalue())
+
+    def test_neural_cli_root_puct_play_benchmark_rejects_legacy_no_belief_checkpoint_by_default(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch("pokezero.neural_cli.require_torch"),
+            patch("pokezero.neural_cli.load_transformer_checkpoint") as load_checkpoint,
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = neural_cli_main(
+                [
+                    "root-puct-play-benchmark",
+                    "--checkpoint",
+                    "pokezero-no-belief-gen3-1m.pt",
+                    "--games",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(load_checkpoint.call_count, 0)
+        self.assertIn("current-family v2+", stderr.getvalue())
+        self.assertIn("root-puct play benchmark", stderr.getvalue())
+
     def test_neural_cli_iterate_reports_missing_torch_extra(self) -> None:
         if torch_available():
             self.skipTest("PyTorch is installed in this environment.")
@@ -2619,6 +2688,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         "root-puct-play-benchmark",
                         "--checkpoint",
                         "checkpoint.pt",
+                        "--allow-legacy-checkpoints",
                         "--games",
                         "2",
                         "--opponent-policy",
@@ -2710,6 +2780,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--seed-start",
@@ -2828,6 +2899,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--opponent-policy",
                     "random-legal",
                     "--temperature",
@@ -2895,6 +2967,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--opponent-policy",
@@ -2927,6 +3000,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--root-opponent-action-scenarios",
                     "2",
                     "--root-opponent-action-candidate-scenarios",
@@ -2948,6 +3022,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--root-opponent-action-policy",
                     "benchmark",
                     "--root-opponent-action-scenarios",
@@ -2989,6 +3064,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--opponent-policy",
@@ -3077,6 +3153,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--opponent-policy",
@@ -3152,6 +3229,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--opponent-policy",
@@ -3221,6 +3299,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-play-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--opponent-policy",
@@ -3284,6 +3363,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-benchmark",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--prefixes-per-game",
@@ -3368,6 +3448,7 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "root-puct-counterfactual",
                     "--checkpoint",
                     "checkpoint.pt",
+                    "--allow-legacy-checkpoints",
                     "--games",
                     "3",
                     "--prefixes-per-game",
