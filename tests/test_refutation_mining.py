@@ -12,6 +12,7 @@ from pokezero.dataset import iter_training_cache_batches
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
+from pokezero import refutation_cli
 from pokezero.refutation_cli import main as refutation_cli_main
 from pokezero.refutation_curriculum import (
     REFUTATION_CURRICULUM_METADATA_SCHEMA_VERSION,
@@ -670,6 +671,29 @@ class RefutationMiningTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn('"candidate_deviation_count": 3', stdout.getvalue())
+
+    def test_sparse_cli_record_loader_keeps_only_referenced_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record(battle_id="skip", winner="p2"))
+                write_rollout_record(handle, _record(battle_id="needed", winner="p1"))
+                handle.write("{not valid json and should not be consumed}\n")
+
+            records = refutation_cli._load_records_at_indices([path], {1})
+
+        self.assertEqual(len(records), 2)
+        self.assertIsNone(records[0])
+        self.assertEqual(records[1].battle_id, "needed")
+
+    def test_sparse_cli_record_loader_rejects_missing_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record(battle_id="only", winner="p1"))
+
+            with self.assertRaisesRegex(ValueError, "missing archived source_record_index"):
+                refutation_cli._load_records_at_indices([path], {2})
 
     def test_cli_mine_uses_simulator_rng_reseeded_evaluator(self) -> None:
         class FakeReport:
