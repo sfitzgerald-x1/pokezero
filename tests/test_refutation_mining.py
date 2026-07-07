@@ -31,6 +31,7 @@ from pokezero.refutation_mining import (
     mine_refutations,
     reproduce_refutation_archive,
     validate_refutation_report_payload,
+    write_merged_refutation_artifacts,
     write_refutation_report,
 )
 from pokezero.refutation_population import (
@@ -355,6 +356,39 @@ class RefutationMiningTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume_archive requires stop_after_first_refutation_per_game"):
             RefutationMiningConfig(champion_policy_id="champion", resume_archive=True)
 
+    def test_config_rejects_invalid_source_record_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_record_start_index"):
+            RefutationMiningConfig(champion_policy_id="champion", source_record_start_index=-1)
+        with self.assertRaisesRegex(ValueError, "source_record_end_index"):
+            RefutationMiningConfig(champion_policy_id="champion", source_record_end_index=0)
+        with self.assertRaisesRegex(ValueError, "source_record_end_index"):
+            RefutationMiningConfig(
+                champion_policy_id="champion",
+                source_record_start_index=3,
+                source_record_end_index=3,
+            )
+
+    def test_candidate_count_filters_source_record_range_and_preserves_global_count(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            source_record_start_index=1,
+            source_record_end_index=2,
+        )
+
+        counts = candidate_count_for_records(
+            records=(
+                _record(battle_id="skipped-0", winner="p1"),
+                _record(battle_id="included-1", winner="p1"),
+                _record(battle_id="skipped-2", winner="p1"),
+            ),
+            config=config,
+        )
+
+        self.assertEqual(counts["source_record_count"], 2)
+        self.assertEqual(counts["sampled_win_count"], 1)
+        self.assertEqual(counts["candidate_deviation_count"], 3)
+
     def test_miner_certifies_only_terminal_rollout_flips_above_threshold(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
@@ -395,6 +429,41 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(archive_rows[0]["schema_version"], FRAGILE_STATE_SCHEMA_VERSION)
             self.assertEqual(archive_rows[0]["candidate"]["deviation_action_index"], 2)
             self.assertEqual(archive_rows[0]["certification"]["seed_count"], 20)
+
+    def test_miner_filters_source_record_range_and_archives_global_source_index(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            source_record_start_index=1,
+            source_record_end_index=2,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            report = mine_refutations(
+                records=(
+                    _record(battle_id="skipped-0", winner="p1"),
+                    _record(battle_id="included-1", winner="p1"),
+                    _record(battle_id="skipped-2", winner="p1"),
+                ),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+
+            archive_rows = tuple(iter_fragile_states(archive_path))
+
+        self.assertEqual(report.source_record_count, 2)
+        self.assertEqual(report.sampled_win_count, 1)
+        self.assertEqual(len(report.certified_refutations), 1)
+        self.assertEqual(report.certified_refutations[0].candidate.source_record_index, 1)
+        self.assertEqual(archive_rows[0]["candidate"]["source_record_index"], 1)
+        self.assertEqual(report.to_dict()["config"]["source_record_start_index"], 1)
+        self.assertEqual(report.to_dict()["config"]["source_record_end_index"], 2)
 
     def test_miner_short_circuits_candidates_that_cannot_reach_flip_threshold(self) -> None:
         config = RefutationMiningConfig(
@@ -1261,6 +1330,10 @@ class RefutationMiningTest(unittest.TestCase):
                         "--resume-archive",
                         "--progress-interval-evaluations",
                         "25",
+                        "--source-record-start-index",
+                        "10",
+                        "--source-record-end-index",
+                        "20",
                     ]
                 )
 
@@ -1268,6 +1341,8 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertTrue(captured["evaluator"].reseed_simulator_rng)
         self.assertEqual(captured["evaluator"].reseed_scope, "simulator_rng")
         self.assertTrue(captured["config"].resume_archive)
+        self.assertEqual(captured["config"].source_record_start_index, 10)
+        self.assertEqual(captured["config"].source_record_end_index, 20)
         self.assertEqual(captured["progress_interval_evaluations"], 25)
         progress_payload = json.loads(stderr.getvalue())
         self.assertEqual(progress_payload["schema_version"], "pokezero.refutation_mining_progress.v1")
@@ -1703,6 +1778,225 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertFalse(payload["passed"])
         failed = {check["name"] for check in payload["checks"] if not check["passed"]}
         self.assertIn("simulator_rng_reseed_scope_consistency_rows", failed)
+
+    def test_write_merged_refutation_artifacts_combines_ranged_shards_for_validation(self) -> None:
+        records = (_record(battle_id="battle-0"), _record(battle_id="battle-1"))
+        left_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            source_record_start_index=0,
+            source_record_end_index=1,
+        )
+        right_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            source_record_start_index=1,
+            source_record_end_index=2,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            left_archive = root / "left.jsonl"
+            right_archive = root / "right.jsonl"
+            left_report = mine_refutations(
+                records=records,
+                config=left_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=left_archive,
+            )
+            right_report = mine_refutations(
+                records=records,
+                config=right_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=right_archive,
+            )
+            merged_report_path = root / "merged-report.json"
+            merged_archive_path = root / "merged.jsonl"
+            merged_report = write_merged_refutation_artifacts(
+                report_path=merged_report_path,
+                archive_path=merged_archive_path,
+                reports=(left_report.to_dict(), right_report.to_dict()),
+                fragile_state_groups=(tuple(iter_fragile_states(left_archive)), tuple(iter_fragile_states(right_archive))),
+            )
+            merged_rows = tuple(iter_fragile_states(merged_archive_path))
+            validation = validate_refutation_report_payload(
+                report=merged_report,
+                fragile_states=merged_rows,
+                min_sampled_wins=2,
+                min_certified_refutations=2,
+            )
+
+        self.assertEqual(merged_report["sampled_win_count"], 2)
+        self.assertEqual(merged_report["certified_refutation_count"], 2)
+        self.assertEqual(merged_report["distinct_certified_root_count"], 2)
+        self.assertEqual(merged_report["config"]["mode"], "oracle")
+        self.assertEqual(merged_report["config"]["champion_policy_id"], "champion")
+        self.assertEqual([row["candidate"]["source_record_index"] for row in merged_rows], [0, 1])
+        self.assertTrue(validation["passed"])
+        self.assertEqual(validation["waivers"][0]["name"], "relaxed_r0_thresholds")
+        cycle_report = build_refutation_cycle_report(
+            [
+                RefutationCycleReportInput(
+                    cycle_id="cycle-a",
+                    report_path=merged_report_path,
+                    report=merged_report,
+                )
+            ]
+        ).to_dict()
+        self.assertEqual(cycle_report["rows"][0]["mode"], "oracle")
+
+    def test_write_merged_refutation_artifacts_rejects_duplicate_certified_roots(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "fragile.jsonl"
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = tuple(iter_fragile_states(archive_path))
+            with self.assertRaisesRegex(ValueError, "duplicate certified roots"):
+                write_merged_refutation_artifacts(
+                    report_path=root / "merged-report.json",
+                    archive_path=root / "merged.jsonl",
+                    reports=(report.to_dict(), report.to_dict()),
+                    fragile_state_groups=(rows, rows),
+                )
+
+    def test_write_merged_refutation_artifacts_rejects_mixed_modes(self) -> None:
+        left_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            mode="oracle",
+            source_record_start_index=0,
+            source_record_end_index=1,
+        )
+        right_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            mode="fair",
+            source_record_start_index=1,
+            source_record_end_index=2,
+        )
+        records = (_record(battle_id="battle-0"), _record(battle_id="battle-1"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            left_archive = root / "left.jsonl"
+            right_archive = root / "right.jsonl"
+            left_report = mine_refutations(
+                records=records,
+                config=left_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=left_archive,
+            )
+            right_report = mine_refutations(
+                records=records,
+                config=right_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=right_archive,
+            )
+            with self.assertRaisesRegex(ValueError, "different config.mode"):
+                write_merged_refutation_artifacts(
+                    report_path=root / "merged-report.json",
+                    archive_path=root / "merged.jsonl",
+                    reports=(left_report.to_dict(), right_report.to_dict()),
+                    fragile_state_groups=(
+                        tuple(iter_fragile_states(left_archive)),
+                        tuple(iter_fragile_states(right_archive)),
+                    ),
+                )
+
+    def test_refutation_merge_cli_writes_merged_report_and_archive(self) -> None:
+        records = (_record(battle_id="battle-0"), _record(battle_id="battle-1"))
+        left_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            source_record_start_index=0,
+            source_record_end_index=1,
+        )
+        right_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+            source_record_start_index=1,
+            source_record_end_index=2,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            left_archive = root / "left.jsonl"
+            right_archive = root / "right.jsonl"
+            left_report = mine_refutations(
+                records=records,
+                config=left_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=left_archive,
+            )
+            right_report = mine_refutations(
+                records=records,
+                config=right_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=right_archive,
+            )
+            left_report_path = root / "left-report.json"
+            right_report_path = root / "right-report.json"
+            write_refutation_report(left_report_path, left_report)
+            write_refutation_report(right_report_path, right_report)
+            merged_report_path = root / "merged-report.json"
+            merged_archive_path = root / "merged.jsonl"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "merge",
+                        "--report",
+                        str(left_report_path),
+                        "--archive",
+                        str(left_archive),
+                        "--report",
+                        str(right_report_path),
+                        "--archive",
+                        str(right_archive),
+                        "--out-report",
+                        str(merged_report_path),
+                        "--out-archive",
+                        str(merged_archive_path),
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            disk_payload = json.loads(merged_report_path.read_text(encoding="utf-8"))
+            merged_rows = tuple(iter_fragile_states(merged_archive_path))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["certified_refutation_count"], 2)
+        self.assertEqual(disk_payload["sampled_win_count"], 2)
+        self.assertEqual([row["candidate"]["source_record_index"] for row in merged_rows], [0, 1])
 
     def test_validate_refutation_report_payload_enforces_fixed_r0_flip_rate(self) -> None:
         config = RefutationMiningConfig(

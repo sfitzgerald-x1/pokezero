@@ -34,6 +34,7 @@ from .refutation_mining import (
     mine_refutations,
     reproduce_refutation_archive,
     validate_refutation_report_payload,
+    write_merged_refutation_artifacts,
     write_refutation_report,
 )
 from .refutation_population import (
@@ -143,6 +144,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     validate.set_defaults(func=_validate)
+
+    merge = subparsers.add_parser(
+        "merge",
+        help="Merge disjoint ranged refutation reports and archives into one validation-ready artifact pair.",
+    )
+    merge.add_argument("--report", action="append", required=True, type=Path, help="Shard refutation report JSON. Repeat once per shard.")
+    merge.add_argument("--archive", action="append", required=True, type=Path, help="Shard fragile-state JSONL archive. Repeat in the same order as --report.")
+    merge.add_argument("--out-report", type=Path, required=True, help="Merged refutation report JSON.")
+    merge.add_argument("--out-archive", type=Path, required=True, help="Merged fragile-state JSONL archive.")
+    merge.set_defaults(func=_merge)
 
     reproduce = subparsers.add_parser(
         "reproduce",
@@ -445,6 +456,18 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
             "deviations, plus start/certification/finish events."
         ),
     )
+    parser.add_argument(
+        "--source-record-start-index",
+        type=int,
+        default=None,
+        help="Only scan source records with original index >= this value.",
+    )
+    parser.add_argument(
+        "--source-record-end-index",
+        type=int,
+        default=None,
+        help="Only scan source records with original index < this value.",
+    )
 
 
 def _positive_int(raw: str) -> int:
@@ -467,6 +490,8 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
         mode=args.mode,
         stop_after_first_refutation_per_game=args.stop_after_first_refutation_per_game,
         resume_archive=args.resume_archive,
+        source_record_start_index=args.source_record_start_index,
+        source_record_end_index=args.source_record_end_index,
     )
 
 
@@ -598,6 +623,21 @@ def _validate(args: argparse.Namespace) -> int:
     if payload["r0_acceptance_eligible"]:
         return 0
     return 3 if payload["passed"] else 2
+
+
+def _merge(args: argparse.Namespace) -> int:
+    if len(args.report) != len(args.archive):
+        raise ValueError("--report and --archive must be repeated the same number of times.")
+    reports = tuple(json.loads(path.read_text(encoding="utf-8")) for path in args.report)
+    fragile_groups = tuple(tuple(iter_fragile_states(path)) for path in args.archive)
+    payload = write_merged_refutation_artifacts(
+        report_path=args.out_report,
+        archive_path=args.out_archive,
+        reports=reports,
+        fragile_state_groups=fragile_groups,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
 
 
 def _reproduce(args: argparse.Namespace) -> int:
