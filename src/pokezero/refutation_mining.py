@@ -1120,18 +1120,17 @@ def _deviation_candidates(
     if max_deviations is not None:
         legal = legal[:max_deviations]
     candidates: list[RefutationCandidate] = []
-    for deviation_action_index in legal:
-        branch_actions = dict(recorded_round.actions)
-        branch_actions[loser_player_id] = deviation_action_index
-        branch_action_sequences = [(branch_actions,)]
-        for depth in range(2, max_line_depth + 1):
-            continuation = continuation_rounds[: depth - 1]
-            if len(continuation) != depth - 1:
-                break
-            branch_action_sequences.append(
-                (branch_actions, *tuple(dict(round_actions.actions) for round_actions in continuation))
+    for depth in range(1, max_line_depth + 1):
+        continuation = continuation_rounds[: depth - 1]
+        if len(continuation) != depth - 1:
+            break
+        for deviation_action_index in legal:
+            branch_actions = dict(recorded_round.actions)
+            branch_actions[loser_player_id] = deviation_action_index
+            branch_action_sequence = (
+                branch_actions,
+                *tuple(dict(round_actions.actions) for round_actions in continuation),
             )
-        for branch_action_sequence in branch_action_sequences:
             candidates.append(
                 RefutationCandidate(
                     battle_id=record.battle_id,
