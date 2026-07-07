@@ -351,6 +351,10 @@ class RefutationMiningTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_line_depth"):
             RefutationMiningConfig(champion_policy_id="champion", max_line_depth=4)
 
+    def test_config_rejects_resume_without_first_refutation_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "resume_archive requires stop_after_first_refutation_per_game"):
+            RefutationMiningConfig(champion_policy_id="champion", resume_archive=True)
+
     def test_miner_certifies_only_terminal_rollout_flips_above_threshold(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
@@ -466,6 +470,268 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(report.refutation_rate, exhaustive_report.refutation_rate)
         self.assertLess(report.evaluated_deviation_count, exhaustive_report.evaluated_deviation_count)
         self.assertTrue(report.to_dict()["config"]["stop_after_first_refutation_per_game"])
+
+    def test_miner_can_resume_existing_archive_without_truncating_refutations(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            initial_report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            resumed_report = mine_refutations(
+                records=(_record(),),
+                config=resume_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                archive_path=archive_path,
+            )
+            archive_rows = tuple(iter_fragile_states(archive_path))
+
+        self.assertEqual(len(initial_report.certified_refutations), 1)
+        self.assertEqual(len(resumed_report.certified_refutations), 1)
+        self.assertEqual(resumed_report.sampled_win_count, 1)
+        self.assertEqual(resumed_report.scanned_decision_count, 1)
+        self.assertEqual(resumed_report.candidate_deviation_count, 0)
+        self.assertEqual(resumed_report.evaluated_deviation_count, 0)
+        self.assertEqual(resumed_report.refuted_game_count, 1)
+        self.assertEqual(resumed_report.refutation_rate, 1.0)
+        self.assertTrue(resumed_report.to_dict()["config"]["resume_archive"])
+        self.assertEqual(len(archive_rows), 1)
+        self.assertEqual(archive_rows[0]["candidate"]["battle_id"], "battle-1")
+
+    def test_miner_resume_appends_new_refutations_after_preserved_rows(self) -> None:
+        initial_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=1,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=2,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        records = (_record(battle_id="first"), _record(battle_id="second"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=records,
+                config=initial_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            resumed_report = mine_refutations(
+                records=records,
+                config=resume_config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            archive_rows = tuple(iter_fragile_states(archive_path))
+
+        self.assertEqual(len(resumed_report.certified_refutations), 2)
+        self.assertEqual(resumed_report.sampled_win_count, 2)
+        self.assertEqual(resumed_report.refuted_game_count, 2)
+        self.assertEqual(len(archive_rows), 2)
+        self.assertEqual([row["candidate"]["battle_id"] for row in archive_rows], ["first", "second"])
+
+    def test_miner_resume_rejects_archive_for_different_source_record(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(battle_id="original"),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            with self.assertRaisesRegex(ValueError, "source record does not match"):
+                mine_refutations(
+                    records=(_record(battle_id="different"),),
+                    config=resume_config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                    archive_path=archive_path,
+                )
+
+    def test_miner_resume_rejects_archived_rows_outside_current_sample_cap(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=2,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=1,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        records = (_record(battle_id="first"), _record(battle_id="second"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=records,
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=40),
+                archive_path=archive_path,
+            )
+            with self.assertRaisesRegex(ValueError, "outside the current max_wins sample cap"):
+                mine_refutations(
+                    records=records,
+                    config=resume_config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                    archive_path=archive_path,
+                )
+
+    def test_miner_resume_rejects_archive_index_missing_from_current_records(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(battle_id="first"), _record(battle_id="second")),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            rows = [dict(row) for row in iter_fragile_states(archive_path)]
+            rows[0]["candidate"]["source_record_index"] = 1
+            rows[0]["candidate"]["battle_id"] = "second"
+            archive_path.write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing archived source_record_index"):
+                mine_refutations(
+                    records=(_record(battle_id="first"),),
+                    config=resume_config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                    archive_path=archive_path,
+                )
+
+    def test_miner_resume_rejects_archive_for_non_champion_current_record(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(winner="p1"),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            with self.assertRaisesRegex(ValueError, "source record does not match"):
+                mine_refutations(
+                    records=(_record(winner="p2"),),
+                    config=resume_config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                    archive_path=archive_path,
+                )
+
+    def test_miner_resume_rejects_archive_certified_under_different_config(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+        )
+        resume_config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.75,
+            max_decision_points_per_game=1,
+            stop_after_first_refutation_per_game=True,
+            resume_archive=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=20),
+                archive_path=archive_path,
+            )
+            with self.assertRaisesRegex(ValueError, "does not match current refutation mining config"):
+                mine_refutations(
+                    records=(_record(),),
+                    config=resume_config,
+                    evaluator=FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0),
+                    archive_path=archive_path,
+                )
 
     def test_miner_can_certify_recorded_continuation_line_depth(self) -> None:
         config = RefutationMiningConfig(
@@ -777,6 +1043,7 @@ class RefutationMiningTest(unittest.TestCase):
 
         def fake_mine_refutations(**kwargs):
             captured["evaluator"] = kwargs["evaluator"]
+            captured["config"] = kwargs["config"]
             return FakeReport()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -806,12 +1073,15 @@ class RefutationMiningTest(unittest.TestCase):
                         "random-legal",
                         "--p2-policy",
                         "random-legal",
+                        "--stop-after-first-refutation-per-game",
+                        "--resume-archive",
                     ]
                 )
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(captured["evaluator"].reseed_simulator_rng)
         self.assertEqual(captured["evaluator"].reseed_scope, "simulator_rng")
+        self.assertTrue(captured["config"].resume_archive)
 
     def test_reproduce_refutation_archive_reruns_terminal_results(self) -> None:
         config = RefutationMiningConfig(
