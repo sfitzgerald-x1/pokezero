@@ -56,6 +56,8 @@ class RefutationMiningConfig:
     mode: str = "oracle"
     stop_after_first_refutation_per_game: bool = False
     resume_archive: bool = False
+    source_record_start_index: int | None = None
+    source_record_end_index: int | None = None
 
     def __post_init__(self) -> None:
         if self.champion_policy_id is None and self.champion_player_id is None:
@@ -79,6 +81,16 @@ class RefutationMiningConfig:
                 "resume_archive requires stop_after_first_refutation_per_game so a "
                 "partially written archive has at most one certified row per sampled win."
             )
+        if self.source_record_start_index is not None and self.source_record_start_index < 0:
+            raise ValueError("source_record_start_index must be non-negative when set.")
+        if self.source_record_end_index is not None and self.source_record_end_index <= 0:
+            raise ValueError("source_record_end_index must be positive when set.")
+        if (
+            self.source_record_start_index is not None
+            and self.source_record_end_index is not None
+            and self.source_record_end_index <= self.source_record_start_index
+        ):
+            raise ValueError("source_record_end_index must be greater than source_record_start_index.")
 
 
 @dataclass(frozen=True)
@@ -436,6 +448,8 @@ class RefutationMiningReport:
                 "mode": self.config.mode,
                 "stop_after_first_refutation_per_game": self.config.stop_after_first_refutation_per_game,
                 "resume_archive": self.config.resume_archive,
+                "source_record_start_index": self.config.source_record_start_index,
+                "source_record_end_index": self.config.source_record_end_index,
             },
             "source_record_count": self.source_record_count,
             "sampled_win_count": self.sampled_win_count,
@@ -554,7 +568,11 @@ def mine_refutations(
     with archive_path.open(archive_mode, encoding="utf-8") as handle:
         emit_progress("started")
         for record_index, record in enumerate(records):
+            if config.source_record_end_index is not None and record_index >= config.source_record_end_index:
+                break
             source_record_count = record_index + 1
+            if config.source_record_start_index is not None and record_index < config.source_record_start_index:
+                continue
             existing_refutations = already_refuted_by_record_index.get(record_index, ())
             if existing_refutations:
                 for refutation in existing_refutations:
@@ -731,7 +749,11 @@ def candidate_count_for_records(
     decisions = 0
     deviations = 0
     for record_index, record in enumerate(records):
+        if config.source_record_end_index is not None and record_index >= config.source_record_end_index:
+            break
         source_record_count = record_index + 1
+        if config.source_record_start_index is not None and record_index < config.source_record_start_index:
+            continue
         champion_win = _champion_win(record, config=config)
         if champion_win is None:
             continue
@@ -745,7 +767,7 @@ def candidate_count_for_records(
             deviations += len(
                 _deviation_candidates(
                     record=record,
-                    source_record_index=0,
+                    source_record_index=record_index,
                     champion_player_id=champion_player_id,
                     loser_player_id=loser_player_id,
                     step_index=step_index,
@@ -774,6 +796,162 @@ def iter_fragile_states(path: Path) -> Iterator[dict[str, Any]]:
         for line in handle:
             if line.strip():
                 yield json.loads(line)
+
+
+def _fragile_row_root_key(row: Mapping[str, Any]) -> tuple[int, int, int, int]:
+    candidate = _mapping_or_empty(row.get("candidate"))
+    return (
+        int(candidate.get("source_record_index", -1)),
+        int(candidate.get("decision_round_index", -1)),
+        int(candidate.get("step_index", -1)),
+        int(candidate.get("deviation_action_index", -1)),
+    )
+
+
+def _shared_merged_config(shard_configs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if not shard_configs:
+        return {}
+    shared_keys = (
+        "mode",
+        "champion_policy_id",
+        "champion_player_id",
+        "certification_seed_count",
+        "min_flip_rate",
+        "max_line_depth",
+    )
+    merged: dict[str, Any] = {}
+    for key in shared_keys:
+        first_value = shard_configs[0].get(key)
+        if any(config.get(key) != first_value for config in shard_configs[1:]):
+            raise ValueError(f"cannot merge refutation reports with different config.{key} values.")
+        if first_value is not None:
+            merged[key] = first_value
+    return merged
+
+
+def merge_refutation_report_payloads(
+    *,
+    reports: Sequence[Mapping[str, Any]],
+    fragile_state_groups: Sequence[Iterable[Mapping[str, Any]]],
+    archive_path: Path,
+) -> dict[str, Any]:
+    """Merge disjoint ranged R0 reports into one validation-ready report payload."""
+
+    if len(reports) != len(fragile_state_groups):
+        raise ValueError("reports and fragile_state_groups must have the same length.")
+    if not reports:
+        raise ValueError("at least one report is required.")
+
+    merged_rows: list[dict[str, Any]] = []
+    shard_payloads: list[dict[str, Any]] = []
+    source_record_count = 0
+    sampled_win_count = 0
+    scanned_decision_count = 0
+    candidate_deviation_count = 0
+    evaluated_deviation_count = 0
+    skipped_candidate_error_count = 0
+    candidate_error_examples: list[Mapping[str, Any]] = []
+    shard_configs: list[Mapping[str, Any]] = []
+
+    for shard_index, (report, rows_iterable) in enumerate(zip(reports, fragile_state_groups, strict=True)):
+        if report.get("schema_version") != REFUTATION_REPORT_SCHEMA_VERSION:
+            raise ValueError(f"report {shard_index} has unsupported schema_version.")
+        rows = [dict(row) for row in rows_iterable]
+        reported_certified_count = _int_value(report.get("certified_refutation_count"))
+        if reported_certified_count is None or reported_certified_count != len(rows):
+            raise ValueError(
+                f"report {shard_index} certified_refutation_count does not match archive rows."
+            )
+        source_record_count = max(source_record_count, _int_value(report.get("source_record_count")) or 0)
+        sampled_win_count += _int_value(report.get("sampled_win_count")) or 0
+        scanned_decision_count += _int_value(report.get("scanned_decision_count")) or 0
+        candidate_deviation_count += _int_value(report.get("candidate_deviation_count")) or 0
+        evaluated_deviation_count += _int_value(report.get("evaluated_deviation_count")) or 0
+        skipped_candidate_error_count += _int_value(report.get("skipped_candidate_error_count")) or 0
+        raw_examples = report.get("candidate_error_examples")
+        if isinstance(raw_examples, list):
+            candidate_error_examples.extend(
+                dict(example)
+                for example in raw_examples
+                if isinstance(example, Mapping)
+            )
+        shard_config = dict(_mapping_or_empty(report.get("config")))
+        shard_configs.append(shard_config)
+        shard_payloads.append(
+            {
+                "report_index": shard_index,
+                "config": shard_config,
+                "source_record_count": report.get("source_record_count"),
+                "sampled_win_count": report.get("sampled_win_count"),
+                "certified_refutation_count": reported_certified_count,
+                "archive_row_count": len(rows),
+            }
+        )
+        merged_rows.extend(rows)
+
+    merged_rows.sort(key=_fragile_row_root_key)
+    distinct_roots = {_fragile_row_root_key(row) for row in merged_rows}
+    if len(distinct_roots) != len(merged_rows):
+        raise ValueError("merged fragile-state archives contain duplicate certified roots.")
+    refuted_games = {
+        _fragile_row_root_key(row)[0]
+        for row in merged_rows
+        if _fragile_row_root_key(row)[0] >= 0
+    }
+    certified_refutation_count = len(merged_rows)
+    refuted_game_count = len(refuted_games)
+    merged_config = _shared_merged_config(shard_configs)
+    merged_config.update(
+        {
+            "merged": True,
+            "shard_count": len(reports),
+            "shards": shard_payloads,
+        }
+    )
+    return {
+        "schema_version": REFUTATION_REPORT_SCHEMA_VERSION,
+        "config": merged_config,
+        "source_record_count": source_record_count,
+        "sampled_win_count": sampled_win_count,
+        "scanned_decision_count": scanned_decision_count,
+        "candidate_deviation_count": candidate_deviation_count,
+        "evaluated_deviation_count": evaluated_deviation_count,
+        "skipped_candidate_error_count": skipped_candidate_error_count,
+        "candidate_error_examples": [dict(example) for example in candidate_error_examples[:10]],
+        "certified_refutation_count": certified_refutation_count,
+        "distinct_certified_root_count": len(distinct_roots),
+        "refuted_game_count": refuted_game_count,
+        "refutation_rate": refuted_game_count / sampled_win_count if sampled_win_count else 0.0,
+        "certified_refutations_per_sampled_win": (
+            certified_refutation_count / sampled_win_count if sampled_win_count else 0.0
+        ),
+        "archive_path": str(archive_path),
+        "examples": merged_rows[:10],
+    }
+
+
+def write_merged_refutation_artifacts(
+    *,
+    report_path: Path,
+    archive_path: Path,
+    reports: Sequence[Mapping[str, Any]],
+    fragile_state_groups: Sequence[Iterable[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    rows_by_group = [[dict(row) for row in group] for group in fragile_state_groups]
+    payload = merge_refutation_report_payloads(
+        reports=reports,
+        fragile_state_groups=rows_by_group,
+        archive_path=archive_path,
+    )
+    merged_rows = [row for group in rows_by_group for row in group]
+    merged_rows.sort(key=_fragile_row_root_key)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with archive_path.open("w", encoding="utf-8") as handle:
+        for row in merged_rows:
+            handle.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+    return payload
 
 
 def reproduce_refutation_archive(
