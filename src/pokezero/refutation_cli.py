@@ -438,15 +438,20 @@ def _load_records(paths: list[Path]) -> tuple:
     return tuple(records)
 
 
+def _iter_records(paths: list[Path]):
+    for path in paths:
+        yield from iter_rollout_records(path)
+
+
 def _plan(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    records = _iter_records(args.records)
     payload = candidate_count_for_records(records=records, config=_config_from_args(args))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
 def _mine(args: argparse.Namespace) -> int:
-    records = _load_records(args.records)
+    records = _iter_records(args.records)
     config = _config_from_args(args)
     env_config = LocalShowdownConfig(
         showdown_root=args.showdown_root,

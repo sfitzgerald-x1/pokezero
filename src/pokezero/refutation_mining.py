@@ -454,8 +454,8 @@ def mine_refutations(
     """Mine and certify loser-seat deviations from champion wins."""
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    source_records = tuple(records)
-    sampled_wins = tuple(_iter_champion_wins(source_records, config=config))
+    sampled_win_count = 0
+    source_record_count = 0
     scanned_decision_count = 0
     candidate_deviation_count = 0
     evaluated_deviation_count = 0
@@ -464,7 +464,13 @@ def mine_refutations(
     certified: list[CertifiedRefutation] = []
 
     with archive_path.open("w", encoding="utf-8") as handle:
-        for record_index, record, champion_player_id, loser_player_id in sampled_wins:
+        for record_index, record in enumerate(records):
+            source_record_count = record_index + 1
+            champion_win = _champion_win(record, config=config)
+            if champion_win is None:
+                continue
+            champion_player_id, loser_player_id = champion_win
+            sampled_win_count += 1
             decision_steps = _loser_decision_steps(record.trajectory, loser_player_id)
             if config.max_decision_points_per_game is not None:
                 decision_steps = decision_steps[: config.max_decision_points_per_game]
@@ -504,11 +510,13 @@ def mine_refutations(
                         continue
                     certified.append(maybe)
                     _write_fragile_state(handle, maybe)
+            if sampled_win_count >= config.max_wins:
+                break
 
     return RefutationMiningReport(
         config=config,
-        source_record_count=len(source_records),
-        sampled_win_count=len(sampled_wins),
+        source_record_count=source_record_count,
+        sampled_win_count=sampled_win_count,
         scanned_decision_count=scanned_decision_count,
         candidate_deviation_count=candidate_deviation_count,
         evaluated_deviation_count=evaluated_deviation_count,
@@ -580,11 +588,16 @@ def candidate_count_for_records(
 ) -> dict[str, int]:
     """Cheap planning helper for report preflights."""
 
-    source_records = tuple(records)
+    source_record_count = 0
     win_count = 0
     decisions = 0
     deviations = 0
-    for _, record, champion_player_id, loser_player_id in _iter_champion_wins(source_records, config=config):
+    for record_index, record in enumerate(records):
+        source_record_count = record_index + 1
+        champion_win = _champion_win(record, config=config)
+        if champion_win is None:
+            continue
+        champion_player_id, loser_player_id = champion_win
         win_count += 1
         decision_steps = _loser_decision_steps(record.trajectory, loser_player_id)
         if config.max_decision_points_per_game is not None:
@@ -603,8 +616,10 @@ def candidate_count_for_records(
                     max_line_depth=config.max_line_depth,
                 )
             )
+        if win_count >= config.max_wins:
+            break
     return {
-        "source_record_count": len(source_records),
+        "source_record_count": source_record_count,
         "sampled_win_count": win_count,
         "scanned_decision_count": decisions,
         "candidate_deviation_count": deviations,
@@ -1029,26 +1044,17 @@ def validate_refutation_report_payload(
     }
 
 
-def _iter_champion_wins(
-    records: Sequence[RolloutRecord],
-    *,
-    config: RefutationMiningConfig,
-) -> Iterator[tuple[int, RolloutRecord, str, str]]:
-    emitted = 0
-    for record_index, record in enumerate(records):
-        terminal = record.terminal
-        if terminal.capped or terminal.winner is None:
-            continue
-        champion_player_id = _champion_player_id(record, config=config)
-        if champion_player_id is None or terminal.winner != champion_player_id:
-            continue
-        loser_player_id = _single_loser_player(record.trajectory, champion_player_id)
-        if loser_player_id is None:
-            continue
-        yield record_index, record, champion_player_id, loser_player_id
-        emitted += 1
-        if emitted >= config.max_wins:
-            return
+def _champion_win(record: RolloutRecord, *, config: RefutationMiningConfig) -> tuple[str, str] | None:
+    terminal = record.terminal
+    if terminal.capped or terminal.winner is None:
+        return None
+    champion_player_id = _champion_player_id(record, config=config)
+    if champion_player_id is None or terminal.winner != champion_player_id:
+        return None
+    loser_player_id = _single_loser_player(record.trajectory, champion_player_id)
+    if loser_player_id is None:
+        return None
+    return champion_player_id, loser_player_id
 
 
 def _champion_player_id(record: RolloutRecord, *, config: RefutationMiningConfig) -> str | None:
