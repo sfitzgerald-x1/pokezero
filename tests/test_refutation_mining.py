@@ -44,7 +44,9 @@ from pokezero.refutation_progress import (
 )
 from pokezero.refutation_training import (
     RefutationTrainingConfig,
+    refutation_behavior_seed_training_examples,
     refutation_training_examples,
+    write_refutation_behavior_seed_training_cache,
     write_refutation_training_cache,
 )
 from pokezero.rollout import RolloutConfig
@@ -1701,6 +1703,136 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(printed, written)
         self.assertEqual(written["seed_count"], 1)
         self.assertEqual(written["seeds"][0]["deviation_action_index"], 2)
+
+    def test_refutation_behavior_seed_training_examples_retarget_loser_action(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            manifest = build_refutation_behavior_seed_manifest(tuple(iter_fragile_states(archive_path))).to_dict()
+
+        examples = refutation_behavior_seed_training_examples(
+            records=(_record(),),
+            behavior_seed_manifest=manifest,
+            config=RefutationTrainingConfig(target_mode="policy-value"),
+        )
+
+        self.assertEqual(len(examples), 1)
+        example = examples[0]
+        self.assertEqual(example.player_id, "p2")
+        self.assertEqual(example.action_index, 2)
+        self.assertAlmostEqual(example.return_value, 0.3)
+        self.assertAlmostEqual(example.ppo_value_target, 0.3)
+        self.assertEqual(example.step_metadata["refutation_training"]["deviation_action_index"], 2)
+
+    def test_refutation_behavior_seed_training_rejects_distribution_mode(self) -> None:
+        manifest = {
+            "schema_version": REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION,
+            "seeds": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "behavior-seed training does not support"):
+            refutation_behavior_seed_training_examples(
+                records=(),
+                behavior_seed_manifest=manifest,
+                config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
+            )
+
+    def test_refutation_behavior_seed_cache_cli_writes_corrected_cache(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            records_path = root / "records.jsonl"
+            archive_path = root / "fragile.jsonl"
+            behavior_seeds_path = root / "behavior-seeds.json"
+            cache_path = root / "behavior-seed-cache"
+            with records_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, _record())
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            manifest = build_refutation_behavior_seed_manifest(tuple(iter_fragile_states(archive_path)))
+            behavior_seeds_path.write_text(json.dumps(manifest.to_dict(), indent=2), encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = refutation_cli_main(
+                    [
+                        "behavior-seed-cache",
+                        "--records",
+                        str(records_path),
+                        "--behavior-seeds",
+                        str(behavior_seeds_path),
+                        "--out",
+                        str(cache_path),
+                        "--surprise-weight-scale",
+                        "2.0",
+                    ]
+                )
+            payload = json.loads(stdout.getvalue())
+            metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
+            (batch,) = tuple(iter_training_cache_batches(cache_path, batch_size=10))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["example_count"], 1)
+        self.assertEqual(payload["fragile_state_count"], 1)
+        self.assertEqual(payload["compatible_objectives"], ["behavior-cloning", "ppo", "reward-weighted"])
+        self.assertEqual(metadata["refutation_training"]["target_mode"], "policy-value")
+        self.assertAlmostEqual(payload["training_weight_mean"], 1.25)
+        self.assertEqual(batch.action_indices, (2,))
+        self.assertAlmostEqual(batch.training_weights[0], 1.25, places=6)
+        self.assertAlmostEqual(batch.returns[0], 0.3, places=6)
+        self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
+        self.assertEqual(batch.action_probability_mask, (False,))
+
+    def test_refutation_behavior_seed_training_cache_helper_writes_corrected_cache(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "fragile.jsonl"
+            cache_path = root / "behavior-seed-cache"
+            mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13),
+                archive_path=archive_path,
+            )
+            manifest = build_refutation_behavior_seed_manifest(tuple(iter_fragile_states(archive_path))).to_dict()
+            summary = write_refutation_behavior_seed_training_cache(
+                records=(_record(),),
+                behavior_seed_manifest=manifest,
+                output_path=cache_path,
+            )
+            (batch,) = tuple(iter_training_cache_batches(cache_path, batch_size=10))
+
+        self.assertEqual(summary.example_count, 1)
+        self.assertEqual(batch.action_indices, (2,))
 
     def test_refutation_behavior_seed_manifest_filters_and_caps_rows(self) -> None:
         config = RefutationMiningConfig(

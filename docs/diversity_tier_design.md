@@ -249,6 +249,14 @@ consumers still use the active gauntlet policy: max-damage, foul-play rungs, and
 frozen current-family v2+ checkpoint pools rather than random/simple or legacy
 families.
 
+`pokezero-refutation behavior-seed-cache` is the opt-in R2 distillation bridge
+from that compact manifest back into the same refutation-cache contract consumed
+by `pokezero-neural train --refutation-cache`. It retargets loser-perspective
+examples from source rollout records using each seed's certified deviation and
+aggregate terminal counts. Because behavior-seed manifests do not carry full
+search distributions, this path supports `value` and `policy-value` targets only;
+`policy-distribution-value` remains archive-backed through `training-cache`.
+
 ### G3 — Exploiters (the adversarial engine)
 
 Periodically train an **exploiter**: a fresh (or branched) agent whose collection

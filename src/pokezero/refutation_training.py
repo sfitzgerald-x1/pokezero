@@ -24,6 +24,7 @@ from .dataset import (
     write_training_cache_from_examples,
 )
 from .refutation_mining import FRAGILE_STATE_SCHEMA_VERSION
+from .refutation_population import REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION
 
 
 POLICY_DISTRIBUTION_TARGET_MODE = "policy-distribution-value"
@@ -118,6 +119,30 @@ def refutation_training_examples(
     return examples
 
 
+def refutation_behavior_seed_training_examples(
+    *,
+    records: Sequence[RolloutRecord],
+    behavior_seed_manifest: Mapping[str, Any],
+    dataset_config: TrajectoryDatasetConfig | None = None,
+    config: RefutationTrainingConfig | None = None,
+) -> tuple[TrajectoryExample, ...]:
+    """Build corrected examples from an R2 behavior-seed manifest.
+
+    Behavior-seed manifests are the compact population artifact derived from the
+    fragile-state archive. They carry a certified deviation action and aggregate
+    terminal counts, but not a full search distribution, so this path supports
+    ``value`` and ``policy-value`` target modes only.
+    """
+
+    examples, _ = _behavior_seed_training_examples_and_skipped(
+        records=records,
+        behavior_seed_manifest=behavior_seed_manifest,
+        dataset_config=dataset_config,
+        config=config,
+    )
+    return examples
+
+
 def write_refutation_training_cache(
     *,
     records: Sequence[RolloutRecord],
@@ -164,6 +189,54 @@ def write_refutation_training_cache(
     )
 
 
+def write_refutation_behavior_seed_training_cache(
+    *,
+    records: Sequence[RolloutRecord],
+    behavior_seed_manifest: Mapping[str, Any],
+    output_path: Path,
+    dataset_config: TrajectoryDatasetConfig | None = None,
+    config: RefutationTrainingConfig | None = None,
+    overwrite: bool = False,
+) -> RefutationTrainingSummary:
+    """Write a refutation training cache from an R2 behavior-seed manifest."""
+
+    resolved_config = _behavior_seed_training_config(config)
+    seed_rows = tuple(_fragile_rows_from_behavior_seed_manifest(behavior_seed_manifest))
+    examples, skipped_count = _behavior_seed_training_examples_and_skipped(
+        records=records,
+        behavior_seed_manifest=behavior_seed_manifest,
+        dataset_config=dataset_config,
+        config=resolved_config,
+    )
+    cache = write_training_cache_from_examples(
+        examples,
+        output_path,
+        config=dataset_config,
+        overwrite=overwrite,
+    )
+    _stamp_refutation_cache_metadata(
+        cache.path,
+        target_mode=resolved_config.target_mode,
+        compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
+        surprise_weighting=_surprise_weighting_payload(resolved_config),
+        training_weight_stats=_training_weight_stats(examples),
+    )
+    weight_stats = _training_weight_stats(examples)
+    return RefutationTrainingSummary(
+        source_record_count=len(records),
+        fragile_state_count=len(seed_rows),
+        example_count=len(examples),
+        skipped_count=skipped_count,
+        target_mode=resolved_config.target_mode,
+        compatible_objectives=REFUTATION_TRAINING_COMPATIBLE_OBJECTIVES[resolved_config.target_mode],
+        surprise_weighting=_surprise_weighting_payload(resolved_config),
+        training_weight_min=weight_stats["min"],
+        training_weight_max=weight_stats["max"],
+        training_weight_mean=weight_stats["mean"],
+        cache=cache,
+    )
+
+
 def _refutation_training_examples_and_skipped(
     *,
     records: Sequence[RolloutRecord],
@@ -198,6 +271,72 @@ def _refutation_training_examples_and_skipped(
             continue
         examples.extend(group)
     return tuple(examples), skipped_count
+
+
+def _behavior_seed_training_examples_and_skipped(
+    *,
+    records: Sequence[RolloutRecord],
+    behavior_seed_manifest: Mapping[str, Any],
+    dataset_config: TrajectoryDatasetConfig | None = None,
+    config: RefutationTrainingConfig | None = None,
+) -> tuple[tuple[TrajectoryExample, ...], int]:
+    resolved_config = _behavior_seed_training_config(config)
+    return _refutation_training_examples_and_skipped(
+        records=records,
+        fragile_states=tuple(_fragile_rows_from_behavior_seed_manifest(behavior_seed_manifest)),
+        dataset_config=dataset_config,
+        config=resolved_config,
+    )
+
+
+def _behavior_seed_training_config(config: RefutationTrainingConfig | None) -> RefutationTrainingConfig:
+    resolved = config or RefutationTrainingConfig()
+    if resolved.target_mode == POLICY_DISTRIBUTION_TARGET_MODE:
+        raise ValueError("behavior-seed training does not support policy-distribution-value targets")
+    return resolved
+
+
+def _fragile_rows_from_behavior_seed_manifest(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    if manifest.get("schema_version") != REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"unsupported behavior-seed manifest schema: {manifest.get('schema_version')!r}")
+    seeds = _sequence(manifest.get("seeds"), label="behavior_seed_manifest.seeds")
+    rows = []
+    for seed in seeds:
+        rows.append(_fragile_row_from_behavior_seed(_mapping(seed, label="behavior_seed")))
+    return tuple(rows)
+
+
+def _fragile_row_from_behavior_seed(seed: Mapping[str, Any]) -> dict[str, Any]:
+    seed_count = _int(seed.get("certification_seed_count"), label="behavior_seed.certification_seed_count")
+    deviation_wins = _int(seed.get("deviation_wins"), label="behavior_seed.deviation_wins")
+    champion_wins = _int(seed.get("champion_wins"), label="behavior_seed.champion_wins")
+    ties_or_caps = _int(seed.get("ties_or_caps"), label="behavior_seed.ties_or_caps")
+    if seed_count != deviation_wins + champion_wins + ties_or_caps:
+        raise ValueError("behavior_seed terminal counts must sum to certification_seed_count")
+    return {
+        "schema_version": FRAGILE_STATE_SCHEMA_VERSION,
+        "mode": _required_str(seed.get("mode"), label="behavior_seed.mode"),
+        "candidate": {
+            "source_record_index": _int(seed.get("source_record_index"), label="behavior_seed.source_record_index"),
+            "battle_id": _required_str(seed.get("battle_id"), label="behavior_seed.battle_id"),
+            "seed": _int(seed.get("seed"), label="behavior_seed.seed"),
+            "format_id": _required_str(seed.get("format_id"), label="behavior_seed.format_id"),
+            "champion_player_id": _required_str(seed.get("champion_player_id"), label="behavior_seed.champion_player_id"),
+            "loser_player_id": _required_str(seed.get("loser_player_id"), label="behavior_seed.loser_player_id"),
+            "decision_round_index": _int(seed.get("decision_round_index"), label="behavior_seed.decision_round_index"),
+            "step_index": _int(seed.get("step_index"), label="behavior_seed.step_index"),
+            "recorded_action_index": _int(seed.get("recorded_action_index"), label="behavior_seed.recorded_action_index"),
+            "deviation_action_index": _int(seed.get("deviation_action_index"), label="behavior_seed.deviation_action_index"),
+        },
+        "certification": {
+            "passed": True,
+            "seed_count": seed_count,
+            "deviation_wins": deviation_wins,
+            "champion_wins": champion_wins,
+            "ties_or_caps": ties_or_caps,
+            "flip_rate": _float(seed.get("flip_rate"), label="behavior_seed.flip_rate"),
+        },
+    }
 
 
 def _stamp_refutation_cache_metadata(
@@ -453,8 +592,25 @@ def _mapping(value: Any, *, label: str) -> Mapping[str, Any]:
     return value
 
 
+def _required_str(value: Any, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} must be a non-empty string")
+    return text
+
+
 def _int(value: Any, *, label: str) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} must be an integer") from exc
+
+
+def _float(value: Any, *, label: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{label} must be a finite number")
+    return result
