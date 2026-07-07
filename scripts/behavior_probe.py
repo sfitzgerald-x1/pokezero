@@ -40,12 +40,19 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from pokezero.behavior_metrics import move_class_summary
 from pokezero.checkpoint_factors import choice_label
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.online_client import build_agent
-from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
+
+# Optional enrichments: probes are frequently run against a deployed foundation image whose
+# pokezero may lag main (e.g. the v2.2 image predates behavior_metrics / the current-family gate).
+# Degrade gracefully rather than hard-failing — the core behavioral signals do not depend on these.
+try:
+    from pokezero.behavior_metrics import move_class_summary
+except ImportError:  # older image: drop the move-class breakdown, keep everything else
+    def move_class_summary(move_counts, *, dex=None):  # type: ignore[misc]
+        return {}
 
 MAX_STEPS = 400
 
@@ -60,9 +67,22 @@ def _self_play_behavior(agent, showdown_root: str, num_games: int, seed_start: i
     total_turns = 0
     games_played = 0
 
+    # Pair the env with the checkpoint's OWN observation spec/vocab/masks. This is what selects the
+    # encode schema: a v2.2 (turn-merged) spec makes _state_for_player populate state.turn_merged_tokens,
+    # which the v2.2 encode requires — without it the encoder raises "requires ... turn_merged_tokens"
+    # on the first move. Mirrors online_client.build_agent + the local self-play path.
+    env_kwargs = {
+        "showdown_root": showdown_root,
+        "set_belief_source": belief_set_source,
+        "observation_spec": agent.spec,
+        "category_vocab": agent.vocab,
+    }
+    if agent.feature_masks is not None:
+        env_kwargs["feature_masks"] = agent.feature_masks
+
     for index in range(num_games):
         seed = seed_start + index
-        config = LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=belief_set_source)
+        config = LocalShowdownConfig(**env_kwargs)
         env = LocalShowdownEnv(config)
         env.reset(seed=seed)
         last_turn = 0
@@ -157,10 +177,17 @@ def main() -> int:
         path, _, label = spec.partition("=")
         specs.append((label or Path(path).stem, path))
     if not args.allow_legacy_checkpoints:
-        require_current_family_checkpoint_paths(
-            (path for _, path in specs),
-            context="behavior probe",
-        )
+        try:
+            from pokezero.opponents import require_current_family_checkpoint_paths
+        except ImportError:
+            print("[warn] current-family gate unavailable in this image; skipping schema check "
+                  "(the deployed image is the checkpoint's own, so schema matches by construction)",
+                  file=sys.stderr)
+        else:
+            require_current_family_checkpoint_paths(
+                (path for _, path in specs),
+                context="behavior probe",
+            )
 
     belief = True if args.belief_set_source else None
     rows = []
