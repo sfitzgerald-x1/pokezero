@@ -293,20 +293,30 @@ def sample_states_at_turn(
     player: str = "p1",
     seed_start: int = 1,
     max_seed_scan: int | None = None,
+    observation_spec: "ObservationSpec | None" = None,
 ):
     """Collect one decision state per unique game at the given turn (deterministic driver ensemble).
     Returns a list of (state, seed). Games that end before `turn` (or have no clean decision for
-    `player` there) are skipped and the next seed is tried, up to `max_seed_scan` seeds."""
+    `player` there) are skipped and the next seed is tried, up to `max_seed_scan` seeds.
+
+    ``observation_spec`` selects the encode schema of the capture env. Pass the checkpoint's own
+    spec so a v2.2 (turn-merged) run captures states with ``state.turn_merged_tokens`` populated —
+    the v2.2 encode requires them. The scripted drivers never read the observation tensors, so the
+    spec only affects which fields the captured state carries (and env.observe self-builds the
+    matching turn-merged vocab when the spec is v2.2)."""
     pairs = _driver_pairs(showdown_root)
     scan_limit = max_seed_scan if max_seed_scan is not None else num_games * 8
     collected: list[tuple[Any, int]] = []
+    env_config_kwargs = {"showdown_root": showdown_root}
+    if observation_spec is not None:
+        env_config_kwargs["observation_spec"] = observation_spec
 
     for offset in range(scan_limit):
         if len(collected) >= num_games:
             break
         seed = seed_start + offset
         pair = pairs[offset % len(pairs)]
-        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root))
+        env = LocalShowdownEnv(LocalShowdownConfig(**env_config_kwargs))
         env.reset(seed=seed)
         rngs = {"p1": random.Random(seed * 2 + 1), "p2": random.Random(seed * 2 + 2)}
         captured = None

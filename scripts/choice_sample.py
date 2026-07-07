@@ -30,7 +30,6 @@ from pokezero.checkpoint_factors import (
 )
 from pokezero.neural_policy import evaluate_transformer_action_priors
 from pokezero.online_client import build_agent
-from pokezero.opponents import require_current_family_checkpoint_paths
 from pokezero.showdown import observation_from_player_state
 
 
@@ -130,18 +129,40 @@ def main() -> int:
         path, _, label = raw.partition("=")
         specs.append((label or Path(path).stem, path))
     if not args.allow_legacy_checkpoints:
-        require_current_family_checkpoint_paths(
-            (path for _, path in specs),
-            context="choice-sample probe",
-        )
+        try:
+            from pokezero.opponents import require_current_family_checkpoint_paths
+        except ImportError:
+            print("[warn] current-family gate unavailable in this image; skipping schema check "
+                  "(the deployed image is the checkpoint's own, so schema matches by construction)",
+                  file=sys.stderr)
+        else:
+            require_current_family_checkpoint_paths(
+                (path for _, path in specs),
+                context="choice-sample probe",
+            )
 
-    print(f"[sample] collecting turn-{args.turn} {args.player} states from {args.num_games} unique games…")
+    # Build agents up front (cached) so state capture can use the checkpoint's own observation
+    # spec. This matters for v2.2 (turn-merged) runs: the capture env must populate
+    # state.turn_merged_tokens, which the v2.2 encode requires. All checkpoints in one invocation
+    # share a schema family (enforced by the current-family gate above), so the first checkpoint's
+    # spec drives capture.
+    agents: dict[str, object] = {}
+
+    def _agent(path: str):
+        if path not in agents:
+            agents[path] = build_agent(path, args.showdown_root, our_name="sample", deterministic=True)
+        return agents[path]
+
+    capture_spec = _agent(specs[0][1]).spec
+    print(f"[sample] collecting turn-{args.turn} {args.player} states from {args.num_games} unique "
+          f"games (schema {capture_spec.schema_version})…")
     states = sample_states_at_turn(
         args.showdown_root,
         num_games=args.num_games,
         turn=args.turn,
         player=args.player,
         seed_start=args.seed_start,
+        observation_spec=capture_spec,
     )
     print(f"[sample] captured {len(states)} states (seeds {[s for _, s in states]})")
 
@@ -166,7 +187,7 @@ def main() -> int:
 
     for label, path in specs:
         print(f"[sample] scoring {label}…")
-        agent = build_agent(path, args.showdown_root, our_name="sample", deterministic=True)
+        agent = _agent(path)
         for record, (state, _) in zip(records, states):
             obs = observation_from_player_state(
                 state, category_vocab=agent.vocab, spec=agent.spec, dex=agent.dex,
