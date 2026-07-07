@@ -23,6 +23,7 @@ from pokezero.dataset import (
     training_batch_from_examples,
     write_training_cache_from_examples,
     write_training_cache_from_rollouts,
+    write_training_cache_streaming,
 )
 from pokezero.env import TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
@@ -1391,6 +1392,55 @@ def _fill_like(value, replacement):
     if isinstance(value, tuple):
         return tuple(_fill_like(item, replacement) for item in value)
     return replacement
+
+
+class StreamingCacheParityTest(unittest.TestCase):
+    def test_streaming_cache_is_byte_identical_to_in_memory_builder(self) -> None:
+        import numpy
+
+        config = TrajectoryDatasetConfig(window_size=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rollouts = tmp_path / "rollouts.jsonl"
+            # A handful of records so pass-2 chunking crosses a flush boundary; mixed
+            # belief-source hashes so the provenance metadata (belief_set_source_mixed,
+            # counts) is exercised and must match the in-memory builder.
+            hashes = ["hash-a", "hash-a", "hash-b", None, "hash-b", "hash-a", "hash-b"]
+            with rollouts.open("w", encoding="utf-8") as handle:
+                for value in hashes:
+                    write_rollout_record(handle, replace(rollout_record(), belief_set_source_hash=value))
+
+            in_memory = TrainingCacheBuilder(config=config)
+            for record in _read_records(rollouts):
+                in_memory.add_record(record)
+            old = tmp_path / "old"
+            in_memory.write(old, max_cache_root_bytes=None)
+
+            new = tmp_path / "new"
+            write_training_cache_streaming(
+                rollouts, new, config=config, max_cache_root_bytes=None, flush_rows=3
+            )
+
+            old_files = sorted(p.name for p in old.glob("*.npy"))
+            self.assertEqual(old_files, sorted(p.name for p in new.glob("*.npy")))
+            for name in old_files:
+                a = numpy.load(old / name)
+                b = numpy.load(new / name)
+                self.assertEqual(a.shape, b.shape, name)
+                self.assertEqual(a.dtype, b.dtype, name)
+                self.assertTrue(numpy.array_equal(a, b), name)
+            # Full metadata parity — every key, including belief/opponent-pool provenance,
+            # feature_masks and observation_schema (regression guard: these were dropped once).
+            meta_old = json.loads((old / "metadata.json").read_text())
+            meta_new = json.loads((new / "metadata.json").read_text())
+            self.assertEqual(meta_old, meta_new)
+            self.assertTrue(meta_new["belief_set_source_mixed"])
+
+
+def _read_records(path: Path):
+    from pokezero.collection import iter_rollout_records
+
+    return list(iter_rollout_records(path))
 
 
 if __name__ == "__main__":
