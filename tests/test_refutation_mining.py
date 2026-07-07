@@ -380,6 +380,7 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(report.evaluated_deviation_count, 2)
             self.assertEqual(len(report.certified_refutations), 1)
             refutation = report.certified_refutations[0]
+            self.assertEqual(len(refutation.terminal_results), 20)
             self.assertEqual(refutation.evaluation_source, "terminal_rollout")
             self.assertEqual(refutation.search_stats["value_head_used"], False)
             self.assertEqual(refutation.search_stats["reseed_scope"], "simulator_rng")
@@ -394,6 +395,72 @@ class RefutationMiningTest(unittest.TestCase):
             self.assertEqual(archive_rows[0]["schema_version"], FRAGILE_STATE_SCHEMA_VERSION)
             self.assertEqual(archive_rows[0]["candidate"]["deviation_action_index"], 2)
             self.assertEqual(archive_rows[0]["certification"]["seed_count"], 20)
+
+    def test_miner_short_circuits_candidates_that_cannot_reach_flip_threshold(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions=set(), loser_win_count=0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        self.assertEqual(report.evaluated_deviation_count, 1)
+        self.assertEqual(len(report.certified_refutations), 0)
+        self.assertEqual(len(evaluator.calls), 8)
+
+    def test_miner_short_circuits_partial_win_candidate_when_remaining_seeds_cannot_pass(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=11)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        self.assertEqual(report.evaluated_deviation_count, 1)
+        self.assertEqual(len(report.certified_refutations), 0)
+        self.assertEqual(len(evaluator.calls), 19)
+
+    def test_miner_rejects_strict_flip_rate_boundary_after_full_seed_count(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.60,
+            max_decision_points_per_game=1,
+            max_deviations_per_state=1,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=12)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=Path(temp_dir) / "fragile.jsonl",
+            )
+
+        self.assertEqual(report.evaluated_deviation_count, 1)
+        self.assertEqual(len(report.certified_refutations), 0)
+        self.assertEqual(len(evaluator.calls), 20)
 
     def test_miner_emits_progress_snapshots_during_long_running_search(self) -> None:
         config = RefutationMiningConfig(
