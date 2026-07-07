@@ -316,7 +316,7 @@ class RefutationMiningTest(unittest.TestCase):
             champion_policy_id="champion",
             max_wins=10,
             certification_seed_count=20,
-            min_flip_rate=0.60,
+            min_flip_rate=0.50,
             max_decision_points_per_game=1,
         )
         evaluator = FakeTerminalEvaluator(loser_winning_actions={2}, loser_win_count=13)
@@ -1662,6 +1662,7 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(payload["skipped_count"], 1)
         seed = payload["seeds"][0]
         self.assertEqual(seed["seed_id"], "battle-1:round-0:step-1:action-2")
+        self.assertEqual(seed["min_flip_rate"], 0.6)
         self.assertEqual(seed["population_use"]["kind"], "refutation_behavior_seed")
         self.assertIn("legacy_checkpoint_strength_eval", seed["population_use"]["not_for"])
 
@@ -1670,7 +1671,7 @@ class RefutationMiningTest(unittest.TestCase):
             champion_policy_id="champion",
             max_wins=10,
             certification_seed_count=20,
-            min_flip_rate=0.60,
+            min_flip_rate=0.50,
             max_decision_points_per_game=1,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1749,12 +1750,44 @@ class RefutationMiningTest(unittest.TestCase):
                 config=RefutationTrainingConfig(target_mode="policy-distribution-value"),
             )
 
+    def test_refutation_behavior_seed_training_rejects_count_mismatch(self) -> None:
+        manifest = {
+            "schema_version": REFUTATION_BEHAVIOR_SEED_MANIFEST_SCHEMA_VERSION,
+            "seeds": [
+                {
+                    "source_record_index": 0,
+                    "battle_id": "battle-1",
+                    "seed": 123,
+                    "format_id": "gen3randombattle",
+                    "mode": "oracle",
+                    "champion_player_id": "p1",
+                    "loser_player_id": "p2",
+                    "decision_round_index": 0,
+                    "step_index": 1,
+                    "recorded_action_index": 1,
+                    "deviation_action_index": 2,
+                    "flip_rate": 0.65,
+                    "min_flip_rate": 0.60,
+                    "certification_seed_count": 20,
+                    "deviation_wins": 13,
+                    "champion_wins": 6,
+                    "ties_or_caps": 0,
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "terminal counts must sum"):
+            refutation_behavior_seed_training_examples(
+                records=(_record(),),
+                behavior_seed_manifest=manifest,
+            )
+
     def test_refutation_behavior_seed_cache_cli_writes_corrected_cache(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",
             max_wins=10,
             certification_seed_count=20,
-            min_flip_rate=0.60,
+            min_flip_rate=0.50,
             max_decision_points_per_game=1,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1798,9 +1831,9 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(payload["fragile_state_count"], 1)
         self.assertEqual(payload["compatible_objectives"], ["behavior-cloning", "ppo", "reward-weighted"])
         self.assertEqual(metadata["refutation_training"]["target_mode"], "policy-value")
-        self.assertAlmostEqual(payload["training_weight_mean"], 1.25)
+        self.assertAlmostEqual(payload["training_weight_mean"], 1.6)
         self.assertEqual(batch.action_indices, (2,))
-        self.assertAlmostEqual(batch.training_weights[0], 1.25, places=6)
+        self.assertAlmostEqual(batch.training_weights[0], 1.6, places=6)
         self.assertAlmostEqual(batch.returns[0], 0.3, places=6)
         self.assertAlmostEqual(batch.ppo_value_targets[0], 0.3, places=6)
         self.assertEqual(batch.action_probability_mask, (False,))

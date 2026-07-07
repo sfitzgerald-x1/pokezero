@@ -335,6 +335,7 @@ def _fragile_row_from_behavior_seed(seed: Mapping[str, Any]) -> dict[str, Any]:
             "champion_wins": champion_wins,
             "ties_or_caps": ties_or_caps,
             "flip_rate": _float(seed.get("flip_rate"), label="behavior_seed.flip_rate"),
+            "min_flip_rate": _float(seed.get("min_flip_rate"), label="behavior_seed.min_flip_rate"),
         },
     }
 
