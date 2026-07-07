@@ -416,6 +416,15 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default="oracle",
         help="Refutation mode label. R0 is expected to start with oracle.",
     )
+    parser.add_argument(
+        "--stop-after-first-refutation-per-game",
+        action="store_true",
+        help=(
+            "During mining, stop evaluating additional deviations for a sampled win after "
+            "the first certified refutation. This preserves the refutation-rate metric "
+            "while bounding R0 acceptance runtime."
+        ),
+    )
 
 
 def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
@@ -429,6 +438,7 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
         certification_seed_count=args.certification_seeds,
         min_flip_rate=args.min_flip_rate,
         mode=args.mode,
+        stop_after_first_refutation_per_game=args.stop_after_first_refutation_per_game,
     )
 
 

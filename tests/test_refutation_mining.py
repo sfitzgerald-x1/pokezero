@@ -397,6 +397,33 @@ class RefutationMiningTest(unittest.TestCase):
         self.assertEqual(report.candidate_deviation_count, 1)
         self.assertEqual(report.evaluated_deviation_count, 1)
 
+    def test_miner_can_stop_after_first_refutation_per_game(self) -> None:
+        config = RefutationMiningConfig(
+            champion_policy_id="champion",
+            max_wins=10,
+            certification_seed_count=20,
+            min_flip_rate=0.50,
+            stop_after_first_refutation_per_game=True,
+        )
+        evaluator = FakeTerminalEvaluator(loser_winning_actions={2, 3, 5}, loser_win_count=20)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "fragile.jsonl"
+
+            report = mine_refutations(
+                records=(_record(),),
+                config=config,
+                evaluator=evaluator,
+                archive_path=archive_path,
+            )
+
+        self.assertEqual(report.sampled_win_count, 1)
+        self.assertEqual(report.scanned_decision_count, 2)
+        self.assertEqual(report.candidate_deviation_count, 2)
+        self.assertEqual(report.evaluated_deviation_count, 1)
+        self.assertEqual(len(report.certified_refutations), 1)
+        self.assertEqual(report.refuted_game_count, 1)
+        self.assertTrue(report.to_dict()["config"]["stop_after_first_refutation_per_game"])
+
     def test_miner_can_certify_recorded_continuation_line_depth(self) -> None:
         config = RefutationMiningConfig(
             champion_policy_id="champion",

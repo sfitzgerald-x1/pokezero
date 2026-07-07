@@ -53,6 +53,7 @@ class RefutationMiningConfig:
     certification_seed_count: int = 20
     min_flip_rate: float = 0.60
     mode: str = "oracle"
+    stop_after_first_refutation_per_game: bool = False
 
     def __post_init__(self) -> None:
         if self.champion_policy_id is None and self.champion_player_id is None:
@@ -426,6 +427,7 @@ class RefutationMiningReport:
                 "certification_seed_count": self.config.certification_seed_count,
                 "min_flip_rate": self.config.min_flip_rate,
                 "mode": self.config.mode,
+                "stop_after_first_refutation_per_game": self.config.stop_after_first_refutation_per_game,
             },
             "source_record_count": self.source_record_count,
             "sampled_win_count": self.sampled_win_count,
@@ -471,11 +473,14 @@ def mine_refutations(
                 continue
             champion_player_id, loser_player_id = champion_win
             sampled_win_count += 1
+            game_refuted = False
             decision_steps = _loser_decision_steps(record.trajectory, loser_player_id)
             if config.max_decision_points_per_game is not None:
                 decision_steps = decision_steps[: config.max_decision_points_per_game]
             scanned_decision_count += len(decision_steps)
             for step_index, step in decision_steps:
+                if game_refuted and config.stop_after_first_refutation_per_game:
+                    break
                 candidates = _deviation_candidates(
                     record=record,
                     source_record_index=record_index,
@@ -510,6 +515,9 @@ def mine_refutations(
                         continue
                     certified.append(maybe)
                     _write_fragile_state(handle, maybe)
+                    game_refuted = True
+                    if config.stop_after_first_refutation_per_game:
+                        break
             if sampled_win_count >= config.max_wins:
                 break
 
