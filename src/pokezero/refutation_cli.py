@@ -425,6 +425,15 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
             "while bounding R0 acceptance runtime."
         ),
     )
+    parser.add_argument(
+        "--resume-archive",
+        action="store_true",
+        help=(
+            "Append to an existing fragile-state archive and skip sampled wins that already "
+            "have certified rows after validating their replay coordinates against the current "
+            "records. Intended for resumable bounded R0 mining runs."
+        ),
+    )
 
 
 def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
@@ -439,6 +448,7 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
         min_flip_rate=args.min_flip_rate,
         mode=args.mode,
         stop_after_first_refutation_per_game=args.stop_after_first_refutation_per_game,
+        resume_archive=args.resume_archive,
     )
 
 

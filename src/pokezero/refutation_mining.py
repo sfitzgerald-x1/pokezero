@@ -54,6 +54,7 @@ class RefutationMiningConfig:
     min_flip_rate: float = 0.60
     mode: str = "oracle"
     stop_after_first_refutation_per_game: bool = False
+    resume_archive: bool = False
 
     def __post_init__(self) -> None:
         if self.champion_policy_id is None and self.champion_player_id is None:
@@ -72,6 +73,11 @@ class RefutationMiningConfig:
             raise ValueError("min_flip_rate must be between 0 and 1.")
         if self.mode not in {"oracle", "fair"}:
             raise ValueError("mode must be 'oracle' or 'fair'.")
+        if self.resume_archive and not self.stop_after_first_refutation_per_game:
+            raise ValueError(
+                "resume_archive requires stop_after_first_refutation_per_game so a "
+                "partially written archive has at most one certified row per sampled win."
+            )
 
 
 @dataclass(frozen=True)
@@ -428,6 +434,7 @@ class RefutationMiningReport:
                 "min_flip_rate": self.config.min_flip_rate,
                 "mode": self.config.mode,
                 "stop_after_first_refutation_per_game": self.config.stop_after_first_refutation_per_game,
+                "resume_archive": self.config.resume_archive,
             },
             "source_record_count": self.source_record_count,
             "sampled_win_count": self.sampled_win_count,
@@ -463,13 +470,38 @@ def mine_refutations(
     evaluated_deviation_count = 0
     skipped_candidate_error_count = 0
     candidate_error_examples: list[Mapping[str, Any]] = []
-    certified: list[CertifiedRefutation] = []
+    certified: list[CertifiedRefutation] = (
+        _certified_refutations_from_archive(archive_path)
+        if config.resume_archive and archive_path.exists()
+        else []
+    )
+    for refutation in certified:
+        _require_archived_refutation_matches_config(refutation, config=config)
+    already_refuted_by_record_index: dict[int, list[CertifiedRefutation]] = {}
+    for refutation in certified:
+        already_refuted_by_record_index.setdefault(refutation.candidate.source_record_index, []).append(refutation)
+    archived_record_indices = set(already_refuted_by_record_index)
+    validated_archived_record_indices: set[int] = set()
+    archive_mode = "a" if config.resume_archive else "w"
 
-    with archive_path.open("w", encoding="utf-8") as handle:
+    with archive_path.open(archive_mode, encoding="utf-8") as handle:
         for record_index, record in enumerate(records):
             source_record_count = record_index + 1
+            existing_refutations = already_refuted_by_record_index.get(record_index, ())
+            if existing_refutations:
+                for refutation in existing_refutations:
+                    _require_candidate_matches_record(
+                        refutation.candidate,
+                        record=record,
+                        row_index=record_index,
+                    )
+                validated_archived_record_indices.add(record_index)
             champion_win = _champion_win(record, config=config)
             if champion_win is None:
+                if existing_refutations:
+                    raise ValueError(
+                        f"archived source_record_index {record_index} is not a champion win under the current config."
+                    )
                 continue
             champion_player_id, loser_player_id = champion_win
             sampled_win_count += 1
@@ -478,6 +510,10 @@ def mine_refutations(
             if config.max_decision_points_per_game is not None:
                 decision_steps = decision_steps[: config.max_decision_points_per_game]
             scanned_decision_count += len(decision_steps)
+            if existing_refutations:
+                if sampled_win_count >= config.max_wins:
+                    break
+                continue
             for step_index, step in decision_steps:
                 if game_refuted and config.stop_after_first_refutation_per_game:
                     break
@@ -520,6 +556,13 @@ def mine_refutations(
                         break
             if sampled_win_count >= config.max_wins:
                 break
+    missing_archived_indices = archived_record_indices - validated_archived_record_indices
+    if missing_archived_indices:
+        missing = ", ".join(str(index) for index in sorted(missing_archived_indices)[:10])
+        raise ValueError(
+            "source records missing archived source_record_index values, or archived rows are "
+            f"outside the current max_wins sample cap: {missing}"
+        )
 
     return RefutationMiningReport(
         config=config,
@@ -1154,6 +1197,99 @@ def _write_fragile_state(handle: TextIO, refutation: CertifiedRefutation) -> Non
     handle.write(json.dumps(refutation.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False))
     handle.write("\n")
     handle.flush()
+
+
+def _certified_refutations_from_archive(path: Path) -> list[CertifiedRefutation]:
+    return [
+        _certified_refutation_from_archive_row(row)
+        for row in iter_fragile_states(path)
+    ]
+
+
+def _certified_refutation_from_archive_row(row: Mapping[str, Any]) -> CertifiedRefutation:
+    if row.get("schema_version") != FRAGILE_STATE_SCHEMA_VERSION:
+        raise ValueError("fragile row schema_version is unsupported or missing.")
+    evaluation_source = row.get("evaluation_source")
+    mode = row.get("mode")
+    if not isinstance(evaluation_source, str) or not evaluation_source:
+        raise ValueError("fragile row evaluation_source is missing.")
+    if not isinstance(mode, str) or not mode:
+        raise ValueError("fragile row mode is missing.")
+    candidate = _candidate_from_archive_row(row)
+    certification = _mapping_or_empty(row.get("certification"))
+    if certification.get("passed") is not True:
+        raise ValueError("fragile row certification did not pass.")
+    terminal_results = _terminal_results_from_archive_row(row)
+    seed_count = _int_value(certification.get("seed_count"))
+    min_flip_rate = _float_value(certification.get("min_flip_rate"))
+    deviation_wins = _int_value(certification.get("deviation_wins"))
+    champion_wins = _int_value(certification.get("champion_wins"))
+    ties_or_caps = _int_value(certification.get("ties_or_caps"))
+    flip_rate = _float_value(certification.get("flip_rate"))
+    missing = [
+        name
+        for name, value in (
+            ("seed_count", seed_count),
+            ("min_flip_rate", min_flip_rate),
+            ("deviation_wins", deviation_wins),
+            ("champion_wins", champion_wins),
+            ("ties_or_caps", ties_or_caps),
+            ("flip_rate", flip_rate),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(f"fragile row certification is missing required fields: {', '.join(missing)}")
+    if len(terminal_results) != seed_count:
+        raise ValueError("fragile row terminal_results length does not match certification seed_count.")
+    return CertifiedRefutation(
+        candidate=candidate,
+        evaluation_source=evaluation_source,
+        mode=mode,
+        certification_seed_count=seed_count,
+        min_flip_rate=min_flip_rate,
+        deviation_wins=deviation_wins,
+        champion_wins=champion_wins,
+        ties_or_caps=ties_or_caps,
+        flip_rate=flip_rate,
+        terminal_results=terminal_results,
+        reseed_scope=str(certification.get("reseed_scope") or ""),
+        simulator_rng_reseeded=certification.get("simulator_rng_reseeded") is True,
+        search_stats=_mapping_or_empty(row.get("search_stats")),
+    )
+
+
+def _require_archived_refutation_matches_config(
+    refutation: CertifiedRefutation,
+    *,
+    config: RefutationMiningConfig,
+) -> None:
+    mismatches: list[str] = []
+    if refutation.mode != config.mode:
+        mismatches.append(f"mode archive={refutation.mode!r} config={config.mode!r}")
+    if refutation.certification_seed_count != config.certification_seed_count:
+        mismatches.append(
+            "certification_seed_count "
+            f"archive={refutation.certification_seed_count!r} config={config.certification_seed_count!r}"
+        )
+    if not _float_equal(refutation.min_flip_rate, config.min_flip_rate):
+        mismatches.append(
+            f"min_flip_rate archive={refutation.min_flip_rate!r} config={config.min_flip_rate!r}"
+        )
+    if refutation.candidate.line_depth > config.max_line_depth:
+        mismatches.append(
+            f"line_depth archive={refutation.candidate.line_depth!r} config_max={config.max_line_depth!r}"
+        )
+    if (
+        config.champion_player_id is not None
+        and refutation.candidate.champion_player_id != config.champion_player_id
+    ):
+        mismatches.append(
+            "champion_player_id "
+            f"archive={refutation.candidate.champion_player_id!r} config={config.champion_player_id!r}"
+        )
+    if mismatches:
+        raise ValueError("fragile row does not match current refutation mining config: " + "; ".join(mismatches))
 
 
 def _candidate_from_archive_row(row: Mapping[str, Any]) -> RefutationCandidate:
