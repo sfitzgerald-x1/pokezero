@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence, TextIO
 
@@ -669,17 +670,28 @@ def certify_candidate(
         raise ValueError("refutation certification cannot use a value-head-backed evaluator.")
     reseed_scope = evaluator.reseed_scope
     simulator_rng_reseeded = reseed_scope == "simulator_rng"
-    terminal_results = tuple(
-        evaluator.evaluate(
+    required_deviation_wins = math.floor(config.min_flip_rate * config.certification_seed_count) + 1
+    terminal_results_list: list[BranchTerminalResult] = []
+    deviation_wins = 0
+    champion_wins = 0
+    ties_or_caps = 0
+    for seed_offset in range(config.certification_seed_count):
+        result = evaluator.evaluate(
             record=record,
             candidate=candidate,
             certification_seed=record.seed + seed_offset + 1,
         )
-        for seed_offset in range(config.certification_seed_count)
-    )
-    deviation_wins = sum(1 for result in terminal_results if result.winner == candidate.loser_player_id)
-    champion_wins = sum(1 for result in terminal_results if result.winner == candidate.champion_player_id)
-    ties_or_caps = len(terminal_results) - deviation_wins - champion_wins
+        terminal_results_list.append(result)
+        if result.winner == candidate.loser_player_id:
+            deviation_wins += 1
+        elif result.winner == candidate.champion_player_id:
+            champion_wins += 1
+        else:
+            ties_or_caps += 1
+        remaining = config.certification_seed_count - len(terminal_results_list)
+        if deviation_wins + remaining < required_deviation_wins:
+            return None
+    terminal_results = tuple(terminal_results_list)
     flip_rate = deviation_wins / len(terminal_results) if terminal_results else 0.0
     if flip_rate <= config.min_flip_rate:
         return None
