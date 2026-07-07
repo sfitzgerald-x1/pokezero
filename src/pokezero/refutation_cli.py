@@ -432,13 +432,6 @@ def _config_from_args(args: argparse.Namespace) -> RefutationMiningConfig:
     )
 
 
-def _load_records(paths: list[Path]) -> tuple:
-    records = []
-    for path in paths:
-        records.extend(iter_rollout_records(path))
-    return tuple(records)
-
-
 def _iter_records(paths: list[Path]):
     for path in paths:
         yield from iter_rollout_records(path)
