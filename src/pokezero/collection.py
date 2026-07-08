@@ -325,7 +325,7 @@ def collect_training_cache(
             accumulator.add(record)
             write_started = perf_counter()
             builder.add_record(record)
-            accumulator.add_timing("training_cache_write", perf_counter() - write_started)
+            accumulator.add_timing("training_cache_add_record", perf_counter() - write_started)
         write_kwargs: dict[str, object] = {"overwrite": overwrite}
         if max_cache_root_bytes is not None:
             write_kwargs["max_cache_root_bytes"] = max_cache_root_bytes
@@ -333,7 +333,7 @@ def collect_training_cache(
             write_kwargs["cache_root"] = cache_root
         write_started = perf_counter()
         summary = builder.write(output_path, **write_kwargs)
-        accumulator.add_timing("training_cache_write", perf_counter() - write_started)
+        accumulator.add_timing("training_cache_flush_write", perf_counter() - write_started)
     finally:
         close = getattr(env, "close", None)
         if callable(close):

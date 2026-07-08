@@ -673,7 +673,7 @@ def collect_selfplay_rollouts(
         if training_cache_writer is not None:
             cache_close_started = perf_counter()
             training_cache_writer.close()
-            metrics_accumulator.add_timing("training_cache_write", perf_counter() - cache_close_started)
+            metrics_accumulator.add_timing("training_cache_flush_write", perf_counter() - cache_close_started)
         if write_path is not None and output_path is not None:
             write_path.replace(output_path)
         if training_write_path is not None and training_output_path is not None:
@@ -800,7 +800,7 @@ def _write_selfplay_game_results(
         if training_cache_writer is not None:
             write_started = perf_counter()
             training_cache_writer.add_record(training_record)
-            metrics_accumulator.add_timing("training_cache_write", perf_counter() - write_started)
+            metrics_accumulator.add_timing("training_cache_add_record", perf_counter() - write_started)
         if rss_recorder is not None:
             if index == 1:
                 rss_recorder("after_first_record")
