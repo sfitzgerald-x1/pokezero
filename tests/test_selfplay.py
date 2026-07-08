@@ -236,6 +236,15 @@ class SelfPlayTest(unittest.TestCase):
         self.assertEqual(metrics.games, 2)
         self.assertEqual([path.name for path in cache_paths], ["cache-00001", "cache-00002"])
         self.assertEqual(sum(batch.batch_size for batch in batches), 2)
+        # Cache-write timing split (chunked path): chunk_games=1 over 2 games => 2 periodic chunk
+        # flushes. The chunk writer tracks its own timing so the heavy per-chunk builder.write()
+        # lands in flush_write (2 calls), not the per-record add_record append bucket (2 calls) it
+        # would otherwise ride inside — the correctness point of the split on the self-play path.
+        timing = metrics.to_dict()["collection_timing"]
+        self.assertEqual(timing["training_cache_add_record_calls"], 2)
+        self.assertEqual(timing["training_cache_flush_write_calls"], 2)
+        self.assertGreaterEqual(timing["training_cache_flush_write_elapsed_seconds"], 0.0)
+        self.assertGreaterEqual(timing["training_cache_add_record_elapsed_seconds"], 0.0)
 
     def test_collect_selfplay_rollouts_filters_current_seat_even_when_policy_ids_match(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
