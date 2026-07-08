@@ -34,6 +34,7 @@ from .collection import (
 )
 from .dataset import (
     MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    CacheRootByteBudget,
     TrajectoryDatasetConfig,
     TrainingCacheBuilder,
     delete_training_cache_path,
@@ -671,9 +672,21 @@ def collect_selfplay_rollouts(
                 if training_handle is not None:
                     training_handle.close()
         if training_cache_writer is not None:
-            cache_close_started = perf_counter()
             training_cache_writer.close()
-            metrics_accumulator.add_timing("training_cache_flush_write", perf_counter() - cache_close_started)
+            # Surface the writer's internally-tracked split (append vs the periodic/final chunk
+            # flushes) once here, so per-chunk builder.write cost lands in flush_write — not the
+            # per-record add_record bucket it would otherwise ride inside on the chunked path.
+            _cache_timing = training_cache_writer.timing
+            metrics_accumulator.add_timing(
+                "training_cache_add_record",
+                _cache_timing["add_record_seconds"],
+                calls=int(_cache_timing["add_record_calls"]),
+            )
+            metrics_accumulator.add_timing(
+                "training_cache_flush_write",
+                _cache_timing["flush_seconds"],
+                calls=int(_cache_timing["flush_calls"]),
+            )
         if write_path is not None and output_path is not None:
             write_path.replace(output_path)
         if training_write_path is not None and training_output_path is not None:
@@ -798,9 +811,10 @@ def _write_selfplay_game_results(
             write_rollout_record(training_handle, training_record)
             metrics_accumulator.add_timing("training_rollout_jsonl_write", perf_counter() - write_started)
         if training_cache_writer is not None:
-            write_started = perf_counter()
+            # Timing is tracked inside the chunk writer (append vs periodic chunk flush) and
+            # surfaced once at close(); timing the outer call here would misattribute the periodic
+            # _flush() (heavy builder.write) to the per-record add_record bucket.
             training_cache_writer.add_record(training_record)
-            metrics_accumulator.add_timing("training_cache_add_record", perf_counter() - write_started)
         if rss_recorder is not None:
             if index == 1:
                 rss_recorder("after_first_record")
@@ -838,13 +852,41 @@ class _TrainingCacheChunkWriter:
             feature_masks=self._feature_masks,
             observation_schema=self._observation_schema,
         )
+        # One amortized cap budget across all chunk flushes: re-walks the cache root only every N
+        # writes / T seconds instead of an O(files) rglob on every flush (the per-flush x per-pod
+        # NFS getattr storm that dominated metamon-M collect wall-time).
+        self._root_byte_budget = (
+            CacheRootByteBudget(self._max_cache_root_bytes)
+            if self._max_cache_root_bytes is not None
+            else None
+        )
+        # Cache-write timing is tracked HERE, not at the caller: add_record() triggers a periodic
+        # _flush() (the heavy builder.write) every chunk_games records, so timing the outer
+        # add_record call would fold those chunk flushes into the per-record append bucket and hide
+        # the real cost. Split: add_record = pure per-record append; flush = builder.write.
+        self._add_record_seconds = 0.0
+        self._add_record_calls = 0
+        self._flush_seconds = 0.0
+        self._flush_calls = 0
+
+    @property
+    def timing(self) -> dict[str, float]:
+        return {
+            "add_record_seconds": self._add_record_seconds,
+            "add_record_calls": float(self._add_record_calls),
+            "flush_seconds": self._flush_seconds,
+            "flush_calls": float(self._flush_calls),
+        }
 
     @property
     def paths(self) -> tuple[Path, ...]:
         return tuple(self._paths)
 
     def add_record(self, record: RolloutRecord) -> None:
+        started = perf_counter()
         self._builder.add_record(record)
+        self._add_record_seconds += perf_counter() - started
+        self._add_record_calls += 1
         if self._chunk_games is not None and self._builder.record_count >= self._chunk_games:
             self._flush()
 
@@ -864,11 +906,15 @@ class _TrainingCacheChunkWriter:
         if self._builder.record_count == 0:
             return
         output_path = self._next_output_path()
+        flush_started = perf_counter()
         self._builder.write(
             output_path,
             max_cache_root_bytes=self._max_cache_root_bytes,
             cache_root=self._cache_root,
+            root_byte_budget=self._root_byte_budget,
         )
+        self._flush_seconds += perf_counter() - flush_started
+        self._flush_calls += 1
         self._paths.append(output_path)
         self._builder = TrainingCacheBuilder(
             config=self._dataset_config,

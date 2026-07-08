@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.dataset import (
     MISSING_ACTION_INDEX,
     TRAINING_CACHE_SCHEMA_VERSION,
+    CacheRootByteBudget,
     TrajectoryDatasetConfig,
     TrainingCacheBuilder,
     batch_training_examples,
@@ -971,6 +973,56 @@ class DatasetTest(unittest.TestCase):
                 )
 
             self.assertFalse(second_cache.exists())
+
+    def test_cache_root_byte_budget_accumulates_reservations_without_rewalk(self) -> None:
+        # Between re-walks the budget must sum reservations LOCALLY so an over-cap is caught even
+        # though the root dir on disk is still empty (nothing flushed yet within this window).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            budget = CacheRootByteBudget(100, revalidate_writes=10, revalidate_seconds=1e9)
+            budget.reserve(root, 40)  # walk #1: on-disk 0 + 40
+            budget.reserve(root, 40)  # cached walk + local 40 -> 80, no re-walk
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                budget.reserve(root, 40)  # 80 + 40 > 100
+
+    def test_cache_root_byte_budget_rewalks_after_cadence_for_global_visibility(self) -> None:
+        # After the cadence the budget re-walks, so bytes written by OTHER processes (fleet pods)
+        # or reclaimed by GC become visible — the property a pure per-process counter would miss.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            budget = CacheRootByteBudget(1000, revalidate_writes=1, revalidate_seconds=1e9)
+            budget.reserve(root, 10)  # walk #1: on-disk 0
+            (root / "external.bin").write_bytes(b"x" * 500)  # another writer adds 500 bytes
+            with self.assertRaisesRegex(ValueError, "storage cap"):
+                budget.reserve(root, 600)  # re-walk sees 500; 500 + 600 > 1000
+
+    def test_training_cache_write_env_var_bypasses_storage_cap(self) -> None:
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "cache"
+            os.environ["POKEZERO_SKIP_CACHE_ROOT_CAP"] = "1"
+            try:
+                builder.write(cache_path, max_cache_root_bytes=1, cache_root=temp_dir)
+            finally:
+                del os.environ["POKEZERO_SKIP_CACHE_ROOT_CAP"]
+            self.assertTrue(is_training_cache_path(cache_path))
+
+    def test_training_cache_write_default_root_ignores_parent_siblings(self) -> None:
+        # Default root is the cache dir itself, not its parent: an unrelated large sibling in the
+        # parent must NOT count against the cap (the /tmp-walk bug). A tiny cache under a cap far
+        # below the sibling still succeeds because only the cache dir is measured.
+        self._require_numpy()
+        builder = TrainingCacheBuilder(config=TrajectoryDatasetConfig(window_size=1))
+        builder.add_record(rollout_record())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "unrelated.bin").write_bytes(b"x" * 10_000_000)  # 10 MB sibling
+            cache_path = Path(temp_dir) / "cache"
+            # Cap sits above the tiny cache's own estimate (~16.8 MB floor) but below cache+sibling;
+            # succeeds only because the parent's 10 MB sibling is NOT counted (default root = cache dir).
+            builder.write(cache_path, max_cache_root_bytes=20_000_000)
+            self.assertTrue(is_training_cache_path(cache_path))
 
     def test_training_cache_rejects_categorical_ids_outside_compact_range_before_cast(self) -> None:
         self._require_numpy()

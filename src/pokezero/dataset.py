@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 import json
+import logging
 import math
+import os
 from os import PathLike
 from pathlib import Path
 import shutil
 import tempfile
+from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -18,6 +21,8 @@ from .padding import zeros_like as _zeros_like
 from .shaping import ShapingConfig, shaping_rewards_by_step_index
 from .trajectory import TrajectoryStep
 
+_LOGGER = logging.getLogger(__name__)
+
 MISSING_ACTION_INDEX = -1
 # v2: cache arrays carry observation-spec-v2 tensors. Bumped with the observation break so a
 # pre-break cache refuses at the metadata guard instead of failing shape-wise mid-training.
@@ -25,7 +30,70 @@ TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v2"
 MAX_ACTIVE_TRAINING_CACHE_GB = 50.0
 MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024 * 1024)
 
+# Env escape hatch: skip the storage-cap check entirely (local smokes / benchmarks where the
+# output parent is an unrelated scratch dir and the cap is irrelevant). Never set in production.
+_SKIP_CACHE_ROOT_CAP_ENV = "POKEZERO_SKIP_CACHE_ROOT_CAP"
+
 PathInput = str | PathLike[str] | Path
+
+
+class CacheRootByteBudget:
+    """Amortized storage-cap tracker for repeated cache writes into one root.
+
+    The cap check must sum the cache root's on-disk bytes, but ``_directory_byte_size`` is an
+    ``rglob + stat`` over the whole root — O(files), and on NFS a per-flush getattr storm. A
+    chunked/self-play run calls ``write`` once per chunk, so re-walking every flush makes cap cost
+    grow with the run (the dominant collect-wall cost measured on metamon-M). This tracker re-walks
+    only every ``revalidate_writes`` writes or ``revalidate_seconds`` — whichever first — and adds
+    each write's estimated bytes locally in between. That keeps GLOBAL visibility (concurrent
+    collector pods + the trainer GC-deleting consumed caches, both invisible to a pure per-process
+    counter) with bounded staleness, at O(1) amortized cost. Shared across a writer's lifetime; the
+    per-chunk builder is recreated each flush, so the budget must live on the caller (chunk writer).
+    """
+
+    def __init__(
+        self,
+        max_bytes: int,
+        *,
+        revalidate_writes: int = 20,
+        revalidate_seconds: float = 60.0,
+    ) -> None:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive.")
+        self.max_bytes = max_bytes
+        self._revalidate_writes = max(1, revalidate_writes)
+        self._revalidate_seconds = revalidate_seconds
+        self._walked_bytes: int | None = None
+        self._walked_at = 0.0
+        self._writes_since_walk = 0
+        self._pending_bytes = 0
+
+    def reserve(self, root: Path, estimated_bytes: int) -> None:
+        """Raise if this write would exceed the cap; otherwise reserve its bytes.
+
+        Re-walks ``root`` when stale (first call, >= revalidate_writes since, or >=
+        revalidate_seconds since), else uses the last walk plus locally-accumulated reservations.
+        """
+        now = perf_counter()
+        stale = (
+            self._walked_bytes is None
+            or self._writes_since_walk >= self._revalidate_writes
+            or (now - self._walked_at) >= self._revalidate_seconds
+        )
+        if stale:
+            self._walked_bytes = _directory_byte_size(root) if root.exists() else 0
+            self._walked_at = now
+            self._writes_since_walk = 0
+            self._pending_bytes = 0
+        current_bytes = (self._walked_bytes or 0) + self._pending_bytes
+        if current_bytes + estimated_bytes > self.max_bytes:
+            raise ValueError(
+                f"training cache write would exceed storage cap: existing~={current_bytes} bytes "
+                f"estimated_new={estimated_bytes} bytes limit={self.max_bytes} bytes "
+                f"(amortized; last walk {self._writes_since_walk} write(s) ago)."
+            )
+        self._pending_bytes += estimated_bytes
+        self._writes_since_walk += 1
 
 _OPPONENT_POOL_METADATA_KEYS = (
     "opponent_policy_spec",
@@ -473,6 +541,7 @@ class TrainingCacheBuilder:
         overwrite: bool = False,
         max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
         cache_root: PathInput | None = None,
+        root_byte_budget: "CacheRootByteBudget | None" = None,
     ) -> TrainingCacheSummary:
         if self.example_count == 0:
             raise ValueError("training cache cannot be written with zero examples.")
@@ -481,22 +550,45 @@ class TrainingCacheBuilder:
         if output_path.exists() and not overwrite:
             raise FileExistsError(f"training cache already exists: {output_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Optional write()-stage timing (off by default; POKEZERO_ARRAYS_TIMING=1) to localize the
+        # cost between array materialization, the storage-cap directory walk (rglob over the whole
+        # output parent — a real cost on a large/NFS cache root), and the numpy.save disk loop.
+        _wtimed = os.environ.get("POKEZERO_ARRAYS_TIMING", "").strip().lower() in {"1", "true", "yes", "on"}
+        _wt: dict[str, float] = {}
+        _wstart = perf_counter()
         arrays = self._arrays(numpy)
-        if max_cache_root_bytes is not None:
+        if _wtimed:
+            _wt["arrays_total"] = round(perf_counter() - _wstart, 4)
+        _skip_cap = os.environ.get(_SKIP_CACHE_ROOT_CAP_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+        if max_cache_root_bytes is not None and not _skip_cap:
             if max_cache_root_bytes <= 0:
                 raise ValueError("max_cache_root_bytes must be positive.")
-            root = Path(cache_root) if cache_root is not None else output_path.parent
-            current_bytes = _directory_byte_size(root) if root.exists() else 0
+            # Root default is the cache dir ITSELF, not its parent: walking the parent sweeps
+            # unrelated siblings (a local smoke walked all of /tmp — 15s). Callers that intend a
+            # shared multi-cache root pass cache_root explicitly (they already do).
+            root = Path(cache_root) if cache_root is not None else output_path
             estimated_bytes = _estimated_training_cache_byte_size(arrays)
-            if current_bytes + estimated_bytes > max_cache_root_bytes:
-                raise ValueError(
-                    f"training cache write would exceed storage cap: existing={current_bytes} bytes "
-                    f"estimated_new={estimated_bytes} bytes limit={max_cache_root_bytes} bytes."
-                )
+            _wstart = perf_counter()
+            if root_byte_budget is not None:
+                # Amortized: re-walks root only every N writes / T seconds (see CacheRootByteBudget).
+                root_byte_budget.reserve(root, estimated_bytes)
+            else:
+                current_bytes = _directory_byte_size(root) if root.exists() else 0
+                if current_bytes + estimated_bytes > max_cache_root_bytes:
+                    raise ValueError(
+                        f"training cache write would exceed storage cap: existing={current_bytes} bytes "
+                        f"estimated_new={estimated_bytes} bytes limit={max_cache_root_bytes} bytes."
+                    )
+            if _wtimed:
+                _wt["cap_dir_walk"] = round(perf_counter() - _wstart, 4)
         temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
         try:
+            _wstart = perf_counter()
             for name, value in arrays.items():
                 numpy.save(temp_path / f"{name}.npy", value, allow_pickle=False)
+            if _wtimed:
+                _wt["save_loop"] = round(perf_counter() - _wstart, 4)
+                _LOGGER.warning("training-cache write() stage timing (s): %s", _wt)
             metadata = {
                 "schema_version": TRAINING_CACHE_SCHEMA_VERSION,
                 "dataset_config": self.config.to_dict(),
@@ -554,18 +646,35 @@ class TrainingCacheBuilder:
         )
 
     def _arrays(self, numpy: Any) -> dict[str, Any]:
-        categorical_raw = numpy.asarray(self._categorical_rows)
-        numeric = numpy.asarray(self._numeric_rows, dtype=numpy.float16)
-        token_type_raw = numpy.asarray(self._token_type_rows)
+        # Optional per-line timing (off by default; POKEZERO_ARRAYS_TIMING=1). The dominant cost of
+        # write() is here — converting the builder's accumulated nested-Python-list rows into numpy
+        # (esp. the float16 numeric asarray of ~tokens*features*examples objects) and the
+        # categorical compaction — NOT the numpy.save disk loop. This breaks out which line pays.
+        _timed = os.environ.get("POKEZERO_ARRAYS_TIMING", "").strip().lower() in {"1", "true", "yes", "on"}
+        _breakdown: dict[str, float] = {}
+
+        def _timeit(label: str, make: "Callable[[], Any]") -> Any:
+            if not _timed:
+                return make()
+            _start = perf_counter()
+            value = make()
+            _breakdown[label] = round(perf_counter() - _start, 4)
+            return value
+
+        categorical_raw = _timeit("categorical_asarray", lambda: numpy.asarray(self._categorical_rows))
+        numeric = _timeit("numeric_asarray_float16", lambda: numpy.asarray(self._numeric_rows, dtype=numpy.float16))
+        token_type_raw = _timeit("token_type_asarray", lambda: numpy.asarray(self._token_type_rows))
         if _array_min(numpy, categorical_raw) < 0 or _array_max(numpy, categorical_raw) > int(numpy.iinfo(numpy.uint16).max):
             raise ValueError("categorical ids exceed uint16 training-cache range.")
         if _array_min(numpy, token_type_raw) < 0 or _array_max(numpy, token_type_raw) > int(numpy.iinfo(numpy.uint8).max):
             raise ValueError("token type ids exceed uint8 training-cache range.")
-        categorical = _compact_categorical_rows(
-            numpy,
-            categorical_raw.astype(numpy.uint16, copy=False),
+        categorical = _timeit(
+            "compact_categorical",
+            lambda: _compact_categorical_rows(numpy, categorical_raw.astype(numpy.uint16, copy=False)),
         )
         token_type = token_type_raw.astype(numpy.uint8, copy=False)
+        if _timed:
+            _LOGGER.warning("training-cache _arrays per-line timing (s): %s", _breakdown)
         return {
             "categorical_ids": _prepend_zero_row(numpy, categorical),
             "numeric_features": _prepend_zero_row(numpy, numeric),
