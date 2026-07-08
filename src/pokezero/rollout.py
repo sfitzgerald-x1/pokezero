@@ -29,6 +29,11 @@ class RolloutResult:
     trajectory: BattleTrajectory
     terminal: TerminalState
     decision_round_count: int
+    # Per-phase collection timing, carried on the in-memory result as a sidecar so it can reach the
+    # metrics accumulator WITHOUT being stamped into the trajectory/record — record payloads must
+    # stay deterministic (twin-replay byte-exactness; the parallel-vs-serial equality invariant).
+    # None when timing was not collected.
+    timing: "RolloutTiming | None" = None
 
 
 @dataclass
@@ -279,11 +284,11 @@ def _rollout_result(
     decision_round_count: int,
     timing: RolloutTiming,
 ) -> RolloutResult:
-    trajectory.metadata = {**dict(trajectory.metadata), "rollout_timing": timing.to_dict()}
     return RolloutResult(
         trajectory=trajectory,
         terminal=terminal,
         decision_round_count=decision_round_count,
+        timing=timing,
     )
 
 

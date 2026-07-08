@@ -86,7 +86,11 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(result.trajectory.steps[1].opponent_action_index, result.trajectory.steps[0].action_index)
         self.assertEqual(result.trajectory.steps[0].metadata["policy_id"], "random-legal")
         self.assertEqual(result.trajectory.steps[1].metadata["policy_id"], "simple-legal")
-        timing = result.trajectory.metadata["rollout_timing"]
+        # Timing rides the result sidecar, NOT the trajectory/record (records must stay
+        # deterministic for twin-replay byte-exactness), so it must be absent from trajectory
+        # metadata and present on result.timing.
+        self.assertNotIn("rollout_timing", result.trajectory.metadata)
+        timing = result.timing.to_dict()
         self.assertEqual(timing["env_observe_calls"], 2)
         self.assertEqual(timing["policy_select_calls"], 2)
         self.assertEqual(timing["env_step_calls"], 1)

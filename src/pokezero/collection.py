@@ -175,6 +175,10 @@ class RolloutRecord:
     # observations with (None = source disabled or pre-provenance record). Flows into checkpoint
     # metadata at train time so eval can match observation conditions to training.
     belief_set_source_hash: str | None = None
+    # In-memory-only per-phase collection timing sidecar (see rollout.RolloutResult.timing).
+    # Deliberately NOT serialized by rollout_record_to_dict — record payloads must stay
+    # deterministic (twin-replay byte-exactness). None on records reloaded from JSONL.
+    rollout_timing: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -674,6 +678,7 @@ def record_from_result(
         terminal=result.terminal,
         trajectory=result.trajectory,
         belief_set_source_hash=belief_set_source_hash,
+        rollout_timing=result.timing.to_dict() if result.timing is not None else None,
     )
 
 
@@ -1279,7 +1284,7 @@ class _MetricsAccumulator:
             self.ties += 1
         if record.terminal.capped:
             self.capped_games += 1
-        self.timing.add_rollout_timing(record.trajectory.metadata.get("rollout_timing"))
+        self.timing.add_rollout_timing(record.rollout_timing)
         for step in record.trajectory.steps:
             metadata = step.metadata
             policy_id = str(metadata.get("policy_id") or "unknown")
