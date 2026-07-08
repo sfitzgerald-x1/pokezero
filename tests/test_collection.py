@@ -415,6 +415,14 @@ class CollectionTest(unittest.TestCase):
             self.assertEqual(cache.record_count, 2)
             self.assertEqual(cache.example_count, 4)
             self.assertEqual([batch.batch_size for batch in batches], [2, 2])
+            # Cache-write timing is split into materialize (per-record add_record) and the
+            # single final flush/disk write, so we can tell which dominates the slow runs.
+            timing = metrics.to_dict()["collection_timing"]
+            self.assertEqual(timing["training_cache_add_record_calls"], 2)
+            self.assertGreaterEqual(timing["training_cache_add_record_elapsed_seconds"], 0.0)
+            self.assertEqual(timing["training_cache_flush_write_calls"], 1)
+            self.assertGreaterEqual(timing["training_cache_flush_write_elapsed_seconds"], 0.0)
+            self.assertNotIn("training_cache_write_calls", timing)
 
     def test_collect_training_cache_rejects_storage_cap(self) -> None:
         self._require_numpy()
