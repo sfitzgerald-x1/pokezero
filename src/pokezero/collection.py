@@ -190,6 +190,7 @@ class CollectionMetrics:
     peak_rss_mb: float | None = None
     peak_rss_mb_by_phase: Mapping[str, float | None] | None = None
     policy_decision_summary: Mapping[str, Mapping[str, Any]] | None = None
+    collection_timing: Mapping[str, Any] | None = None
 
     @property
     def games_per_second(self) -> float:
@@ -237,6 +238,7 @@ class CollectionMetrics:
                 if self.policy_decision_summary
                 else {}
             ),
+            **({"collection_timing": dict(self.collection_timing)} if self.collection_timing else {}),
         }
 
 
@@ -270,7 +272,9 @@ def collect_rollouts(
                     battle_id=f"rollout-{seed}",
                 )
                 accumulator.add(record)
+                write_started = perf_counter()
                 write_rollout_record(handle, record)
+                accumulator.add_timing("raw_rollout_jsonl_write", perf_counter() - write_started)
         if not append:
             write_path.replace(output_path)
     except Exception:
@@ -319,13 +323,17 @@ def collect_training_cache(
                 battle_id=f"rollout-{seed}",
             )
             accumulator.add(record)
+            write_started = perf_counter()
             builder.add_record(record)
+            accumulator.add_timing("training_cache_write", perf_counter() - write_started)
         write_kwargs: dict[str, object] = {"overwrite": overwrite}
         if max_cache_root_bytes is not None:
             write_kwargs["max_cache_root_bytes"] = max_cache_root_bytes
         if cache_root is not None:
             write_kwargs["cache_root"] = cache_root
+        write_started = perf_counter()
         summary = builder.write(output_path, **write_kwargs)
+        accumulator.add_timing("training_cache_write", perf_counter() - write_started)
     finally:
         close = getattr(env, "close", None)
         if callable(close):
@@ -1209,6 +1217,45 @@ def _slugify_label(label: str) -> str:
 
 
 @dataclass
+class _CollectionTimingAccumulator:
+    elapsed_by_phase: dict[str, float] = field(default_factory=dict)
+    calls_by_phase: dict[str, int] = field(default_factory=dict)
+
+    def add(self, phase: str, elapsed_seconds: float, *, calls: int = 1) -> None:
+        if elapsed_seconds < 0.0:
+            return
+        self.elapsed_by_phase[phase] = self.elapsed_by_phase.get(phase, 0.0) + elapsed_seconds
+        self.calls_by_phase[phase] = self.calls_by_phase.get(phase, 0) + max(0, calls)
+
+    def add_rollout_timing(self, value: object) -> None:
+        if not isinstance(value, Mapping):
+            return
+        for phase in ("env_reset", "env_observe", "policy_select", "env_step"):
+            elapsed = _metadata_optional_float(value.get(f"{phase}_elapsed_seconds"))
+            if elapsed is None:
+                continue
+            calls = _metadata_optional_int(value.get(f"{phase}_calls"))
+            if calls is None:
+                calls = 1 if phase == "env_reset" else 0
+            self.add(phase, elapsed, calls=calls)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        total_profiled = 0.0
+        for phase in sorted(self.elapsed_by_phase):
+            elapsed = self.elapsed_by_phase[phase]
+            calls = self.calls_by_phase.get(phase, 0)
+            payload[f"{phase}_elapsed_seconds"] = elapsed
+            payload[f"{phase}_calls"] = calls
+            if calls:
+                payload[f"{phase}_average_elapsed_seconds"] = elapsed / calls
+            total_profiled += elapsed
+        if payload:
+            payload["total_profiled_elapsed_seconds"] = total_profiled
+        return payload
+
+
+@dataclass
 class _MetricsAccumulator:
     games: int = 0
     total_decision_rounds: int = 0
@@ -1218,6 +1265,7 @@ class _MetricsAccumulator:
     ties: int = 0
     capped_games: int = 0
     policy_summaries: dict[str, "_PolicyDecisionAccumulator"] = field(default_factory=dict)
+    timing: _CollectionTimingAccumulator = field(default_factory=_CollectionTimingAccumulator)
 
     def add(self, record: RolloutRecord) -> None:
         self.games += 1
@@ -1231,6 +1279,7 @@ class _MetricsAccumulator:
             self.ties += 1
         if record.terminal.capped:
             self.capped_games += 1
+        self.timing.add_rollout_timing(record.trajectory.metadata.get("rollout_timing"))
         for step in record.trajectory.steps:
             metadata = step.metadata
             policy_id = str(metadata.get("policy_id") or "unknown")
@@ -1239,6 +1288,9 @@ class _MetricsAccumulator:
                 summary = _PolicyDecisionAccumulator()
                 self.policy_summaries[policy_id] = summary
             summary.add(metadata)
+
+    def add_timing(self, phase: str, elapsed_seconds: float, *, calls: int = 1) -> None:
+        self.timing.add(phase, elapsed_seconds, calls=calls)
 
     def to_metrics(self, *, elapsed_seconds: float, peak_rss_mb: float | None = None) -> CollectionMetrics:
         return CollectionMetrics(
@@ -1255,6 +1307,7 @@ class _MetricsAccumulator:
                 policy_id: summary.to_dict()
                 for policy_id, summary in sorted(self.policy_summaries.items())
             },
+            collection_timing=self.timing.to_dict(),
         )
 
 

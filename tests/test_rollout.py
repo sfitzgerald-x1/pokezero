@@ -86,6 +86,12 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(result.trajectory.steps[1].opponent_action_index, result.trajectory.steps[0].action_index)
         self.assertEqual(result.trajectory.steps[0].metadata["policy_id"], "random-legal")
         self.assertEqual(result.trajectory.steps[1].metadata["policy_id"], "simple-legal")
+        timing = result.trajectory.metadata["rollout_timing"]
+        self.assertEqual(timing["env_observe_calls"], 2)
+        self.assertEqual(timing["policy_select_calls"], 2)
+        self.assertEqual(timing["env_step_calls"], 1)
+        self.assertGreaterEqual(timing["env_reset_elapsed_seconds"], 0.0)
+        self.assertGreaterEqual(timing["policy_select_elapsed_seconds"], 0.0)
 
     def test_rollout_records_asymmetric_requested_player_without_opponent_action(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)

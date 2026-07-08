@@ -16,6 +16,7 @@ import os
 from os import PathLike
 from pathlib import Path
 import random
+from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .actions import ACTION_COUNT, ACTION_SCHEMA_VERSION, MOVE_ACTION_COUNT
@@ -504,6 +505,16 @@ class TransformerEpochMetrics:
     ppo_value_clip_eligible_examples: int | None = None
     ppo_value_clip_fraction: float | None = None
     ppo_entropy: float | None = None
+    batches: int | None = None
+    elapsed_seconds: float | None = None
+    batch_load_elapsed_seconds: float | None = None
+    tensorize_elapsed_seconds: float | None = None
+    model_forward_elapsed_seconds: float | None = None
+    loss_elapsed_seconds: float | None = None
+    backward_elapsed_seconds: float | None = None
+    optimizer_step_elapsed_seconds: float | None = None
+    average_batch_elapsed_seconds: float | None = None
+    examples_per_second: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1294,9 +1305,18 @@ def train_transformer_policy(
     )
     epoch_metrics: list[TransformerEpochMetrics] = []
     for epoch in range(1, resolved_training_config.epochs + 1):
+        epoch_started = perf_counter()
         epoch_learning_rate = _learning_rate_for_epoch(resolved_training_config, epoch)
         _set_optimizer_learning_rate(optimizer, epoch_learning_rate)
         totals = _TorchMetricTotals()
+        batch_count = 0
+        batch_load_elapsed_seconds = 0.0
+        tensorize_elapsed_seconds = 0.0
+        model_forward_elapsed_seconds = 0.0
+        loss_elapsed_seconds = 0.0
+        backward_elapsed_seconds = 0.0
+        optimizer_step_elapsed_seconds = 0.0
+        previous_batch_finished = perf_counter()
         cache_callback_for_epoch = (
             consumed_cache_callback
             if consumed_cache_callback is not None and epoch == resolved_training_config.epochs
@@ -1321,9 +1341,19 @@ def train_transformer_policy(
                 defer_cache_window_expansion=True,
             )
         for batch_index, batch in enumerate(training_batches, start=1):
+            batch_count = batch_index
+            batch_ready = perf_counter()
+            batch_load_elapsed_seconds += batch_ready - previous_batch_finished
+            tensorize_started = perf_counter()
             tensors = training_batch_to_torch(batch, device=device)
+            tensorize_elapsed_seconds += perf_counter() - tensorize_started
+            forward_started = perf_counter()
             output = model_forward_from_training_tensors(model, tensors)
+            model_forward_elapsed_seconds += perf_counter() - forward_started
+            loss_started = perf_counter()
             loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
+            loss_elapsed_seconds += perf_counter() - loss_started
+            backward_started = perf_counter()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             if resolved_training_config.max_grad_norm is not None:
@@ -1331,13 +1361,30 @@ def train_transformer_policy(
                     trainable_parameters,
                     resolved_training_config.max_grad_norm,
                 )
+            backward_elapsed_seconds += perf_counter() - backward_started
+            optimizer_started = perf_counter()
             optimizer.step()
+            optimizer_step_elapsed_seconds += perf_counter() - optimizer_started
             totals.add(batch.batch_size, pieces)
+            previous_batch_finished = perf_counter()
             if resolved_training_config.max_batches is not None and batch_index >= resolved_training_config.max_batches:
                 break
         if totals.examples == 0:
             raise ValueError("training data produced no examples.")
-        epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate))
+        epoch_elapsed_seconds = perf_counter() - epoch_started
+        timing = {
+            "batches": batch_count,
+            "elapsed_seconds": epoch_elapsed_seconds,
+            "batch_load_elapsed_seconds": batch_load_elapsed_seconds,
+            "tensorize_elapsed_seconds": tensorize_elapsed_seconds,
+            "model_forward_elapsed_seconds": model_forward_elapsed_seconds,
+            "loss_elapsed_seconds": loss_elapsed_seconds,
+            "backward_elapsed_seconds": backward_elapsed_seconds,
+            "optimizer_step_elapsed_seconds": optimizer_step_elapsed_seconds,
+            "average_batch_elapsed_seconds": epoch_elapsed_seconds / batch_count if batch_count else 0.0,
+            "examples_per_second": totals.examples / epoch_elapsed_seconds if epoch_elapsed_seconds > 0 else 0.0,
+        }
+        epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate, timing=timing))
         if epoch_callback is not None:
             epoch_callback(
                 model,
@@ -1525,6 +1572,16 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 ppo_value_clip_fraction=_optional_float(metrics.get("ppo_value_clip_fraction")),
                 ppo_entropy=_optional_float(metrics.get("ppo_entropy")),
                 learning_rate=_optional_float(metrics.get("learning_rate")),
+                batches=_optional_int(metrics.get("batches")),
+                elapsed_seconds=_optional_float(metrics.get("elapsed_seconds")),
+                batch_load_elapsed_seconds=_optional_float(metrics.get("batch_load_elapsed_seconds")),
+                tensorize_elapsed_seconds=_optional_float(metrics.get("tensorize_elapsed_seconds")),
+                model_forward_elapsed_seconds=_optional_float(metrics.get("model_forward_elapsed_seconds")),
+                loss_elapsed_seconds=_optional_float(metrics.get("loss_elapsed_seconds")),
+                backward_elapsed_seconds=_optional_float(metrics.get("backward_elapsed_seconds")),
+                optimizer_step_elapsed_seconds=_optional_float(metrics.get("optimizer_step_elapsed_seconds")),
+                average_batch_elapsed_seconds=_optional_float(metrics.get("average_batch_elapsed_seconds")),
+                examples_per_second=_optional_float(metrics.get("examples_per_second")),
             )
             for metrics in payload.get("epochs", ())
         ),
@@ -1605,7 +1662,13 @@ class _TorchMetricTotals:
         self.ppo_value_clip_eligible_examples += int(pieces.get("ppo_value_clip_eligible_examples", 0))
         self.ppo_value_clip_count += int(pieces.get("ppo_value_clip_count", 0))
 
-    def to_epoch_metrics(self, epoch: int, *, learning_rate: float | None = None) -> TransformerEpochMetrics:
+    def to_epoch_metrics(
+        self,
+        epoch: int,
+        *,
+        learning_rate: float | None = None,
+        timing: Mapping[str, float | int] | None = None,
+    ) -> TransformerEpochMetrics:
         ppo_advantage_mean = None
         ppo_advantage_std = None
         ppo_ratio_mean = None
@@ -1626,6 +1689,7 @@ class _TorchMetricTotals:
             ppo_ratio_mean = self.ppo_ratio_sum / self.ppo_valid_examples
             ppo_clip_fraction = self.ppo_clip_count / self.ppo_valid_examples
             ppo_entropy = self.ppo_entropy_sum / self.ppo_valid_examples
+        timing_payload = dict(timing or {})
         return TransformerEpochMetrics(
             epoch=epoch,
             examples=self.examples,
@@ -1655,7 +1719,31 @@ class _TorchMetricTotals:
             ),
             ppo_value_clip_fraction=ppo_value_clip_fraction,
             ppo_entropy=ppo_entropy,
+            batches=_optional_int_from_mapping(timing_payload, "batches"),
+            elapsed_seconds=_optional_float_from_mapping(timing_payload, "elapsed_seconds"),
+            batch_load_elapsed_seconds=_optional_float_from_mapping(timing_payload, "batch_load_elapsed_seconds"),
+            tensorize_elapsed_seconds=_optional_float_from_mapping(timing_payload, "tensorize_elapsed_seconds"),
+            model_forward_elapsed_seconds=_optional_float_from_mapping(timing_payload, "model_forward_elapsed_seconds"),
+            loss_elapsed_seconds=_optional_float_from_mapping(timing_payload, "loss_elapsed_seconds"),
+            backward_elapsed_seconds=_optional_float_from_mapping(timing_payload, "backward_elapsed_seconds"),
+            optimizer_step_elapsed_seconds=_optional_float_from_mapping(timing_payload, "optimizer_step_elapsed_seconds"),
+            average_batch_elapsed_seconds=_optional_float_from_mapping(timing_payload, "average_batch_elapsed_seconds"),
+            examples_per_second=_optional_float_from_mapping(timing_payload, "examples_per_second"),
         )
+
+
+def _optional_float_from_mapping(mapping: Mapping[str, float | int], key: str) -> float | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int_from_mapping(mapping: Mapping[str, float | int], key: str) -> int | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    return int(value)
 
 
 def learning_rate_for_progress(*, base_learning_rate: float, schedule: str, progress: float) -> float:

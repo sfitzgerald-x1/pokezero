@@ -5494,6 +5494,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertAlmostEqual(learning_rates[1], 5.9e-5 / (5.0**1.5))
         self.assertAlmostEqual(learning_rates[2], 5.9e-5 / (9.0**1.5))
         self.assertEqual(restored.training_config.learning_rate_schedule, MIT_THESIS_LEARNING_RATE_SCHEDULE)
+        for metrics in restored.epochs:
+            self.assertEqual(metrics.batches, 1)
+            self.assertIsNotNone(metrics.elapsed_seconds)
+            self.assertIsNotNone(metrics.batch_load_elapsed_seconds)
+            self.assertIsNotNone(metrics.tensorize_elapsed_seconds)
+            self.assertIsNotNone(metrics.model_forward_elapsed_seconds)
+            self.assertIsNotNone(metrics.backward_elapsed_seconds)
+            self.assertIsNotNone(metrics.optimizer_step_elapsed_seconds)
+            self.assertIsNotNone(metrics.examples_per_second)
+            self.assertGreaterEqual(metrics.elapsed_seconds or 0.0, 0.0)
 
     def test_train_transformer_policy_applies_max_grad_norm_clip(self) -> None:
         if not torch_available():
