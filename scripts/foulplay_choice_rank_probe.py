@@ -208,7 +208,6 @@ def _build_states_from_captures(
         "states": 0,
         "parse_errors": 0,
         "undecoded_choices": 0,
-        "illegal_teacher_choices": 0,
         "no_legal_mask": 0,
     }
     for capture_path, username in capture_specs:
@@ -234,9 +233,6 @@ def _build_states_from_captures(
                 teacher_action = action_index_from_choice_string(state, decision.choice)
                 if teacher_action is None:
                     stats["undecoded_choices"] += 1
-                elif not state.legal_action_mask[teacher_action]:
-                    stats["illegal_teacher_choices"] += 1
-                    teacher_action = None
                 records.append(
                     {
                         "source_capture": str(capture_path),
@@ -269,10 +265,28 @@ def _score_checkpoints(
     showdown_root: str,
     device: str | None,
     temperature: float,
-) -> None:
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
     for label, path in checkpoint_specs:
         print(f"[rank-probe] scoring {label}…", file=sys.stderr)
         agent = build_agent(path, showdown_root, our_name="foulplay-rank-probe", deterministic=True)
+        result = agent.policy.result
+        model_config = result.model_config
+        if int(model_config.window_size) != 1:
+            raise ValueError(
+                f"{label} has window_size={model_config.window_size}; "
+                "foul-play choice-rank probe currently requires window_size=1"
+            )
+        metadata.append(
+            {
+                "label": label,
+                "path": path,
+                "policy_id": model_config.policy_id,
+                "observation_schema_version": model_config.observation_schema_version,
+                "window_size": model_config.window_size,
+                "belief_set_source_hash": result.belief_set_source_hash,
+            }
+        )
         for record in states:
             state = record["state"]
             observation = observation_from_player_state(
@@ -307,6 +321,47 @@ def _score_checkpoints(
                 ),
                 "ranked_actions": ranked,
             }
+    return metadata
+
+
+def _provenance_warnings(
+    checkpoints: Sequence[Mapping[str, Any]],
+    *,
+    set_source: Any,
+) -> list[str]:
+    warnings: list[str] = []
+    schemas = sorted({str(item.get("observation_schema_version")) for item in checkpoints})
+    if len(schemas) > 1:
+        warnings.append(f"checkpoint observation schemas differ: {', '.join(schemas)}")
+    belief_hashes = sorted({item.get("belief_set_source_hash") for item in checkpoints}, key=lambda x: str(x))
+    if len(belief_hashes) > 1:
+        warnings.append("checkpoint belief_set_source_hash values differ")
+    active_hash = _set_source_hash(set_source)
+    for item in checkpoints:
+        label = str(item.get("label"))
+        checkpoint_hash = item.get("belief_set_source_hash")
+        if active_hash and checkpoint_hash != active_hash:
+            warnings.append(
+                f"{label} was trained with belief_set_source_hash={checkpoint_hash!r}, "
+                f"but active source hash is {active_hash!r}"
+            )
+        if active_hash is None and checkpoint_hash:
+            warnings.append(
+                f"{label} was trained with belief_set_source_hash={checkpoint_hash!r}, "
+                "but POKEZERO_BELIEF_SET_SOURCE is disabled for this probe"
+            )
+    return warnings
+
+
+def _set_source_hash(set_source: Any) -> str | None:
+    if set_source is None:
+        return None
+    direct = getattr(set_source, "source_hash", None)
+    if direct:
+        return str(direct)
+    metadata = getattr(set_source, "metadata", None)
+    nested = getattr(metadata, "source_hash", None)
+    return str(nested) if nested else None
 
 
 def _pairwise_summary(states: Sequence[Mapping[str, Any]], pairs: Sequence[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -438,7 +493,7 @@ def main() -> int:
     if not states:
         raise SystemExit("no scoreable decision states found in capture(s)")
     print(f"[rank-probe] scoreable states: {len(states)}", file=sys.stderr)
-    _score_checkpoints(
+    checkpoint_metadata = _score_checkpoints(
         states,
         checkpoint_specs,
         showdown_root=args.showdown_root,
@@ -452,16 +507,15 @@ def main() -> int:
             {"path": path, "username": username}
             for path, username in capture_specs
         ],
-        "checkpoints": [
-            {"label": label, "path": path}
-            for label, path in checkpoint_specs
-        ],
+        "checkpoints": checkpoint_metadata,
         "pairs": [
             {"baseline": left, "candidate": right}
             for left, right in pairs
         ],
         "temperature": args.temperature,
         "belief_set_source": set_source is not None,
+        "belief_set_source_hash": _set_source_hash(set_source),
+        "warnings": _provenance_warnings(checkpoint_metadata, set_source=set_source),
         "stats": stats,
         "pairwise": _pairwise_summary(states, pairs),
         "states": _strip_state_objects(states),
