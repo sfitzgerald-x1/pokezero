@@ -34,6 +34,7 @@ from .collection import (
 )
 from .dataset import (
     MAX_ACTIVE_TRAINING_CACHE_BYTES,
+    CacheRootByteBudget,
     TrajectoryDatasetConfig,
     TrainingCacheBuilder,
     delete_training_cache_path,
@@ -838,6 +839,14 @@ class _TrainingCacheChunkWriter:
             feature_masks=self._feature_masks,
             observation_schema=self._observation_schema,
         )
+        # One amortized cap budget across all chunk flushes: re-walks the cache root only every N
+        # writes / T seconds instead of an O(files) rglob on every flush (the per-flush x per-pod
+        # NFS getattr storm that dominated metamon-M collect wall-time).
+        self._root_byte_budget = (
+            CacheRootByteBudget(self._max_cache_root_bytes)
+            if self._max_cache_root_bytes is not None
+            else None
+        )
 
     @property
     def paths(self) -> tuple[Path, ...]:
@@ -868,6 +877,7 @@ class _TrainingCacheChunkWriter:
             output_path,
             max_cache_root_bytes=self._max_cache_root_bytes,
             cache_root=self._cache_root,
+            root_byte_budget=self._root_byte_budget,
         )
         self._paths.append(output_path)
         self._builder = TrainingCacheBuilder(
