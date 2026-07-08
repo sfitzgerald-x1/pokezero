@@ -671,7 +671,9 @@ def collect_selfplay_rollouts(
                 if training_handle is not None:
                     training_handle.close()
         if training_cache_writer is not None:
+            cache_close_started = perf_counter()
             training_cache_writer.close()
+            metrics_accumulator.add_timing("training_cache_write", perf_counter() - cache_close_started)
         if write_path is not None and output_path is not None:
             write_path.replace(output_path)
         if training_write_path is not None and training_output_path is not None:
@@ -788,11 +790,17 @@ def _write_selfplay_game_results(
     for index, (record, training_record) in enumerate(results, start=1):
         metrics_accumulator.add(record)
         if handle is not None:
+            write_started = perf_counter()
             write_rollout_record(handle, record)
+            metrics_accumulator.add_timing("raw_rollout_jsonl_write", perf_counter() - write_started)
         if training_handle is not None:
+            write_started = perf_counter()
             write_rollout_record(training_handle, training_record)
+            metrics_accumulator.add_timing("training_rollout_jsonl_write", perf_counter() - write_started)
         if training_cache_writer is not None:
+            write_started = perf_counter()
             training_cache_writer.add_record(training_record)
+            metrics_accumulator.add_timing("training_cache_write", perf_counter() - write_started)
         if rss_recorder is not None:
             if index == 1:
                 rss_recorder("after_first_record")

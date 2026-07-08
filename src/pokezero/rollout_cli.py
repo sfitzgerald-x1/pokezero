@@ -655,6 +655,16 @@ def _print_metrics(metrics: dict[str, object]) -> None:
     print(f"capped_games: {metrics['capped_games']}")
     print(f"average_decision_rounds: {float(metrics['average_decision_rounds']):.2f}")
     print(f"average_simulator_turns: {float(metrics['average_simulator_turns']):.2f}")
+    timing = metrics.get("collection_timing")
+    if isinstance(timing, dict):
+        for key in sorted(timing):
+            value = timing[key]
+            if isinstance(value, bool) or value is None:
+                continue
+            if isinstance(value, int):
+                print(f"collection_timing_{key}: {value}")
+            elif isinstance(value, float):
+                print(f"collection_timing_{key}: {value:.6f}")
 
 
 def _add_dataset_config_arguments(parser: argparse.ArgumentParser) -> None:

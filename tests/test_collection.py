@@ -355,6 +355,13 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(metrics.total_decision_rounds, 2)
         self.assertEqual(metrics.peak_rss_mb, 123.5)
         self.assertEqual(metrics.to_dict()["peak_rss_mb"], 123.5)
+        timing = metrics.to_dict()["collection_timing"]
+        self.assertEqual(timing["env_reset_calls"], 2)
+        self.assertEqual(timing["env_observe_calls"], 4)
+        self.assertEqual(timing["policy_select_calls"], 4)
+        self.assertEqual(timing["env_step_calls"], 2)
+        self.assertEqual(timing["raw_rollout_jsonl_write_calls"], 2)
+        self.assertGreaterEqual(timing["raw_rollout_jsonl_write_elapsed_seconds"], 0.0)
         self.assertEqual([record.seed for record in records], [10, 11])
         self.assertEqual([record.seed for record in streamed_records], [10, 11])
         self.assertEqual([record.battle_id for record in records], ["rollout-10", "rollout-11"])

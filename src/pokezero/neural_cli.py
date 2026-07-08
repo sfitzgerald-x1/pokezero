@@ -2375,6 +2375,19 @@ def _train(args: argparse.Namespace) -> int:
                 f" opponent_loss={metrics.opponent_loss:.6f} "
                 f"opponent_accuracy={metrics.opponent_accuracy:.4f}"
             )
+        if metrics.elapsed_seconds is not None:
+            line += (
+                f" elapsed_seconds={metrics.elapsed_seconds:.3f}"
+                f" batches={metrics.batches}"
+            )
+            if metrics.examples_per_second is not None:
+                line += f" examples_per_second={metrics.examples_per_second:.1f}"
+            if metrics.model_forward_elapsed_seconds is not None:
+                line += f" model_forward_seconds={metrics.model_forward_elapsed_seconds:.3f}"
+            if metrics.backward_elapsed_seconds is not None:
+                line += f" backward_seconds={metrics.backward_elapsed_seconds:.3f}"
+            if metrics.batch_load_elapsed_seconds is not None:
+                line += f" batch_load_seconds={metrics.batch_load_elapsed_seconds:.3f}"
         print(line)
     print(f"checkpoint: {args.out}")
     if value_selection_payload is not None:
