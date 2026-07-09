@@ -7,7 +7,8 @@ an injected ``forward_fn``) keeps the entire decision path — per-player histor
 legal-action masking, rng sampling, behavior-probability, value — so served-vs-local parity
 is structural and determinism (sampling stays client-side) is untouched.
 
-Wire protocol (JSON over HTTP; raw-bytes/dynamic-batching optimization is a follow-up):
+Requests are dynamically batched (see _BatchingForwarder) so N concurrent collector requests
+cost one GPU forward. Wire protocol (JSON over HTTP; a raw-bytes payload is a possible follow-up):
   GET  /config  -> {"window_size": int, "policy_id": str, "action_count": int}
   POST /forward -> body is the observation-window tensors (nested lists, leading batch dim 1):
                    {categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask}
@@ -254,7 +255,10 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 result = forwarder.submit(payload)
-            except Exception as exc:  # noqa: BLE001
+            except TimeoutError as exc:  # server overload, not a client error
+                self._send(504, {"error": f"TimeoutError: {exc}"})
+                return
+            except Exception as exc:  # noqa: BLE001 — malformed/bad-shape body is a client error
                 self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
                 return
             self._send(200, result)
