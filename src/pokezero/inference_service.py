@@ -18,6 +18,7 @@ cost one GPU forward. Wire protocol (JSON over HTTP; a raw-bytes payload is a po
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import queue
 import threading
@@ -25,7 +26,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from typing import Any, Mapping
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from .actions import ACTION_COUNT
 from .neural_policy import (
@@ -165,20 +167,48 @@ class _BatchingForwarder:
 
 
 class RemoteForward:
-    """A ``forward_fn`` for TransformerSoftmaxPolicy that RPCs the window tensors to an
-    inference server and returns an equivalent TransformerPolicyOutput (fp32 torch tensors)."""
+    """A ``forward_fn`` for TransformerSoftmaxPolicy that RPCs the window tensors to an inference
+    server and returns an equivalent TransformerPolicyOutput (fp32 torch tensors).
+
+    Reuses ONE persistent HTTP connection (keep-alive) rather than opening a socket per forward —
+    a collector does ~70 forwards/game, and 64 collectors each churning new connections overflows
+    the server's listen backlog (Errno 104 connection-reset). Reconnects once on a dropped/stale
+    connection. Guarded by a lock in case a pod runs games concurrently on the same policy."""
 
     def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
-        self._forward_url = base_url.rstrip("/") + "/forward"
+        parsed = urlsplit(base_url if "://" in base_url else "http://" + base_url)
+        self._host = parsed.hostname
+        self._port = parsed.port or 80
         self._timeout = timeout
+        self._lock = threading.Lock()
+        self._conn: "http.client.HTTPConnection | None" = None
+
+    def _request(self, body: bytes) -> dict[str, Any]:
+        # Reconnect-once: a keep-alive connection can be closed server-side between calls.
+        for attempt in range(2):
+            try:
+                if self._conn is None:
+                    self._conn = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+                self._conn.request("POST", "/forward", body=body, headers={"Content-Type": "application/json"})
+                response = self._conn.getresponse()
+                data = response.read()
+                if response.status != 200:
+                    raise RuntimeError(f"inference server {response.status}: {data[:200]!r}")
+                return json.loads(data.decode("utf-8"))
+            except (http.client.HTTPException, ConnectionError, OSError):
+                if self._conn is not None:
+                    self._conn.close()
+                self._conn = None
+                if attempt == 1:
+                    raise
+        raise RuntimeError("unreachable")
 
     def __call__(self, tensors: Mapping[str, Any]) -> TransformerPolicyOutput:
         torch_module = require_torch()
         payload = {key: tensors[key].detach().cpu().tolist() for key in _FORWARD_TENSOR_KEYS}
         body = json.dumps(payload).encode("utf-8")
-        request = Request(self._forward_url, data=body, headers={"Content-Type": "application/json"})
-        with urlopen(request, timeout=self._timeout) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        with self._lock:
+            result = self._request(body)
         opp = result.get("opponent_action_logits")
         return TransformerPolicyOutput(
             policy_logits=torch_module.tensor(result["policy_logits"], dtype=torch_module.float32),
@@ -226,6 +256,8 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
     policy_id = str(policy.policy_id)
 
     class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"  # keep-alive so the persistent RemoteForward reuses the socket
+
         def log_message(self, *args: Any) -> None:  # silence per-request stderr spam
             pass
 
@@ -285,7 +317,14 @@ def serve_inference(
         policy, device=device, amp=amp, max_batch=max_batch, max_delay_s=batch_window_ms / 1000.0
     )
     handler = build_request_handler(policy, forwarder)
-    server = ThreadingHTTPServer((host, port), handler)
+
+    class _BatchedHTTPServer(ThreadingHTTPServer):
+        # 64+ collectors connect near-simultaneously; the default listen backlog of 5 overflows
+        # (Errno 104 connection-reset). Widen it. daemon_threads so workers don't block shutdown.
+        request_queue_size = 512
+        daemon_threads = True
+
+    server = _BatchedHTTPServer((host, port), handler)
     return server
 
 
