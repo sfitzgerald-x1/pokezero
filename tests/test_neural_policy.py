@@ -763,6 +763,51 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(decision.action_index, 1)
         self.assertAlmostEqual(decision.value_estimate, 0.37, places=6)
 
+    def test_transformer_policy_forward_fn_seam_preserves_decisions(self) -> None:
+        # WS-L1: a forward_fn that round-trips logits/value through python lists (the RPC
+        # serialization boundary a remote inference client will cross) must produce byte-identical
+        # decisions to the local self.model path — same action, behavior-prob, and value — under
+        # sampling with a fixed rng. This proves parity is structural (one shared decision path).
+        if not torch_available():
+            self.skipTest("requires torch")
+        torch = require_torch()
+        config = TransformerPolicyConfig.compact_category(
+            policy_id="seam", category_vocab=("fixture",), category_oov_buckets=1, window_size=2,
+            categorical_feature_count=1, numeric_feature_count=1,
+            token_count=ObservationSpec(categorical_feature_count=1, numeric_feature_count=1).token_count,
+            embedding_dim=4, transformer_layers=1, attention_heads=1, feedforward_dim=8,
+        )
+
+        class FakePolicyModel:
+            def eval(self): pass
+            def __call__(self, **kwargs):
+                logits = torch.tensor([[0.5, 2.0, -1.0, 0.25, 1.5, 0.0, 0.75, -0.5, 1.1]])
+                return SimpleNamespace(policy_logits=logits, value=torch.tensor([0.42]),
+                                       opponent_action_logits=torch.zeros(1, 9))
+
+        def make_result():
+            return TransformerTrainingResult(
+                model_config=config, training_config=TransformerTrainingConfig(window_size=2), epochs=(),
+            )
+
+        model = FakePolicyModel()
+
+        def roundtrip_forward(tensors):
+            out = model(**tensors)
+            # simulate the RPC: tensors -> python lists -> tensors (lossless for float32)
+            pl = torch.tensor([list(out.policy_logits[0].tolist())])
+            val = torch.tensor([float(out.value[0])])
+            return SimpleNamespace(policy_logits=pl, value=val, opponent_action_logits=None)
+
+        local = TransformerSoftmaxPolicy(model=model, result=make_result(), deterministic=False)
+        remote = TransformerSoftmaxPolicy(model=model, result=make_result(), deterministic=False,
+                                          forward_fn=roundtrip_forward)
+        d_local = local.select_action(observation(1), rng=__import__("random").Random(7))
+        d_remote = remote.select_action(observation(1), rng=__import__("random").Random(7))
+        self.assertEqual(d_local.action_index, d_remote.action_index)
+        self.assertEqual(d_local.action_probability, d_remote.action_probability)
+        self.assertEqual(d_local.value_estimate, d_remote.value_estimate)
+
     def test_transformer_policy_drops_non_finite_value_estimate(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")

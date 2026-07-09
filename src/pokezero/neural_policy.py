@@ -1129,6 +1129,12 @@ class TransformerSoftmaxPolicy:
     policy_id: str | None = None
     checkpoint_path: str | None = None
     weights_sha256: str | None = None
+    # WS-L1 seam: the model forward. None → local self.model(...). A remote inference client
+    # injects a forward_fn that RPCs the tensors to a batched GPU server and returns an
+    # equivalent TransformerPolicyOutput, so the ENTIRE decision path (history, tensorize,
+    # masking, rng sampling, behavior-prob, value) is shared verbatim between local and remote
+    # — parity is structural, and determinism (sampling stays client-side) is untouched.
+    forward_fn: "Callable[[Mapping[str, Any]], TransformerPolicyOutput] | None" = None
     _history_by_player: dict[str, list[PokeZeroObservationV0]] | None = None
 
     def __post_init__(self) -> None:
@@ -1147,6 +1153,17 @@ class TransformerSoftmaxPolicy:
             self.model.eval()
         if self.device is not None and hasattr(self.model, "to"):
             self.model.to(self.device)
+        if self.forward_fn is None:
+            self.forward_fn = self._default_forward
+
+    def _default_forward(self, tensors: "Mapping[str, Any]") -> "TransformerPolicyOutput":
+        return self.model(
+            categorical_ids=tensors["categorical_ids"],
+            numeric_features=tensors["numeric_features"],
+            token_type_ids=tensors["token_type_ids"],
+            attention_mask=tensors["attention_mask"],
+            history_mask=tensors["history_mask"],
+        )
 
     def reset(self) -> None:
         if self._history_by_player is not None:
@@ -1168,14 +1185,9 @@ class TransformerSoftmaxPolicy:
             window_size=self.result.model_config.window_size,
             device=self.device,
         )
+        forward_fn = self.forward_fn if self.forward_fn is not None else self._default_forward
         with torch_module.no_grad():
-            output = self.model(
-                categorical_ids=tensors["categorical_ids"],
-                numeric_features=tensors["numeric_features"],
-                token_type_ids=tensors["token_type_ids"],
-                attention_mask=tensors["attention_mask"],
-                history_mask=tensors["history_mask"],
-            )
+            output = forward_fn(tensors)
             probabilities = _masked_action_probabilities(
                 output.policy_logits[0],
                 tensors["legal_action_mask"][0],
