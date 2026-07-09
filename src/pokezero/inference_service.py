@@ -356,6 +356,12 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
                     checkpoint = str(req["checkpoint_path"])
                     with reload_lock:
                         new_policy = load_transformer_policy(Path(checkpoint), device=device)
+                        new_window = int(new_policy.result.model_config.window_size)
+                        if new_window != window_size:
+                            raise ValueError(
+                                f"reload window_size {new_window} != served {window_size}; "
+                                "collectors tensorize at the served window — refusing arch-mismatched swap."
+                            )
                         forwarder.set_policy(new_policy)
                         state["policy_id"] = str(new_policy.policy_id)
                 except Exception as exc:  # noqa: BLE001
