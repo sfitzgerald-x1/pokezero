@@ -808,6 +808,54 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(d_local.action_probability, d_remote.action_probability)
         self.assertEqual(d_local.value_estimate, d_remote.value_estimate)
 
+    def test_remote_inference_policy_matches_local_over_http(self) -> None:
+        # WS-L1 parity: a policy served by the inference server over real HTTP (`remote:` spec)
+        # must produce byte-identical decisions to the local `neural:` policy on the same
+        # checkpoint + seed. Proves the server forward + JSON round-trip preserve the decision
+        # exactly (fp32 path); bf16 numerics are a separate scale-gate concern.
+        if not torch_available():
+            self.skipTest("requires torch")
+        import random as _random
+        import threading
+
+        from pokezero.collection import policy_from_spec
+        from pokezero.inference_service import serve_inference
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            ckpt = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="parity",
+                window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
+                numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
+                attention_heads=4, feedforward_dim=32, dropout=0.0,
+            )
+            model, result = train_transformer_policy(
+                data_path, model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu"),
+            )
+            save_transformer_checkpoint(ckpt, model, result=result)
+
+            server = serve_inference(str(ckpt), host="127.0.0.1", port=0, device="cpu")
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                local = policy_from_spec(f"neural:{ckpt}")
+                remote = policy_from_spec(f"remote:http://127.0.0.1:{port}")
+                rl, rr = _random.Random(3), _random.Random(3)
+                for i in range(1, 5):
+                    a = local.select_action(observation(i), rng=rl)
+                    b = remote.select_action(observation(i), rng=rr)
+                    self.assertEqual(a.action_index, b.action_index)
+                    self.assertEqual(a.action_probability, b.action_probability)
+                    self.assertEqual(a.value_estimate, b.value_estimate)
+            finally:
+                server.shutdown()
+
     def test_transformer_policy_drops_non_finite_value_estimate(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")

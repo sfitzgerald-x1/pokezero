@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 ROLLOUT_RECORD_SCHEMA_VERSION = "pokezero.rollout_record.v2"
 LINEAR_POLICY_SPEC_PREFIX = "linear:"
 NEURAL_POLICY_SPEC_PREFIX = "neural:"
+REMOTE_POLICY_SPEC_PREFIX = "remote:"
 
 
 @dataclass(frozen=True)
@@ -946,10 +947,21 @@ def policy_factory_from_spec(spec: str) -> Callable[[], Policy]:
             raise ValueError("neural policy spec must include a checkpoint path after 'neural:'.")
         neural_options = _neural_policy_options(options)
         return lambda: load_transformer_policy(Path(checkpoint), **neural_options)
+    if lowered.startswith(REMOTE_POLICY_SPEC_PREFIX):
+        from .inference_service import remote_inference_policy
+
+        base_url = policy_body[len(REMOTE_POLICY_SPEC_PREFIX) :].strip()
+        if not base_url:
+            raise ValueError("remote policy spec must include a server URL after 'remote:'.")
+        if "://" not in base_url:
+            base_url = "http://" + base_url
+        remote_options = _neural_policy_options(options)
+        return lambda: remote_inference_policy(base_url, **remote_options)
     raise ValueError(
         f"Unsupported policy spec: {spec!r}. Expected random-legal, simple-legal, max-damage, "
         "aggressive-damage, "
-        "scripted-teacher, linear:/path/to/checkpoint.json, or neural:/path/to/checkpoint.pt."
+        "scripted-teacher, linear:/path/to/checkpoint.json, neural:/path/to/checkpoint.pt, "
+        "or remote:host:port."
     )
 
 
