@@ -1,11 +1,12 @@
 """--observation-schema {v2.1,v2.2}: the v2.2 fresh-selection latch.
 
 #516's checkpoint-driven resolution could adopt an existing v2.2 checkpoint but nothing
-could START one. The flag SETS the schema on a fresh train/collect (default v2.1 — the
-current default spec, byte-identical behavior when omitted); on resume/adoption the
-checkpoint wins and an explicitly disagreeing flag hard-fails (mask-conflict semantics).
-Collection stamps the encoding schema into cache metadata; the trainer cross-checks it
-both directions, with the legacy-absence asymmetry (no field = pre-v2.2 collector).
+could START one. The flag SETS the schema on a fresh train/collect (when omitted, the
+current default spec applies — v2.2 since the 2026-07-08 promotion); on resume/adoption
+the checkpoint wins and an explicitly disagreeing flag hard-fails (mask-conflict
+semantics). Collection stamps the encoding schema into cache metadata; the trainer
+cross-checks it both directions, with the legacy-absence asymmetry (no field = pre-v2.2
+collector).
 """
 
 import json
@@ -112,7 +113,8 @@ class SchemaFlagLatchUnitTest(unittest.TestCase):
 @unittest.skipUnless(_integration_root() is not None, "requires built Showdown checkout and node")
 class SchemaFlagEndToEndTest(unittest.TestCase):
     """Fresh collect + train at --observation-schema v2.2, end to end through the real
-    CLIs and the real BattleStream env; the v2.1 default path stamps v2.1/140."""
+    CLIs and the real BattleStream env; the flag-less default path stamps v2.2/155
+    (post-flip), and the explicit v2.1 flag still stamps v2.1/140."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -139,6 +141,7 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             v2_2_cache = Path(tmp) / "cache-v2-2"
+            v2_1_cache = Path(tmp) / "cache-v2-1"
             default_cache = Path(tmp) / "cache-default"
 
             # Fresh v2.2 collect: schema + census recorded in cache metadata.
@@ -150,17 +153,32 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
                 V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
             )
 
-            # Default collect: v2.1 stamp, v2.1 census — flag-less behavior unchanged.
+            # Explicit v2.1 collect: v2.1 stamp, v2.1 census — the pre-flip schema stays
+            # a first-class explicit selection.
+            self._collect(v2_1_cache, "--observation-schema", "v2.1")
+            v2_1_metadata = json.loads(
+                (v2_1_cache / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                v2_1_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION_V2_1
+            )
+            self.assertEqual(
+                v2_1_metadata["observation_shapes"]["numeric_features"][-1],
+                V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+            )
+
+            # Default (flag-less) collect: stamps the CURRENT default — v2.2 since the
+            # 2026-07-08 promotion (this assertion is deliberately about the default).
             self._collect(default_cache)
             default_metadata = json.loads(
                 (default_cache / "metadata.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
-                default_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION_V2_1
+                default_metadata["observation_schema"], OBSERVATION_SCHEMA_VERSION_V2_2
             )
             self.assertEqual(
                 default_metadata["observation_shapes"]["numeric_features"][-1],
-                V2_1_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
+                V2_2_REPLAY_OBSERVATION_SPEC.numeric_feature_count,
             )
 
             # Cross-check hard-fails both directions through the real CLI (run BEFORE
@@ -169,8 +187,8 @@ class SchemaFlagEndToEndTest(unittest.TestCase):
             import io
 
             for data, schema_args, expectation in (
-                (v2_2_cache, [], "cross-schema"),  # v2.1 default train on a v2.2 cache
-                (default_cache, ["--observation-schema", "v2.2"], "cross-schema"),
+                (v2_1_cache, [], "cross-schema"),  # v2.2 default train on a v2.1 cache
+                (v2_2_cache, ["--observation-schema", "v2.1"], "cross-schema"),
             ):
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr):
