@@ -864,6 +864,23 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_inference_request_codec_round_trips(self) -> None:
+        # WS-L1 raw-bytes wire: encode_forward_request -> decode_forward_request must reproduce the
+        # tensors exactly (lossless), incl. dtypes/shapes, for the 5 window tensors.
+        if not torch_available():
+            self.skipTest("requires torch")
+        import numpy as _np
+
+        from pokezero.inference_service import decode_forward_request, encode_forward_request
+        from pokezero.neural_policy import observation_window_to_torch
+
+        tensors = observation_window_to_torch([observation(1)], window_size=2, device="cpu")
+        keys = ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask", "history_mask")
+        decoded = decode_forward_request(encode_forward_request(tensors))
+        for key in keys:
+            self.assertTrue(_np.array_equal(decoded[key], tensors[key].detach().cpu().numpy()),
+                            f"codec mismatch on {key}")
+
     def test_inference_forward_batch_matches_single(self) -> None:
         # WS-L1 batching: a coalesced batch of N identical requests must yield N results each
         # byte-identical to the single-forward result — i.e. the batch split is correct and
