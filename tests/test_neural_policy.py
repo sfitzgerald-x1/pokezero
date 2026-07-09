@@ -853,6 +853,14 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     self.assertEqual(a.action_index, b.action_index)
                     self.assertEqual(a.action_probability, b.action_probability)
                     self.assertEqual(a.value_estimate, b.value_estimate)
+                # Reconnect-once: force-close the client's persistent connection mid-stream and
+                # confirm the next forward transparently reconnects and still matches local.
+                if remote.forward_fn._conn is not None:
+                    remote.forward_fn._conn.close()
+                a = local.select_action(observation(5), rng=rl)
+                b = remote.select_action(observation(5), rng=rr)
+                self.assertEqual(a.action_index, b.action_index)
+                self.assertEqual(a.value_estimate, b.value_estimate)
             finally:
                 server.shutdown()
 

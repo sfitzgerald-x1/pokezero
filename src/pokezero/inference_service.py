@@ -257,6 +257,10 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
 
     class _Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"  # keep-alive so the persistent RemoteForward reuses the socket
+        # Close idle kept-alive connections so a collector that dies ungracefully (OOM/evict/SIGKILL
+        # — routine at 64 pods) doesn't leak a server thread+FD until OS TCP-keepalive (~2h). Set
+        # above the client's 30s request / 60s batch timeout so it never cuts a live request.
+        timeout = 65
 
         def log_message(self, *args: Any) -> None:  # silence per-request stderr spam
             pass
