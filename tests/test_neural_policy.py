@@ -5624,6 +5624,20 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
             self.assertEqual(restored.training_config.amp, "bf16")
 
+    def test_amp_autocast_device_type_maps_supported_and_rejects_others(self) -> None:
+        # WS-A1: cuda/cpu map through; mps (and any other backend) must raise, not silently
+        # coerce to cpu (which would train fp32 with no warning). Pure device-string parsing —
+        # no GPU/mps hardware required.
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import _amp_autocast_device_type
+
+        self.assertEqual(_amp_autocast_device_type("cpu"), "cpu")
+        self.assertEqual(_amp_autocast_device_type("cuda"), "cuda")
+        self.assertEqual(_amp_autocast_device_type("cuda:0"), "cuda")
+        with self.assertRaisesRegex(ValueError, "amp"):
+            _amp_autocast_device_type("mps")
+
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():
             self.skipTest("PyTorch is not installed in this environment.")

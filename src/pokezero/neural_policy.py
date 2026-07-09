@@ -1258,6 +1258,22 @@ def _file_sha256(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _amp_autocast_device_type(device: Any) -> str:
+    """Map a resolved torch device to an autocast device_type for bf16 (WS-A1).
+
+    Only cuda and cpu carry the bf16 autocast path today. Any other backend (e.g. mps)
+    would otherwise be silently coerced and train in fp32 with no warning, so reject it
+    explicitly rather than no-op.
+    """
+    torch_module = require_torch()
+    device_type = torch_module.device(str(device)).type
+    if device_type not in ("cuda", "cpu"):
+        raise ValueError(
+            f"amp='bf16' is only supported on cuda or cpu devices, not {device_type!r}."
+        )
+    return device_type
+
+
 def train_transformer_policy(
     paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
     *,
@@ -1303,9 +1319,8 @@ def train_transformer_policy(
     # optimizer state stay fp32; bf16 needs no GradScaler (fp32-range exponent). A reusable
     # torch.autocast instance is safe to re-enter each iteration; fp32 uses a null context.
     if resolved_training_config.amp == "bf16":
-        autocast_device_type = "cuda" if "cuda" in str(device) else "cpu"
         autocast_context: Any = torch_module.autocast(
-            device_type=autocast_device_type, dtype=torch_module.bfloat16
+            device_type=_amp_autocast_device_type(device), dtype=torch_module.bfloat16
         )
     else:
         autocast_context = contextlib.nullcontext()
