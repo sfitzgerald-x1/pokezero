@@ -4340,6 +4340,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         str(checkpoint_path),
                         "--showdown-root",
                         "/tmp/showdown",
+                        # Pinned: unstamped .jsonl fixture data pairs with v2.1 only.
+                        "--observation-schema",
+                        "v2.1",
                         "--temporal-aggregator",
                         "gru",
                         "--hp-delta-return-weight",
@@ -4443,6 +4446,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "checkpoint.pt",
                     "--showdown-root",
                     "/tmp/showdown",
+                    # Pinned: this scaffold battery predates the v2.2 default; the bare
+                    # "cache-a" carries no schema stamp (legacy), which only pairs with a
+                    # v2.1-declaring train.
+                    "--observation-schema",
+                    "v2.1",
                 ]
             )
 
@@ -4514,6 +4522,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         str(summary_path),
                         "--showdown-root",
                         "/tmp/showdown",
+                        # Pinned: unstamped (legacy) fixture cache pairs with v2.1 only.
+                        "--observation-schema",
+                        "v2.1",
                     ]
                 )
 
@@ -4580,6 +4591,11 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     "checkpoint.pt",
                     "--showdown-root",
                     "/tmp/showdown",
+                    # Pinned: this scaffold battery predates the v2.2 default; the bare
+                    # "cache-a" carries no schema stamp (legacy), which only pairs with a
+                    # v2.1-declaring train.
+                    "--observation-schema",
+                    "v2.1",
                 ]
             )
 
@@ -4842,6 +4858,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                         str(checkpoint_path),
                         "--showdown-root",
                         "/tmp/showdown",
+                        # Pinned: unstamped .jsonl fixture data pairs with v2.1 only.
+                        "--observation-schema",
+                        "v2.1",
                         "--objective",
                         "value-only",
                         "--freeze-non-value-parameters",
@@ -4875,10 +4894,16 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             self.skipTest("PyTorch is not installed in this environment.")
 
         fake_model = object()
+        # Pinned to a v2.1-stamped base checkpoint: the finetune data fixture is an
+        # unstamped (legacy) .jsonl, which only pairs with a v2.1-declaring run — and
+        # a fresh compact_category() would stamp the current default (v2.2) post-flip.
         fake_model_config = TransformerPolicyConfig.compact_category(
             category_vocab=("species:a",),
             category_oov_buckets=2,
             policy_id="base-policy",
+            observation_schema_version="pokezero.observation.v2.1",
+            numeric_feature_count=140,
+            categorical_feature_count=39,
         )
         fake_loaded_result = TransformerTrainingResult(
             model_config=fake_model_config,
@@ -5804,7 +5829,9 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()) as stderr,
                 ):
                     exit_code = neural_cli_main(
-                        ["train", "--data", *data_paths, "--out", str(temp_path / out_name), "--showdown-root", "/tmp/showdown"]
+                        # Pinned to v2.1: the provenance-fixture .jsonl files are
+                        # deliberately unstamped (legacy), which only pairs with v2.1.
+                        ["train", "--data", *data_paths, "--out", str(temp_path / out_name), "--showdown-root", "/tmp/showdown", "--observation-schema", "v2.1"]
                     )
                 self.assertEqual(exit_code, 0)
                 return stderr.getvalue()

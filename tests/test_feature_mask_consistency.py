@@ -118,6 +118,9 @@ def _save_v2_checkpoint(path: Path):
         dropout=0.0,
         observation_schema_version="pokezero.observation.v2",
         numeric_feature_count=121,
+        # Real v2-era artifacts carry the 39-column categorical census (the constructor
+        # default tracks the CURRENT schema — v2.2's 51 — post-flip).
+        categorical_feature_count=39,
     )
     model = EntityTokenTransformerPolicy(config)
     result = TransformerTrainingResult(
@@ -145,7 +148,9 @@ class EnvConfigSpecResolutionTest(unittest.TestCase):
     def test_matching_v2_1_spec_is_a_no_op(self) -> None:
         from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
 
-        config = LocalShowdownConfig()
+        # Pinned explicitly post-flip: the default env spec is v2.2 now, so a matching
+        # v2.1 pair needs a v2.1 env to stay a no-op.
+        config = LocalShowdownConfig(observation_spec=V2_1_REPLAY_OBSERVATION_SPEC)
         resolved = env_config_with_checkpoint_masks(
             config,
             (),
@@ -434,9 +439,14 @@ def _probe_state():
 
 
 def _k32_agent():
-    """A build_agent-shaped agent whose checkpoint provenance stamped the K=32 masks."""
+    """A build_agent-shaped agent whose checkpoint provenance stamped the K=32 masks.
+
+    Pinned to the v2.1 spec the K=32 arm was trained under: the probe corpus states are
+    normalized without the turn-merged stream, and the point of these tests is the MASK
+    latch, not the schema default (which is v2.2 post-flip).
+    """
     from pokezero.category_vocab import build_category_vocabulary
-    from pokezero.showdown import DEFAULT_REPLAY_OBSERVATION_SPEC
+    from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
 
     vocab = build_category_vocabulary(
         ["species:Charizard", "species:Xatu", "status:tox", "status:none"], oov_buckets=4
@@ -450,7 +460,7 @@ def _k32_agent():
         policy=policy,
         vocab=vocab,
         dex=None,
-        spec=DEFAULT_REPLAY_OBSERVATION_SPEC,
+        spec=V2_1_REPLAY_OBSERVATION_SPEC,
         feature_masks=K32_MASKS,
         rng=random.Random(0),
         set_source=None,
@@ -581,8 +591,9 @@ class V2CheckpointHarnessPathTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             v2_path = Path(temp_dir) / "v2.pt"
             _save_v2_checkpoint(v2_path)
-            # A fresh default (v2.1-stamped) checkpoint with the SAME default masks, so the
-            # failure is unambiguously the schema axis, not the mask axis.
+            # An explicitly v2.1-stamped checkpoint (the default stamps v2.2 post-flip)
+            # with the SAME default masks, so the failure is unambiguously the schema
+            # axis, not the mask axis.
             v21_config = TransformerPolicyConfig.compact_category(
                 policy_id="v21-arm",
                 category_vocab=tuple(f"token-{index}" for index in range(8)),
@@ -593,6 +604,9 @@ class V2CheckpointHarnessPathTest(unittest.TestCase):
                 attention_heads=1,
                 feedforward_dim=8,
                 dropout=0.0,
+                observation_schema_version="pokezero.observation.v2.1",
+                numeric_feature_count=140,
+                categorical_feature_count=39,
             )
             v21_path = Path(temp_dir) / "v21.pt"
             save_transformer_checkpoint(
