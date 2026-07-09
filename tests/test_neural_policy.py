@@ -1124,6 +1124,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(learning_rate_progress_end=1.1)
         with self.assertRaisesRegex(ValueError, "learning_rate_progress_end"):
             TransformerTrainingConfig(learning_rate_progress_start=0.5, learning_rate_progress_end=0.25)
+        with self.assertRaisesRegex(ValueError, "learning_rate_warmup_progress"):
+            TransformerTrainingConfig(learning_rate_warmup_progress=-0.1)
+        with self.assertRaisesRegex(ValueError, "learning_rate_warmup_progress"):
+            TransformerTrainingConfig(learning_rate_warmup_progress=1.1)
         self.assertIsNone(TransformerTrainingConfig().max_grad_norm)
         self.assertEqual(TransformerTrainingConfig(max_grad_norm=0.543).to_dict()["max_grad_norm"], 0.543)
         self.assertEqual(TransformerTrainingConfig(value_clip_range=0.0184).to_dict()["value_clip_range"], 0.0184)
@@ -1695,6 +1699,78 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             ),
             5.9e-5 / (9.0**1.5),
         )
+
+    def test_learning_rate_warmup_ramps_linearly_then_follows_decay(self) -> None:
+        base = 5.9e-5
+        warmup = 0.1
+        # scheduled value at the warmup boundary — the ramp target.
+        target = base / (((8.0 * warmup) + 1.0) ** 1.5)
+        # At progress 0 the LR is 0 (textbook linear warmup from zero).
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.0,
+                warmup_progress=warmup,
+            ),
+            0.0,
+        )
+        # Halfway through warmup -> half the boundary value.
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=warmup / 2.0,
+                warmup_progress=warmup,
+            ),
+            target * 0.5,
+        )
+        # Continuity: at exactly warmup_progress the ramp and the decay agree.
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=warmup,
+                warmup_progress=warmup,
+            ),
+            target,
+        )
+        # Past warmup the curve is the unchanged decay schedule.
+        self.assertAlmostEqual(
+            learning_rate_for_progress(
+                base_learning_rate=base,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.5,
+                warmup_progress=warmup,
+            ),
+            base / (5.0**1.5),
+        )
+
+    def test_learning_rate_warmup_zero_preserves_legacy_curve(self) -> None:
+        base = 5.9e-5
+        for progress in (0.0, 0.25, 0.5, 1.0):
+            self.assertAlmostEqual(
+                learning_rate_for_progress(
+                    base_learning_rate=base,
+                    schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                    progress=progress,
+                    warmup_progress=0.0,
+                ),
+                learning_rate_for_progress(
+                    base_learning_rate=base,
+                    schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                    progress=progress,
+                ),
+            )
+
+    def test_learning_rate_warmup_progress_out_of_range_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            learning_rate_for_progress(
+                base_learning_rate=5.9e-5,
+                schedule=MIT_THESIS_LEARNING_RATE_SCHEDULE,
+                progress=0.5,
+                warmup_progress=1.5,
+            )
 
     def test_ppo_epoch_metrics_reports_zero_valid_coverage(self) -> None:
         from pokezero.neural_policy import _TorchMetricTotals
