@@ -428,7 +428,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("v2.1", "v2.2"),
         default=None,
         help=(
-            "Observation schema for a FRESH train: v2.1 (default) or v2.2 (turn-merged "
+            "Observation schema for a FRESH train: v2.1 or v2.2 (default; turn-merged "
             "transition tokens; stamps the model config, sizes the widths, and flips the "
             "schema-derived vocabulary). With --initial-checkpoint the checkpoint's stamped "
             "schema wins and an explicitly disagreeing flag hard-fails (mask-conflict "
@@ -1450,8 +1450,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("v2.1", "v2.2"),
         default=None,
         help=(
-            "Observation schema for a FRESH iterate run: v2.1 (default) or v2.2 "
-            "(turn-merged transition tokens; sizes the model config, the env spec, and the "
+            "Observation schema for a FRESH iterate run: v2.1 or v2.2 (default; "
+            "turn-merged transition tokens; sizes the model config, the env spec, and the "
             "schema-derived vocabulary). On --resume the run's stored model config wins; a "
             "disagreeing explicit flag fails the model-config equality validation."
         ),
