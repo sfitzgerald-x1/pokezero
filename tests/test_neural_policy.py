@@ -856,6 +856,52 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_inference_server_returns_400_on_malformed_forward_body(self) -> None:
+        # WS-L1 robustness: a malformed /forward body must return a diagnosable 400, not drop the
+        # socket, and the server must survive to serve the next request (per-request isolation).
+        if not torch_available():
+            self.skipTest("requires torch")
+        import json as _json
+        import threading
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+
+        from pokezero.inference_service import serve_inference
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            ckpt = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="robust",
+                window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
+                numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
+                attention_heads=4, feedforward_dim=32, dropout=0.0,
+            )
+            model, result = train_transformer_policy(
+                data_path, model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu"),
+            )
+            save_transformer_checkpoint(ckpt, model, result=result)
+            server = serve_inference(str(ckpt), host="127.0.0.1", port=0, device="cpu")
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                bad = Request(f"http://127.0.0.1:{port}/forward",
+                              data=b'{"categorical_ids": "not a tensor"}',
+                              headers={"Content-Type": "application/json"})
+                with self.assertRaises(HTTPError) as ctx:
+                    urlopen(bad, timeout=10)
+                self.assertEqual(ctx.exception.code, 400)
+                # server survives: /config still works
+                with urlopen(f"http://127.0.0.1:{port}/config", timeout=10) as resp:
+                    self.assertEqual(_json.loads(resp.read())["window_size"], 2)
+            finally:
+                server.shutdown()
+
     def test_transformer_policy_drops_non_finite_value_estimate(self) -> None:
         if not torch_available():
             self.skipTest("requires torch")

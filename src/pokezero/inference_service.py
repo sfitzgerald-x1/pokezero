@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -165,9 +164,17 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, *, device: Any, amp:
             if self.path.rstrip("/") != "/forward":
                 self._send(404, {"error": "not found"})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            self._send(200, run_forward_from_payload(policy, payload, device=device, amp=amp))
+            # Trusted in-cluster caller, but return a diagnosable error instead of dropping the
+            # socket on a malformed/missing-key/wrong-shape body (matters once batching coalesces
+            # requests — one bad item must not take down a batch). Per-request isolation only.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                result = run_forward_from_payload(policy, payload, device=device, amp=amp)
+            except Exception as exc:  # noqa: BLE001
+                self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
+                return
+            self._send(200, result)
 
     return _Handler
 
@@ -192,6 +199,9 @@ def serve_inference(
 
 def serve_forever(checkpoint_path: str, **kwargs: Any) -> None:
     server = serve_inference(checkpoint_path, **kwargs)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    thread.join()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
