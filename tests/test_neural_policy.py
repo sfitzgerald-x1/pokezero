@@ -848,6 +848,10 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             TransformerTrainingConfig(max_grad_norm=0.0)
         with self.assertRaisesRegex(ValueError, "max_grad_norm"):
             TransformerTrainingConfig(max_grad_norm=-1.0)
+        self.assertIsNone(TransformerTrainingConfig().amp)
+        self.assertEqual(TransformerTrainingConfig(amp="bf16").amp, "bf16")
+        with self.assertRaisesRegex(ValueError, "amp"):
+            TransformerTrainingConfig(amp="fp16")
         with self.assertRaisesRegex(ValueError, "learning_rate_schedule"):
             TransformerTrainingConfig(learning_rate_schedule="bogus")
         with self.assertRaisesRegex(ValueError, "learning_rate_schedule_total_games"):
@@ -5556,6 +5560,83 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
                     ),
                 )
             self.assertEqual(observed, [])
+
+    def test_train_transformer_policy_bf16_autocast_runs_and_engages(self) -> None:
+        # WS-A1: bf16 autocast must (a) run without error, (b) actually enter a bf16 autocast
+        # context around forward/loss, (c) keep master weights fp32, and (d) round-trip the
+        # amp setting through the checkpoint. Numerical parity vs fp32 is validated separately
+        # on GPU at recipe scale (the PPO ratio/clip gate); here we only assert the path works.
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        torch = require_torch()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            checkpoint_path = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)),
+                category_oov_buckets=4,
+                policy_id="bf16-autocast",
+                window_size=2,
+                token_type_vocab_size=8,
+                categorical_feature_count=1,
+                numeric_feature_count=1,
+                embedding_dim=16,
+                transformer_layers=1,
+                attention_heads=4,
+                feedforward_dim=32,
+                dropout=0.0,
+            )
+            autocast_states: list[bool] = []
+            real_forward = neural_policy_module.model_forward_from_training_tensors
+
+            def _autocast_on() -> bool:
+                try:
+                    return bool(torch.is_autocast_enabled("cpu"))
+                except TypeError:
+                    cpu_fn = getattr(torch, "is_autocast_cpu_enabled", None)
+                    return bool(cpu_fn()) if cpu_fn else bool(torch.is_autocast_enabled())
+
+            def _forward_spy(model, tensors):
+                autocast_states.append(_autocast_on())
+                return real_forward(model, tensors)
+
+            with patch.object(neural_policy_module, "model_forward_from_training_tensors", side_effect=_forward_spy):
+                model, result = train_transformer_policy(
+                    data_path,
+                    model_config=model_config,
+                    training_config=TransformerTrainingConfig(
+                        batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu", amp="bf16"
+                    ),
+                )
+            # (b) autocast was actually engaged during forward.
+            self.assertTrue(autocast_states and all(autocast_states))
+            # (c) master weights remain fp32 despite bf16 compute.
+            self.assertTrue(all(p.dtype == torch.float32 for p in model.parameters()))
+            # (a) losses are finite (equal to themselves = not NaN, bounded = not inf).
+            for metrics in result.epochs:
+                loss_value = float(metrics.loss)
+                self.assertEqual(loss_value, loss_value)
+                self.assertLess(abs(loss_value), 1e9)
+            # (d) amp round-trips through the checkpoint.
+            save_transformer_checkpoint(checkpoint_path, model, result=result)
+            _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
+            self.assertEqual(restored.training_config.amp, "bf16")
+
+    def test_amp_autocast_device_type_maps_supported_and_rejects_others(self) -> None:
+        # WS-A1: cuda/cpu map through; mps (and any other backend) must raise, not silently
+        # coerce to cpu (which would train fp32 with no warning). Pure device-string parsing —
+        # no GPU/mps hardware required.
+        if not torch_available():
+            self.skipTest("PyTorch is not installed in this environment.")
+        from pokezero.neural_policy import _amp_autocast_device_type
+
+        self.assertEqual(_amp_autocast_device_type("cpu"), "cpu")
+        self.assertEqual(_amp_autocast_device_type("cuda"), "cuda")
+        self.assertEqual(_amp_autocast_device_type("cuda:0"), "cuda")
+        with self.assertRaisesRegex(ValueError, "amp"):
+            _amp_autocast_device_type("mps")
 
     def test_torch_forward_train_save_load_and_policy_adapter_smoke(self) -> None:
         if not torch_available():

@@ -8,6 +8,7 @@ is available.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
@@ -380,6 +381,11 @@ class TransformerTrainingConfig:
     # Optional global gradient-norm clip (torch.nn.utils.clip_grad_norm_) applied before each
     # optimizer step. None disables clipping (legacy behavior). The MIT thesis recipe uses 0.5430.
     max_grad_norm: float | None = None
+    # Mixed-precision autocast for the forward/loss compute (WS-A1). None = fp32 (legacy,
+    # default). "bf16" wraps forward+loss in torch.autocast(bfloat16) while master weights,
+    # gradients, and optimizer state stay fp32 — bf16's fp32-range exponent needs no
+    # GradScaler. backward()/clip/step run outside autocast in fp32.
+    amp: str | None = None
     freeze_non_value_parameters: bool = False
     # Dense potential-based reward shaping applied to returns/GAE targets (canonical JSON of a
     # pokezero.shaping ShapingConfig, or None for unshaped). Stored as a JSON string so
@@ -406,6 +412,8 @@ class TransformerTrainingConfig:
             raise ValueError("entropy_coef must be non-negative.")
         if self.max_grad_norm is not None and self.max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive when set.")
+        if self.amp is not None and self.amp not in ("bf16",):
+            raise ValueError("amp must be None or 'bf16'.")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive.")
         if self.epochs <= 0:
@@ -1250,6 +1258,22 @@ def _file_sha256(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _amp_autocast_device_type(device: Any) -> str:
+    """Map a resolved torch device to an autocast device_type for bf16 (WS-A1).
+
+    Only cuda and cpu carry the bf16 autocast path today. Any other backend (e.g. mps)
+    would otherwise be silently coerced and train in fp32 with no warning, so reject it
+    explicitly rather than no-op.
+    """
+    torch_module = require_torch()
+    device_type = torch_module.device(str(device)).type
+    if device_type not in ("cuda", "cpu"):
+        raise ValueError(
+            f"amp='bf16' is only supported on cuda or cpu devices, not {device_type!r}."
+        )
+    return device_type
+
+
 def train_transformer_policy(
     paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path],
     *,
@@ -1291,6 +1315,15 @@ def train_transformer_policy(
         lr=resolved_training_config.learning_rate,
         weight_decay=resolved_training_config.weight_decay,
     )
+    # WS-A1 bf16 autocast: wrap only the forward+loss compute. Master weights, grads, and
+    # optimizer state stay fp32; bf16 needs no GradScaler (fp32-range exponent). A reusable
+    # torch.autocast instance is safe to re-enter each iteration; fp32 uses a null context.
+    if resolved_training_config.amp == "bf16":
+        autocast_context: Any = torch_module.autocast(
+            device_type=_amp_autocast_device_type(device), dtype=torch_module.bfloat16
+        )
+    else:
+        autocast_context = contextlib.nullcontext()
     dataset_config = TrajectoryDatasetConfig(
         window_size=resolved_training_config.window_size,
         discount=resolved_training_config.discount,
@@ -1348,10 +1381,11 @@ def train_transformer_policy(
             tensors = training_batch_to_torch(batch, device=device)
             tensorize_elapsed_seconds += perf_counter() - tensorize_started
             forward_started = perf_counter()
-            output = model_forward_from_training_tensors(model, tensors)
-            model_forward_elapsed_seconds += perf_counter() - forward_started
-            loss_started = perf_counter()
-            loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
+            with autocast_context:
+                output = model_forward_from_training_tensors(model, tensors)
+                model_forward_elapsed_seconds += perf_counter() - forward_started
+                loss_started = perf_counter()
+                loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
             loss_elapsed_seconds += perf_counter() - loss_started
             backward_started = perf_counter()
             optimizer.zero_grad(set_to_none=True)
