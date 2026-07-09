@@ -26,6 +26,7 @@ from .dataset import (
     TrainingBatch,
     iter_training_batches,
     iter_training_batches_with_capped_auxiliary,
+    slice_training_batch,
 )
 from .observation import (
     LEGACY_OBSERVATION_SCHEMA_VERSIONS,
@@ -387,6 +388,10 @@ class TransformerTrainingConfig:
     # gradients, and optimizer state stay fp32 — bf16's fp32-range exponent needs no
     # GradScaler. backward()/clip/step run outside autocast in fp32.
     amp: str | None = None
+    # Used by the distributed trainer to make rank-local dropout streams explicit.
+    # It is harmless on the legacy single-device path, whose initialization behavior
+    # remains unchanged unless a caller chooses to seed torch themselves.
+    random_seed: int = 0
     freeze_non_value_parameters: bool = False
     # Dense potential-based reward shaping applied to returns/GAE targets (canonical JSON of a
     # pokezero.shaping ShapingConfig, or None for unshaped). Stored as a JSON string so
@@ -415,6 +420,8 @@ class TransformerTrainingConfig:
             raise ValueError("max_grad_norm must be positive when set.")
         if self.amp is not None and self.amp not in ("bf16",):
             raise ValueError("amp must be None or 'bf16'.")
+        if not isinstance(self.random_seed, int):
+            raise ValueError("random_seed must be an integer.")
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive.")
         if self.epochs <= 0:
@@ -630,6 +637,116 @@ class TransformerPolicyOutput:
 
 def torch_available() -> bool:
     return torch is not None and nn is not None
+
+
+@dataclass(frozen=True)
+class DistributedTrainingContext:
+    """One-process view of an optional single-node DDP train job.
+
+    The normal CLI remains a one-process trainer. ``torchrun`` supplies these
+    environment variables only for the opt-in multi-GPU path, so the same
+    train command remains the public interface for both modes.
+    """
+
+    rank: int = 0
+    world_size: int = 1
+    local_rank: int = 0
+    backend: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.world_size > 1
+
+    @property
+    def is_primary(self) -> bool:
+        return self.rank == 0
+
+    def to_dict(self, *, base_seed: int) -> dict[str, int | str | bool | None]:
+        return {
+            "enabled": self.enabled,
+            "rank": self.rank,
+            "world_size": self.world_size,
+            "local_rank": self.local_rank,
+            "backend": self.backend,
+            "base_seed": base_seed,
+            "rank_seed": base_seed + self.rank,
+        }
+
+
+def initialize_distributed_training(device: str | Any | None = None) -> DistributedTrainingContext:
+    """Initialize DDP from ``torchrun`` environment when ``WORLD_SIZE > 1``.
+
+    A CUDA rank is bound before NCCL initialization so each process owns exactly
+    one visible device. CPU/Gloo support is retained for the parity unit test.
+    """
+
+    torch_module = require_torch()
+    raw_world_size = os.environ.get("WORLD_SIZE")
+    if raw_world_size in (None, "", "1"):
+        return DistributedTrainingContext()
+    try:
+        world_size = int(raw_world_size)
+        rank = int(os.environ["RANK"])
+        local_rank = int(os.environ["LOCAL_RANK"])
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("Distributed training requires valid RANK, WORLD_SIZE, and LOCAL_RANK from torchrun.") from exc
+    if world_size <= 1 or not 0 <= rank < world_size or local_rank < 0:
+        raise RuntimeError("Distributed training received invalid torchrun rank environment values.")
+    resolved_device = torch_module.device(resolve_torch_device(device))
+    if resolved_device.type == "cuda":
+        torch_module.cuda.set_device(local_rank)
+        backend = "nccl"
+    else:
+        backend = "gloo"
+    distributed = torch_module.distributed
+    if not distributed.is_available():
+        raise RuntimeError("This PyTorch build does not include torch.distributed support required for multi-GPU training.")
+    if not distributed.is_initialized():
+        distributed.init_process_group(backend=backend)
+    actual_rank = int(distributed.get_rank())
+    actual_world_size = int(distributed.get_world_size())
+    if actual_rank != rank or actual_world_size != world_size:
+        raise RuntimeError("Initialized process group disagrees with torchrun rank environment values.")
+    return DistributedTrainingContext(rank=rank, world_size=world_size, local_rank=local_rank, backend=backend)
+
+
+def distributed_training_context() -> DistributedTrainingContext:
+    """Return the already-initialized DDP view, or the single-process default."""
+
+    torch_module = require_torch()
+    distributed = torch_module.distributed
+    if not distributed.is_available() or not distributed.is_initialized():
+        return DistributedTrainingContext()
+    return DistributedTrainingContext(
+        rank=int(distributed.get_rank()),
+        world_size=int(distributed.get_world_size()),
+        local_rank=int(os.environ.get("LOCAL_RANK", "0")),
+        backend=str(distributed.get_backend()),
+    )
+
+
+def _distributed_barrier(context: DistributedTrainingContext) -> None:
+    if context.enabled:
+        require_torch().distributed.barrier()
+
+
+def _distributed_reduce_sum(context: DistributedTrainingContext, value: Any) -> Any:
+    """All-reduce a detached scalar as fp32 without adding collectives to autograd."""
+
+    torch_module = require_torch()
+    if not context.enabled:
+        return value.detach().float()
+    reduced = value.detach().float().clone()
+    torch_module.distributed.all_reduce(reduced, op=torch_module.distributed.ReduceOp.SUM)
+    return reduced
+
+
+def _distributed_reduce_max(context: DistributedTrainingContext, value: float, *, device: Any) -> float:
+    torch_module = require_torch()
+    tensor = torch_module.tensor(float(value), dtype=torch_module.float64, device=device)
+    if context.enabled:
+        torch_module.distributed.all_reduce(tensor, op=torch_module.distributed.ReduceOp.MAX)
+    return float(tensor.item())
 
 
 def _positive_int_env(name: str) -> int | None:
@@ -1301,9 +1418,11 @@ def train_transformer_policy(
     consumed_cache_callback: Callable[[Path], None] | None = None,
     auxiliary_paths: str | PathLike[str] | Path | Iterable[str | PathLike[str] | Path] | None = None,
     auxiliary_max_fraction: float = 0.0,
+    distributed_context_override: DistributedTrainingContext | None = None,
 ) -> tuple[Any, TransformerTrainingResult]:
     torch_module = require_torch()
     resolved_training_config = training_config or TransformerTrainingConfig()
+    context = distributed_context_override or distributed_training_context()
     if model_config is None:
         raise ValueError("model_config is required (build it with TransformerPolicyConfig.compact_category).")
     resolved_model_config = model_config
@@ -1313,20 +1432,42 @@ def train_transformer_policy(
         raise ValueError("auxiliary_max_fraction requires auxiliary_paths.")
     if auxiliary_paths is not None and not 0.0 < auxiliary_max_fraction < 1.0:
         raise ValueError("auxiliary_max_fraction must be greater than 0 and less than 1.")
-    device = resolve_torch_device(resolved_training_config.device)
+    if context.enabled and resolved_training_config.value_ranking_loss_weight:
+        raise ValueError(
+            "Distributed training does not support value_ranking_loss_weight yet because cross-rank pairs "
+            "would change the objective. Set it to 0.0 for DDP training."
+        )
+    device = torch_module.device(resolve_torch_device(resolved_training_config.device))
+    if context.enabled and device.type == "cuda":
+        # ``initialize_distributed_training`` already sets this, but keeping the
+        # assignment local makes direct library callers safe as well.
+        torch_module.cuda.set_device(context.local_rank)
+        device = torch_module.device("cuda", context.local_rank)
+    if context.enabled:
+        torch_module.manual_seed(resolved_training_config.random_seed + context.rank)
     if initial_model is None:
-        model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
+        base_model = EntityTokenTransformerPolicy(resolved_model_config).to(device)
     else:
         _validate_initial_model_config(initial_model, resolved_model_config)
-        model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
+        base_model = initial_model.to(device) if hasattr(initial_model, "to") else initial_model
     trainable_parameters = _configure_trainable_parameters(
-        model,
+        base_model,
         freeze_non_value_parameters=resolved_training_config.freeze_non_value_parameters,
     )
-    if resolved_training_config.freeze_non_value_parameters and hasattr(model, "eval"):
-        model.eval()
-    elif hasattr(model, "train"):
-        model.train()
+    if resolved_training_config.freeze_non_value_parameters and hasattr(base_model, "eval"):
+        base_model.eval()
+    elif hasattr(base_model, "train"):
+        base_model.train()
+    if context.enabled:
+        # Optional opponent/family/switch heads can have no valid examples in a
+        # particular global batch, so DDP must tolerate intentionally unused
+        # parameters while preserving their zero gradient contribution.
+        ddp_kwargs: dict[str, Any] = {"broadcast_buffers": False, "find_unused_parameters": True}
+        if device.type == "cuda":
+            ddp_kwargs.update(device_ids=[context.local_rank], output_device=context.local_rank)
+        model = torch_module.nn.parallel.DistributedDataParallel(base_model, **ddp_kwargs)
+    else:
+        model = base_model
     optimizer = torch_module.optim.AdamW(
         trainable_parameters,
         lr=resolved_training_config.learning_rate,
@@ -1394,15 +1535,29 @@ def train_transformer_policy(
             batch_count = batch_index
             batch_ready = perf_counter()
             batch_load_elapsed_seconds += batch_ready - previous_batch_finished
+            local_examples = batch.batch_size
+            local_batch = batch
+            if context.enabled:
+                local_batch, local_examples = _distributed_training_batch_shard(batch, context)
             tensorize_started = perf_counter()
-            tensors = training_batch_to_torch(batch, device=device)
+            tensors = training_batch_to_torch(local_batch, device=device)
             tensorize_elapsed_seconds += perf_counter() - tensorize_started
             forward_started = perf_counter()
             with autocast_context:
                 output = model_forward_from_training_tensors(model, tensors)
                 model_forward_elapsed_seconds += perf_counter() - forward_started
                 loss_started = perf_counter()
-                loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
+                if context.enabled:
+                    loss, pieces = _distributed_transformer_loss(
+                        output,
+                        tensors,
+                        resolved_training_config,
+                        context=context,
+                        local_examples=local_examples,
+                        global_examples=batch.batch_size,
+                    )
+                else:
+                    loss, pieces = _transformer_loss(output, tensors, resolved_training_config)
             loss_elapsed_seconds += perf_counter() - loss_started
             backward_started = perf_counter()
             optimizer.zero_grad(set_to_none=True)
@@ -1416,13 +1571,21 @@ def train_transformer_policy(
             optimizer_started = perf_counter()
             optimizer.step()
             optimizer_step_elapsed_seconds += perf_counter() - optimizer_started
-            totals.add(batch.batch_size, pieces)
+            totals.add(batch.batch_size if context.enabled else local_batch.batch_size, pieces)
             previous_batch_finished = perf_counter()
             if resolved_training_config.max_batches is not None and batch_index >= resolved_training_config.max_batches:
                 break
         if totals.examples == 0:
             raise ValueError("training data produced no examples.")
         epoch_elapsed_seconds = perf_counter() - epoch_started
+        if context.enabled:
+            epoch_elapsed_seconds = _distributed_reduce_max(context, epoch_elapsed_seconds, device=device)
+            batch_load_elapsed_seconds = _distributed_reduce_max(context, batch_load_elapsed_seconds, device=device)
+            tensorize_elapsed_seconds = _distributed_reduce_max(context, tensorize_elapsed_seconds, device=device)
+            model_forward_elapsed_seconds = _distributed_reduce_max(context, model_forward_elapsed_seconds, device=device)
+            loss_elapsed_seconds = _distributed_reduce_max(context, loss_elapsed_seconds, device=device)
+            backward_elapsed_seconds = _distributed_reduce_max(context, backward_elapsed_seconds, device=device)
+            optimizer_step_elapsed_seconds = _distributed_reduce_max(context, optimizer_step_elapsed_seconds, device=device)
         timing = {
             "batches": batch_count,
             "elapsed_seconds": epoch_elapsed_seconds,
@@ -1437,19 +1600,391 @@ def train_transformer_policy(
         }
         epoch_metrics.append(totals.to_epoch_metrics(epoch, learning_rate=epoch_learning_rate, timing=timing))
         if epoch_callback is not None:
-            epoch_callback(
-                model,
-                TransformerTrainingResult(
-                    model_config=resolved_model_config,
-                    training_config=resolved_training_config,
-                    epochs=tuple(epoch_metrics),
-                ),
-            )
-    return model, TransformerTrainingResult(
+            _distributed_barrier(context)
+            if not context.enabled or context.is_primary:
+                epoch_callback(
+                    base_model,
+                    TransformerTrainingResult(
+                        model_config=resolved_model_config,
+                        training_config=resolved_training_config,
+                        epochs=tuple(epoch_metrics),
+                    ),
+                )
+            _distributed_barrier(context)
+    _distributed_barrier(context)
+    return base_model, TransformerTrainingResult(
         model_config=resolved_model_config,
         training_config=resolved_training_config,
         epochs=tuple(epoch_metrics),
     )
+
+
+def _distributed_training_batch_shard(
+    batch: TrainingBatch,
+    context: DistributedTrainingContext,
+) -> tuple[TrainingBatch, int]:
+    """Contiguously shard a deterministic global batch for one DDP rank.
+
+    Full 512-example batches split into four 128-example slices. A smaller final
+    batch remains contiguous and unpadded; a rank with no examples receives a
+    one-example placeholder only so DDP can execute its required collectives.
+    That placeholder is assigned zero loss, metrics, and gradient below.
+    """
+
+    per_rank = (batch.batch_size + context.world_size - 1) // context.world_size
+    start = context.rank * per_rank
+    stop = min(batch.batch_size, start + per_rank)
+    if start < stop:
+        return slice_training_batch(batch, start, stop), stop - start
+    return slice_training_batch(batch, 0, 1), 0
+
+
+def _distributed_zero_loss(output: TransformerPolicyOutput) -> Any:
+    """Touch every head for a zero-example rank without changing the update."""
+
+    return (
+        output.policy_logits.sum() * 0.0
+        + output.value.sum() * 0.0
+        + output.opponent_action_logits.sum() * 0.0
+    )
+
+
+def _distributed_loss_term(
+    local_sum: Any,
+    local_denominator: Any,
+    *,
+    context: DistributedTrainingContext,
+) -> tuple[Any, float, float]:
+    """Return a DDP-scaled gradient contribution and its global mean.
+
+    DDP averages rank gradients. Multiplying each local numerator by
+    ``world_size / global_denominator`` preserves the legacy global-batch
+    objective up to normal floating-point reduction order, even when masks or
+    sample weights differ by rank. The legacy denominator floor of one is part
+    of that contract for sparse fractional training weights.
+    """
+
+    global_sum = _distributed_reduce_sum(context, local_sum)
+    global_denominator = _distributed_reduce_sum(context, local_denominator)
+    denominator = float(global_denominator.item())
+    if denominator <= 0.0:
+        return local_sum * 0.0, 0.0, 0.0
+    normalizer = global_denominator.clamp(min=1.0)
+    return (
+        local_sum * (float(context.world_size) / normalizer),
+        float((global_sum / normalizer).item()),
+        denominator,
+    )
+
+
+def _distributed_int_sum(context: DistributedTrainingContext, value: int, *, device: Any) -> int:
+    torch_module = require_torch()
+    tensor = torch_module.tensor(float(value), dtype=torch_module.float32, device=device)
+    return int(round(float(_distributed_reduce_sum(context, tensor).item())))
+
+
+def _distributed_value_loss(
+    output: TransformerPolicyOutput,
+    tensors: Mapping[str, Any],
+    config: TransformerTrainingConfig,
+    *,
+    context: DistributedTrainingContext,
+    active: bool,
+    zero: Any,
+) -> tuple[Any, float, int, int]:
+    """Exact global weighted value loss for one contiguous DDP shard."""
+
+    torch_module = require_torch()
+    values = output.value
+    targets = _value_targets(tensors)
+    training_weights = _training_sample_weights(tensors)
+    if not active:
+        training_weights = training_weights * 0.0
+    unclipped_loss = (values - targets) ** 2
+    eligible_local = 0
+    clipped_local = 0
+    per_example_loss = unclipped_loss
+    if config.objective == "ppo" and config.value_clip_range is not None:
+        old_values = tensors["value_estimates"]
+        old_value_mask = tensors["value_estimate_mask"]
+        eligible_local = int(old_value_mask.sum().detach().item()) if active else 0
+        clipped_values = old_values + (values - old_values).clamp(
+            -float(config.value_clip_range),
+            float(config.value_clip_range),
+        )
+        clipped_local = (
+            int((old_value_mask & ((values - old_values).abs() > float(config.value_clip_range))).sum().detach().item())
+            if active
+            else 0
+        )
+        clipped_loss = (clipped_values - targets) ** 2
+        per_example_loss = torch_module.where(old_value_mask, torch_module.maximum(unclipped_loss, clipped_loss), unclipped_loss)
+    local_sum = (per_example_loss * training_weights).sum() if active else zero
+    local_denominator = training_weights.sum() if active else zero
+    gradient, metric, _ = _distributed_loss_term(local_sum, local_denominator, context=context)
+    eligible = _distributed_int_sum(context, eligible_local, device=values.device)
+    clipped = _distributed_int_sum(context, clipped_local, device=values.device)
+    return gradient, metric, eligible, clipped
+
+
+def _distributed_cross_entropy_term(
+    logits: Any,
+    targets: Any,
+    *,
+    active: bool,
+    zero: Any,
+    context: DistributedTrainingContext,
+) -> tuple[Any, float, int, int]:
+    """Cross-entropy mean over a globally masked set of examples."""
+
+    torch_module = require_torch()
+    local_count = int(targets.numel()) if active else 0
+    if local_count:
+        local_sum = torch_module.nn.functional.cross_entropy(logits, targets, reduction="sum")
+        local_correct = int((logits.argmax(dim=1) == targets).sum().detach().item())
+        local_denominator = local_sum.new_tensor(float(local_count))
+    else:
+        local_sum = zero
+        local_correct = 0
+        local_denominator = zero
+    gradient, metric, global_count_float = _distributed_loss_term(local_sum, local_denominator, context=context)
+    global_count = int(round(global_count_float))
+    global_correct = _distributed_int_sum(context, local_correct, device=logits.device)
+    return gradient, metric, global_correct, global_count
+
+
+def _distributed_transformer_loss(
+    output: TransformerPolicyOutput,
+    tensors: Mapping[str, Any],
+    config: TransformerTrainingConfig,
+    *,
+    context: DistributedTrainingContext,
+    local_examples: int,
+    global_examples: int,
+) -> tuple[Any, dict[str, float | int]]:
+    """PPO/BC loss preserving the legacy global-batch objective under DDP.
+
+    Every term keeps its own global denominator because PPO validity masks,
+    sample weights, opponent labels, and switch labels are not uniformly
+    distributed across rank slices. Value-ranking is rejected at setup because
+    its pairwise objective needs cross-rank pairs rather than a scalar reduce.
+    """
+
+    torch_module = require_torch()
+    functional = torch_module.nn.functional
+    active = local_examples > 0
+    zero = _distributed_zero_loss(output)
+    masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
+    local_policy_correct = (
+        int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().detach().item()) if active else 0
+    )
+    policy_correct = _distributed_int_sum(context, local_policy_correct, device=output.value.device)
+    value_gradient, value_metric, value_clip_eligible, value_clip_count = _distributed_value_loss(
+        output,
+        tensors,
+        config,
+        context=context,
+        active=active,
+        zero=zero,
+    )
+
+    ppo_objective_examples = 0
+    ppo_valid_examples = 0
+    ppo_advantage_sum = 0.0
+    ppo_advantage_square_sum = 0.0
+    ppo_ratio_sum = 0.0
+    ppo_clip_count = 0
+    ppo_entropy_sum = 0.0
+    entropy_gradient = zero
+    entropy_metric = 0.0
+
+    if config.objective == "value-only":
+        policy_gradient = zero
+        policy_metric = 0.0
+        loss_gradient = value_gradient
+        loss_metric = value_metric
+    elif config.objective == "ppo":
+        ppo_objective_examples = global_examples
+        training_weights = _training_sample_weights(tensors)
+        valid_mask = tensors["action_probability_mask"] & (tensors["action_probabilities"] > 0)
+        objective_weights = valid_mask.float() * training_weights
+        if not active:
+            objective_weights = objective_weights * 0.0
+        raw_advantage = _ppo_advantages(output, tensors)
+        local_weight_sum = objective_weights.sum() if active else zero
+        global_weight_sum = _distributed_reduce_sum(context, local_weight_sum)
+        global_weight_normalizer = global_weight_sum.clamp(min=1.0)
+        local_advantage_sum = (raw_advantage * objective_weights).sum() if active else zero
+        global_advantage_sum = _distributed_reduce_sum(context, local_advantage_sum)
+        local_valid_count = int(valid_mask.sum().detach().item()) if active else 0
+        ppo_valid_examples = _distributed_int_sum(context, local_valid_count, device=output.value.device)
+        advantage = raw_advantage
+        if config.normalize_advantage and ppo_valid_examples > 1 and float(global_weight_sum.item()) > 0.0:
+            global_mean = global_advantage_sum / global_weight_normalizer
+            # Match the legacy centered weighted-variance formulation instead
+            # of E[x^2] - E[x]^2, which is less stable around a small variance.
+            local_variance_sum = (((raw_advantage - global_mean) ** 2) * objective_weights).sum() if active else zero
+            global_variance = _distributed_reduce_sum(context, local_variance_sum) / global_weight_normalizer
+            advantage = (advantage - global_mean) / (global_variance.sqrt() + 1e-8)
+        log_probs = functional.log_softmax(masked_policy_logits, dim=1)
+        chosen_log_prob = log_probs.gather(1, tensors["action_indices"].unsqueeze(1)).squeeze(1)
+        behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()
+        ratio = (chosen_log_prob - behavior_log_prob).exp()
+        surrogate = torch_module.minimum(
+            ratio * advantage,
+            ratio.clamp(1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon) * advantage,
+        )
+        local_policy_sum = (-(surrogate * objective_weights)).sum() if active else zero
+        policy_gradient, policy_metric, _ = _distributed_loss_term(
+            local_policy_sum,
+            local_weight_sum,
+            context=context,
+        )
+        entropy = -(log_probs.exp() * log_probs).sum(dim=1)
+        local_entropy_sum = (entropy * objective_weights).sum() if active else zero
+        entropy_gradient, entropy_metric, _ = _distributed_loss_term(
+            local_entropy_sum,
+            local_weight_sum,
+            context=context,
+        )
+        if active:
+            valid_advantage = raw_advantage[valid_mask]
+            valid_ratio = ratio[valid_mask]
+            local_metric_advantage_sum = valid_advantage.sum()
+            local_metric_advantage_square_sum = (valid_advantage * valid_advantage).sum()
+            local_metric_ratio_sum = valid_ratio.sum()
+            local_metric_entropy_sum = entropy[valid_mask].sum()
+            local_metric_clip_count = int(
+                ((valid_ratio < (1.0 - config.clip_epsilon)) | (valid_ratio > (1.0 + config.clip_epsilon))).sum().detach().item()
+            )
+        else:
+            local_metric_advantage_sum = zero
+            local_metric_advantage_square_sum = zero
+            local_metric_ratio_sum = zero
+            local_metric_entropy_sum = zero
+            local_metric_clip_count = 0
+        ppo_advantage_sum = float(_distributed_reduce_sum(context, local_metric_advantage_sum).item())
+        ppo_advantage_square_sum = float(_distributed_reduce_sum(context, local_metric_advantage_square_sum).item())
+        ppo_ratio_sum = float(_distributed_reduce_sum(context, local_metric_ratio_sum).item())
+        ppo_entropy_sum = float(_distributed_reduce_sum(context, local_metric_entropy_sum).item())
+        ppo_clip_count = _distributed_int_sum(context, local_metric_clip_count, device=output.value.device)
+        loss_gradient = policy_gradient + (config.value_loss_weight * value_gradient) - (config.entropy_coef * entropy_gradient)
+        loss_metric = policy_metric + (config.value_loss_weight * value_metric) - (config.entropy_coef * entropy_metric)
+    else:
+        per_example_policy_loss = functional.cross_entropy(masked_policy_logits, tensors["action_indices"], reduction="none")
+        if config.objective == "reward-weighted":
+            weights = tensors["returns"].clamp(min=0.0) * _action_family_loss_weights(tensors, config)
+        else:
+            weights = _action_family_loss_weights(tensors, config)
+        weights = weights * _training_sample_weights(tensors)
+        if not active:
+            weights = weights * 0.0
+        local_policy_sum = (per_example_policy_loss * weights).sum() if active else zero
+        local_denominator = weights.sum() if active else zero
+        policy_gradient, policy_metric, _ = _distributed_loss_term(local_policy_sum, local_denominator, context=context)
+        loss_gradient = policy_gradient + (config.value_loss_weight * value_gradient)
+        loss_metric = policy_metric + (config.value_loss_weight * value_metric)
+
+    if config.objective == "value-only":
+        opponent_gradient = zero
+        opponent_metric = 0.0
+        opponent_correct = 0
+        opponent_examples = 0
+        family_gradient = zero
+        family_metric = 0.0
+        family_correct = 0
+        family_examples = 0
+        switch_gradient = zero
+        switch_metric = 0.0
+        switch_correct = 0
+        switch_examples = 0
+    else:
+        opponent_mask = tensors["opponent_action_mask"] if active else tensors["opponent_action_mask"] & False
+        opponent_gradient, opponent_metric, opponent_correct, opponent_examples = _distributed_cross_entropy_term(
+            output.opponent_action_logits[opponent_mask],
+            tensors["opponent_action_indices"][opponent_mask],
+            active=active and bool(config.opponent_action_loss_weight),
+            zero=zero,
+            context=context,
+        )
+        if not config.opponent_action_loss_weight:
+            opponent_gradient = zero
+            opponent_metric = 0.0
+            opponent_correct = 0
+            opponent_examples = 0
+        move_family_logits = torch_module.logsumexp(masked_policy_logits[:, :MOVE_ACTION_COUNT], dim=1)
+        switch_family_logits = torch_module.logsumexp(masked_policy_logits[:, MOVE_ACTION_COUNT:], dim=1)
+        family_logits = torch_module.stack((move_family_logits, switch_family_logits), dim=1)
+        family_targets = (tensors["action_indices"] >= MOVE_ACTION_COUNT).long()
+        family_gradient, family_metric, family_correct, family_examples = _distributed_cross_entropy_term(
+            family_logits,
+            family_targets,
+            active=active and bool(config.action_family_loss_weight),
+            zero=zero,
+            context=context,
+        )
+        if not config.action_family_loss_weight:
+            family_gradient = zero
+            family_metric = 0.0
+            family_correct = 0
+            family_examples = 0
+        switch_mask = tensors["action_indices"] >= MOVE_ACTION_COUNT
+        if active:
+            switch_logits = masked_policy_logits[switch_mask, MOVE_ACTION_COUNT:]
+            switch_targets = tensors["action_indices"][switch_mask] - MOVE_ACTION_COUNT
+        else:
+            switch_logits = masked_policy_logits[:0, MOVE_ACTION_COUNT:]
+            switch_targets = tensors["action_indices"][:0]
+        switch_gradient, switch_metric, switch_correct, switch_examples = _distributed_cross_entropy_term(
+            switch_logits,
+            switch_targets,
+            active=active and bool(config.switch_target_loss_weight),
+            zero=zero,
+            context=context,
+        )
+        if not config.switch_target_loss_weight:
+            switch_gradient = zero
+            switch_metric = 0.0
+            switch_correct = 0
+            switch_examples = 0
+        loss_gradient = (
+            loss_gradient
+            + (config.opponent_action_loss_weight * opponent_gradient)
+            + (config.action_family_loss_weight * family_gradient)
+            + (config.switch_target_loss_weight * switch_gradient)
+        )
+        loss_metric += (
+            (config.opponent_action_loss_weight * opponent_metric)
+            + (config.action_family_loss_weight * family_metric)
+            + (config.switch_target_loss_weight * switch_metric)
+        )
+
+    return loss_gradient, {
+        "loss": loss_metric,
+        "policy_loss": policy_metric,
+        "policy_correct": policy_correct,
+        "value_loss": value_metric,
+        "value_ranking_loss": 0.0,
+        "value_ranking_pairs": 0,
+        "opponent_loss": opponent_metric,
+        "opponent_correct": opponent_correct,
+        "opponent_examples": opponent_examples,
+        "action_family_loss": family_metric,
+        "action_family_correct": family_correct,
+        "action_family_examples": family_examples,
+        "switch_target_loss": switch_metric,
+        "switch_target_correct": switch_correct,
+        "switch_target_examples": switch_examples,
+        "ppo_objective_examples": ppo_objective_examples,
+        "ppo_valid_examples": ppo_valid_examples,
+        "ppo_advantage_sum": ppo_advantage_sum,
+        "ppo_advantage_square_sum": ppo_advantage_square_sum,
+        "ppo_ratio_sum": ppo_ratio_sum,
+        "ppo_clip_count": ppo_clip_count,
+        "ppo_value_clip_eligible_examples": value_clip_eligible,
+        "ppo_value_clip_count": value_clip_count,
+        "ppo_entropy_sum": ppo_entropy_sum,
+    }
 
 
 def _validate_initial_model_config(model: Any, expected: TransformerPolicyConfig) -> None:
@@ -1488,6 +2023,10 @@ def save_transformer_checkpoint(
     result: TransformerTrainingResult,
 ) -> None:
     torch_module = require_torch()
+    # DDP owns a ``module`` wrapper solely for gradient synchronization. Persist
+    # the underlying policy so checkpoints remain loadable by either one process
+    # or a future DDP train job.
+    model_to_save = getattr(model, "module", model)
     checkpoint_path = Path(path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1500,7 +2039,7 @@ def save_transformer_checkpoint(
             result.value_calibration_transform.to_dict() if result.value_calibration_transform is not None else None
         ),
         "belief_set_source_hash": result.belief_set_source_hash,
-        "state_dict": model.state_dict(),
+        "state_dict": model_to_save.state_dict(),
     }
     # Persist atomically: serialize into a temp file on the same filesystem, flush it
     # all the way to disk, then os.replace onto the final path. os.replace is atomic on

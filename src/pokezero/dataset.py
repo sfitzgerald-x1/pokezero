@@ -862,14 +862,14 @@ def iter_training_batches_with_capped_auxiliary(
                     auxiliary_exhausted = True
                     break
             emit_count = min(allowed_auxiliary, pending_auxiliary.batch_size)
-            emitted = _slice_training_batch(pending_auxiliary, 0, emit_count)
+            emitted = slice_training_batch(pending_auxiliary, 0, emit_count)
             yield emitted
             auxiliary_seen += emit_count
             allowed_auxiliary -= emit_count
             if emit_count == pending_auxiliary.batch_size:
                 pending_auxiliary = None
             else:
-                pending_auxiliary = _slice_training_batch(
+                pending_auxiliary = slice_training_batch(
                     pending_auxiliary,
                     emit_count,
                     pending_auxiliary.batch_size,
@@ -1184,9 +1184,9 @@ def _iter_coalesced_training_cache_batches(
                     pending_size += remainder.batch_size
                     remainder = None
                 else:
-                    pending.append(_slice_training_batch(remainder, 0, available))
+                    pending.append(slice_training_batch(remainder, 0, available))
                     pending_size += available
-                    remainder = _slice_training_batch(remainder, available, remainder.batch_size)
+                    remainder = slice_training_batch(remainder, available, remainder.batch_size)
                 if pending_size == batch_size:
                     yield _combine_training_batches(pending)
                     pending = []
@@ -1319,7 +1319,13 @@ def _concat_batch_field(values: Sequence[Any]) -> Any:
     return tuple(combined)
 
 
-def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> TrainingBatch:
+def slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> TrainingBatch:
+    """Return a contiguous example slice while retaining only its referenced cache rows.
+
+    Distributed training uses this to split an already deterministic global batch into
+    contiguous rank-local views. The cache-row remap keeps the deferred window path
+    memory-bounded instead of materializing the full batch on every rank.
+    """
     if start < 0 or stop < start or stop > batch.batch_size:
         raise ValueError("invalid training batch slice.")
     row_categorical_ids = batch.row_categorical_ids
@@ -1372,6 +1378,10 @@ def _slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Traini
         row_attention_mask=row_attention_mask,
         window_row_indices=window_row_indices,
     )
+
+
+# Private compatibility alias for callers that predate the distributed trainer.
+_slice_training_batch = slice_training_batch
 
 
 def _slice_batch_field(value: Any, start: int, stop: int) -> Any:
