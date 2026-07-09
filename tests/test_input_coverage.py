@@ -20,6 +20,7 @@ from pathlib import Path
 import unittest
 
 from pokezero.local_showdown import LocalShowdownEnv, LocalShowdownConfig
+from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
 
 SHOWDOWN_ROOT = Path(
     os.environ.get("POKEZERO_SHOWDOWN_ROOT", "/Users/scott/workspace/pokerena/vendor/pokemon-showdown")
@@ -158,7 +159,16 @@ def _aggregate_coverage() -> tuple[dict[int, set], dict[int, set]]:
     num_values: dict[int, set] = {}
     cat_ids: dict[int, set] = {}
     for seed in SEEDS:
-        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=str(SHOWDOWN_ROOT), set_belief_source=True))
+        # Pinned to v2.1: NUMERIC_LABELS + ALLOW_NUMERIC document the v2.1 census
+        # (0..139); the post-flip default (v2.2) appends turn-merged columns this
+        # 12-seed sweep does not guarantee to populate.
+        env = LocalShowdownEnv(
+            LocalShowdownConfig(
+                showdown_root=str(SHOWDOWN_ROOT),
+                set_belief_source=True,
+                observation_spec=V2_1_REPLAY_OBSERVATION_SPEC,
+            )
+        )
         try:
             env.reset(seed=seed)
             rng = random.Random(seed)

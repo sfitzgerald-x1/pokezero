@@ -460,7 +460,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             "|move|p2a: Xatu|Wish|p2a: Xatu",
             "|-weather|RainDance",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         field_row = observation.numeric_features[0]
         self.assertEqual(field_row[NUMERIC_OPP_SLEEP_CLAUSE], 1.0)
         self.assertEqual(field_row[NUMERIC_SELF_SLEEP_CLAUSE], 0.0)
@@ -482,7 +484,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             format_id="gen3randombattle",
             set_source=_EarlyBirdSetSource(),
         )
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         xatu_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         self.assertAlmostEqual(xatu_row[NUMERIC_SLEEP_TURNS], 1 / 5)
         self.assertEqual(xatu_row[NUMERIC_REST_SLEEP], 1.0)
@@ -497,7 +501,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             format_id="gen3randombattle",
             set_source=_SynchronizeOnlySetSource(),
         )
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         xatu_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         self.assertEqual(xatu_row[NUMERIC_REST_SLEEP], 1.0)
         self.assertEqual(xatu_row[NUMERIC_WAKE_KNOWN], 1.0)
@@ -508,7 +514,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             "|-ability|p2a: Dugtrio|Arena Trap",
             "|switch|p2a: Xatu|Xatu, L78|100/100",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         rows = {
             state.opponent_team[index].species: observation.numeric_features[
                 OPPONENT_POKEMON_TOKEN_OFFSET + index
@@ -540,7 +548,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             ],
             set_source=SingletonTrapSource(),
         )
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         rows = {
             state.opponent_team[index].species: observation.numeric_features[
                 OPPONENT_POKEMON_TOKEN_OFFSET + index
@@ -570,7 +580,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             ],
             set_source=AmbiguousTrapSource(),
         )
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         dugtrio_index = next(
             index for index, mon in enumerate(state.opponent_team) if mon.species == "Dugtrio"
         )
@@ -583,7 +595,9 @@ class ExactStateEncodingTest(unittest.TestCase):
         from pokezero.showdown import NUMERIC_UNCERTAINTY, SELF_POKEMON_TOKEN_OFFSET
 
         state = _state([])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         row = observation.numeric_features[SELF_POKEMON_TOKEN_OFFSET]
         self.assertEqual(row[NUMERIC_UNCERTAINTY], 0.0)
 
@@ -593,7 +607,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             "|turn|2",
             "|move|p2a: Xatu|Psychic|p1a: Charizard",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, dex=_fake_dex())
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_fake_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         xatu_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         # Psychic: base pp 10 -> catalog max 16; two uses -> 14/16. Only one revealed move,
         # so it occupies bucket column 0.
@@ -607,7 +623,9 @@ class ExactStateEncodingTest(unittest.TestCase):
             format_id="gen3randombattle",
             set_source=_VariantSetSource(),
         )
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, dex=_fake_dex())
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_fake_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         xatu_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         level = 78
         expected_def = _gen3_stat(70, level, ev=85, iv=31, hp=False) / 714.0
@@ -628,7 +646,9 @@ class ExactStateEncodingTest(unittest.TestCase):
 
     def test_expected_stats_without_set_source_collapse_bounds_to_baseline(self) -> None:
         state = _state([])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, dex=_fake_dex())
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_fake_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         xatu_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         self.assertEqual(xatu_row[NUMERIC_EXPECTED_ATK], xatu_row[NUMERIC_EXPECTED_ATK_LOW])
         self.assertEqual(xatu_row[NUMERIC_EXPECTED_ATK], xatu_row[NUMERIC_EXPECTED_ATK_HIGH])
@@ -655,7 +675,9 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
             "|-weather|RainDance",
             "|turn|2",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         stats_row = observation.numeric_features[STATS_TOKEN_OFFSET]
         self.assertAlmostEqual(stats_row[NUMERIC_STAT_OPP_DECISION_OPPORTUNITIES], 1 / 64)
         # Rain reveal pair: (set-this-game=1, from-ability=0); order rain/sun/sand/hail.
@@ -664,7 +686,9 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
 
     def test_transition_positional_pair_and_reserved_tier2_slots(self) -> None:
         state = self._history_state()
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         # First transition after the leads: Xatu's turn-1 Psychic.
         first_move_row = observation.numeric_features[TRANSITION_TOKEN_OFFSET + 2]
         self.assertAlmostEqual(first_move_row[NUMERIC_TT_ABS_TURN], 1 / 1000)
@@ -676,7 +700,9 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
     def test_transition_budget_mask_truncates_oldest_first(self) -> None:
         state = self._history_state()
         masks = ObservationFeatureMasks(transition_token_budget=2)
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, feature_masks=masks)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, feature_masks=masks, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertEqual(len(state.transition_tokens), 6)
         # Only the two most recent actions (turn-2 switch + Flamethrower) are encoded.
         self.assertEqual(
@@ -691,7 +717,9 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
     def test_stats_block_mask_zeroes_and_hides_the_stats_token(self) -> None:
         state = self._history_state()
         masks = ObservationFeatureMasks(stats_block=False)
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, feature_masks=masks)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, feature_masks=masks, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         self.assertFalse(observation.attention_mask[STATS_TOKEN_OFFSET])
         self.assertEqual(set(observation.numeric_features[STATS_TOKEN_OFFSET]), {0.0})
         self.assertEqual(set(observation.categorical_ids[STATS_TOKEN_OFFSET]), {0})
@@ -707,6 +735,7 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
             category_vocab=_VOCAB,
             dex=_fake_dex(),
             feature_masks=ObservationFeatureMasks(exact_state=False),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         field_row = masked.numeric_features[0]
         self.assertEqual(field_row[NUMERIC_OPP_SLEEP_CLAUSE], 0.0)
@@ -716,19 +745,22 @@ class StatsAndTransitionBlockTest(unittest.TestCase):
 
     def test_masks_do_not_change_shapes_or_schema_version(self) -> None:
         state = self._history_state()
-        default = observation_from_player_state(state, category_vocab=_VOCAB)
+        default = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         masked = observation_from_player_state(
             state,
             category_vocab=_VOCAB,
             feature_masks=ObservationFeatureMasks(
                 stats_block=False, exact_state=False, transition_token_budget=32
             ),
+            spec=V2_1_REPLAY_OBSERVATION_SPEC,
         )
         self.assertEqual(default.schema_version, masked.schema_version)
         self.assertEqual(len(default.categorical_ids), len(masked.categorical_ids))
         self.assertEqual(len(default.attention_mask), len(masked.attention_mask))
-        default.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
-        masked.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+        default.validate(V2_1_REPLAY_OBSERVATION_SPEC)
+        masked.validate(V2_1_REPLAY_OBSERVATION_SPEC)
 
 
 _TRANSFORM_REQUEST = (
@@ -776,7 +808,7 @@ class TransformExpectedStatsTest(unittest.TestCase):
         replay = parse_showdown_replay(_TRANSFORM_LINES, battle_id="battle-1")
         state = normalize_for_player(replay, player_id="agent", player_name="Us")
         observation = observation_from_player_state(
-            state, category_vocab=_VOCAB, dex=_transform_dex()
+            state, category_vocab=_VOCAB, dex=_transform_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
         )
         ditto_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         # Non-HP expected stats are the copy TARGET's actual (player-known) values — never
@@ -797,7 +829,7 @@ class TransformExpectedStatsTest(unittest.TestCase):
         replay = parse_showdown_replay(lines, battle_id="battle-1")
         state = normalize_for_player(replay, player_id="agent", configured_showdown_slot="p1")
         observation = observation_from_player_state(
-            state, category_vocab=_VOCAB, dex=_transform_dex()
+            state, category_vocab=_VOCAB, dex=_transform_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
         )
         ditto_row = observation.numeric_features[OPPONENT_POKEMON_TOKEN_OFFSET]
         for slot in (
@@ -820,7 +852,9 @@ class TransitionTokenFieldGateTest(unittest.TestCase):
             "|switch|p2a: Snorlax|Snorlax, L80|100/100",
             "|turn|3",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         kinds = [token.kind for token in state.transition_tokens]
         for index, kind in enumerate(kinds):
             n_hits = observation.numeric_features[TRANSITION_TOKEN_OFFSET + index][NUMERIC_TT_N_HITS]
@@ -878,7 +912,9 @@ class DataSideOneWayDoorTest(unittest.TestCase):
         from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
         state = _state([])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         observation = dc_replace(observation, schema_version=schema_version)
         trajectory = BattleTrajectory(battle_id="battle-1", format_id="gen3randombattle", seed=1)
         action_index = next(
@@ -932,7 +968,9 @@ class DataSideOneWayDoorTest(unittest.TestCase):
         from pokezero.trajectory import _observation_to_dict as obs_to_dict
 
         state = _state([])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
         payload = dict(obs_to_dict(observation))
         payload.pop("schema_version")
         decoded = obs_from_dict(payload)
@@ -958,10 +996,12 @@ class SerializationRoundTripTest(unittest.TestCase):
             "|-damage|p1a: Charizard|70/100",
             "|turn|2",
         ])
-        observation = observation_from_player_state(state, category_vocab=_VOCAB, dex=_fake_dex())
-        observation.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+        observation = observation_from_player_state(
+            state, category_vocab=_VOCAB, dex=_fake_dex(), spec=V2_1_REPLAY_OBSERVATION_SPEC
+        )
+        observation.validate(V2_1_REPLAY_OBSERVATION_SPEC)
         decoded = _observation_from_dict(_observation_to_dict(observation))
-        decoded.validate(DEFAULT_REPLAY_OBSERVATION_SPEC)
+        decoded.validate(V2_1_REPLAY_OBSERVATION_SPEC)
         self.assertEqual(decoded.schema_version, observation.schema_version)
         self.assertEqual(decoded.categorical_ids, observation.categorical_ids)
         self.assertEqual(decoded.numeric_features, observation.numeric_features)

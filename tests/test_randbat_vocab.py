@@ -173,6 +173,7 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
             from pokezero.policy import RandomLegalPolicy
             from pokezero.randbat_vocab import gen3_category_vocabulary
             from pokezero.rollout import RolloutConfig
+            from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC
         except Exception as exc:  # pragma: no cover - environment guard
             self.skipTest(f"runtime deps unavailable: {exc}")
 
@@ -190,10 +191,17 @@ class Gen3RandbatVocabCoverageTests(unittest.TestCase):
                     seen[str(value)] = row
                 return row
 
+        # Pinned to v2.1: this battery audits the BASE (non-turn-merged) vocabulary the
+        # v2/v2.1 family encodes with; the post-flip default (v2.2) refuses a base vocab
+        # outright (see test_turn_merged_encode.test_v2_2_encode_refuses_a_base_vocabulary).
         benchmark_rollouts(
             games=12,
             env_factory=lambda: LocalShowdownEnv(
-                LocalShowdownConfig(showdown_root=SHOWDOWN_ROOT, category_vocab=_SpyVocab())
+                LocalShowdownConfig(
+                    showdown_root=SHOWDOWN_ROOT,
+                    category_vocab=_SpyVocab(),
+                    observation_spec=V2_1_REPLAY_OBSERVATION_SPEC,
+                )
             ),
             rollout_config=RolloutConfig(max_decision_rounds=250),
             seed_start=9100001,
