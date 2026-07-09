@@ -5624,6 +5624,24 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             _, restored = load_transformer_checkpoint(checkpoint_path, map_location="cpu")
             self.assertEqual(restored.training_config.amp, "bf16")
 
+    def test_amp_flag_parses_on_train_and_iterate_entry_points(self) -> None:
+        # WS-A1: --amp bf16 must be accepted on both training entry points (the cluster trains
+        # via `neural train`; `neural iterate` is the in-process loop), default fp32, reject others.
+        from pokezero.neural_cli import build_arg_parser
+
+        parser = build_arg_parser()
+        train_base = ["train", "--data", "x", "--out", "y"]
+        iterate_base = [
+            "iterate", "--run-dir", "r", "--iterations", "1",
+            "--games-per-iteration", "2", "--initial-policy", "random-legal",
+        ]
+        self.assertEqual(parser.parse_args(train_base + ["--amp", "bf16"]).amp, "bf16")
+        self.assertIsNone(parser.parse_args(train_base).amp)
+        self.assertEqual(parser.parse_args(iterate_base + ["--amp", "bf16"]).amp, "bf16")
+        self.assertIsNone(parser.parse_args(iterate_base).amp)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(iterate_base + ["--amp", "fp16"])
+
     def test_amp_autocast_device_type_maps_supported_and_rejects_others(self) -> None:
         # WS-A1: cuda/cpu map through; mps (and any other backend) must raise, not silently
         # coerce to cpu (which would train fp32 with no warning). Pure device-string parsing —
