@@ -347,6 +347,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     describe.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     describe.set_defaults(func=_describe)
 
+    serve = subparsers.add_parser("serve", help="Serve a checkpoint's forward to remote collectors (WS-L1 GPU inference service).")
+    serve.add_argument("--checkpoint", required=True, help="Path to the transformer checkpoint to serve.")
+    serve.add_argument("--host", default="0.0.0.0", help="Bind host (default 0.0.0.0).")
+    serve.add_argument("--port", type=int, default=8600, help="Bind port (default 8600).")
+    serve.add_argument("--device", default=None, help="Torch device (default: cuda if available, else cpu).")
+    serve.add_argument("--amp", choices=["bf16"], default=None, help="Run the served forward in bf16 autocast (GB200 tensor cores).")
+    serve.set_defaults(func=_serve)
+
     train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL or training caches.")
     train.add_argument("--data", type=Path, nargs="+", required=True, help="One or more rollout JSONL files or training cache directories.")
     train.add_argument(
@@ -1953,6 +1961,15 @@ def _suppress_parser_defaults(parser: argparse.ArgumentParser) -> None:
         if isinstance(action, argparse._SubParsersAction):
             for subparser in action.choices.values():
                 _suppress_parser_defaults(subparser)
+
+
+def _serve(args: argparse.Namespace) -> int:
+    from .inference_service import serve_forever
+
+    print(f"neural serve: loading {args.checkpoint} on device={args.device or 'auto'} amp={args.amp or 'fp32'}")
+    print(f"neural serve: listening on {args.host}:{args.port} (GET /config, /health; POST /forward)")
+    serve_forever(args.checkpoint, host=args.host, port=args.port, device=args.device, amp=args.amp)
+    return 0
 
 
 def _describe(args: argparse.Namespace) -> int:
