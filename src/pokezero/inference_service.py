@@ -21,6 +21,7 @@ import contextlib
 import http.client
 import json
 import queue
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,8 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 from urllib.request import urlopen
+
+import numpy
 
 from .actions import ACTION_COUNT
 from .neural_policy import (
@@ -53,6 +56,38 @@ def _autocast_context(torch_module: Any, device: Any, amp: str | None):
     return torch_module.autocast(device_type=device_type, dtype=torch_module.bfloat16)
 
 
+def encode_forward_request(tensors: Mapping[str, Any]) -> bytes:
+    """Serialize the 5 window tensors as a 4-byte header length + JSON header (shapes/dtypes) +
+    raw little-endian array bytes. Avoids per-float JSON encode/decode of the ~100 KB
+    numeric_features (the measured bottleneck: server GPU sat at 2% while collect crawled)."""
+    header: dict[str, Any] = {"__order__": list(_FORWARD_TENSOR_KEYS)}
+    chunks: list[bytes] = []
+    for key in _FORWARD_TENSOR_KEYS:
+        arr = numpy.ascontiguousarray(tensors[key].detach().cpu().numpy())
+        header[key] = {"shape": list(arr.shape), "dtype": arr.dtype.str}
+        chunks.append(arr.tobytes())
+    header_bytes = json.dumps(header).encode("utf-8")
+    return struct.pack(">I", len(header_bytes)) + header_bytes + b"".join(chunks)
+
+
+def decode_forward_request(body: bytes) -> "dict[str, Any]":
+    """Inverse of encode_forward_request → {key: numpy array with leading batch dim}."""
+    (header_len,) = struct.unpack(">I", body[:4])
+    header = json.loads(body[4 : 4 + header_len].decode("utf-8"))
+    offset = 4 + header_len
+    out: dict[str, Any] = {}
+    for key in header["__order__"]:
+        meta = header[key]
+        dtype = numpy.dtype(meta["dtype"])
+        shape = tuple(meta["shape"])
+        count = int(numpy.prod(shape)) if shape else 1
+        nbytes = count * dtype.itemsize
+        # .copy() → writable + contiguous (frombuffer is read-only, which torch dislikes)
+        out[key] = numpy.frombuffer(body[offset : offset + nbytes], dtype=dtype).reshape(shape).copy()
+        offset += nbytes
+    return out
+
+
 def _forward_batch(
     policy: TransformerSoftmaxPolicy,
     payloads: "list[Mapping[str, Any]]",
@@ -71,7 +106,13 @@ def _forward_batch(
     torch_module = require_torch()
 
     def _stack(key: str, dtype: Any) -> Any:
-        return torch_module.tensor([p[key][0] for p in payloads], dtype=dtype, device=device)
+        values = [p[key] for p in payloads]  # each carries leading batch dim 1
+        if isinstance(values[0], numpy.ndarray):
+            # binary path: concat [1,…] arrays → [B,…] and adopt as one tensor (fast, no per-float parse)
+            stacked = numpy.concatenate(values, axis=0)
+            return torch_module.as_tensor(stacked).to(dtype=dtype, device=device)
+        # list path (tests): nested Python lists
+        return torch_module.tensor([v[0] for v in values], dtype=dtype, device=device)
 
     tensors = {
         "categorical_ids": _stack("categorical_ids", torch_module.long),
@@ -189,7 +230,7 @@ class RemoteForward:
             try:
                 if self._conn is None:
                     self._conn = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
-                self._conn.request("POST", "/forward", body=body, headers={"Content-Type": "application/json"})
+                self._conn.request("POST", "/forward", body=body, headers={"Content-Type": "application/octet-stream"})
                 response = self._conn.getresponse()
                 data = response.read()
                 if response.status != 200:
@@ -205,8 +246,7 @@ class RemoteForward:
 
     def __call__(self, tensors: Mapping[str, Any]) -> TransformerPolicyOutput:
         torch_module = require_torch()
-        payload = {key: tensors[key].detach().cpu().tolist() for key in _FORWARD_TENSOR_KEYS}
-        body = json.dumps(payload).encode("utf-8")
+        body = encode_forward_request(tensors)
         with self._lock:
             result = self._request(body)
         opp = result.get("opponent_action_logits")
@@ -289,7 +329,7 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_Batchin
             # collector or takes down the batch).
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                payload = decode_forward_request(self.rfile.read(length))
                 result = forwarder.submit(payload)
             except TimeoutError as exc:  # server overload, not a client error
                 self._send(504, {"error": f"TimeoutError: {exc}"})
