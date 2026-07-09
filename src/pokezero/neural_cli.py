@@ -600,6 +600,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional global gradient-norm clip applied before each optimizer step (thesis recipe: 0.5430).",
     )
     train.add_argument(
+        "--amp",
+        choices=["bf16"],
+        default=None,
+        help="Mixed-precision autocast for forward/loss (WS-A1). 'bf16' keeps fp32 master weights/grads (no GradScaler). Default fp32.",
+    )
+    train.add_argument(
         "--freeze-non-value-parameters",
         action="store_true",
         help="Train only value-head parameters; intended for value-only calibration fine-tunes from --initial-checkpoint.",
@@ -2225,6 +2231,7 @@ def _train(args: argparse.Namespace) -> int:
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
         max_grad_norm=args.max_grad_norm,
+        amp=args.amp,
         freeze_non_value_parameters=args.freeze_non_value_parameters,
         shaping_weights=shaping_weights_json,
     )
