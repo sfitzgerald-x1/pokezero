@@ -890,6 +890,35 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once_with(0)
 
+    def test_remote_config_does_not_retry_permanent_http_error(self) -> None:
+        from urllib.error import HTTPError
+
+        from pokezero.inference_service import fetch_remote_config
+
+        error = HTTPError("http://inference.test/config", 400, "bad request", hdrs=None, fp=None)
+        with (
+            patch("pokezero.inference_service.urlopen", side_effect=error) as urlopen,
+            patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
+        ):
+            with self.assertRaises(HTTPError):
+                fetch_remote_config("http://inference.test")
+
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_remote_config_retries_are_bounded(self) -> None:
+        from pokezero.inference_service import _REMOTE_RETRY_ATTEMPTS, fetch_remote_config
+
+        with (
+            patch("pokezero.inference_service.urlopen", side_effect=OSError(1, "operation not permitted")) as urlopen,
+            patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
+        ):
+            with self.assertRaises(OSError):
+                fetch_remote_config("http://inference.test")
+
+        self.assertEqual(urlopen.call_count, _REMOTE_RETRY_ATTEMPTS)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(index,) for index in range(_REMOTE_RETRY_ATTEMPTS - 1)])
+
     def test_remote_forward_retries_transient_connection_failure(self) -> None:
         from pokezero.inference_service import RemoteForward
 
