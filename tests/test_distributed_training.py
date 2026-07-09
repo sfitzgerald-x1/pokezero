@@ -12,6 +12,7 @@ from pokezero.collection import RolloutRecord, write_rollout_record
 from pokezero.env import TerminalState
 from pokezero.neural_policy import (
     EntityTokenTransformerPolicy,
+    DistributedTrainingContext,
     TransformerPolicyConfig,
     TransformerTrainingConfig,
     TransformerTrainingResult,
@@ -20,6 +21,7 @@ from pokezero.neural_policy import (
     save_transformer_checkpoint,
     torch_available,
     train_transformer_policy,
+    _distributed_loss_term,
 )
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
@@ -115,6 +117,22 @@ def _ddp_train_worker(
 
 @unittest.skipUnless(torch_available(), "requires torch")
 class DistributedTrainingTest(unittest.TestCase):
+    def test_distributed_loss_term_preserves_legacy_denominator_floor(self) -> None:
+        """A sparse fractional weighted batch must retain single-process scaling."""
+
+        import torch
+
+        numerator = torch.tensor(0.25, requires_grad=True)
+        gradient_term, metric, raw_denominator = _distributed_loss_term(
+            numerator,
+            torch.tensor(0.5),
+            context=DistributedTrainingContext(),
+        )
+        gradient_term.backward()
+        self.assertEqual(raw_denominator, 0.5)
+        self.assertEqual(metric, 0.25)
+        self.assertEqual(float(numerator.grad.item()), 1.0)
+
     def test_ddp_two_rank_contiguous_shards_match_single_device_updates(self) -> None:
         import torch
 
@@ -134,6 +152,9 @@ class DistributedTrainingTest(unittest.TestCase):
                 categorical_feature_count=1,
                 numeric_feature_count=1,
                 embedding_dim=8,
+                # The strict parameter-delta gate deliberately avoids attention
+                # kernel reduction-order drift; the PPO parity gate below runs
+                # a real transformer layer.
                 transformer_layers=0,
                 attention_heads=1,
                 feedforward_dim=8,
@@ -208,9 +229,9 @@ class DistributedTrainingTest(unittest.TestCase):
                 categorical_feature_count=1,
                 numeric_feature_count=1,
                 embedding_dim=8,
-                transformer_layers=0,
-                attention_heads=1,
-                feedforward_dim=8,
+                transformer_layers=1,
+                attention_heads=2,
+                feedforward_dim=16,
                 dropout=0.0,
             )
             torch.manual_seed(91)

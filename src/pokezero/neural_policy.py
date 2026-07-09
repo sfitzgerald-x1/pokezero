@@ -1658,9 +1658,10 @@ def _distributed_loss_term(
     """Return a DDP-scaled gradient contribution and its global mean.
 
     DDP averages rank gradients. Multiplying each local numerator by
-    ``world_size / global_denominator`` makes that average exactly match the
-    legacy full-global-batch mean, even when masks or sample weights differ by
-    rank.
+    ``world_size / global_denominator`` preserves the legacy global-batch
+    objective up to normal floating-point reduction order, even when masks or
+    sample weights differ by rank. The legacy denominator floor of one is part
+    of that contract for sparse fractional training weights.
     """
 
     global_sum = _distributed_reduce_sum(context, local_sum)
@@ -1668,9 +1669,10 @@ def _distributed_loss_term(
     denominator = float(global_denominator.item())
     if denominator <= 0.0:
         return local_sum * 0.0, 0.0, 0.0
+    normalizer = global_denominator.clamp(min=1.0)
     return (
-        local_sum * (float(context.world_size) / denominator),
-        float((global_sum / global_denominator).item()),
+        local_sum * (float(context.world_size) / normalizer),
+        float((global_sum / normalizer).item()),
         denominator,
     )
 
@@ -1760,7 +1762,7 @@ def _distributed_transformer_loss(
     local_examples: int,
     global_examples: int,
 ) -> tuple[Any, dict[str, float | int]]:
-    """PPO/BC loss whose DDP update equals the legacy global-batch update.
+    """PPO/BC loss preserving the legacy global-batch objective under DDP.
 
     Every term keeps its own global denominator because PPO validity masks,
     sample weights, opponent labels, and switch labels are not uniformly
@@ -1811,17 +1813,19 @@ def _distributed_transformer_loss(
         raw_advantage = _ppo_advantages(output, tensors)
         local_weight_sum = objective_weights.sum() if active else zero
         global_weight_sum = _distributed_reduce_sum(context, local_weight_sum)
+        global_weight_normalizer = global_weight_sum.clamp(min=1.0)
         local_advantage_sum = (raw_advantage * objective_weights).sum() if active else zero
-        local_advantage_square_sum = ((raw_advantage * raw_advantage) * objective_weights).sum() if active else zero
         global_advantage_sum = _distributed_reduce_sum(context, local_advantage_sum)
-        global_advantage_square_sum = _distributed_reduce_sum(context, local_advantage_square_sum)
         local_valid_count = int(valid_mask.sum().detach().item()) if active else 0
         ppo_valid_examples = _distributed_int_sum(context, local_valid_count, device=output.value.device)
         advantage = raw_advantage
         if config.normalize_advantage and ppo_valid_examples > 1 and float(global_weight_sum.item()) > 0.0:
-            global_mean = global_advantage_sum / global_weight_sum
-            global_variance = (global_advantage_square_sum / global_weight_sum) - (global_mean * global_mean)
-            advantage = (advantage - global_mean) / (global_variance.clamp(min=0.0).sqrt() + 1e-8)
+            global_mean = global_advantage_sum / global_weight_normalizer
+            # Match the legacy centered weighted-variance formulation instead
+            # of E[x^2] - E[x]^2, which is less stable around a small variance.
+            local_variance_sum = (((raw_advantage - global_mean) ** 2) * objective_weights).sum() if active else zero
+            global_variance = _distributed_reduce_sum(context, local_variance_sum) / global_weight_normalizer
+            advantage = (advantage - global_mean) / (global_variance.sqrt() + 1e-8)
         log_probs = functional.log_softmax(masked_policy_logits, dim=1)
         chosen_log_prob = log_probs.gather(1, tensors["action_indices"].unsqueeze(1)).squeeze(1)
         behavior_log_prob = tensors["action_probabilities"].clamp(min=1e-6).log()

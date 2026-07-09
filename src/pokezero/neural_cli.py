@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -1966,6 +1967,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw_argv)
     args._explicit_cli_options = _explicit_cli_options(raw_argv)
     try:
+        if int(os.environ.get("WORLD_SIZE", "1")) > 1 and args.command != "train":
+            raise ValueError("torchrun multi-process execution is supported only for the neural_cli train command.")
         return int(args.func(args))
     except RunAuditFailure as exc:
         _print_run_audit_failure(exc)
@@ -2418,9 +2421,11 @@ def _train(args: argparse.Namespace) -> int:
         )
     train_elapsed_seconds = time.perf_counter() - train_started
     if not is_primary_rank:
-        # ``train_transformer_policy`` synchronizes after the final optimizer
-        # step. Only rank 0 may create/delete artifacts or write human-readable
-        # summaries, so non-primary torchrun processes can now finish cleanly.
+        # Only rank 0 may create/delete artifacts. Wait until its atomic
+        # checkpoint/summary work is finished, then tear down NCCL/Gloo cleanly
+        # instead of relying on process exit to release collective resources.
+        require_torch().distributed.barrier()
+        require_torch().distributed.destroy_process_group()
         return 0
     provenance_hashes = distinct_belief_set_source_hashes(training_data_paths)
     if len(provenance_hashes) == 1 and provenance_hashes[0] is not None:
@@ -2514,6 +2519,9 @@ def _train(args: argparse.Namespace) -> int:
         )
         _write_json(args.summary_out, payload)
         print(f"train_summary: {args.summary_out}")
+    if distributed_context_value.enabled:
+        require_torch().distributed.barrier()
+        require_torch().distributed.destroy_process_group()
     return 0
 
 
