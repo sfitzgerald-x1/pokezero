@@ -1384,6 +1384,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional global gradient-norm clip applied before each optimizer step (thesis recipe: 0.5430).",
     )
+    iterate.add_argument(
+        "--amp",
+        choices=["bf16"],
+        default=None,
+        help="Mixed-precision autocast for forward/loss (WS-A1). 'bf16' keeps fp32 master weights/grads (no GradScaler). Default fp32.",
+    )
     iterate.add_argument("--max-batches", type=int, default=None, help="Optional max batches per epoch for smoke runs.")
     iterate.add_argument("--device", default=None, help="Torch device, e.g. cpu, cuda, or mps. Defaults to cuda when available, else cpu.")
     iterate.add_argument(
@@ -3986,6 +3992,7 @@ def _iterate(args: argparse.Namespace) -> int:
         ppo_target_mode=args.ppo_target_mode,
         gae_lambda=args.gae_lambda,
         max_grad_norm=args.max_grad_norm,
+        amp=args.amp,
     )
     iterate_model_config_kwargs = dict(
         policy_id=args.policy_id,
