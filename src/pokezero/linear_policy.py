@@ -37,6 +37,10 @@ LEGACY_LINEAR_FEATURE_FINGERPRINTS = (
     # features hash observation metadata and masks, not the numeric census, so v2-era
     # artifacts stay load-compatible through the dual-schema window.
     "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",
+    # Observation-schema-v2.1-era fingerprint (identical extractor sources; the constant
+    # rotated to v2.2 when turn-merged earned the fresh-selection default, 2026-07-08).
+    # Same rationale as above: v2.1-era linear artifacts stay load-compatible.
+    "16b258abc6de07cc7940f93f730513ddda62233d3d80191f43d7c272f23d8903",
 )
 LinearTrainingObjective = Literal["behavior-cloning", "reward-weighted"]
 ALL_ACTIONS_LEGAL_MASK = tuple(True for _ in range(ACTION_COUNT))

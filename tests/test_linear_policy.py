@@ -313,13 +313,18 @@ class LinearPolicyTest(unittest.TestCase):
         self.assertEqual(
             linear_feature_fingerprint(),
             # Pinned hash tracks the fingerprint payload; the observation spec version
-            # (pokezero.observation.v2.1) is intentionally part of it. The v2-era
-            # fingerprint lives in LEGACY_LINEAR_FEATURE_FINGERPRINTS so v2-era linear
-            # artifacts stay loadable through the dual-schema window.
-            "16b258abc6de07cc7940f93f730513ddda62233d3d80191f43d7c272f23d8903",
+            # (pokezero.observation.v2.2 since the 2026-07-08 default flip) is
+            # intentionally part of it. The v2- and v2.1-era fingerprints live in
+            # LEGACY_LINEAR_FEATURE_FINGERPRINTS so older linear artifacts stay loadable
+            # through the dual-schema window.
+            "016206c05d4d65a409ebf55d4dfda6adb441bfe2ff719cfa6094b05c16f973d7",
         )
         self.assertIn(
             "2c58350d2d4f34d7a19e10ddcf2ccf6886903089bcfb5124d09f2d29465f393d",
+            LEGACY_LINEAR_FEATURE_FINGERPRINTS,
+        )
+        self.assertIn(
+            "16b258abc6de07cc7940f93f730513ddda62233d3d80191f43d7c272f23d8903",
             LEGACY_LINEAR_FEATURE_FINGERPRINTS,
         )
 
