@@ -353,6 +353,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8600, help="Bind port (default 8600).")
     serve.add_argument("--device", default=None, help="Torch device (default: cuda if available, else cpu).")
     serve.add_argument("--amp", choices=["bf16"], default=None, help="Run the served forward in bf16 autocast (GB200 tensor cores).")
+    serve.add_argument("--max-batch", type=int, default=64, help="Max requests coalesced into one batched forward (default 64).")
+    serve.add_argument("--batch-window-ms", type=float, default=10.0, help="Dynamic-batching wait window in ms (default 10).")
     serve.set_defaults(func=_serve)
 
     train = subparsers.add_parser("train", help="Train an entity-token transformer policy from rollout JSONL or training caches.")
@@ -1967,8 +1969,11 @@ def _serve(args: argparse.Namespace) -> int:
     from .inference_service import serve_forever
 
     print(f"neural serve: loading {args.checkpoint} on device={args.device or 'auto'} amp={args.amp or 'fp32'}")
-    print(f"neural serve: listening on {args.host}:{args.port} (GET /config, /health; POST /forward)")
-    serve_forever(args.checkpoint, host=args.host, port=args.port, device=args.device, amp=args.amp)
+    print(f"neural serve: batched (max_batch={args.max_batch}, window={args.batch_window_ms}ms); listening on {args.host}:{args.port}")
+    serve_forever(
+        args.checkpoint, host=args.host, port=args.port, device=args.device, amp=args.amp,
+        max_batch=args.max_batch, batch_window_ms=args.batch_window_ms,
+    )
     return 0
 
 
