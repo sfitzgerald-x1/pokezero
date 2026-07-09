@@ -21,6 +21,7 @@ import contextlib
 import http.client
 import json
 import queue
+import random
 import struct
 import threading
 import time
@@ -28,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
@@ -48,6 +50,28 @@ _FORWARD_TENSOR_KEYS = (
     "attention_mask",
     "history_mask",
 )
+
+# A collector fleet can start hundreds of clients immediately after the inference server becomes
+# ready. Retry transient connection failures locally so that short-lived socket admission pressure
+# does not burn an entire Job-index retry. This affects request timing only, never policy outputs.
+_REMOTE_RETRY_ATTEMPTS = 6
+_REMOTE_RETRY_INITIAL_BACKOFF_S = 0.05
+_REMOTE_RETRY_MAX_BACKOFF_S = 0.8
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+
+class _RetryableInferenceResponse(RuntimeError):
+    """Marks a transient HTTP response that should use the bounded client retry path."""
+
+
+def _retry_backoff_seconds(attempt: int) -> float:
+    """Return exponential backoff with bounded jitter to desynchronize a collector startup burst."""
+    base = min(_REMOTE_RETRY_INITIAL_BACKOFF_S * (2**attempt), _REMOTE_RETRY_MAX_BACKOFF_S)
+    return base * random.uniform(0.75, 1.25)
+
+
+def _sleep_before_remote_retry(attempt: int) -> None:
+    time.sleep(_retry_backoff_seconds(attempt))
 
 
 def _autocast_context(torch_module: Any, device: Any, amp: str | None):
@@ -219,8 +243,9 @@ class RemoteForward:
 
     Reuses ONE persistent HTTP connection (keep-alive) rather than opening a socket per forward —
     a collector does ~70 forwards/game, and 64 collectors each churning new connections overflows
-    the server's listen backlog (Errno 104 connection-reset). Reconnects once on a dropped/stale
-    connection. Guarded by a lock in case a pod runs games concurrently on the same policy."""
+    the server's listen backlog (Errno 104 connection-reset). Retries bounded transient transport
+    failures with exponential backoff; permanent client responses still fail immediately. Guarded
+    by a lock in case a pod runs games concurrently on the same policy."""
 
     def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
         parsed = urlsplit(base_url if "://" in base_url else "http://" + base_url)
@@ -231,8 +256,7 @@ class RemoteForward:
         self._conn: "http.client.HTTPConnection | None" = None
 
     def _request(self, body: bytes) -> dict[str, Any]:
-        # Reconnect-once: a keep-alive connection can be closed server-side between calls.
-        for attempt in range(2):
+        for attempt in range(_REMOTE_RETRY_ATTEMPTS):
             try:
                 if self._conn is None:
                     self._conn = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
@@ -240,14 +264,19 @@ class RemoteForward:
                 response = self._conn.getresponse()
                 data = response.read()
                 if response.status != 200:
+                    if response.status in _RETRYABLE_HTTP_STATUSES:
+                        raise _RetryableInferenceResponse(
+                            f"inference server {response.status}: {data[:200]!r}"
+                        )
                     raise RuntimeError(f"inference server {response.status}: {data[:200]!r}")
                 return json.loads(data.decode("utf-8"))
-            except (http.client.HTTPException, ConnectionError, OSError):
+            except (http.client.HTTPException, ConnectionError, OSError, _RetryableInferenceResponse):
                 if self._conn is not None:
                     self._conn.close()
                 self._conn = None
-                if attempt == 1:
+                if attempt == _REMOTE_RETRY_ATTEMPTS - 1:
                     raise
+                _sleep_before_remote_retry(attempt)
         raise RuntimeError("unreachable")
 
     def __call__(self, tensors: Mapping[str, Any]) -> TransformerPolicyOutput:
@@ -275,8 +304,19 @@ class _StubModel:
 
 
 def fetch_remote_config(base_url: str, *, timeout: float = 30.0) -> dict[str, Any]:
-    with urlopen(base_url.rstrip("/") + "/config", timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    config_url = base_url.rstrip("/") + "/config"
+    for attempt in range(_REMOTE_RETRY_ATTEMPTS):
+        try:
+            with urlopen(config_url, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code not in _RETRYABLE_HTTP_STATUSES or attempt == _REMOTE_RETRY_ATTEMPTS - 1:
+                raise
+        except (URLError, OSError):
+            if attempt == _REMOTE_RETRY_ATTEMPTS - 1:
+                raise
+        _sleep_before_remote_retry(attempt)
+    raise RuntimeError("unreachable")
 
 
 def remote_inference_policy(base_url: str, **policy_options: Any) -> TransformerSoftmaxPolicy:

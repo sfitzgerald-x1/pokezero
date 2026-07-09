@@ -865,6 +865,73 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_remote_config_retries_transient_bootstrap_failure(self) -> None:
+        # A collector creates its remote policy by fetching /config. This is the startup path that
+        # must absorb a transient socket-admission failure instead of failing the whole shard.
+        from pokezero.inference_service import fetch_remote_config
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"window_size": 1, "policy_id": "ready"}'
+
+        with (
+            patch("pokezero.inference_service.urlopen", side_effect=[OSError(1, "operation not permitted"), Response()]) as urlopen,
+            patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
+        ):
+            config = fetch_remote_config("http://inference.test")
+
+        self.assertEqual(config["policy_id"], "ready")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(0)
+
+    def test_remote_forward_retries_transient_connection_failure(self) -> None:
+        from pokezero.inference_service import RemoteForward
+
+        class FailingConnection:
+            def __init__(self):
+                self.closed = False
+
+            def request(self, *args, **kwargs):
+                raise OSError(1, "operation not permitted")
+
+            def close(self):
+                self.closed = True
+
+        class Response:
+            status = 200
+
+            def read(self):
+                return b'{"policy_logits": [[0.0]], "value": [0.0], "opponent_action_logits": null}'
+
+        class GoodConnection:
+            def request(self, *args, **kwargs):
+                return None
+
+            def getresponse(self):
+                return Response()
+
+            def close(self):
+                return None
+
+        failing = FailingConnection()
+        remote = RemoteForward("http://inference.test")
+        with (
+            patch("pokezero.inference_service.http.client.HTTPConnection", side_effect=[failing, GoodConnection()]) as connection,
+            patch("pokezero.inference_service._sleep_before_remote_retry") as sleep,
+        ):
+            result = remote._request(b"payload")
+
+        self.assertEqual(result["value"], [0.0])
+        self.assertEqual(connection.call_count, 2)
+        self.assertTrue(failing.closed)
+        sleep.assert_called_once_with(0)
+
     def test_inference_server_hot_swap_reload(self) -> None:
         # WS-L1 hot-swap: POST /reload swaps the served checkpoint atomically. /config must report
         # the new policy_id and the served forward must change to the new weights — this is how the
