@@ -7,7 +7,8 @@ an injected ``forward_fn``) keeps the entire decision path — per-player histor
 legal-action masking, rng sampling, behavior-probability, value — so served-vs-local parity
 is structural and determinism (sampling stays client-side) is untouched.
 
-Wire protocol (JSON over HTTP; raw-bytes/dynamic-batching optimization is a follow-up):
+Requests are dynamically batched (see _BatchingForwarder) so N concurrent collector requests
+cost one GPU forward. Wire protocol (JSON over HTTP; a raw-bytes payload is a possible follow-up):
   GET  /config  -> {"window_size": int, "policy_id": str, "action_count": int}
   POST /forward -> body is the observation-window tensors (nested lists, leading batch dim 1):
                    {categorical_ids, numeric_features, token_type_ids, attention_mask, history_mask}
@@ -18,6 +19,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import queue
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -47,6 +51,51 @@ def _autocast_context(torch_module: Any, device: Any, amp: str | None):
     return torch_module.autocast(device_type=device_type, dtype=torch_module.bfloat16)
 
 
+def _forward_batch(
+    policy: TransformerSoftmaxPolicy,
+    payloads: "list[Mapping[str, Any]]",
+    *,
+    device: Any = None,
+    amp: str | None = None,
+) -> "list[dict[str, Any]]":
+    """Run ONE batched model forward for N request payloads and return one result dict each.
+
+    Each payload's tensors carry a leading batch dim 1 (from the client's
+    observation_window_to_torch); we concatenate along that dim into a [B, …] batch, run a single
+    forward, then split back per request — so B concurrent collector requests cost one GPU call.
+    fp32 is emitted on the wire even under bf16 (the collector's softmax/masking/sampling stay
+    fp32, identical to local). Batch-of-1 is numerically identical to a single forward → parity holds.
+    """
+    torch_module = require_torch()
+
+    def _stack(key: str, dtype: Any) -> Any:
+        return torch_module.tensor([p[key][0] for p in payloads], dtype=dtype, device=device)
+
+    tensors = {
+        "categorical_ids": _stack("categorical_ids", torch_module.long),
+        "numeric_features": _stack("numeric_features", torch_module.float32),
+        "token_type_ids": _stack("token_type_ids", torch_module.long),
+        "attention_mask": _stack("attention_mask", torch_module.bool),
+        "history_mask": _stack("history_mask", torch_module.bool),
+    }
+    with torch_module.no_grad(), _autocast_context(torch_module, device, amp):
+        output = policy._default_forward(tensors)
+    policy_logits = output.policy_logits.float().cpu().tolist()
+    value = output.value.float().cpu().tolist()
+    opp = getattr(output, "opponent_action_logits", None)
+    opp_logits = None if opp is None else opp.float().cpu().tolist()
+    results: list[dict[str, Any]] = []
+    for i in range(len(payloads)):
+        results.append(
+            {
+                "policy_logits": [policy_logits[i]],
+                "value": [value[i]],
+                "opponent_action_logits": None if opp_logits is None else [opp_logits[i]],
+            }
+        )
+    return results
+
+
 def run_forward_from_payload(
     policy: TransformerSoftmaxPolicy,
     payload: Mapping[str, Any],
@@ -54,29 +103,65 @@ def run_forward_from_payload(
     device: Any = None,
     amp: str | None = None,
 ) -> dict[str, Any]:
-    """Rebuild the window tensors from a request payload, run the model forward, and return
-    logits/value as plain lists. Shared by the HTTP server and in-process parity tests.
+    """Single-payload forward (batch-of-1). Kept for in-process parity tests."""
+    return _forward_batch(policy, [payload], device=device, amp=amp)[0]
 
-    fp32 is emitted on the wire even when the forward runs in bf16 — the collector applies
-    softmax/masking/sampling in fp32 exactly like the local path (the bf16 numerics are what
-    the parity gate bounds, not the serialization).
-    """
-    torch_module = require_torch()
-    tensors = {
-        "categorical_ids": torch_module.tensor(payload["categorical_ids"], dtype=torch_module.long, device=device),
-        "numeric_features": torch_module.tensor(payload["numeric_features"], dtype=torch_module.float32, device=device),
-        "token_type_ids": torch_module.tensor(payload["token_type_ids"], dtype=torch_module.long, device=device),
-        "attention_mask": torch_module.tensor(payload["attention_mask"], dtype=torch_module.bool, device=device),
-        "history_mask": torch_module.tensor(payload["history_mask"], dtype=torch_module.bool, device=device),
-    }
-    with torch_module.no_grad(), _autocast_context(torch_module, device, amp):
-        output = policy._default_forward(tensors)
-    opp = getattr(output, "opponent_action_logits", None)
-    return {
-        "policy_logits": output.policy_logits.float().cpu().tolist(),
-        "value": output.value.float().cpu().tolist(),
-        "opponent_action_logits": None if opp is None else opp.float().cpu().tolist(),
-    }
+
+class _BatchingForwarder:
+    """Dynamic-batching front-end: coalesces concurrent /forward requests within a small time
+    window into ONE GPU forward, so 64 collectors don't each pay a batch-1 GPU call + serialize
+    on the server. A background thread drains the queue; each request waits on its own Event."""
+
+    def __init__(
+        self,
+        policy: TransformerSoftmaxPolicy,
+        *,
+        device: Any,
+        amp: str | None,
+        max_batch: int = 64,
+        max_delay_s: float = 0.010,
+    ) -> None:
+        self._policy = policy
+        self._device = device
+        self._amp = amp
+        self._max_batch = max_batch
+        self._max_delay = max_delay_s
+        self._queue: "queue.Queue[tuple[Mapping[str, Any], dict[str, Any], threading.Event]]" = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def submit(self, payload: Mapping[str, Any], *, timeout: float = 60.0) -> dict[str, Any]:
+        slot: dict[str, Any] = {}
+        event = threading.Event()
+        self._queue.put((payload, slot, event))
+        if not event.wait(timeout):
+            raise TimeoutError("inference batch timed out")
+        if "error" in slot:
+            raise RuntimeError(slot["error"])
+        return slot["result"]
+
+    def _loop(self) -> None:
+        while True:
+            batch = [self._queue.get()]  # block for the first request
+            deadline = time.monotonic() + self._max_delay
+            while len(batch) < self._max_batch:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    batch.append(self._queue.get(timeout=remaining))
+                except queue.Empty:
+                    break
+            payloads = [item[0] for item in batch]
+            try:
+                results = _forward_batch(self._policy, payloads, device=self._device, amp=self._amp)
+                for (_, slot, event), result in zip(batch, results):
+                    slot["result"] = result
+                    event.set()
+            except Exception as exc:  # noqa: BLE001 — fail the whole batch diagnosably, don't hang collectors
+                for _, slot, event in batch:
+                    slot["error"] = f"{type(exc).__name__}: {exc}"
+                    event.set()
 
 
 class RemoteForward:
@@ -136,7 +221,7 @@ def remote_inference_policy(base_url: str, **policy_options: Any) -> Transformer
     )
 
 
-def build_request_handler(policy: TransformerSoftmaxPolicy, *, device: Any, amp: str | None):
+def build_request_handler(policy: TransformerSoftmaxPolicy, forwarder: "_BatchingForwarder"):
     window_size = int(policy.result.model_config.window_size)
     policy_id = str(policy.policy_id)
 
@@ -164,14 +249,16 @@ def build_request_handler(policy: TransformerSoftmaxPolicy, *, device: Any, amp:
             if self.path.rstrip("/") != "/forward":
                 self._send(404, {"error": "not found"})
                 return
-            # Trusted in-cluster caller, but return a diagnosable error instead of dropping the
-            # socket on a malformed/missing-key/wrong-shape body (matters once batching coalesces
-            # requests — one bad item must not take down a batch). Per-request isolation only.
+            # Submit to the batcher (one bad item returns a diagnosable error, never hangs the
+            # collector or takes down the batch).
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                result = run_forward_from_payload(policy, payload, device=device, amp=amp)
-            except Exception as exc:  # noqa: BLE001
+                result = forwarder.submit(payload)
+            except TimeoutError as exc:  # server overload, not a client error
+                self._send(504, {"error": f"TimeoutError: {exc}"})
+                return
+            except Exception as exc:  # noqa: BLE001 — malformed/bad-shape body is a client error
                 self._send(400, {"error": f"{type(exc).__name__}: {exc}"})
                 return
             self._send(200, result)
@@ -186,13 +273,18 @@ def serve_inference(
     port: int = 8600,
     device: str | None = None,
     amp: str | None = None,
+    max_batch: int = 64,
+    batch_window_ms: float = 10.0,
 ) -> ThreadingHTTPServer:
-    """Load a checkpoint and start a threaded HTTP inference server. Returns the server
-    (call .serve_forever() to block, or use in a thread for tests)."""
+    """Load a checkpoint and start a threaded, dynamically-batched HTTP inference server. Returns
+    the server (call .serve_forever() to block, or use in a thread for tests)."""
     from pathlib import Path
 
     policy = load_transformer_policy(Path(checkpoint_path), device=device)
-    handler = build_request_handler(policy, device=device, amp=amp)
+    forwarder = _BatchingForwarder(
+        policy, device=device, amp=amp, max_batch=max_batch, max_delay_s=batch_window_ms / 1000.0
+    )
+    handler = build_request_handler(policy, forwarder)
     server = ThreadingHTTPServer((host, port), handler)
     return server
 

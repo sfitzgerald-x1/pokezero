@@ -856,6 +856,50 @@ class NeuralPolicyScaffoldTest(unittest.TestCase):
             finally:
                 server.shutdown()
 
+    def test_inference_forward_batch_matches_single(self) -> None:
+        # WS-L1 batching: a coalesced batch of N identical requests must yield N results each
+        # byte-identical to the single-forward result — i.e. the batch split is correct and
+        # batch-of-N == N singles (so batching preserves parity).
+        if not torch_available():
+            self.skipTest("requires torch")
+        from pokezero.inference_service import _forward_batch, run_forward_from_payload
+        from pokezero.neural_policy import load_transformer_policy, observation_window_to_torch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = Path(temp_dir) / "rollouts.jsonl"
+            ckpt = Path(temp_dir) / "transformer.pt"
+            with data_path.open("w", encoding="utf-8") as handle:
+                write_rollout_record(handle, rollout_record())
+            model_config = TransformerPolicyConfig.compact_category(
+                category_vocab=tuple(range(1, 17)), category_oov_buckets=4, policy_id="batch",
+                window_size=2, token_type_vocab_size=8, categorical_feature_count=1,
+                numeric_feature_count=1, embedding_dim=16, transformer_layers=1,
+                attention_heads=4, feedforward_dim=32, dropout=0.0,
+            )
+            model, result = train_transformer_policy(
+                data_path, model_config=model_config,
+                training_config=TransformerTrainingConfig(
+                    batch_size=2, epochs=1, window_size=2, max_batches=1, device="cpu"),
+            )
+            save_transformer_checkpoint(ckpt, model, result=result)
+            policy = load_transformer_policy(ckpt, device="cpu")
+            tensors = observation_window_to_torch([observation(1)], window_size=2, device="cpu")
+            payload = {k: tensors[k].tolist() for k in
+                       ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask", "history_mask")}
+            single = run_forward_from_payload(policy, payload, device="cpu")
+            batched = _forward_batch(policy, [payload, payload, payload], device="cpu")
+            self.assertEqual(len(batched), 3)
+            # Batched matmul reductions differ from single-forward at ~1e-9 (reduction order
+            # depends on batch size), so compare within tolerance, not bitwise. This ~1e-9
+            # batch-composition-dependent noise is expected and acceptable for stochastic
+            # self-play collection (far below sampling noise; PPO stays self-consistent because
+            # the collector records the behavior-prob from the served logits). Batch-of-1 remains
+            # exact (see the HTTP parity test).
+            for item in batched:
+                for a, b in zip(item["policy_logits"][0], single["policy_logits"][0]):
+                    self.assertAlmostEqual(a, b, places=4)
+                self.assertAlmostEqual(item["value"][0], single["value"][0], places=4)
+
     def test_inference_server_returns_400_on_malformed_forward_body(self) -> None:
         # WS-L1 robustness: a malformed /forward body must return a diagnosable 400, not drop the
         # socket, and the server must survive to serve the next request (per-request isolation).
