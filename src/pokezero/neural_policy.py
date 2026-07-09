@@ -349,6 +349,7 @@ class TransformerTrainingConfig:
     learning_rate_schedule_total_games: int | None = None
     learning_rate_progress_start: float = 0.0
     learning_rate_progress_end: float = 0.0
+    learning_rate_warmup_progress: float = 0.0
     weight_decay: float = 0.0
     window_size: int = 1
     discount: float = 1.0
@@ -434,6 +435,10 @@ class TransformerTrainingConfig:
             raise ValueError("learning_rate_progress_end must be between 0 and 1.")
         if self.learning_rate_progress_end < self.learning_rate_progress_start:
             raise ValueError("learning_rate_progress_end must be greater than or equal to learning_rate_progress_start.")
+        if not math.isfinite(self.learning_rate_warmup_progress):
+            raise ValueError("learning_rate_warmup_progress must be finite.")
+        if not 0.0 <= self.learning_rate_warmup_progress <= 1.0:
+            raise ValueError("learning_rate_warmup_progress must be between 0 and 1.")
         if self.weight_decay < 0.0:
             raise ValueError("weight_decay must be non-negative.")
         if self.window_size <= 0:
@@ -1792,16 +1797,30 @@ def _optional_int_from_mapping(mapping: Mapping[str, float | int], key: str) -> 
     return int(value)
 
 
-def learning_rate_for_progress(*, base_learning_rate: float, schedule: str, progress: float) -> float:
+def _decayed_learning_rate(base_learning_rate: float, schedule: str, progress: float) -> float:
+    if schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
+        return float(base_learning_rate)
+    return float(base_learning_rate) / (((8.0 * float(progress)) + 1.0) ** 1.5)
+
+
+def learning_rate_for_progress(
+    *, base_learning_rate: float, schedule: str, progress: float, warmup_progress: float = 0.0
+) -> float:
     if base_learning_rate <= 0.0 or not math.isfinite(base_learning_rate):
         raise ValueError("base_learning_rate must be positive and finite.")
     if schedule not in LEARNING_RATE_SCHEDULES:
         raise ValueError(f"learning_rate_schedule must be one of: {', '.join(LEARNING_RATE_SCHEDULES)}.")
     if not math.isfinite(progress) or not 0.0 <= progress <= 1.0:
         raise ValueError("learning rate progress must be finite and between 0 and 1.")
-    if schedule == CONSTANT_LEARNING_RATE_SCHEDULE:
-        return float(base_learning_rate)
-    return float(base_learning_rate) / (((8.0 * float(progress)) + 1.0) ** 1.5)
+    if not math.isfinite(warmup_progress) or not 0.0 <= warmup_progress <= 1.0:
+        raise ValueError("warmup_progress must be finite and between 0 and 1.")
+    # Linear warmup (WS-D): over [0, warmup_progress] ramp 0 -> the scheduled value at
+    # warmup_progress, then follow the normal decay. Continuous at the boundary. warmup_progress=0
+    # disables it (legacy behavior). Standard at ~50M+ to avoid the cold-start clip spikes we saw.
+    if warmup_progress > 0.0 and progress < warmup_progress:
+        target = _decayed_learning_rate(base_learning_rate, schedule, warmup_progress)
+        return target * (float(progress) / float(warmup_progress))
+    return _decayed_learning_rate(base_learning_rate, schedule, progress)
 
 
 def _learning_rate_for_epoch(config: TransformerTrainingConfig, epoch: int) -> float:
@@ -1818,6 +1837,7 @@ def _learning_rate_for_epoch(config: TransformerTrainingConfig, epoch: int) -> f
         base_learning_rate=config.learning_rate,
         schedule=config.learning_rate_schedule,
         progress=progress,
+        warmup_progress=config.learning_rate_warmup_progress,
     )
 
 

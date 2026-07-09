@@ -508,6 +508,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Global training progress at the end of this standalone train call, in [0, 1].",
     )
+    train.add_argument(
+        "--learning-rate-warmup-progress",
+        type=float,
+        default=0.0,
+        help="Linear LR warmup fraction of global progress, in [0, 1]. Below this progress the LR ramps "
+        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale. "
+        "Compares against absolute global progress, so on a resumed run whose progress already starts "
+        "past this fraction it never fires.",
+    )
     train.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     train.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
     train.add_argument("--discount", type=float, default=1.0, help="Terminal return discount per player decision.")
@@ -1292,6 +1301,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "offset for non-constant schedules. Use when continuing from a checkpoint in a fresh run_dir; "
             "--resume inherits the prior offset from the run manifest."
         ),
+    )
+    iterate.add_argument(
+        "--learning-rate-warmup-progress",
+        type=float,
+        default=0.0,
+        help="Linear LR warmup fraction of global progress, in [0, 1]. Below this progress the LR ramps "
+        "0 -> the scheduled value; 0 disables warmup (default). Stabilizes cold-start at 50M+ scale. "
+        "Compares against absolute global progress, so on a resumed run whose progress already starts "
+        "past this fraction it never fires.",
     )
     iterate.add_argument("--weight-decay", type=float, default=0.0, help="AdamW weight decay.")
     iterate.add_argument("--window-size", type=int, default=1, help="Per-player observation history window (spec v2 default: 1).")
@@ -2234,6 +2252,7 @@ def _train(args: argparse.Namespace) -> int:
         learning_rate_schedule_total_games=args.learning_rate_schedule_total_games,
         learning_rate_progress_start=args.learning_rate_progress_start,
         learning_rate_progress_end=args.learning_rate_progress_end,
+        learning_rate_warmup_progress=args.learning_rate_warmup_progress,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
@@ -3988,6 +4007,7 @@ def _iterate(args: argparse.Namespace) -> int:
         learning_rate=args.learning_rate,
         learning_rate_schedule=args.learning_rate_schedule,
         learning_rate_schedule_total_games=args.learning_rate_schedule_total_games,
+        learning_rate_warmup_progress=args.learning_rate_warmup_progress,
         weight_decay=args.weight_decay,
         window_size=args.window_size,
         discount=args.discount,
